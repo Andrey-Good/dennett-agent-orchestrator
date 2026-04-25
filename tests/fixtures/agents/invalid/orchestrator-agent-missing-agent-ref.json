@@ -1,0 +1,25 @@
+{
+  "graph_contract_version": "1.0",
+  "meta": {
+    "id": "orch-missing-ref",
+    "name": "Orchestrator Missing Ref"
+  },
+  "entry_node_id": "delegate",
+  "nodes": [
+    {
+      "id": "delegate",
+      "kind": "orchestrator_agent",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delegate"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      }
+    }
+  ]
+}

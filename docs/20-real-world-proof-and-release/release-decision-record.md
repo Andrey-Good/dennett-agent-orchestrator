@@ -1,0 +1,372 @@
+[English](#english) | [Russian](#russian)
+
+<a id="english"></a>
+# Release Decision Record
+
+Status: final Phase 19 decision remains `defer` for the current local CLI/repository release scope. The canonical next release target is locked in [Release Scope Lock](./release-scope-lock.md) as `local-cli-repository-readiness`. Reviewed TASK-287 live runtime smoke evidence, TASK-290 stress/regression evidence, TASK-291 local operational/recovery/cleanup evidence, TASK-292 bilingual documentation cleanup, TASK-333 narrow Stage 2 runtime-memory proof, TASK-357 verified scoped Mem0 cleanup proof, TASK-384 deterministic provider matrix proof, TASK-386 final Stage 4 repository gates, TASK-394 build-local distribution proof, TASK-400 final Stage 5 gates, TASK-402 Mem0 Windows test hardening, TASK-434 Stage 7 local/offline integrated-flow gates, TASK-450 Stage 8 deterministic local stress/recovery/regression gates, and TASK-454 Stage 8 final gate rerun after the crash/reopen recovery completion fix support only the narrowed local scope; TASK-402 supersedes the TASK-400 `pnpm test` blocker with a clean mandatory gate rerun. Hosted/package/container rollback, durable external provider cleanup beyond the verified scoped Mem0 namespace proof, external provider reliability, broader runtime-memory behavior beyond registered local Mem0 plus Codex prompt rendering, live integrated multi-feature product flows, live provider stress, production-scale load proof, and public Builder 2.0 / managed subagent product claims remain deferred and must not be represented as proven.
+
+## Decision Summary
+
+The selected release target for the next product-readiness pass is [Release Scope Lock](./release-scope-lock.md) target `local-cli-repository-readiness`: a taggable repository state for contributors and local users that includes the source tree, contracts, documentation, examples, tests, and a build-local `dist` CLI generated from the checkout with `pnpm build`. Generated `dist` is not tracked source and is not promised to be already present in a clean checkout. It excludes hosted service deployment, package publication, installers, containers, managed deployment, and production SaaS claims.
+
+```yaml
+decision_id: P19-RDR-2026-04-24-TASK-296
+date: "2026-04-24"
+decision: defer
+release_target: "local-cli-repository-readiness"
+scope_lock: "docs/20-real-world-proof-and-release/release-scope-lock.md"
+version:
+  commit: "716f694"
+  package: "0.0.0"
+  schema: "current repository contracts"
+decision_owner: "TASK-296 final decision integration from reviewed TASK-287/TASK-290/TASK-291/TASK-292 evidence"
+reviewers:
+  - "TASK-287 live Codex App Server smoke review passed"
+  - "TASK-290 stress/regression review passed"
+  - "TASK-291 operational/rollback evidence review passed"
+  - "TASK-292 bilingual documentation cleanup review passed"
+  - "TASK-386 final Stage 4 repository gates passed; targeted-command instability documented"
+  - "TASK-394 build-local distribution checks passed"
+  - "TASK-400 final Stage 5 distribution gates passed, but full pnpm test gate failed in Mem0-backed Windows Chroma/SQLite tests"
+  - "TASK-402 Mem0 Windows Chroma/SQLite test hardening passed the targeted Mem0 suites, full pnpm test, lint, and typecheck"
+  - "TASK-434 Stage 7 local/offline integrated-flow targeted tests and full gates passed"
+  - "TASK-450 Stage 8 deterministic local stress/recovery/regression targeted tests and full gates passed"
+  - "TASK-454 Stage 8 final gates rerun passed after crash/reopen recovery completion proof was extended"
+scope_included:
+  - "repository release gates"
+  - "build-local dist CLI artifact proof"
+  - "runtime discovery and environment inspection"
+  - "minimal Codex runtime graph smoke through the local CLI"
+  - "direct local Mem0 provider readiness/proof"
+  - "verified scoped Mem0 namespace cleanup proof for the direct local provider path"
+  - "narrow Stage 2 Codex runtime-memory proof with registered local Mem0 and prompt-rendered memory context"
+  - "local graph-runner stress and regression proof with stub runtime"
+  - "deterministic Stage 8 local recovery, SQLite pressure, and event-dispatch regression coverage, including explicit retry/resume completion and exactly-once final output after crash/reopen"
+  - "deterministic provider reliability matrix with a local stub runtime and no latency gates"
+  - "deterministic local/offline integrated-flow automated coverage"
+  - "local CLI setup, disposable SQLite recovery, cleanup, and rollback classification"
+scope_deferred:
+  - "broader runtime-memory behavior beyond the narrow registered local Mem0 plus Codex prompt-rendering path"
+  - "hosted service deployment and rollback"
+  - "npm/package publication, installer, container, or other artifact deployment and rollback"
+  - "durable external provider data cleanup and rollback beyond disposable local proof data and verified scoped Mem0 namespace cleanup"
+  - "external provider reliability, throttling, and volume claims beyond the dated live smoke and direct local provider proofs"
+  - "full user interaction layer beyond current local evidence"
+  - "managed subagent orchestration as an operator-facing product surface"
+  - "live integrated multi-feature product flows as public authoring workflows"
+blocking_items:
+  - "No unresolved local CLI/repository release-gate blocker remains after TASK-402 superseded the TASK-400 Mem0-backed Windows Chroma/SQLite `pnpm test` failure with a clean mandatory gate rerun."
+accepted_residual_risks:
+  - "The local stress proof uses a stub runtime and does not prove external provider throttling reliability."
+  - "The deterministic provider matrix proves Core behavior for scripted provider-style failures, resume, drain, and final-output integrity only; it does not prove live provider throttling or latency behavior."
+  - "The Stage 2 runtime-memory proof covers only registered local Mem0, prompt-rendered Codex context, and success-only provider writes; it does not prove native App Server memory."
+  - "The TASK-357 provider-operations proof covers only verified scoped delete for a configured Mem0 namespace and explicit scope; it does not prove true restore, graph-store cleanup, provider-wide cleanup, or provider reliability."
+  - "The initial TASK-333 default `pnpm test` gate failed in this environment because existing Mem0-backed tests exceeded their test-local timeouts and hit Windows SQLite cleanup locks; the TASK-334 review rerun passed and supersedes that failure as the current default-gate status."
+  - "The TASK-400 final `pnpm test` failure is preserved as failed evidence but superseded by TASK-402. The hardened default suite still contains real local Mem0/Chroma tests and remains a local provider proof, not an external provider reliability or hosted/package readiness proof."
+  - "The TASK-434 Stage 7 gates prove deterministic local/offline integrated-flow behavior only. They do not prove live external provider behavior, hosted deployment, managed deployment, or public integrated authoring readiness."
+  - "The TASK-454 Stage 8 gate rerun proves deterministic local stress/recovery/regression behavior only, including explicit retry/resume completion and exactly-once final output after crash/reopen. It does not prove automatic live crash recovery, live provider stress, production-scale load, hosted deployment, or external provider reliability."
+  - "The operational proof covers disposable local SQLite backup/restore and cleanup only, not hosted/package rollback or durable external provider cleanup."
+evidence_items:
+  - "P19-2026-04-24-GATES-001"
+  - "P19-2026-04-24-RUNTIME-DISCOVERY-001"
+  - "P19-2026-04-24-LIVE-SMOKE-001"
+  - "P19-2026-04-24-LIVE-SMOKE-002"
+  - "P19-2026-04-24-MEM0-001"
+  - "P19-2026-04-24-MEM0-002"
+  - "P19-2026-04-24-STRESS-001"
+  - "P19-2026-04-24-REGRESSION-002"
+  - "P19-2026-04-24-OPS-CONFIG-001"
+  - "P19-2026-04-24-OPS-RECOVERY-001"
+  - "P19-2026-04-24-ROLLBACK-001"
+  - "P19-2026-04-25-STAGE2-GATES-001"
+  - "P19-2026-04-25-STAGE2-GATES-002"
+  - "P19-2026-04-25-STAGE2-MEMORY-001"
+  - "P19-2026-04-25-STAGE2-MEMORY-002"
+  - "P19-2026-04-25-STAGE3-GATES-001"
+  - "P19-2026-04-25-STAGE3-CLEANUP-001"
+  - "P19-2026-04-25-STAGE3-CLEANUP-002"
+  - "P19-2026-04-25-STAGE4-PROVIDER-MATRIX-001"
+  - "P19-2026-04-25-STAGE4-GATES-001"
+  - "P19-2026-04-25-STAGE4-TARGETED-RERUN-001"
+  - "P19-2026-04-25-STAGE5-DIST-001"
+  - "P19-2026-04-25-STAGE5-FINAL-GATES-001"
+  - "P19-2026-04-25-STAGE5-MEM0-HARDENING-001"
+  - "P19-2026-04-25-STAGE7-FINAL-GATES-001"
+  - "P19-2026-04-25-STAGE8-FINAL-GATES-001"
+  - "P19-2026-04-25-STAGE8-FINAL-GATES-RERUN-001"
+```
+
+## Release Criteria
+
+The decision may be `release` only when:
+
+- all release-scope live proof scenarios pass or have an approved equivalent live proof;
+- stress and regression evidence covers the release-scope capabilities;
+- operational setup, observability, incident response, cleanup, and rollback are proven or explicitly accepted as residual risk;
+- no unresolved `blocks-release` evidence item remains;
+- user-visible limitations and deferred capabilities are documented;
+- reviewers agree that the evidence supports the selected scope.
+
+## Block Criteria
+
+The decision must be `block` when:
+
+- a required proof category is missing for an included capability;
+- a live proof fails or is inconclusive and the capability remains in scope;
+- operational rollback or recovery cannot be performed for the release target;
+- evidence cannot be audited because artifacts are missing or unredacted data cannot be shared safely;
+- a release-blocking defect has no accepted mitigation.
+
+## Defer Criteria
+
+The decision may be `defer` only when:
+
+- the deferred capability, provider, runtime, scenario, or operational promise is removed from release scope;
+- users and maintainers can see the limitation;
+- evidence explains why the deferred area is not ready;
+- a follow-up owner and expected proof path are named;
+- remaining in-scope evidence still satisfies release criteria.
+
+## Deferred Follow-Up Owners And Proof Paths
+
+Each deferred scope below must stay outside release claims until its owner records the expected proof path in the evidence log and a later decision moves it into scope.
+
+| Deferred scope | Follow-up owner | Expected proof path before inclusion | Rollback or cleanup expectation | User-visible limitation |
+| --- | --- | --- | --- | --- |
+| Broader runtime-memory behavior beyond the narrow Stage 2 proof | Memory integration owner and Runtime integration owner | Prove additional providers, native runtime memory primitives if a runtime exposes them, provider cleanup/idempotency behavior, retry semantics, and broader runtime/model option combinations beyond the TASK-333 registered local Mem0 plus Codex prompt-rendering path. | Clean provider proof data or use a disposable namespace; preserve redacted evidence that only intended proof data was removed. | The current graph proof is narrow: registered local Mem0, prompt-rendered `memory_context`, and success-only provider writes. It is not native App Server memory or broad provider readiness. |
+| Hosted service deployment and rollback | Release engineering owner and Operations owner | Define the hosted deployment artifact and environment, deploy the recorded version, run hosted smoke and observability checks, roll back to a known previous version or disabled-capability mode, and verify state integrity plus post-rollback health. | Hosted rollback must be executed and audited before hosted readiness is claimed. | No hosted service operation, uptime, multi-tenant support, or hosted rollback promise exists in this release target. |
+| npm/package publication, installer, container, or other artifact deployment and rollback | Release engineering owner | Define the artifact type and publish/install path, build from a recorded commit, install in a disposable environment, run CLI smoke and configuration inspection, then uninstall or roll back to a previous artifact and verify the prior version runs. | Artifact-specific uninstall, rollback, or previous-version verification is mandatory before inclusion. | Users should not expect an npm package, installer, Docker image, or packaged upgrade path. |
+| Durable external provider data cleanup and rollback beyond disposable local proof data and verified scoped Mem0 namespace cleanup | Memory integration owner and Provider operations owner | Use an isolated provider namespace/account, create durable test data, prove backup or cleanup semantics beyond bounded scoped delete, verify via provider read/search/list that only intended proof data was removed or restored, and preserve redacted provider evidence. | Removal or restoration must be provider-verified; disposable local cleanup and TASK-357 scoped namespace cleanup are insufficient for true restore or provider-wide cleanup claims. | Durable external provider data cleanup beyond the configured namespace and explicit scope is not covered by the current cleanup guarantee. |
+| External provider reliability, throttling, and volume claims beyond dated live smoke, direct local provider proofs, and deterministic stub-provider matrix | Runtime integration owner and Provider reliability owner | Run a quota-safe provider test matrix covering throttling, transient failures, retry behavior, volume limits, and final output integrity against the target providers; record metrics, request IDs when safe, and controlled-failure evidence. Use TASK-384 as local semantics coverage, not as a substitute for live provider proof. | Failed or throttled runs must leave no unbounded retry or cleanup debt. | Current evidence proves local failure semantics only and does not guarantee provider reliability under load. |
+| Full user interaction layer beyond current local evidence | Interaction owner and CLI owner | Prove blocked prompts, replies, resume-after-reply, and risky mid-run change policy across CLI and supported runtime state. | Clean prompt/reply proof state and preserve redacted interaction evidence. | User chat and resume behavior must be described only at the proven local/focused level. |
+| Managed subagent orchestration as an operator-facing product surface | Managed subagent owner and QA owner | Prove create/send/wait/status/close/cancel, roles, write-scope ownership, review/fix loops, lineage, and cancellation through user-visible flows. | Close or cancel child work and verify no leaked active child runs. | Managed subagents remain partially implemented and not broadly release-proven. |
+| Builder 2.0 and integrated multi-feature product flows as public authoring workflows | Builder owner and Product integration owner | Prove builder output through validation, lifecycle publication, execution, memory/runtime/interaction/subagent boundaries, and integrated acceptance scenarios. | Clean drafts, live revisions, and proof state or prove safe rollback. | Builder and integrated flows must not be marketed as a complete public authoring system. |
+
+## Decision Narrative
+
+The final Phase 19 decision is `defer`.
+
+This is the strongest truthful outcome for the current evidence. `block` is no longer accurate for the narrowed local CLI/repository scope because the reviewed upstream evidence resolved the previous in-scope blockers: TASK-287 proved the minimal Codex App Server graph smoke through the CLI, TASK-290 proved local graph-runner stress/regression behavior, TASK-291 proved local setup plus disposable SQLite recovery/cleanup and classified hosted/package rollback as `not-run`, and TASK-292 verified bilingual documentation cleanup.
+
+`release` would overclaim the product surface. The current evidence does not prove hosted service rollback, package/container/installer rollback, durable external provider cleanup beyond TASK-357 scoped namespace cleanup, true restore, graph-store cleanup, provider-wide cleanup, external provider throttling reliability, native App Server memory, runtime-memory behavior beyond the narrow TASK-333 registered-Mem0 plus Codex prompt-rendering path, live integrated multi-feature product flows, or public Builder 2.0 / managed subagent product readiness. Those areas are therefore explicitly removed from the current release scope and remain visible as deferred follow-up work with role owners, expected proof paths, cleanup or rollback expectations, and user-visible limitations.
+
+The historical failed live smoke evidence, `P19-2026-04-24-LIVE-SMOKE-001`, remains preserved as a failed superseded run. It is no longer an unresolved current blocker because the passing retry `P19-2026-04-24-LIVE-SMOKE-002` provides the release-scope live graph proof. The failed Mem0 quoting attempt, `P19-2026-04-24-MEM0-001`, also remains visible as superseded operator evidence.
+
+Hosted/package deployment rollback is not represented as proven. It is deferred because no hosted service, npm/package publication, installer, container, or other deployment artifact exists in the current local CLI/repository release target. If a later decision expands scope to any of those artifacts, artifact-specific deployment and rollback proof becomes release-blocking until completed.
+
+## TASK-357 Stage 3 Decision Note
+
+TASK-357 does not change the final `defer` decision. It adds a narrow included proof for verified scoped delete on the direct local Mem0 provider path: preview plus token-confirmed delete removed target namespace records for an explicit user scope, and a control namespace over the same disposable storage survived. This is not true restore, graph-store cleanup, provider-wide cleanup, durable external provider cleanup beyond the verified scope, or provider reliability.
+
+## TASK-384 Stage 4 Decision Note
+
+TASK-384 does not change the final `defer` decision. It adds deterministic local coverage for provider-style throttling, transient failures, interruption, waiting/resume boundaries, bounded concurrent active-execution drain, and final-output integrity through `tests/integration/stage4-provider-reliability.test.ts`. This is stub-runtime evidence only: it does not call live providers, does not use absolute latency gates, and does not prove external provider reliability under real throttling or load.
+
+## TASK-386 Stage 4 Gates Note
+
+TASK-386 does not change the final `defer` decision. It records that the full test suite, lint, typecheck, and build passed after formatter-only cleanup in Stage 4 touched test files. The exact multi-file targeted command passed once, but repeated later reruns failed on existing Mem0-backed `memory-service` tests at hard-coded 60s per-test timeouts with Windows Chroma SQLite cleanup locks; `memory-service.test.ts` passed in isolation and the full `pnpm test` gate passed afterward. This gate evidence supports local CLI/repository confidence only, documents a targeted-command stability risk for final review, and does not add live provider reliability proof.
+
+## TASK-434 Stage 7 Gates Note
+
+TASK-434 does not change the final `defer` decision. It records that the Stage 7 targeted local/offline integrated-flow tests, full test suite, lint, typecheck, and build passed. This supports deterministic local/offline integrated-flow confidence only; it does not add live external integrated-flow proof, hosted/managed deployment proof, external provider reliability proof, or public Builder 2.0 / managed subagent product readiness.
+
+## TASK-450 Stage 8 Gates Note
+
+TASK-450 does not change the final `defer` decision. It records that the Stage 8 targeted deterministic local stress/recovery/regression tests, full test suite, lint, typecheck, and build passed. This supports local state and regression confidence for deterministic stress cleanup, crash/reopen recovery, multi-store SQLite pressure, and repeated/near-concurrent event dispatch only; it does not add live provider stress proof, production-scale load proof, hosted deployment proof, or external provider reliability proof.
+
+## TASK-454 Stage 8 Gates Rerun Note
+
+TASK-454 does not change the final `defer` decision. It records that the Stage 8 targeted command, full test suite, lint, typecheck, and build passed again after the crash/reopen recovery proof was extended. The recovery proof now covers stale in-progress work after a fresh SQLite-store reopen, explicit terminal classification, retry/resume completion, completed run state, and exactly one final output for the recovered node. This remains deterministic local/offline evidence only and does not prove automatic live crash recovery, live provider stress, production-scale load, hosted deployment, or external provider reliability.
+
+## Approval
+
+This record approves only the final Phase 19 `defer` decision for the current local CLI/repository release scope. It does not approve any deferred hosted/package/container, durable external provider, external-provider-reliability, runtime-native memory, live integrated-flow, live provider stress, production-scale load, managed subagent, or public Builder 2.0 claim.
+
+<a id="russian"></a>
+
+# Запись решения о выпуске
+
+Статус: финальное решение Phase 19 - `defer` для текущего local CLI/repository release scope. Каноническая следующая цель выпуска зафиксирована в [Release Scope Lock](./release-scope-lock.md) как `local-cli-repository-readiness`. Проверенные доказательства TASK-287 live runtime smoke, TASK-290 stress/regression, TASK-291 local operational/recovery/cleanup, TASK-292 bilingual documentation cleanup, TASK-333 narrow Stage 2 runtime-memory proof, TASK-357 verified scoped Mem0 cleanup proof, TASK-384 deterministic provider matrix proof, TASK-386 final Stage 4 repository gates, TASK-394 build-local distribution proof, TASK-400 final Stage 5 gates, TASK-402 Mem0 Windows test hardening, TASK-434 Stage 7 local/offline integrated-flow gates, TASK-450 Stage 8 deterministic local stress/recovery/regression gates и TASK-454 Stage 8 final gate rerun после crash/reopen recovery completion fix поддерживают только суженный scope; TASK-402 supersedes TASK-400 `pnpm test` blocker через clean mandatory gate rerun, а TASK-400 failure сохранен как historical failed evidence. Hosted/package/container rollback, durable external provider cleanup beyond verified scoped Mem0 namespace proof, external provider reliability, broader runtime-memory behavior beyond registered local Mem0 plus Codex prompt rendering, live integrated multi-feature product flows, live provider stress, production-scale load proof и public Builder 2.0 / managed subagent product claims остаются deferred и не должны представляться как доказанные.
+
+TASK-454 Stage 8 final gate rerun принят только как deterministic local stress/recovery/regression evidence, включая explicit retry/resume completion и exactly-once final output after crash/reopen. Live provider stress, production-scale load, hosted/managed deployment proof, external provider reliability proof, live integrated-flow proof и public Builder 2.0 / managed subagent product readiness остаются deferred.
+
+## Краткое решение
+
+Выбранная цель выпуска для следующего product-readiness pass - [Release Scope Lock](./release-scope-lock.md) target `local-cli-repository-readiness`: состояние репозитория, которое можно тегировать для contributors и local users и которое включает source tree, contracts, documentation, examples, tests и build-local `dist` CLI, созданный из checkout командой `pnpm build`. Generated `dist` не является tracked source и не обещается как уже существующий в clean checkout. Hosted service deployment, package publication, installers, containers, managed deployment и production SaaS claims исключены.
+
+```yaml
+decision_id: P19-RDR-2026-04-24-TASK-296
+date: "2026-04-24"
+decision: defer
+release_target: "local-cli-repository-readiness"
+scope_lock: "docs/20-real-world-proof-and-release/release-scope-lock.md"
+version:
+  commit: "716f694"
+  package: "0.0.0"
+  schema: "current repository contracts"
+decision_owner: "TASK-296 final decision integration from reviewed TASK-287/TASK-290/TASK-291/TASK-292 evidence"
+reviewers:
+  - "TASK-287 live Codex App Server smoke review passed"
+  - "TASK-290 stress/regression review passed"
+  - "TASK-291 operational/rollback evidence review passed"
+  - "TASK-292 bilingual documentation cleanup review passed"
+  - "TASK-386 final Stage 4 repository gates passed; targeted-command instability documented"
+  - "TASK-394 build-local distribution checks passed"
+  - "TASK-400 final Stage 5 distribution gates passed, but full pnpm test gate failed in Mem0-backed Windows Chroma/SQLite tests"
+  - "TASK-402 Mem0 Windows Chroma/SQLite test hardening passed the targeted Mem0 suites, full pnpm test, lint, and typecheck"
+  - "TASK-434 Stage 7 local/offline integrated-flow targeted tests and full gates passed"
+  - "TASK-450 Stage 8 deterministic local stress/recovery/regression targeted tests and full gates passed"
+  - "TASK-454 Stage 8 final gates rerun passed after crash/reopen recovery completion proof was extended"
+scope_included:
+  - "repository release gates"
+  - "build-local dist CLI artifact proof"
+  - "runtime discovery and environment inspection"
+  - "minimal Codex runtime graph smoke through the local CLI"
+  - "direct local Mem0 provider readiness/proof"
+  - "verified scoped Mem0 namespace cleanup proof for the direct local provider path"
+  - "narrow Stage 2 Codex runtime-memory proof with registered local Mem0 and prompt-rendered memory context"
+  - "local graph-runner stress and regression proof with stub runtime"
+  - "deterministic Stage 8 local recovery, SQLite pressure, and event-dispatch regression coverage, including explicit retry/resume completion and exactly-once final output after crash/reopen"
+  - "deterministic provider reliability matrix with a local stub runtime and no latency gates"
+  - "deterministic local/offline integrated-flow automated coverage"
+  - "local CLI setup, disposable SQLite recovery, cleanup, and rollback classification"
+scope_deferred:
+  - "broader runtime-memory behavior beyond the narrow registered local Mem0 plus Codex prompt-rendering path"
+  - "hosted service deployment and rollback"
+  - "npm/package publication, installer, container, or other artifact deployment and rollback"
+  - "durable external provider data cleanup and rollback beyond disposable local proof data and verified scoped Mem0 namespace cleanup"
+  - "external provider reliability, throttling, and volume claims beyond the dated live smoke and direct local provider proofs"
+  - "full user interaction layer beyond current local evidence"
+  - "managed subagent orchestration as an operator-facing product surface"
+  - "live integrated multi-feature product flows as public authoring workflows"
+blocking_items:
+  - "No unresolved local CLI/repository release-gate blocker remains after TASK-402 superseded the TASK-400 Mem0-backed Windows Chroma/SQLite `pnpm test` failure with a clean mandatory gate rerun."
+accepted_residual_risks:
+  - "The local stress proof uses a stub runtime and does not prove external provider throttling reliability."
+  - "The deterministic provider matrix proves Core behavior for scripted provider-style failures, resume, drain, and final-output integrity only; it does not prove live provider throttling or latency behavior."
+  - "The Stage 2 runtime-memory proof covers only registered local Mem0, prompt-rendered Codex context, and success-only provider writes; it does not prove native App Server memory."
+  - "The TASK-357 provider-operations proof covers only verified scoped delete for a configured Mem0 namespace and explicit scope; it does not prove true restore, graph-store cleanup, provider-wide cleanup, or provider reliability."
+  - "The initial TASK-333 default `pnpm test` gate failed in this environment because existing Mem0-backed tests exceeded their test-local timeouts and hit Windows SQLite cleanup locks; the TASK-334 review rerun passed and supersedes that failure as the current default-gate status."
+  - "The TASK-400 final `pnpm test` failure is preserved as failed evidence but superseded by TASK-402. The hardened default suite still contains real local Mem0/Chroma tests and remains a local provider proof, not an external provider reliability or hosted/package readiness proof."
+  - "The TASK-434 Stage 7 gates prove deterministic local/offline integrated-flow behavior only. They do not prove live external provider behavior, hosted deployment, managed deployment, or public integrated authoring readiness."
+  - "The TASK-454 Stage 8 gate rerun proves deterministic local stress/recovery/regression behavior only, including explicit retry/resume completion and exactly-once final output after crash/reopen. It does not prove automatic live crash recovery, live provider stress, production-scale load, hosted deployment, or external provider reliability."
+  - "The operational proof covers disposable local SQLite backup/restore and cleanup only, not hosted/package rollback or durable external provider cleanup."
+evidence_items:
+  - "P19-2026-04-24-GATES-001"
+  - "P19-2026-04-24-RUNTIME-DISCOVERY-001"
+  - "P19-2026-04-24-LIVE-SMOKE-001"
+  - "P19-2026-04-24-LIVE-SMOKE-002"
+  - "P19-2026-04-24-MEM0-001"
+  - "P19-2026-04-24-MEM0-002"
+  - "P19-2026-04-24-STRESS-001"
+  - "P19-2026-04-24-REGRESSION-002"
+  - "P19-2026-04-24-OPS-CONFIG-001"
+  - "P19-2026-04-24-OPS-RECOVERY-001"
+  - "P19-2026-04-24-ROLLBACK-001"
+  - "P19-2026-04-25-STAGE2-GATES-001"
+  - "P19-2026-04-25-STAGE2-GATES-002"
+  - "P19-2026-04-25-STAGE2-MEMORY-001"
+  - "P19-2026-04-25-STAGE2-MEMORY-002"
+  - "P19-2026-04-25-STAGE3-GATES-001"
+  - "P19-2026-04-25-STAGE3-CLEANUP-001"
+  - "P19-2026-04-25-STAGE3-CLEANUP-002"
+  - "P19-2026-04-25-STAGE4-PROVIDER-MATRIX-001"
+  - "P19-2026-04-25-STAGE4-GATES-001"
+  - "P19-2026-04-25-STAGE4-TARGETED-RERUN-001"
+  - "P19-2026-04-25-STAGE5-DIST-001"
+  - "P19-2026-04-25-STAGE5-FINAL-GATES-001"
+  - "P19-2026-04-25-STAGE5-MEM0-HARDENING-001"
+  - "P19-2026-04-25-STAGE7-FINAL-GATES-001"
+  - "P19-2026-04-25-STAGE8-FINAL-GATES-001"
+  - "P19-2026-04-25-STAGE8-FINAL-GATES-RERUN-001"
+```
+
+## Критерии release
+
+Решение может быть `release` только когда:
+
+- все release-scope live proof scenarios проходят или имеют approved equivalent live proof;
+- stress и regression evidence покрывают release-scope capabilities;
+- operational setup, observability, incident response, cleanup и rollback доказаны или явно приняты как residual risk;
+- не остается unresolved `blocks-release` evidence item;
+- user-visible limitations и deferred capabilities задокументированы;
+- reviewers согласны, что evidence поддерживает выбранный scope.
+
+## Критерии block
+
+Решение должно быть `block`, когда:
+
+- обязательная proof category отсутствует для included capability;
+- live proof fails или inconclusive, а capability остается in scope;
+- operational rollback или recovery невозможно выполнить для release target;
+- evidence нельзя проверить, потому что artifacts отсутствуют или unredacted data нельзя безопасно shared;
+- release-blocking defect не имеет accepted mitigation.
+
+## Критерии defer
+
+Решение может быть `defer` только когда:
+
+- deferred capability, provider, runtime, scenario или operational promise removed из release scope;
+- users и maintainers видят limitation;
+- evidence объясняет, почему deferred area не готова;
+- follow-up owner и expected proof path названы;
+- remaining in-scope evidence все еще удовлетворяет release criteria.
+
+## Follow-up owners и proof paths для deferred scope
+
+Каждый deferred scope ниже должен оставаться вне release claims, пока его owner не запишет expected proof path в evidence log и более позднее решение не включит его в scope.
+
+| Deferred scope | Follow-up owner | Expected proof path before inclusion | Rollback or cleanup expectation | User-visible limitation |
+| --- | --- | --- | --- | --- |
+| Broader runtime-memory behavior beyond the narrow Stage 2 proof | Memory integration owner и Runtime integration owner | Доказать additional providers, native runtime memory primitives if a runtime exposes them, provider cleanup/idempotency behavior, retry semantics и broader runtime/model option combinations beyond the TASK-333 registered local Mem0 plus Codex prompt-rendering path. | Очистить provider proof data или использовать disposable namespace; сохранить redacted evidence, что удалены только intended proof data. | Current graph proof is narrow: registered local Mem0, prompt-rendered `memory_context`, and success-only provider writes. It is not native App Server memory or broad provider readiness. |
+| Hosted service deployment and rollback | Release engineering owner и Operations owner | Определить hosted deployment artifact и environment, развернуть recorded version, выполнить hosted smoke и observability checks, откатиться к known previous version или disabled-capability mode, затем проверить state integrity и post-rollback health. | Hosted rollback должен быть выполнен и проверен до заявления hosted readiness. | В этой цели выпуска нет обещания hosted service operation, uptime, multi-tenant support или hosted rollback. |
+| npm/package publication, installer, container или other artifact deployment and rollback | Release engineering owner | Определить artifact type и publish/install path, собрать из recorded commit, установить в disposable environment, выполнить CLI smoke и configuration inspection, затем uninstall или rollback к previous artifact и проверить, что previous version runs. | Artifact-specific uninstall, rollback или previous-version verification обязательны перед включением. | Пользователи не должны ожидать npm package, installer, Docker image или packaged upgrade path. |
+| Durable external provider data cleanup and rollback beyond disposable local proof data and verified scoped Mem0 namespace cleanup | Memory integration owner и Provider operations owner | Использовать isolated provider namespace/account, создать durable test data, доказать backup или cleanup semantics beyond bounded scoped delete, проверить через provider read/search/list, что удалены или восстановлены только intended proof data, и сохранить redacted provider evidence. | Removal или restoration должны быть provider-verified; disposable local cleanup and TASK-357 scoped namespace cleanup are insufficient for true restore or provider-wide cleanup claims. | Durable external provider data cleanup beyond the configured namespace and explicit scope is not covered by the current cleanup guarantee. |
+| External provider reliability, throttling, and volume claims beyond dated live smoke, direct local provider proofs, and deterministic stub-provider matrix | Runtime integration owner и Provider reliability owner | Выполнить quota-safe provider test matrix для throttling, transient failures, retry behavior, volume limits и final output integrity against target providers; записать metrics, request IDs when safe и controlled-failure evidence. Use TASK-384 as local semantics coverage, not as a substitute for live provider proof. | Failed или throttled runs не должны оставлять unbounded retry или cleanup debt. | Текущие доказательства проверяют только local failure semantics и не гарантируют provider reliability under load. |
+| Full user interaction layer beyond current local evidence | Interaction owner и CLI owner | Доказать blocked prompts, replies, resume-after-reply и risky mid-run change policy через CLI и supported runtime state. | Очистить prompt/reply proof state и сохранить redacted interaction evidence. | User chat и resume behavior нужно описывать только на proven local/focused уровне. |
+| Managed subagent orchestration as an operator-facing product surface | Managed subagent owner и QA owner | Доказать create/send/wait/status/close/cancel, roles, write-scope ownership, review/fix loops, lineage и cancellation через user-visible flows. | Закрыть или отменить child work и проверить отсутствие leaked active child runs. | Managed subagents остаются partially implemented и не доказаны широко для release. |
+| Builder 2.0 and integrated multi-feature product flows as public authoring workflows | Builder owner и Product integration owner | Доказать builder output через validation, lifecycle publication, execution, memory/runtime/interaction/subagent boundaries и integrated acceptance scenarios. | Очистить drafts, live revisions и proof state или доказать safe rollback. | Builder и integrated flows нельзя продвигать как complete public authoring system. |
+
+## Текст решения
+
+Финальное решение Phase 19 - `defer`.
+
+Это самый сильный правдивый outcome для текущих доказательств. `block` больше не точен для суженного local CLI/repository scope, потому что проверенные upstream evidence устранили предыдущие in-scope blockers: TASK-287 доказал minimal Codex App Server graph smoke через CLI, TASK-290 доказал local graph-runner stress/regression behavior, TASK-291 доказал local setup плюс disposable SQLite recovery/cleanup и классифицировал hosted/package rollback как `not-run`, а TASK-292 проверил bilingual documentation cleanup.
+
+`release` переутверждал бы product surface. Текущие доказательства не подтверждают hosted service rollback, package/container/installer rollback, durable external provider cleanup beyond TASK-357 scoped namespace cleanup, true restore, graph-store cleanup, provider-wide cleanup, external provider throttling reliability, native App Server memory, runtime-memory behavior beyond the narrow TASK-333 registered-Mem0 plus Codex prompt-rendering path, live integrated multi-feature product flows, public Builder 2.0 или managed subagent product readiness. Поэтому эти области явно удалены из текущего release scope и остаются видимыми как deferred follow-up work с role owners, expected proof paths, cleanup or rollback expectations и user-visible limitations.
+
+Историческое failed live smoke evidence, `P19-2026-04-24-LIVE-SMOKE-001`, сохранено как failed superseded run. Оно больше не является unresolved current blocker, потому что passing retry `P19-2026-04-24-LIVE-SMOKE-002` дает release-scope live graph proof. Failed Mem0 quoting attempt, `P19-2026-04-24-MEM0-001`, также остается видимым как superseded operator evidence.
+
+Hosted/package deployment rollback не представлен как доказанный. Он deferred, потому что в текущем local CLI/repository release target нет hosted service, npm/package publication, installer, container или другого deployment artifact. Если более позднее решение расширит scope до любого из этих artifacts, artifact-specific deployment and rollback proof станет release-blocking до выполнения.
+
+## Approval
+
+Эта запись одобряет только финальное Phase 19 решение `defer` для текущего local CLI/repository release scope. Она не одобряет deferred hosted/package/container, durable external provider, external-provider-reliability, runtime-native memory, live integrated-flow, managed subagent или public Builder 2.0 claims.
+
+## TASK-333 Stage 2 Decision Note
+
+Русский: TASK-333 не меняет решение `defer`. Он добавляет узкий included proof для registered local Mem0 + Codex prompt-rendered `memory_context` + success-only provider write. Это не native App Server memory, не broad runtime-memory readiness и не release readiness. TASK-334 review rerun of default `pnpm test` passed, so the earlier TASK-333 default-gate failure is historical superseded evidence rather than the current blocker.
+
+## TASK-357 Stage 3 Decision Note
+
+Русский: TASK-357 не меняет решение `defer`. Он добавляет узкий included proof для verified scoped delete в direct local Mem0 provider path: preview и token-confirmed delete удалили target namespace records для explicit user scope, а control namespace на том же disposable storage сохранился. Это не true restore, не graph-store cleanup, не provider-wide cleanup, не durable external provider cleanup beyond verified scope и не provider reliability.
+
+## TASK-384 Stage 4 Decision Note
+
+Русский: TASK-384 не меняет решение `defer`. Он добавляет deterministic local coverage для provider-style throttling, transient failures, interruption, waiting/resume boundaries, bounded concurrent active-execution drain и final-output integrity через `tests/integration/stage4-provider-reliability.test.ts`. Это только stub-runtime evidence: live providers не вызываются, absolute latency gates не используются, и external provider reliability under real throttling or load не доказана.
+
+## TASK-386 Stage 4 Gates Note
+
+Русский: TASK-386 не меняет решение `defer`. Он фиксирует, что full test suite, lint, typecheck и build прошли после formatter-only cleanup в Stage 4 touched test files. Exact multi-file targeted command прошел один раз, но повторные reruns failed на existing Mem0-backed `memory-service` tests с hard-coded 60s per-test timeouts и Windows Chroma SQLite cleanup locks; `memory-service.test.ts` прошел isolated, а полный `pnpm test` gate прошел afterward. Это gate evidence поддерживает только local CLI/repository confidence, документирует targeted-command stability risk для final review и не добавляет live provider reliability proof.
+
+## TASK-434 Stage 7 Gates Note
+
+Русский: TASK-434 не меняет финальное решение `defer`. Он фиксирует, что Stage 7 targeted local/offline integrated-flow tests, full test suite, lint, typecheck и build прошли. Это поддерживает только deterministic local/offline integrated-flow confidence; live external integrated-flow proof, hosted/managed deployment proof, external provider reliability proof и public Builder 2.0 / managed subagent product readiness не доказаны.
+
+## TASK-450 Stage 8 Gates Note
+
+Русский: TASK-450 не меняет финальное решение `defer`. Он фиксирует, что Stage 8 targeted deterministic local stress/recovery/regression tests, full test suite, lint, typecheck и build прошли. Это поддерживает только deterministic local confidence для stress cleanup, crash/reopen recovery, multi-store SQLite pressure и repeated/near-concurrent event dispatch; live provider stress, production-scale load, hosted deployment и external provider reliability не доказаны.
+
+## TASK-454 Stage 8 Gates Rerun Note
+
+Русский: TASK-454 не меняет финальное решение `defer`. Он фиксирует, что Stage 8 targeted command, full test suite, lint, typecheck и build прошли повторно после расширения crash/reopen recovery proof. Recovery proof теперь покрывает stale in-progress work after fresh SQLite-store reopen, explicit terminal classification, retry/resume completion, completed run state и exactly one final output for the recovered node. Это остается только deterministic local/offline evidence и не доказывает automatic live crash recovery, live provider stress, production-scale load, hosted deployment или external provider reliability.

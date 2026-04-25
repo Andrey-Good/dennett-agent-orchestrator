@@ -1,0 +1,38 @@
+{
+  "graph_contract_version": "1.0",
+  "meta": {
+    "id": "fixture.agent",
+    "name": "Fixture Agent"
+  },
+  "entry_node_id": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "runtime_agent",
+      "runtime_adapter": "codex",
+      "prompt": "Respond briefly.",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      },
+      "runtime_source_policy": "inherit",
+      "runtime_source_ids": [
+        "source-a"
+      ]
+    }
+  ],
+  "runtime_sources": [
+    {
+      "id": "source-a",
+      "runtime_adapter": "codex",
+      "source_ref": "workspace://source-a"
+    }
+  ]
+}

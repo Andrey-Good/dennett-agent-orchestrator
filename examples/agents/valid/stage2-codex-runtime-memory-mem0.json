@@ -1,0 +1,81 @@
+{
+  "graph_contract_version": "1.0",
+  "meta": {
+    "id": "stage2-codex-runtime-memory-mem0",
+    "name": "Stage 2 Codex Runtime Memory Mem0 Proof",
+    "description": "Proof fixture for Codex runtime_agent execution with a registered local Mem0 memory binding. Requires a local provider registration whose codex_ref is primary_memory."
+  },
+  "params": {
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic to answer using retrieved memory context when relevant."
+    }
+  },
+  "memory_bindings": [
+    {
+      "id": "mem0_runtime_context",
+      "kind": "runtime_memory",
+      "codex_ref": "primary_memory",
+      "scope": "agent",
+      "config": {
+        "intent": {
+          "summary": "Retrieve and write task-relevant long-lived context for the current agent run.",
+          "labels": [
+            "stage2",
+            "codex",
+            "mem0"
+          ]
+        },
+        "required_capabilities": [
+          "read",
+          "write",
+          "entity_scoped"
+        ],
+        "transport_preferences": {
+          "preferred": [
+            "sdk"
+          ],
+          "forbid": [
+            "mcp"
+          ]
+        },
+        "provider_extension": {
+          "provider": "mem0",
+          "transport": "sdk"
+        },
+        "local_notes": "The portable agent file intentionally contains no local Mem0 paths, credentials, or provider lifecycle instructions."
+      }
+    }
+  ],
+  "entry_node_id": "answer",
+  "nodes": [
+    {
+      "id": "answer",
+      "kind": "runtime_agent",
+      "runtime_adapter": "codex",
+      "memory_ids": [
+        "mem0_runtime_context"
+      ],
+      "runtime_options": {
+        "model": "gpt-5.3-codex"
+      },
+      "prompt": "Answer in one concise sentence. Use Dennett memory context if it is provided and relevant. Do not mention provider names, provider configuration, or implementation details.",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Topic: "
+          },
+          {
+            "type": "ref",
+            "ref": "params.topic"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      }
+    }
+  ]
+}

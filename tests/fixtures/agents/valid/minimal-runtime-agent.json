@@ -1,0 +1,27 @@
+{
+  "graph_contract_version": "1.0",
+  "meta": {
+    "id": "minimal-runtime-agent",
+    "name": "Minimal Runtime Agent"
+  },
+  "entry_node_id": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "runtime_agent",
+      "runtime_adapter": "codex",
+      "prompt": "Respond briefly.",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      }
+    }
+  ]
+}

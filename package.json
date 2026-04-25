@@ -1,0 +1,41 @@
+{
+	"name": "dennett-agent-orchestrator",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"dennett-agent-orchestrator": "./dist/src/interfaces/cli.js"
+	},
+	"files": [
+		"dist/src/**",
+		"contracts/json-schema/*.schema.json"
+	],
+	"packageManager": "pnpm@10.33.0",
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"scripts": {
+		"build": "node scripts/clean-dist.js && tsc -p tsconfig.build.json",
+		"dist:clean": "node scripts/clean-dist.js",
+		"dist:check": "node scripts/check-distribution.js",
+		"packlist:check": "node scripts/check-packlist.js",
+		"release-candidate:check": "node scripts/check-release-candidate.js",
+		"package:check": "pnpm build && pnpm dist:check && pnpm packlist:check",
+		"test": "vitest run --config vitest.config.ts",
+		"test:watch": "vitest --config vitest.config.ts",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"lint": "biome check package.json tsconfig.json tsconfig.build.json vitest.config.ts biome.json src tests/unit tests/integration",
+		"format": "biome format --write package.json tsconfig.json tsconfig.build.json vitest.config.ts biome.json src tests/unit tests/integration",
+		"format:check": "biome check package.json tsconfig.json tsconfig.build.json vitest.config.ts biome.json src tests/unit tests/integration --formatter-enabled=true --linter-enabled=false --assist-enabled=false"
+	},
+	"dependencies": {
+		"ajv": "^8.18.0",
+		"commander": "^14.0.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.12",
+		"@types/node": "^25.6.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.5"
+	}
+}

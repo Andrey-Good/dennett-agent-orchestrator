@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-file.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "graph_contract_version",
+    "meta",
+    "entry_node_id",
+    "nodes"
+  ],
+  "properties": {
+    "graph_contract_version": {
+      "type": "string"
+    },
+    "meta": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/meta"
+    },
+    "entry_node_id": {
+      "type": "string"
+    },
+    "params": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/params"
+    },
+    "initial_vars": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/initialVars"
+    },
+    "skills": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/skills"
+    },
+    "mcps": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/mcps"
+    },
+    "plugins": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/plugins"
+    },
+    "permissions": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/permissions"
+    },
+    "interaction": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/interaction"
+    },
+    "chat": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/chat"
+    },
+    "final_output": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/finalOutput"
+    },
+    "nodes": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/nodes"
+    },
+    "edges": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/edges"
+    },
+    "memory_bindings": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/memoryBindings"
+    },
+    "runtime_sources": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/runtimeSources"
+    }
+  }
+}

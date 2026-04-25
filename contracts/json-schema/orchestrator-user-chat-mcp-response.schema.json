@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestrator-user-chat-mcp-response.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "prompt_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": ["text", "option"]
+    },
+    "text": {
+      "type": "string"
+    },
+    "option_id": {
+      "type": "string"
+    },
+    "value": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/jsonValue"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "text"
+          }
+        }
+      },
+      "then": {
+        "required": ["text"],
+        "not": {
+          "required": ["option_id"]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "option"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": ["text"]
+        },
+        "required": ["option_id", "value"]
+      }
+    }
+  ]
+}

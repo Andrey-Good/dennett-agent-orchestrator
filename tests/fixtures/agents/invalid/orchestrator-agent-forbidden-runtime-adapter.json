@@ -1,0 +1,27 @@
+{
+  "graph_contract_version": "1.0",
+  "meta": {
+    "id": "orch-forbidden-runtime",
+    "name": "Orchestrator Forbidden Runtime"
+  },
+  "entry_node_id": "delegate",
+  "nodes": [
+    {
+      "id": "delegate",
+      "kind": "orchestrator_agent",
+      "agent_ref": "agent.delegate",
+      "runtime_adapter": "codex",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delegate"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      }
+    }
+  ]
+}

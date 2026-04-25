@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestrator-user-chat-mcp-request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "text", "require_response"],
+  "properties": {
+    "prompt_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": ["text", "options"]
+    },
+    "text": {
+      "type": "string"
+    },
+    "require_response": {
+      "type": "boolean"
+    },
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "$comment": "Each option must be structurally valid, but uniqueness of options[].id is enforced by the invariant/test layer because portable JSON Schema cannot express object-field uniqueness across an array.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "value"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "value": {
+            "$ref": "./agent-json.defs.schema.json#/$defs/jsonValue"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "text"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": ["options"]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "options"
+          }
+        }
+      },
+      "then": {
+        "required": ["options"]
+      }
+    }
+  ]
+}

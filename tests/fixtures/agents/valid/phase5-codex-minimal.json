@@ -1,0 +1,34 @@
+{
+  "graph_contract_version": "1.0",
+  "meta": {
+    "id": "phase5-codex-minimal",
+    "name": "Phase 5 Codex Minimal"
+  },
+  "entry_node_id": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "runtime_agent",
+      "runtime_adapter": "codex",
+      "runtime_options": {
+        "model": "gpt-5.3-codex"
+      },
+      "prompt": "Summarize the topic in one sentence.",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Topic: "
+          },
+          {
+            "type": "ref",
+            "ref": "params.topic"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      }
+    }
+  ]
+}

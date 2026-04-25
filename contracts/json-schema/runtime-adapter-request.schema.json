@@ -1,0 +1,337 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "runtime-adapter-request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "node_id",
+    "runtime_adapter",
+    "prompt",
+    "input_message",
+    "output",
+    "effective_bindings",
+    "permissions",
+    "runtime_options",
+    "interaction",
+    "resume"
+  ],
+  "properties": {
+    "node_id": {
+      "type": "string"
+    },
+    "runtime_adapter": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "input_message": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/jsonValue"
+    },
+    "output": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/output"
+    },
+    "effective_bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skills", "mcps", "plugins"],
+      "properties": {
+        "skills": {
+          "$ref": "./agent-json.defs.schema.json#/$defs/skills"
+        },
+        "mcps": {
+          "$ref": "./agent-json.defs.schema.json#/$defs/mcps"
+        },
+        "plugins": {
+          "$ref": "./agent-json.defs.schema.json#/$defs/plugins"
+        },
+        "memory_bindings": {
+          "$ref": "./agent-json.defs.schema.json#/$defs/memoryBindings"
+        }
+      }
+    },
+    "permissions": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/permissions"
+    },
+    "runtime_options": {
+      "type": "object"
+    },
+    "runtime_source": {
+      "$ref": "./agent-json.defs.schema.json#/$defs/runtimeSource"
+    },
+    "memory_context": {
+      "$ref": "#/$defs/memoryContext"
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["comments_enabled"],
+      "properties": {
+        "comments_enabled": {
+          "type": "boolean"
+        },
+        "user_chat_server_name": {
+          "type": "string",
+          "const": "orchestrator.user_chat"
+        }
+      }
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "enum": ["fresh", "native_resume"]
+        },
+        "native_session_handle": {
+          "$ref": "./agent-json.defs.schema.json#/$defs/jsonValue"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "fresh"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": ["native_session_handle"]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "native_resume"
+              }
+            }
+          },
+          "then": {
+            "required": ["native_session_handle"]
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "memoryCapabilityToken": {
+      "enum": [
+        "read",
+        "write",
+        "entity_scoped",
+        "user_scoped",
+        "group_scoped",
+        "session_scoped",
+        "graph_context",
+        "temporal_index",
+        "profile_synthesis",
+        "rag_retrieval",
+        "infer_extract",
+        "versioned_write",
+        "mcp_transport"
+      ]
+    },
+    "memoryBindingIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "memoryOperationScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "run_id"],
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        }
+      }
+    },
+    "memoryRecordScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        }
+      }
+    },
+    "memoryRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "content", "scope"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/memoryRecordScope"
+        },
+        "metadata": {
+          "$ref": "./agent-json.defs.schema.json#/$defs/jsonObject"
+        },
+        "score": {
+          "type": "number"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "provider_data": {
+          "$ref": "./agent-json.defs.schema.json#/$defs/jsonObject"
+        }
+      }
+    },
+    "memoryReadContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "records"],
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/memoryRecord"
+          }
+        }
+      }
+    },
+    "memoryWriteContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "const": "node_success_output"
+        },
+        "disabled_reason": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "required": ["mode"],
+            "not": {
+              "required": ["disabled_reason"]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": false
+              }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "not": {
+              "required": ["mode"]
+            }
+          }
+        }
+      ]
+    },
+    "memoryBindingContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_id",
+        "codex_ref",
+        "intent",
+        "required_capabilities",
+        "scope",
+        "write"
+      ],
+      "properties": {
+        "binding_id": {
+          "type": "string"
+        },
+        "codex_ref": {
+          "type": "string"
+        },
+        "intent": {
+          "$ref": "#/$defs/memoryBindingIntent"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/memoryCapabilityToken"
+          },
+          "uniqueItems": true
+        },
+        "scope": {
+          "$ref": "#/$defs/memoryOperationScope"
+        },
+        "read": {
+          "$ref": "#/$defs/memoryReadContext"
+        },
+        "write": {
+          "$ref": "#/$defs/memoryWriteContext"
+        }
+      }
+    },
+    "memoryContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bindings"],
+      "properties": {
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/memoryBindingContext"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+node_modules
+dist
+coverage
+.pnpm-store
+.DS_Store
+.local/
+subagent_tasks/
+
+# Generated package and contract artifacts.
+*.tgz
+contracts/typescript/*.js
+
+# Local state, logs, and temporary files.
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+*.temp
+*.pid
+.env
+.env.*
+!.env.example
+tmp/
+temp/

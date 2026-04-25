@@ -1,0 +1,51 @@
+{
+  "graph_contract_version": "1.0",
+  "meta": {
+    "id": "comments-target-orchestrator",
+    "name": "Comments Target Orchestrator"
+  },
+  "entry_node_id": "delegate",
+  "interaction": {
+    "comments": {
+      "enabled": true,
+      "target_node_ids": [
+        "delegate"
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": "delegate",
+      "kind": "orchestrator_agent",
+      "agent_ref": "agent.delegate",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delegate"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      }
+    },
+    {
+      "id": "review",
+      "kind": "runtime_agent",
+      "runtime_adapter": "codex",
+      "prompt": "Respond briefly.",
+      "input": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello"
+          }
+        ]
+      },
+      "output": {
+        "mode": "text"
+      }
+    }
+  ]
+}
