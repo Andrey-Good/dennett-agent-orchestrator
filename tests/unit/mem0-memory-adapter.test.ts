@@ -57,9 +57,7 @@ async function createAdapter(
 	namespaceId?: string,
 	options: AdapterHarnessOptions = {},
 ) {
-	const mem0Lock = options.acquireMem0Lock
-		? await acquireMem0ChromaTestLock(prefix)
-		: undefined
+	const mem0Lock = options.acquireMem0Lock ? await acquireMem0ChromaTestLock(prefix) : undefined
 	const tempDir = await mkdtemp(path.join(os.tmpdir(), prefix))
 	const chromaPath = path.join(tempDir, 'chroma')
 	const historyDbPath = path.join(tempDir, 'history.db')
