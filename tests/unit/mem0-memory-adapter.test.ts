@@ -16,6 +16,10 @@ import { acquireMem0ChromaTestLock, cleanupMem0TempDir } from './mem0-test-helpe
 const MEM0_PYTHON = path.resolve(process.cwd(), '.local', 'mem0-venv', 'Scripts', 'python.exe')
 const DENNETT_NAMESPACE_METADATA_KEY = 'dennett_namespace_id'
 
+interface AdapterHarnessOptions {
+	acquireMem0Lock?: boolean
+}
+
 function createMem0Config(
 	chromaPath: string,
 	historyDbPath: string,
@@ -48,8 +52,14 @@ function createMem0Config(
 	}
 }
 
-async function createAdapter(prefix: string, namespaceId?: string) {
-	const mem0Lock = await acquireMem0ChromaTestLock(prefix)
+async function createAdapter(
+	prefix: string,
+	namespaceId?: string,
+	options: AdapterHarnessOptions = {},
+) {
+	const mem0Lock = options.acquireMem0Lock
+		? await acquireMem0ChromaTestLock(prefix)
+		: undefined
 	const tempDir = await mkdtemp(path.join(os.tmpdir(), prefix))
 	const chromaPath = path.join(tempDir, 'chroma')
 	const historyDbPath = path.join(tempDir, 'history.db')
@@ -68,7 +78,7 @@ async function createAdapter(prefix: string, namespaceId?: string) {
 			try {
 				await cleanupMem0TempDir(tempDir)
 			} finally {
-				await mem0Lock.release()
+				await mem0Lock?.release()
 			}
 		},
 	}
@@ -245,7 +255,9 @@ describe('Mem0MemoryAdapter', () => {
 	})
 
 	it('performs real local Mem0 write, read, search, list, update, and delete operations', async () => {
-		const harness = await createAdapter('dennett-mem0-live-')
+		const harness = await createAdapter('dennett-mem0-live-', undefined, {
+			acquireMem0Lock: true,
+		})
 		const scope = { user_id: 'phase13-live-user' }
 
 		try {
@@ -611,7 +623,9 @@ describe('Mem0MemoryAdapter', () => {
 	})
 
 	it('surfaces provider execution failures clearly for invalid delete operations', async () => {
-		const harness = await createAdapter('dennett-mem0-provider-error-')
+		const harness = await createAdapter('dennett-mem0-provider-error-', undefined, {
+			acquireMem0Lock: true,
+		})
 
 		try {
 			await expect(

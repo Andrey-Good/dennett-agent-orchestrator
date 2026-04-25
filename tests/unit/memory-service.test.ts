@@ -19,14 +19,23 @@ const storesToClose: SQLiteLocalStateStore[] = []
 const tempDirsToRemove: string[] = []
 const mem0LocksToRelease: Array<() => Promise<void>> = []
 
-async function createHarness(prefix: string): Promise<{
+interface HarnessOptions {
+	acquireMem0Lock?: boolean
+}
+
+async function createHarness(
+	prefix: string,
+	options: HarnessOptions = {},
+): Promise<{
 	store: SQLiteLocalStateStore
 	registry: MemoryProviderRegistryService
 	memoryService: MemoryService
 	tempDir: string
 }> {
-	const mem0Lock = await acquireMem0ChromaTestLock(prefix)
-	mem0LocksToRelease.push(mem0Lock.release)
+	if (options.acquireMem0Lock) {
+		const mem0Lock = await acquireMem0ChromaTestLock(prefix)
+		mem0LocksToRelease.push(mem0Lock.release)
+	}
 	const tempDir = await mkdtemp(path.join(os.tmpdir(), prefix))
 	const store = new SQLiteLocalStateStore({
 		database_path: path.join(tempDir, 'local-state.sqlite'),
@@ -198,7 +207,9 @@ afterEach(async () => {
 
 describe('MemoryService', () => {
 	it('resolves a portable memory binding to the registered Mem0 adapter and performs a live round-trip', async () => {
-		const harness = await createHarness('dennett-phase13-memory-service-binding-')
+		const harness = await createHarness('dennett-phase13-memory-service-binding-', {
+			acquireMem0Lock: true,
+		})
 		const binding = createPortableBinding()
 
 		const writeResult = await harness.memoryService.writeForBinding(binding, {
@@ -517,7 +528,9 @@ describe('MemoryService', () => {
 	})
 
 	it('prepares provider-neutral runtime memory context with searched records and write eligibility', async () => {
-		const harness = await createHarness('dennett-task321-memory-service-runtime-context-')
+		const harness = await createHarness('dennett-task321-memory-service-runtime-context-', {
+			acquireMem0Lock: true,
+		})
 		const binding = createPortableBinding()
 		const scope = {
 			agent_id: 'agent-runtime',
@@ -737,7 +750,9 @@ describe('MemoryService', () => {
 	})
 
 	it('writes successful runtime memory output and records Dennett write metadata', async () => {
-		const harness = await createHarness('dennett-task321-memory-service-success-write-')
+		const harness = await createHarness('dennett-task321-memory-service-success-write-', {
+			acquireMem0Lock: true,
+		})
 		const binding = createPortableBinding()
 		const scope = {
 			agent_id: 'agent-success',
@@ -956,7 +971,9 @@ describe('MemoryService', () => {
 	})
 
 	it('uses direct codex_ref operations for read, list, update, and delete', async () => {
-		const harness = await createHarness('dennett-phase13-memory-service-direct-')
+		const harness = await createHarness('dennett-phase13-memory-service-direct-', {
+			acquireMem0Lock: true,
+		})
 
 		const writeResult = await harness.memoryService.writeForCodexRef('primary_memory', {
 			content: 'Phase 13 direct codex ref memory',
