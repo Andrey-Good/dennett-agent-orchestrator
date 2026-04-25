@@ -19,7 +19,9 @@ The repository is not a new general-purpose agent runtime. It is an orchestratio
 
 Generated `dist` output is build-local, not tracked source. From a clean checkout, local users should run `pnpm build` before any CLI artifact smoke such as `node dist/src/interfaces/cli.js --help`.
 
-The current local package proof is limited to repository checkout usage: `pnpm dist:check`, `pnpm packlist:check`, and `pnpm package:check` verify the generated CLI artifact and npm dry-run inventory. This does not claim npm publication, an installer, Docker image, hosted deployment, or packaged rollback readiness.
+The bounded release decision is `release` only for `local-cli-repository-readiness` on candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. The authoritative final gates passed: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test` under an explicit `1200000ms` wrapper in `271880ms`, `pnpm build`, `node --no-warnings -e "await import('node:sqlite')"`, `node dist/src/interfaces/cli.js --help`, `pnpm dist:check`, `pnpm packlist:check`, `pnpm package:check`, and `pnpm release-candidate:check`.
+
+The current local package proof is limited to repository checkout usage: `pnpm dist:check`, `pnpm packlist:check`, and `pnpm package:check` verify the generated CLI artifact and npm dry-run inventory. This does not claim npm/public package publication, an installer, Docker image, hosted or managed deployment, production SaaS/readiness/load, live provider stress/reliability, broad runtime-memory/provider support, native App Server memory, full App Server certification, full user interaction readiness, operator-facing managed subagent readiness, or packaged rollback readiness.
 
 ## What Exists In The Repository
 
@@ -47,7 +49,7 @@ Implementation work should follow this order:
 3. Move to the relevant detailed section under [`docs/`](./docs/README.md) before changing architecture, contracts, execution logic, state, interaction, lifecycle, or extensions.
 4. If the needed rule does not exist and the change is significant or contested, record it through an ADR in [`docs/09-adrs`](./docs/09-adrs/README.md) instead of inventing behavior silently in code.
 5. For work beyond the completed 1-11 foundation, check [`docs/13-capability-gap-lock`](./docs/13-capability-gap-lock/README.md) before claiming a capability is already implemented. That section is the canonical freeze for `implemented`, `partial`, `documented_only`, `runtime_blocked`, and `not_started`.
-6. For any real-world proof or release-readiness claim, check [`docs/20-real-world-proof-and-release`](./docs/20-real-world-proof-and-release/README.md), the canonical [`release scope lock`](./docs/20-real-world-proof-and-release/release-scope-lock.md), and the completed [`release decision record`](./docs/20-real-world-proof-and-release/release-decision-record.md). The next locked target is `local-cli-repository-readiness`; local/offline Phase 18 evidence is not enough for a Phase 19 release claim.
+6. For any real-world proof or release-readiness claim, check [`docs/20-real-world-proof-and-release`](./docs/20-real-world-proof-and-release/README.md), the canonical [`release scope lock`](./docs/20-real-world-proof-and-release/release-scope-lock.md), and the completed [`release decision record`](./docs/20-real-world-proof-and-release/release-decision-record.md). The locked target `local-cli-repository-readiness` is released only in that bounded sense on candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`; local/offline Phase 18 evidence is not enough for any broader Phase 19 release claim.
 
 ## Repository-Level Guardrails
 
@@ -68,7 +70,9 @@ Implementation work should follow this order:
 
 ## Russian
 
-Phase 19 routing note: release-readiness claims require [`docs/20-real-world-proof-and-release`](./docs/20-real-world-proof-and-release/README.md) evidence and a completed [`release decision record`](./docs/20-real-world-proof-and-release/release-decision-record.md). Local/offline Phase 18 evidence is not enough for a Phase 19 release claim.
+Phase 19 routing note: release-readiness claims require [`docs/20-real-world-proof-and-release`](./docs/20-real-world-proof-and-release/README.md) evidence and a completed [`release decision record`](./docs/20-real-world-proof-and-release/release-decision-record.md). `local-cli-repository-readiness` is released only as a bounded local CLI/repository target on candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`; local/offline Phase 18 evidence is not enough for broader Phase 19 release claims.
+
+Авторитетное финальное gate evidence для bounded local CLI/repository scope: commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`; `pnpm test` прошел под explicit `1200000ms` wrapper за `271880ms`; полный gate set также прошел `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm build`, `node --no-warnings -e "await import('node:sqlite')"`, `node dist/src/interfaces/cli.js --help`, `pnpm dist:check`, `pnpm packlist:check`, `pnpm package:check` и `pnpm release-candidate:check`. Это доказывает только bounded local CLI/repository readiness и не расширяет release claim на hosted/managed deployment, npm/public package publication, installers/containers, production SaaS/readiness/load, live provider stress/reliability, broad runtime-memory/provider support, native App Server memory, full App Server certification, full user interaction readiness, operator-facing managed subagent readiness или packaged rollback readiness.
 
 # dennett-agent-orchestrator
 
@@ -109,7 +113,7 @@ Phase 19 routing note: release-readiness claims require [`docs/20-real-world-pro
 3. Затем перейти в нужный подробный раздел внутри [`docs/`](./docs/README.md) до изменения архитектуры, контрактов, логики исполнения, состояния, interaction, lifecycle или extensions.
 4. Если нужного правила нет, а изменение значимое или спорное, фиксировать его через ADR в [`docs/09-adrs`](./docs/09-adrs/README.md), а не изобретать поведение молча в коде.
 5. Для работы поверх завершенного фундамента 1-11 сначала смотрите [`docs/13-capability-gap-lock`](./docs/13-capability-gap-lock/README.md) и только потом заявляйте, что какая-либо возможность уже реализована. Этот раздел канонически фиксирует состояния `implemented`, `partial`, `documented_only`, `runtime_blocked` и `not_started`.
-6. Для любого real-world proof или release-readiness claim проверяйте [`docs/20-real-world-proof-and-release`](./docs/20-real-world-proof-and-release/README.md), каноническую [`release scope lock`](./docs/20-real-world-proof-and-release/release-scope-lock.md) и завершенную [`release decision record`](./docs/20-real-world-proof-and-release/release-decision-record.md). Следующая зафиксированная цель - `local-cli-repository-readiness`; local/offline Phase 18 evidence недостаточно для Phase 19 release claim.
+6. Для любого real-world proof или release-readiness claim проверяйте [`docs/20-real-world-proof-and-release`](./docs/20-real-world-proof-and-release/README.md), каноническую [`release scope lock`](./docs/20-real-world-proof-and-release/release-scope-lock.md) и завершенную [`release decision record`](./docs/20-real-world-proof-and-release/release-decision-record.md). Зафиксированная цель `local-cli-repository-readiness` выпущена только в bounded local CLI/repository смысле на candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`; local/offline Phase 18 evidence недостаточно для broader Phase 19 release claims.
 
 ## Guardrails На Уровне Репозитория
 

@@ -3,11 +3,11 @@
 <a id="english"></a>
 # Release Scope Lock
 
-Status: canonical Stage 1 release-scope lock for the next product-readiness pass. Final release status remains `defer` until later evidence supports a different release decision.
+Status: canonical release-scope lock for the bounded `release` of `local-cli-repository-readiness` on candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. Broader hosted, managed, packaged, production, live-provider, runtime-memory, App Server certification, Builder 2.0, user-interaction, and operator-facing managed-subagent claims remain deferred.
 
 ## Selected Release Target
 
-The next concrete release target is:
+The concrete bounded release target is:
 
 `local-cli-repository-readiness`
 
@@ -17,15 +17,15 @@ The release target is intentionally narrow because current evidence supports loc
 
 ## Current Decision Status
 
-The current truthful decision is still `defer`.
+The current truthful decision is bounded `release` for `local-cli-repository-readiness` only.
 
-`block` is not the final decision label because major unproven product areas remain intentionally outside the narrowed local CLI/repository scope. TASK-400 remains visible as historical failed gate evidence, but TASK-402 superseded that blocker with a clean mandatory gate rerun, so TASK-400 must no longer be described as the current blocker.
+`block` is not the final decision label because the in-scope local CLI/repository gates passed on candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. TASK-400 remains visible as historical failed gate evidence, but TASK-402 and the final TASK-495 candidate-gate evidence superseded that blocker, so TASK-400 must no longer be described as the current blocker.
 
-`release` is still not supported because the repository has not proven hosted/package/container rollback, durable external provider cleanup beyond the TASK-357 verified scoped Mem0 namespace proof, broader runtime-memory behavior beyond the narrow registered Mem0 plus Codex prompt-rendering path, or external-provider reliability under realistic limits. The earlier TASK-333 default `pnpm test` failure is superseded by a passing TASK-334 review rerun, and the TASK-400 full-suite `pnpm test` failure is superseded by TASK-402's clean mandatory gate rerun, but both failed and superseded evidence must remain visible.
+This `release` is bounded and does not prove hosted/managed deployment, npm/public package publication, installer/container distribution, production SaaS/readiness/load, live provider stress/reliability, broad runtime-memory/provider support, native App Server memory, full App Server certification, durable provider cleanup beyond the TASK-357 verified scoped Mem0 namespace proof, true restore / graph-store/provider-wide cleanup, public Builder 2.0 readiness, full user interaction layer, or operator-facing managed subagent product readiness. The earlier TASK-333 default `pnpm test` failure is superseded by a passing TASK-334 review rerun, and the TASK-400 full-suite `pnpm test` failure is superseded by TASK-402 and TASK-495 clean gates, but both failed and superseded evidence must remain visible.
 
 ## Included Capabilities
 
-These capabilities are inside the next release target. Each one must keep its evidence current before a future decision can move from `defer` to `release`.
+These capabilities are inside the bounded release target. Each one is accepted only for local CLI/repository readiness at the recorded candidate commit.
 
 | Included capability | Owner | Required proof path | Rollback or cleanup expectation | User-visible limitation |
 | --- | --- | --- | --- | --- |
@@ -57,7 +57,7 @@ These capabilities remain outside the next release target. They must not be desc
 
 ## Forbidden Claims
 
-Until a later release decision changes this lock, do not claim:
+Until a later release-scope expansion changes this lock, do not claim:
 
 - the product is fully released or fully production ready;
 - hosted, package, installer, container, or artifact rollback is proven;
@@ -81,11 +81,11 @@ Until a later release decision changes this lock, do not claim:
 <a id="russian"></a>
 # Фиксация области выпуска
 
-Статус: каноническая фиксация области выпуска для Stage 1 следующего прохода product readiness. Финальный статус выпуска остается `defer`, пока более поздние доказательства не поддержат другое решение.
+Статус: каноническая фиксация области bounded `release` для `local-cli-repository-readiness` на candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. Более широкие hosted, managed, packaged, production, live-provider, runtime-memory, App Server certification, Builder 2.0, user-interaction и operator-facing managed-subagent claims остаются deferred.
 
 ## Выбранная цель выпуска
 
-Следующая конкретная цель выпуска:
+Конкретная bounded цель выпуска:
 
 `local-cli-repository-readiness`
 
@@ -95,15 +95,15 @@ Until a later release decision changes this lock, do not claim:
 
 ## Текущий статус решения
 
-Текущее правдивое решение все еще `defer`.
+Текущее правдивое решение - bounded `release` только для `local-cli-repository-readiness`.
 
-`block` не является финальной меткой решения, потому что крупные недоказанные product areas намеренно остаются вне суженного local CLI/repository scope. TASK-400 остается видимым как historical failed gate evidence, но TASK-402 superseded этот blocker чистым mandatory gate rerun, поэтому TASK-400 больше нельзя описывать как current blocker.
+`block` не является финальной меткой решения, потому что in-scope local CLI/repository gates прошли на candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. TASK-400 остается видимым как historical failed gate evidence, но TASK-402 и final TASK-495 candidate-gate evidence superseded этот blocker, поэтому TASK-400 больше нельзя описывать как current blocker.
 
-`release` все еще не поддержан, потому что репозиторий не доказал hosted/package/container rollback, durable external provider cleanup beyond TASK-357 verified scoped Mem0 namespace proof, broader runtime-memory behavior beyond the narrow registered Mem0 plus Codex prompt-rendering path или external-provider reliability под реалистичными limits. Более ранний TASK-333 default `pnpm test` failure superseded by passing TASK-334 review rerun, и TASK-400 full-suite `pnpm test` failure superseded by TASK-402 clean mandatory gate rerun, но failed и superseded evidence должны оставаться видимыми.
+Этот `release` bounded и не доказывает hosted/managed deployment, npm/public package publication, installer/container distribution, production SaaS/readiness/load, live provider stress/reliability, broad runtime-memory/provider support, native App Server memory, full App Server certification, durable provider cleanup beyond TASK-357 verified scoped Mem0 namespace proof, true restore / graph-store/provider-wide cleanup, public Builder 2.0 readiness, full user interaction layer или operator-facing managed subagent product readiness. Более ранний TASK-333 default `pnpm test` failure superseded by passing TASK-334 review rerun, и TASK-400 full-suite `pnpm test` failure superseded by TASK-402 и TASK-495 clean gates, но failed и superseded evidence должны оставаться видимыми.
 
 ## Включенные возможности
 
-Эти возможности входят в следующую цель выпуска. Для каждой из них доказательства должны оставаться актуальными, прежде чем будущее решение сможет перейти от `defer` к `release`.
+Эти возможности входят в bounded цель выпуска. Каждая из них принята только для local CLI/repository readiness на recorded candidate commit.
 
 | Включенная возможность | Владелец | Обязательный proof path | Ожидание rollback или cleanup | Пользовательское ограничение |
 | --- | --- | --- | --- | --- |
@@ -134,7 +134,7 @@ Until a later release decision changes this lock, do not claim:
 
 ## Запрещенные заявления
 
-Пока более позднее release decision не изменит эту фиксацию, нельзя заявлять:
+Пока более позднее release-scope expansion не изменит эту фиксацию, нельзя заявлять:
 
 - продукт полностью выпущен или полностью production ready;
 - hosted, package, installer, container или artifact rollback доказан;

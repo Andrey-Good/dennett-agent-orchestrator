@@ -9,9 +9,11 @@ Status: owner note for the Phase 19 release-readiness evidence slice.
 
 Phase 19 turns completed product surfaces into externally credible proof. The goal is to run realistic end-to-end flows against real runtimes and providers, preserve stress and regression evidence, document operational procedures, and make an explicit release decision based on evidence.
 
-The next product-readiness pass uses [Release Scope Lock](./release-scope-lock.md) as the canonical boundary. Its selected release target is `local-cli-repository-readiness`, and the current final decision remains `defer` until later evidence proves every included capability at that boundary.
+The product-readiness pass uses [Release Scope Lock](./release-scope-lock.md) as the canonical boundary. Its selected release target is `local-cli-repository-readiness`, and the current final decision is bounded `release` for that local CLI/repository target on candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`.
 
 Phase 19 is not complete because a feature is implemented, a local test passes, or a dry run succeeds. It is complete only when the evidence log and release decision record show that the selected release target is either safe to release, blocked, or deliberately deferred with named residual risk.
+
+The bounded release does not include hosted/managed deployment, npm/public package publication, installer/container distribution, production SaaS/readiness/load, live provider stress/reliability, broad runtime-memory/provider support, native App Server memory, full App Server certification, durable provider cleanup beyond verified scoped Mem0 namespace cleanup, true restore / graph-store/provider-wide cleanup, public Builder 2.0 readiness, the full user interaction layer, or operator-facing managed subagent product readiness.
 
 ## Evidence Model
 
@@ -86,9 +88,11 @@ Phase 19 is complete only when:
 
 Phase 19 превращает завершенные продуктовые поверхности во внешне убедимые доказательства. Цель состоит в том, чтобы выполнить реалистичные end-to-end потоки с реальными runtime и providers, сохранить stress и regression evidence, задокументировать операционные процедуры и принять явное решение о выпуске на основе доказательств.
 
-Следующий product-readiness pass использует [Release Scope Lock](./release-scope-lock.md) как каноническую границу. Выбранная цель выпуска - `local-cli-repository-readiness`, а текущее финальное решение остается `defer`, пока более поздние доказательства не докажут каждую included capability в этой границе.
+Product-readiness pass использует [Release Scope Lock](./release-scope-lock.md) как каноническую границу. Выбранная цель выпуска - `local-cli-repository-readiness`, а текущее финальное решение - bounded `release` для этой local CLI/repository цели на candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`.
 
 Phase 19 не считается завершенной только потому, что функция реализована, локальный тест проходит или dry run успешен. Она завершена только тогда, когда evidence log и release decision record показывают, что выбранная цель выпуска либо безопасна для выпуска, либо заблокирована, либо намеренно отложена с названным остаточным риском.
+
+Bounded release не включает hosted/managed deployment, npm/public package publication, installer/container distribution, production SaaS/readiness/load, live provider stress/reliability, broad runtime-memory/provider support, native App Server memory, full App Server certification, durable provider cleanup beyond verified scoped Mem0 namespace cleanup, true restore / graph-store/provider-wide cleanup, public Builder 2.0 readiness, full user interaction layer или operator-facing managed subagent product readiness.
 
 ## Модель доказательств
 
