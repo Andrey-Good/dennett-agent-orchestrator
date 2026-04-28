@@ -13,6 +13,7 @@ Related documents:
 - [Phase 12 Capability Gap Lock](../13-capability-gap-lock/phase-12-capability-gap-lock.md)
 - [Release Gates](../11-hardening/release-gates.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
+- [Builder 2.0 Productization](./builder-2-0-productization.md)
 
 ## Decision
 
@@ -69,7 +70,7 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | Runtime memory with Codex plus Mem0 | Limited/beta for prompt-rendered context and success-only writes. | Not native App Server memory and not broad provider support. |
 | User prompt wait/reply/resume | Limited/beta for currently tested prompt shapes. | Stage 7 must prove full user-visible interaction semantics before broader claims. |
 | Managed subagent primitives | Limited/beta for the bounded local CLI operator surface. | Stage 8 supports `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control`, and `subagent-close` only within the limits in [Managed Subagent Productization](./managed-subagent-productization.md). Launch is launch-and-wait only; control and cancellation are state-recorded, not live-delivered. |
-| Builder 2.0 authoring | Deferred as public complete authoring workflow. | Stage 9 must prove builder output validation, execution, lifecycle, self-review, and integrated scenarios. |
+| Builder 2.0 authoring | Limited/beta for audited draft-first authoring only. | Stage 9 supports formal builder output wrapper validation, deterministic candidate audit, diagnostics outside Agent JSON, and draft-only persistence as documented in [Builder 2.0 Productization](./builder-2-0-productization.md). It does not prove full public authoring readiness, deploy, provider registration, live managed orchestration, or execution of every draft. |
 | Stable CLI/API compatibility | Deferred until freeze. | Stage 10 must publish versioned command/API inventory, compatibility policy, and migration/deprecation rules. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Each requires a separate artifact, proof, rollback/uninstall path, and security/release decision. |
 
@@ -97,7 +98,7 @@ Do not claim:
 - Native App Server memory is implemented or Mem0 is consumed through a native App Server memory primitive.
 - Memory behavior is broader than registered local provider resolution, prompt-rendered Codex context, and success-only provider writes.
 - Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior, or volume reliability is proven.
-- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, public Builder 2.0 readiness, or stable public CLI/API compatibility is complete.
+- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, or stable public CLI/API compatibility is complete.
 
 ## Launch Blockers
 
@@ -109,7 +110,7 @@ The CLI/package-first public launch remains blocked until all selected launch-sc
 - Stage 6 productizes the exact memory provider boundary and cleanup/reliability limits.
 - Stage 7 records user-visible interaction semantics and unsupported prompt/reply cases.
 - Stage 8 records the bounded local CLI managed-subagent operator surface and keeps broader orchestration explicitly deferred.
-- Stage 9 either proves Builder 2.0 as a public authoring surface or keeps it explicitly deferred.
+- Stage 9 records the bounded audited draft-first Builder 2.0 authoring surface and keeps complete public Builder readiness explicitly deferred.
 - Stage 10 freezes the public CLI/API contract and compatibility policy.
 - README and user-facing docs use the same scope language as this document.
 
@@ -137,6 +138,7 @@ A later stage may expand the scope only when:
 - [Phase 12 Capability Gap Lock](../13-capability-gap-lock/phase-12-capability-gap-lock.md)
 - [Release Gates](../11-hardening/release-gates.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
+- [Builder 2.0 Productization](./builder-2-0-productization.md)
 
 ## Решение
 
@@ -193,7 +195,7 @@ Hosted или managed launch может войти в scope только чер�
 | Runtime memory with Codex plus Mem0 | Limited/beta для prompt-rendered context и success-only writes. | Не native App Server memory и не broad provider support. |
 | User prompt wait/reply/resume | Limited/beta для currently tested prompt shapes. | Stage 7 должен доказать full user-visible interaction semantics до broad claims. |
 | Managed subagent primitives | Limited/beta для bounded local CLI operator surface. | Stage 8 поддерживает только `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control` и `subagent-close` в пределах [Managed Subagent Productization](./managed-subagent-productization.md). Launch является только launch-and-wait; control и cancellation записываются в state, а не live-deliver-ятся. |
-| Builder 2.0 authoring | Deferred as public complete authoring workflow. | Stage 9 должен доказать builder output validation, execution, lifecycle, self-review и integrated scenarios. |
+| Builder 2.0 authoring | Limited/beta только для audited draft-first authoring. | Stage 9 поддерживает formal builder output wrapper validation, deterministic candidate audit, diagnostics вне Agent JSON и draft-only persistence по [Builder 2.0 Productization](./builder-2-0-productization.md). Это не доказывает full public authoring readiness, deploy, provider registration, live managed orchestration или execution каждого draft. |
 | Stable CLI/API compatibility | Deferred until freeze. | Stage 10 должен опубликовать versioned command/API inventory, compatibility policy и migration/deprecation rules. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Каждый требует separate artifact, proof, rollback/uninstall path и security/release decision. |
 
@@ -221,7 +223,7 @@ Hosted или managed launch может войти в scope только чер�
 - Native App Server memory реализована или Mem0 потребляется через native App Server memory primitive.
 - Memory behavior шире registered local provider resolution, prompt-rendered Codex context и success-only provider writes.
 - Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior или volume reliability доказаны.
-- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, public Builder 2.0 readiness или stable public CLI/API compatibility завершены.
+- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring или stable public CLI/API compatibility завершены.
 
 ## Блокеры Запуска
 
@@ -233,7 +235,7 @@ CLI/package-first public launch остается blocked, пока все select
 - Stage 6 productizes exact memory provider boundary и cleanup/reliability limits.
 - Stage 7 фиксирует user-visible interaction semantics и unsupported prompt/reply cases.
 - Stage 8 фиксирует bounded local CLI managed-subagent operator surface и явно оставляет broader orchestration deferred.
-- Stage 9 либо доказывает Builder 2.0 как public authoring surface, либо явно оставляет его deferred.
+- Stage 9 фиксирует bounded audited draft-first Builder 2.0 authoring surface и явно оставляет complete public Builder readiness deferred.
 - Stage 10 freezes public CLI/API contract и compatibility policy.
 - README и user-facing docs используют тот же scope language, что и этот документ.
 

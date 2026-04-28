@@ -1966,6 +1966,7 @@ export function buildCliProgram(): Command {
 				printJson({
 					operation: result.operation,
 					builder_run_id: result.builder_run_id,
+					candidate_diagnostics: result.candidate_diagnostics,
 					base_revision: result.base_revision,
 					draft_revision: result.draft.revision,
 					draft_status: result.draft.status,

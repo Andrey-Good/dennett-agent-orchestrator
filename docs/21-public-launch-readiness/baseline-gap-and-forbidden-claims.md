@@ -15,6 +15,7 @@ Related documents:
 - [Phase 16 Managed Subagent Orchestration](../17-managed-subagent-orchestration/phase-16-managed-subagent-orchestration.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Phase 17 Builder 2.0](../18-builder-2-0/phase-17-builder-2-0.md)
+- [Builder 2.0 Productization](./builder-2-0-productization.md)
 
 ## Current Baseline
 
@@ -38,7 +39,7 @@ These items may be described only inside the local CLI/repository boundary:
 | Local stress, recovery, and deterministic provider matrix | Stub-runtime and local SQLite tests prove selected local orchestration semantics. | Does not prove live provider stress, external throttling reliability, production-scale load, or automatic live crash recovery. |
 | Supported user prompt wait/reply/resume slice | Focused adapter, Core, and CLI tests cover durable prompt state for supported prompt shapes. | Not full user interaction readiness across all prompt shapes, interfaces, or risky mid-run change policies. |
 | First managed-subagent layer | Core service and state cover worker/reviewer/final-review roles, launch/wait/send/close, findings, cancellation state, budgets, sibling write-set conflict rejection, and the Stage 8 CLI commands `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control`, and `subagent-close`. | Supports only the bounded local CLI operator surface. Launch is launch-and-wait only; control/cancel semantics are state-recorded, not live-delivered; there is no durable background runner or broad live orchestration proof. |
-| Builder draft and Builder 2.0 authoring boundary | Builder remains draft-first and public-contract-only; richer authoring is documented with boundaries. | Not a public complete authoring system and not proof that builder-authored agents execute as integrated product flows. |
+| Builder draft and Builder 2.0 authoring boundary | Builder remains draft-first and public-contract-only. TASK-557 adds a formal `builder-output.schema.json` wrapper and deterministic candidate audit for runtime options, capability gates, JSON output schema compilation, hidden managed-subagent field rejection, and local/secret provider-data rejection. Accepted output is persisted as a draft revision and candidate diagnostics are exposed outside Agent JSON. | Supports only bounded audited draft authoring. Not a public complete authoring system, not deploy proof, not provider registration, and not proof that builder-authored agents execute as integrated product flows. |
 
 ## Partial Or Deferred Public-Launch Gaps
 
@@ -51,7 +52,7 @@ These items may be described only inside the local CLI/repository boundary:
 | Stage 6: Memory Productization | Memory remains bounded to local provider registration, Mem0-first direct use, and narrow prompt-rendered runtime memory. | Provider readiness matrix, durable cleanup/restore semantics where claimed, provider isolation proof, reliability/throttling proof, backup or deletion guarantees, and documented limits for every supported provider. |
 | Stage 7: Full User Interaction Layer | Current interaction proof is narrower than a full public user-interaction surface. | End-to-end evidence for blocked prompts, replies, resume-after-reply, unsupported prompt errors, risky mid-run change policy, CLI/user-facing semantics, and redacted transcripts across supported runtimes. |
 | Stage 8: Managed Subagent Product Surface | A bounded local CLI operator surface exists, but complete public orchestration remains deferred. | Evidence exists for launch-and-wait, list, show, wait/reconcile, record-control, and close. Evidence is still required for durable background runners, live control delivery, live runtime cancellation, cross-process attachment, complete review/fix loops, surfaced child interaction, cancellation cleanup, and leaked-child checks. |
-| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 is not a public complete authoring workflow. | Builder output validation, lifecycle publication proof, execution proof for supported patterns, memory/runtime/interaction/subagent boundary checks, self-review evidence, and failure-mode documentation. |
+| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 is productized only as bounded audited draft-first authoring, not a public complete authoring workflow. | Remaining evidence is still required for live execution proof of representative drafts, integrated builder/lifecycle/runtime/memory/interaction/subagent scenarios, user-facing rejected-candidate failure docs, and stable Stage 10 CLI/API compatibility. |
 | Stage 10: Stable CLI/API Contract Freeze | No public stable CLI/API compatibility promise is locked. | Versioned command/API inventory, backwards-compatibility policy, deprecation rules, output/error stability rules, migration tests, and examples that match the frozen contract. |
 
 ## Forbidden Claims
@@ -70,7 +71,7 @@ Until a later stage records the required evidence and updates the release scope,
 - Full user interaction readiness is proven beyond the supported prompt wait/reply/resume slice.
 - Managed subagents are a complete operator-facing product surface.
 - Managed subagents provide durable background execution, live control-message delivery, live runtime cancellation, hosted/UI orchestration, or write-set sandboxing.
-- Builder 2.0 is a public complete authoring system or that builder-authored agents are proven integrated product flows.
+- Builder 2.0 is a public complete authoring system, deploy authority, provider/runtime account registry, live managed-subagent orchestrator, or proof that builder-authored agents are integrated product flows.
 - Stable public CLI/API compatibility is frozen.
 
 ## Unlock Rules
@@ -116,6 +117,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 - [Phase 16 Managed Subagent Orchestration](../17-managed-subagent-orchestration/phase-16-managed-subagent-orchestration.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Phase 17 Builder 2.0](../18-builder-2-0/phase-17-builder-2-0.md)
+- [Builder 2.0 Productization](./builder-2-0-productization.md)
 
 ## Текущий baseline
 
@@ -139,7 +141,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 | Local stress, recovery и deterministic provider matrix | Stub-runtime и local SQLite tests доказывают выбранные local orchestration semantics. | Не доказывает live provider stress, external throttling reliability, production-scale load или automatic live crash recovery. |
 | Supported user prompt wait/reply/resume slice | Focused adapter, Core и CLI tests покрывают durable prompt state для поддерживаемых prompt shapes. | Не является full user interaction readiness для всех prompt shapes, interfaces или risky mid-run change policies. |
 | First managed-subagent layer | Core service и state покрывают worker/reviewer/final-review roles, launch/wait/send/close, findings, cancellation state, budgets, sibling write-set conflict rejection и Stage 8 CLI commands `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control` и `subagent-close`. | Поддерживает только bounded local CLI operator surface. Launch является только launch-and-wait; control/cancel semantics записываются в state, а не live-deliver-ятся; нет durable background runner или broad live orchestration proof. |
-| Builder draft и Builder 2.0 authoring boundary | Builder остается draft-first и public-contract-only; richer authoring задокументирован с границами. | Не является public complete authoring system и не доказывает, что builder-authored agents выполняются как integrated product flows. |
+| Builder draft и Builder 2.0 authoring boundary | Builder остается draft-first и public-contract-only. TASK-557 добавляет formal `builder-output.schema.json` wrapper и deterministic candidate audit для runtime options, capability gates, JSON output schema compilation, hidden managed-subagent field rejection и local/secret provider-data rejection. Принятый output сохраняется как draft revision, а candidate diagnostics выводятся вне Agent JSON. | Поддерживается только bounded audited draft authoring. Это не public complete authoring system, не deploy proof, не provider registration и не proof, что builder-authored agents выполняются как integrated product flows. |
 
 ## Partial или deferred gaps для public launch
 
@@ -152,7 +154,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 | Stage 6: Memory Productization | Memory ограничена local provider registration, Mem0-first direct use и narrow prompt-rendered runtime memory. | Provider readiness matrix, durable cleanup/restore semantics where claimed, provider isolation proof, reliability/throttling proof, backup или deletion guarantees и documented limits для каждого supported provider. |
 | Stage 7: Full User Interaction Layer | Текущий interaction proof уже, чем полный public user-interaction surface. | End-to-end evidence для blocked prompts, replies, resume-after-reply, unsupported prompt errors, risky mid-run change policy, CLI/user-facing semantics и redacted transcripts across supported runtimes. |
 | Stage 8: Managed Subagent Product Surface | Bounded local CLI operator surface существует, но complete public orchestration остается deferred. | Evidence существует для launch-and-wait, list, show, wait/reconcile, record-control и close. Evidence все еще нужно для durable background runners, live control delivery, live runtime cancellation, cross-process attachment, complete review/fix loops, surfaced child interaction, cancellation cleanup и leaked-child checks. |
-| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 не является public complete authoring workflow. | Builder output validation, lifecycle publication proof, execution proof for supported patterns, memory/runtime/interaction/subagent boundary checks, self-review evidence и failure-mode documentation. |
+| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 productized только как bounded audited draft-first authoring, а не public complete authoring workflow. | Все еще нужны live execution proof для representative drafts, integrated builder/lifecycle/runtime/memory/interaction/subagent scenarios, user-facing rejected-candidate failure docs и stable Stage 10 CLI/API compatibility. |
 | Stage 10: Stable CLI/API Contract Freeze | Stable public CLI/API compatibility promise не зафиксирован. | Versioned command/API inventory, backwards-compatibility policy, deprecation rules, output/error stability rules, migration tests и examples, совпадающие с frozen contract. |
 
 ## Forbidden Claims
@@ -171,7 +173,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 - Full user interaction readiness доказана сверх supported prompt wait/reply/resume slice.
 - Managed subagents являются complete operator-facing product surface.
 - Managed subagents предоставляют durable background execution, live control-message delivery, live runtime cancellation, hosted/UI orchestration или write-set sandboxing.
-- Builder 2.0 является public complete authoring system или builder-authored agents доказаны как integrated product flows.
+- Builder 2.0 является public complete authoring system, deploy authority, provider/runtime account registry, live managed-subagent orchestrator или proof, что builder-authored agents являются integrated product flows.
 - Stable public CLI/API compatibility зафиксирована.
 
 ## Unlock Rules

@@ -838,14 +838,30 @@ describe('Phase 18 offline integrated product flows', () => {
 		expect(memoryFixture.preparedQueries).toEqual(['Ship a realistic offline integrated flow.'])
 		expect(memoryFixture.writtenContents).toEqual([])
 
-		store.appendVisibleChatMessage({
+		const approvalReply = {
+			kind: 'text',
+			prompt_id: 'phase18-approval',
+			text: 'Approved for delegation.',
+		} as const
+		const recordedReply = store.recordUserPromptReply({
 			run_id: 'run-phase18-parent',
-			kind: 'user_message',
-			payload: {
-				kind: 'text',
+			prompt_id: 'phase18-approval',
+			payload: approvalReply,
+		})
+		expect(recordedReply).toMatchObject({
+			accepted: true,
+			reply: {
 				prompt_id: 'phase18-approval',
-				text: 'Approved for delegation.',
+				payload: approvalReply,
+				delivery_status: 'recorded',
 			},
+		})
+		expect(
+			store.getPersistedRunSnapshot('run-phase18-parent')?.resume.pending_prompt?.reply,
+		).toMatchObject({
+			prompt_id: 'phase18-approval',
+			payload: approvalReply,
+			delivery_status: 'recorded',
 		})
 
 		const resumed = await resumeAgentRun(

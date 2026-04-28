@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "builder-output.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent_file"
+  ],
+  "properties": {
+    "agent_file": {
+      "$ref": "./agent-file.schema.json"
+    }
+  }
+}

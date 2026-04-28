@@ -1,0 +1,35 @@
+{
+  "agent_file": {
+    "graph_contract_version": "1.0",
+    "meta": {
+      "id": "agent.builder.invalid-wrapper",
+      "name": "Invalid Builder Wrapper Example"
+    },
+    "entry_node_id": "start",
+    "nodes": [
+      {
+        "id": "start",
+        "kind": "runtime_agent",
+        "runtime_adapter": "codex",
+        "prompt": "This embedded agent is valid, but the wrapper is not.",
+        "input": {
+          "parts": [
+            {
+              "type": "text",
+              "text": "Invalid wrapper example."
+            }
+          ]
+        },
+        "output": {
+          "mode": "text"
+        }
+      }
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "WRAPPER_EXTRA_FIELD",
+      "message": "Builder diagnostics must be host output, not a wrapper field or Agent JSON field."
+    }
+  ]
+}

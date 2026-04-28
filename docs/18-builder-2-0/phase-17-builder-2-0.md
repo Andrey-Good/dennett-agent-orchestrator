@@ -8,7 +8,9 @@ Status: owner note for the Phase 17 Builder 2.0 documentation slice.
 Related documents:
 
 - [Builder Agent](../08-extensions/builder-agent.md)
+- [Builder 2.0 Productization](../21-public-launch-readiness/builder-2-0-productization.md)
 - [Agent JSON Contract](../03-contracts/agent-json/README.md)
+- [Builder Output Schema](../../contracts/json-schema/builder-output.schema.json)
 - [Memory Binding Model Contract](../03-contracts/agent-json/memory-binding-model-contract.md)
 - [Runtime Sources](../08-extensions/runtime-sources.md)
 - [Runtime Adapter Contract](../03-contracts/runtime-adapter-contract.md)
@@ -37,14 +39,31 @@ Builder 2.0 must treat these as references to public contracts. The builder does
 
 All Builder 2.0 output remains draft-first:
 
-1. the builder returns candidate portable agent JSON;
-2. Core parses and validates the candidate against supported schemas and invariants;
-3. create and revise identity rules are checked before persistence;
-4. accepted output is persisted as a draft revision;
-5. deploy remains a separate explicit lifecycle action;
-6. live runs continue to use the current live revision until deploy occurs.
+1. the builder returns a JSON wrapper with the exact shape `{"agent_file": <portable-agent-json>}`;
+2. Core extracts `agent_file` from the wrapper and rejects missing or non-object candidates;
+3. Core parses and validates the candidate against supported schemas and invariants;
+4. create and revise identity rules are checked before persistence;
+5. Core runs deterministic candidate audit before persistence;
+6. accepted output is persisted as a draft revision;
+7. deploy remains a separate explicit lifecycle action;
+8. live runs continue to use the current live revision until deploy occurs.
 
 Builder 2.0 may recommend validations, dry runs, review passes, or deployment. It must not silently execute deploy, mark a draft as live, or treat its own confidence as proof that the lifecycle is complete.
+
+## Implemented Candidate Audit
+
+The current Stage 9 implementation audits builder candidates after schema validation and before draft persistence.
+
+The audit rejects:
+
+- unsupported or invalid runtime option keys and values. The supported keys are `model`, `reasoning_effort`, `speed_tier`, and `personality`; `speed_tier` accepts only `fast` or `flex`;
+- runtime surfaces that the selected adapter does not advertise through capabilities, including explicit runtime sources, memory bindings, live comments, built-in user chat MCP, reasoning effort, speed tiers, and personality;
+- node JSON output schemas that cannot be compiled;
+- hidden managed-subagent fields such as task packages, write sets, lineage, budgets, and control-message payloads;
+- local provider data, secrets, runtime account data, rate limits, credentials, local executable paths, package paths, provider registration IDs, and similar non-portable state;
+- memory provider-extension data that smuggles local or secret configuration.
+
+Audit diagnostics are exposed outside the candidate file as host result data. They must not be copied into Agent JSON.
 
 ## Public-Contract-Only Rule
 
@@ -132,7 +151,8 @@ Phase 17 does not claim:
 - successful execution of every builder-authored agent;
 - real-provider or real-runtime proof beyond the evidence recorded in the subsystem owner docs;
 - broad external live proof for managed subagent workflows;
-- a builder-only authority over registry, deployment, provider setup, runtime selection, or user-chat state.
+- a builder-only authority over registry, deployment, provider setup, runtime selection, or user-chat state;
+- candidate diagnostics or audit metadata as portable Agent JSON fields.
 
 Those claims belong to later integrated product-flow and release-proof phases when backed by executable evidence.
 
@@ -144,7 +164,9 @@ Those claims belong to later integrated product-flow and release-proof phases wh
 Связанные документы:
 
 - [Builder Agent](../08-extensions/builder-agent.md)
+- [Builder 2.0 Productization](../21-public-launch-readiness/builder-2-0-productization.md)
 - [Agent JSON Contract](../03-contracts/agent-json/README.md)
+- [Builder Output Schema](../../contracts/json-schema/builder-output.schema.json)
 - [Memory Binding Model Contract](../03-contracts/agent-json/memory-binding-model-contract.md)
 - [Runtime Sources](../08-extensions/runtime-sources.md)
 - [Runtime Adapter Contract](../03-contracts/runtime-adapter-contract.md)

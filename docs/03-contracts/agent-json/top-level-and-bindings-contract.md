@@ -251,6 +251,17 @@ Rules:
 - If `config` is absent, the binding is only a local placeholder and Core must not invent required capabilities, transport preferences, or provider-specific settings.
 - This contract owns only binding identity and scope, not the internal storage format or session model of the memory source.
 
+## Builder-Facing Memory Binding Constraints
+
+Builder output must preserve the same top-level `memory_bindings` contract as hand-authored Agent JSON.
+
+For builder-authored candidates:
+
+- `memory_bindings[].codex_ref` remains a local handle, not a portable provider identifier;
+- `memory_bindings[].config` is opaque only until `kind = runtime_memory`, where [memory-binding-model-contract.md](./memory-binding-model-contract.md) defines the portable payload;
+- builder diagnostics, runtime capabilities, provider registrations, credentials, account data, rate limits, local executables, package paths, and provider IDs must not be written into `memory_bindings`;
+- rejected memory candidates must fail before draft persistence instead of being saved with hidden local assumptions.
+
 ## `runtime_sources`
 
 - Type: `array`
@@ -276,6 +287,19 @@ Rules:
 
 <a id="russian"></a>
 # Контракт Верхнего Уровня И Binding-Объектов
+
+## Корректировка для Builder и `memory_bindings`
+
+Этот раздел является исправленной русской сводкой для Builder-facing правил, если более старый русский текст ниже отображается поврежденным или противоречит английскому разделу.
+
+Builder output должен сохранять тот же top-level contract для `memory_bindings`, что и Agent JSON, написанный вручную.
+
+Для builder-authored candidates:
+
+- `memory_bindings[].codex_ref` остается local handle, а не portable provider identifier;
+- `memory_bindings[].config` является opaque только до тех пор, пока `kind = runtime_memory`; после этого portable payload определяет [memory-binding-model-contract.md](./memory-binding-model-contract.md);
+- builder diagnostics, runtime capabilities, provider registrations, credentials, account data, rate limits, local executables, package paths и provider IDs нельзя записывать в `memory_bindings`;
+- rejected memory candidates должны fail до draft persistence, а не сохраняться с hidden local assumptions.
 
 ## Назначение И Владение
 

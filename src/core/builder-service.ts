@@ -5,6 +5,10 @@ import type { RuntimeAdapter } from '../ports/runtime.js'
 import { loadBuilderSystemAgentResource } from '../resources/builder-system-agent.js'
 import type { AgentFile } from './agent-file.js'
 import { type AgentLifecycleIndexResult, AgentLifecycleService } from './agent-lifecycle.js'
+import {
+	auditBuilderCandidate,
+	type BuilderCandidateAuditDiagnostics,
+} from './builder-candidate-auditor.js'
 import { AppError } from './errors.js'
 import { runAgentFile } from './graph-runner.js'
 import type { JsonObject, JsonValue } from './json.js'
@@ -42,6 +46,7 @@ export interface BuildAgentDraftResult {
 	builder_run_id: string
 	draft: AgentLifecycleIndexResult
 	candidate_agent_file: AgentFile
+	candidate_diagnostics: BuilderCandidateAuditDiagnostics
 	base_revision?: AgentRevisionRecord | null
 }
 
@@ -122,6 +127,7 @@ function buildBuilderContext(args: {
 		portable_authoring_guidance: {
 			allowed_public_surfaces: [
 				'params',
+				'initial_vars',
 				'skills',
 				'mcps',
 				'plugins',
@@ -162,7 +168,7 @@ function buildBuilderContext(args: {
 			},
 			runtime_options: {
 				usage:
-					'Use node runtime_options for portable hints such as model, reasoning_effort, speed_tier, temperature, or personality when requested.',
+					'Use node runtime_options for portable hints such as model, reasoning_effort, speed_tier, or personality when requested. speed_tier values are fast or flex.',
 				forbidden_local_data: ['provider secrets', 'account quotas', 'runtime inventory dumps'],
 			},
 			interaction: {
@@ -183,7 +189,8 @@ function buildBuilderContext(args: {
 				],
 			},
 			lifecycle: {
-				builder_result: 'Candidate output is validated and saved as a draft only.',
+				builder_result:
+					'Candidate output must use the formal wrapper contract {"agent_file": <portable-agent-json>}; the candidate is validated, audited, and saved as a draft only.',
 				deployment: 'Deployment remains an explicit separate lifecycle operation.',
 			},
 		},
@@ -195,11 +202,43 @@ function extractAgentFileCandidate(output: JsonValue | null): unknown {
 		throw new AppError('BUILDER_INVALID_OUTPUT', 'Builder completed without a JSON object result.')
 	}
 
+	const wrapperKeys = Object.keys(output)
+	const expectedWrapperProperties = ['agent_file']
+	if (!Object.hasOwn(output, 'agent_file')) {
+		throw new AppError(
+			'BUILDER_INVALID_OUTPUT',
+			'Builder output wrapper must contain exactly one property: "agent_file"; missing required "agent_file" property.',
+			{
+				expected_properties: expectedWrapperProperties,
+				actual_properties: wrapperKeys,
+			},
+		)
+	}
+
+	const extraWrapperKeys = wrapperKeys.filter((key) => key !== 'agent_file')
+	if (extraWrapperKeys.length > 0) {
+		throw new AppError(
+			'BUILDER_INVALID_OUTPUT',
+			`Builder output wrapper must contain only the "agent_file" property; unexpected wrapper field(s): ${extraWrapperKeys
+				.map((key) => `"${key}"`)
+				.join(', ')}.`,
+			{
+				expected_properties: expectedWrapperProperties,
+				actual_properties: wrapperKeys,
+				extra_properties: extraWrapperKeys,
+			},
+		)
+	}
+
 	const candidate = output.agent_file
 	if (!isJsonObject(candidate)) {
 		throw new AppError(
 			'BUILDER_INVALID_OUTPUT',
-			'Builder output must contain an object-valued "agent_file" field.',
+			'Builder output wrapper property "agent_file" must be an object.',
+			{
+				expected_properties: expectedWrapperProperties,
+				actual_properties: wrapperKeys,
+			},
 		)
 	}
 
@@ -278,11 +317,23 @@ export class BuilderAgentService {
 			)
 		}
 
+		let candidatePayload: unknown
+		try {
+			candidatePayload = extractAgentFileCandidate(builderRun.final_output)
+		} catch (error) {
+			if (error instanceof AppError) {
+				throw new AppError(error.code, error.message, {
+					builder_run_id: builderRun.run_id,
+					operation,
+					...(isJsonObject(error.details) ? error.details : {}),
+				})
+			}
+			throw error
+		}
+
 		let candidateAgentFile: AgentFile
 		try {
-			candidateAgentFile = await validateAgentFileValue(
-				extractAgentFileCandidate(builderRun.final_output),
-			)
+			candidateAgentFile = await validateAgentFileValue(candidatePayload)
 		} catch (error) {
 			throw new AppError(
 				'BUILDER_CANDIDATE_INVALID',
@@ -307,6 +358,25 @@ export class BuilderAgentService {
 			)
 		}
 
+		const candidateDiagnostics = auditBuilderCandidate({
+			agent_file: candidateAgentFile,
+			runtime_adapter: this.runtimeAdapter,
+		})
+		if (candidateDiagnostics.status === 'rejected') {
+			throw new AppError(
+				'BUILDER_CANDIDATE_AUDIT_REJECTED',
+				`Builder candidate failed deterministic audit: ${candidateDiagnostics.issues
+					.filter((issue) => issue.severity === 'error')
+					.map((issue) => `${issue.path} ${issue.message}`)
+					.join('; ')}`,
+				{
+					builder_run_id: builderRun.run_id,
+					operation,
+					candidate_diagnostics: candidateDiagnostics,
+				},
+			)
+		}
+
 		const draft = await this.lifecycleService.saveValidatedDraftAgentFile({
 			agent_file: candidateAgentFile,
 		})
@@ -316,6 +386,7 @@ export class BuilderAgentService {
 			builder_run_id: builderRun.run_id,
 			draft,
 			candidate_agent_file: candidateAgentFile,
+			candidate_diagnostics: candidateDiagnostics,
 			base_revision: existingBase?.revision ?? null,
 		}
 	}

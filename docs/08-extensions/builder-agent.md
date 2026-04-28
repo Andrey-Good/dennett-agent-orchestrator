@@ -19,6 +19,7 @@ Related documents:
 - [Draft, Live, and Deploy](../07-lifecycle/draft-live-deploy.md)
 - [Agent Registry](../07-lifecycle/agent-registry.md)
 - [Phase 17 Builder 2.0](../18-builder-2-0/phase-17-builder-2-0.md)
+- [Builder 2.0 Productization](../21-public-launch-readiness/builder-2-0-productization.md)
 - [ADR-0001: Codex-First, Not Codex-Only](../09-adrs/ADR-0001-codex-first-not-codex-only.md)
 
 ## Role
@@ -34,9 +35,11 @@ Phase 10 implements the first executable builder slice with these rules:
 - builder exists as a real system-agent resource that Core and interfaces may invoke;
 - the first user-facing entrypoint is an interface-backed flow, starting with CLI, and interfaces stay thin over Core;
 - invocation uses the existing runtime path rather than a builder-only execution mechanism;
-- builder returns candidate portable agent JSON for create or revise flows;
+- builder returns a formal JSON wrapper whose top-level shape is `{"agent_file": <portable-agent-json>}` for create or revise flows;
 - Core validates the candidate against the supported contract before any persistence happens;
+- Core audits the candidate deterministically before persistence;
 - an accepted candidate is stored as a draft revision by default through the normal lifecycle and registry surfaces;
+- candidate diagnostics are returned as host output outside Agent JSON;
 - deploy remains a separate explicit action, not an automatic side effect of building.
 
 This is the current implemented target for the builder extension. Anything broader must be described as later scope, not implied as already present.
@@ -49,8 +52,9 @@ Builder 2.0 may author candidate agent JSON that uses supported memory bindings,
 
 This is still draft-first and public-contract-only:
 
-- builder output remains candidate portable agent JSON;
+- builder output remains a formal wrapper around candidate portable Agent JSON;
 - Core and lifecycle services still own validation, identity checks, draft persistence, and deploy;
+- Core owns deterministic candidate audit and rejection before persistence;
 - subsystem owner docs still own memory, runtime, interaction, and managed-subagent semantics;
 - integrated product-flow proof remains later Phase 18 scope.
 
@@ -86,11 +90,12 @@ The normal Phase 10 builder workflow is:
 1. understand the user task, target agent, and constraints;
 2. gather only the permitted read context needed for authoring;
 3. invoke the builder system resource through the existing runtime path;
-4. parse the returned candidate as portable agent JSON;
+4. parse the returned wrapper and extract `agent_file`;
 5. validate the candidate against the supported contract;
 6. check that the candidate identity is valid for the requested create or revise mode;
-7. persist a validated candidate as a draft revision through lifecycle services;
-8. leave deploy to a separate explicit later action.
+7. audit runtime options, capability gates, JSON output schemas, hidden managed-subagent fields, and local or secret provider data;
+8. persist a validated and accepted candidate as a draft revision through lifecycle services;
+9. leave deploy to a separate explicit later action.
 
 This workflow is intentionally more precise than "generate some JSON". It is also intentionally narrower than a full multi-candidate evaluation and ranking subsystem.
 
@@ -119,6 +124,8 @@ The builder system resource is therefore part of what gets run, not a license to
 
 When Builder 2.0 authors runtime-source or runtime-option intent, that intent must stay inside the public runtime-source and runtime-adapter contracts. Local runtime metadata and App Server-specific capability details are capability inputs, not portable file truth.
 
+The current candidate audit accepts only supported runtime option keys and values. It rejects unknown keys such as `temperature`, invalid values such as `speed_tier = "standard"`, and options whose adapter capability is not advertised by the selected runtime.
+
 ## Relationship to Lifecycle
 
 The builder operates on drafts by default.
@@ -142,6 +149,8 @@ The builder may describe provider capability requirements and may revise invalid
 
 Memory semantics remain owned by the memory-binding contract and memory extension docs.
 
+The current candidate audit rejects memory bindings that contain local provider registrations, credentials, secret-like fields, local executables, package paths, account metadata, rate limits, or provider-specific config that can smuggle local setup. Mem0 builder output may use only the documented portable provider-extension subset.
+
 ## Relationship to Interaction
 
 Builder 2.0 may author agents that use documented comments, prompt/reply, wait-state, and resume behavior.
@@ -155,6 +164,8 @@ This document consumes the managed subagent model; it does not redefine it.
 If a builder workflow decomposes work, launches review passes, or requests bounded repair, it must use the managed subagent system documented in the architecture, contract, execution, and state owner docs. Those child runs remain interaction-silent at the parent user boundary in the base model.
 
 Builder 2.0 may help author plans that reference managed-subagent roles, task packages, write scopes, budgets, findings, review loops, and close semantics, but those details must stay in the managed Subagent MCP/product surface. Portable agent JSON may include only the portable `orchestrator_agent` nested-graph primitive unless a future owner contract explicitly adds portable fields for richer managed-subagent semantics. Builder 2.0 must not redefine those semantics, assign overlapping write scopes, or spawn hidden subagents as an unstated side effect of draft creation.
+
+The current candidate audit rejects hidden managed-subagent fields such as task packages, write sets, lineage, budgets, and control-message payloads if they appear inside Agent JSON.
 
 ## Relationship to Manual Editing
 
@@ -186,7 +197,8 @@ The following capabilities are not implied as Builder 2.0 behavior:
 - automatic real-provider or real-runtime proof for every generated draft;
 - builder-owned provider registration, runtime account configuration, or secret management;
 - builder-owned cross-interface user interaction semantics;
-- hidden managed-subagent orchestration that is not represented by public contracts and durable state.
+- hidden managed-subagent orchestration that is not represented by public contracts and durable state;
+- diagnostics, audit results, runtime capabilities, or builder run metadata persisted as Agent JSON fields.
 
 ## What the Builder Must Not Become
 

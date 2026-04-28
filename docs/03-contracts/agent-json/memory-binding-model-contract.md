@@ -233,8 +233,22 @@ Core may not assume:
 - that the user's provider is installed or managed by Dennett;
 - that chat history or resume state can be substituted for missing memory.
 
+## Builder-Facing Contract Constraints
+
+Builder-authored memory bindings must rely only on this public contract. A builder candidate may include portable `intent`, `required_capabilities`, `transport_preferences`, and allowed `provider_extension` fields, but it must not include local provider registration data, credentials, account references, rate limits, Python executable paths, package paths, or provider IDs.
+
+In the current Stage 9 builder audit, secret-like and local configuration keys inside `memory_bindings` are rejected before draft persistence. For Mem0, builder candidates may use only the documented portable `provider_extension.config.mem0_config.graph_store` shape with an empty nested `graph_store.config`. Non-Mem0 provider-extension config is rejected from builder candidates until a provider owner documents an explicit portable subtree.
+
 <a id="russian"></a>
 # РљРѕРЅС‚СЂР°РєС‚ РњРѕРґРµР»Рё Memory Binding
+
+## Корректировка для Builder
+
+Этот раздел является исправленной русской сводкой для Builder-facing правил, если более старый русский текст ниже отображается поврежденным или противоречит английскому разделу.
+
+Builder-authored `memory_bindings` должны опираться только на публичный memory contract. Candidate может включать portable `intent`, `required_capabilities`, `transport_preferences` и разрешенные поля `provider_extension`, но не должен включать local provider registration data, credentials, account references, rate limits, Python executable paths, package paths или provider IDs.
+
+В текущем Stage 9 builder audit secret-like и local configuration keys внутри `memory_bindings` отклоняются до draft persistence. Для Mem0 candidate может использовать только documented portable shape `provider_extension.config.mem0_config.graph_store` с пустым nested `graph_store.config`. Non-Mem0 `provider_extension.config` отклоняется в builder candidates, пока owner конкретного provider не задокументирует явное portable subtree.
 
 ## РќР°Р·РЅР°С‡РµРЅРёРµ Р Р’Р»Р°РґРµРЅРёРµ
 
