@@ -1,0 +1,85 @@
+name: External beta feedback
+description: Report feedback from a Stage 16 external beta workflow.
+title: "Beta feedback: "
+labels: ["beta-feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Sensitive data warning:** Do not paste credentials, API keys/tokens, provider config, account/profile data, private prompts/replies, memory records, unredacted logs, raw runtime-env output, local state databases, provider storage, or proprietary inputs/outputs into this public issue.
+
+        Security vulnerabilities, credential exposure, data leakage, or unsafe redaction reports must follow `SECURITY.md` instead of this public template.
+  - type: dropdown
+    id: workflow-id
+    attributes:
+      label: Beta workflow ID
+      description: Select the Stage 16 workflow this feedback covers.
+      options:
+        - EB-WF-01 onboarding
+        - EB-WF-02 CLI validation
+        - EB-WF-03 local graph execution
+        - EB-WF-04 local Mem0 memory operation
+        - EB-WF-05 prompt wait/reply/resume
+        - EB-WF-06 builder draft/audit
+        - EB-WF-07 managed-subagent operator flow
+        - EB-WF-08 support/security routing drill
+    validations:
+      required: true
+  - type: input
+    id: participant-alias
+    attributes:
+      label: Participant alias
+      description: Use an alias such as beta-user-1. Do not include private identity details unless you intentionally want them public.
+      placeholder: beta-user-1
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Redacted environment summary
+      description: Include OS, Node.js, package manager, artifact/commit, and runtime/provider class only if safe to share.
+      placeholder: Windows 11; Node 22.x; pnpm 10.x; local checkout commit <short-sha>; Codex App Server path; no account identifiers.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did the beta workflow documentation lead you to expect?
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Describe what happened. Include only redacted command summaries or short error excerpts.
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Proposed severity
+      description: Use the Stage 16 bug bar from external-beta-readiness.md.
+      options:
+        - S0-security-privacy
+        - S1-critical
+        - S2-major
+        - S3-minor
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: redaction
+    attributes:
+      label: Redaction statement
+      description: State what you removed or withheld before posting publicly.
+      placeholder: Removed account email, provider config, private prompt content, and local user path.
+    validations:
+      required: true
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Public artifacts or private-retention note
+      description: Link safe public artifacts, or explain that sensitive artifacts are retained privately and why.
+    validations:
+      required: false

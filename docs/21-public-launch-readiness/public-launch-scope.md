@@ -82,6 +82,7 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | Managed subagent primitives | Limited/beta for the bounded local CLI operator surface. | Stage 8 supports `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control`, and `subagent-close` only within the limits in [Managed Subagent Productization](./managed-subagent-productization.md). Launch is launch-and-wait only; control and cancellation are state-recorded, not live-delivered. |
 | Builder 2.0 authoring | Limited/beta for audited draft-first authoring only. | Stage 9 supports formal builder output wrapper validation, deterministic candidate audit, diagnostics outside Agent JSON, and draft-only persistence as documented in [Builder 2.0 Productization](./builder-2-0-productization.md). It does not prove full public authoring readiness, deploy, provider registration, live managed orchestration, or execution of every draft. |
 | Stable CLI/API compatibility | Frozen only for the bounded Stage 10 surface. | Only commands labeled `[stable]`, the `[stable/safety-protocol]` cleanup flow, exported JSON schema artifacts, and the no-stable-JS-API package boundary are stable under [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). Experimental commands remain unstable. |
+| External beta program | Not run. | Stage 16 is governed by [External Beta Readiness](./external-beta-readiness.md). Feature-level `Limited/beta` classifications above do not prove external beta completion, participant validation, or public-readiness approval. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Each requires a separate artifact, proof, rollback/uninstall path, and security/release decision. |
 
 ## Public Claims Allowed After Required Gates
@@ -110,6 +111,7 @@ Do not claim:
 - Memory behavior is broader than registered local provider resolution, prompt-rendered Codex context, and success-only provider writes.
 - Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior, or volume reliability is proven.
 - Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, stable compatibility for experimental CLI commands, or any stable JS/TS API is complete.
+- Feature-level `Limited/beta` classifications prove that a completed external beta program, beta-user validation, or public-readiness approval exists.
 
 ## Launch Blockers
 
@@ -213,6 +215,7 @@ Hosted или managed launch может войти в scope только чер�
 | Managed subagent primitives | Limited/beta для bounded local CLI operator surface. | Stage 8 поддерживает только `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control` и `subagent-close` в пределах [Managed Subagent Productization](./managed-subagent-productization.md). Launch является только launch-and-wait; control и cancellation записываются в state, а не live-deliver-ятся. |
 | Builder 2.0 authoring | Limited/beta только для audited draft-first authoring. | Stage 9 поддерживает formal builder output wrapper validation, deterministic candidate audit, diagnostics вне Agent JSON и draft-only persistence по [Builder 2.0 Productization](./builder-2-0-productization.md). Это не доказывает full public authoring readiness, deploy, provider registration, live managed orchestration или execution каждого draft. |
 | Stable CLI/API compatibility | Frozen only for the bounded Stage 10 surface. | Только commands с label `[stable]`, `[stable/safety-protocol]` cleanup flow, exported JSON schema artifacts и no-stable-JS-API package boundary являются stable по [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). Experimental commands остаются unstable. |
+| External beta program | Not run. | Stage 16 governed by [External Beta Readiness](./external-beta-readiness.md). Feature-level `Limited/beta` classifications выше не доказывают external beta completion, participant validation или public-readiness approval. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Каждый требует separate artifact, proof, rollback/uninstall path и security/release decision. |
 
 ## Разрешенные Public Claims После Нужных Gates
@@ -240,6 +243,7 @@ Hosted или managed launch может войти в scope только чер�
 - Memory behavior шире registered local provider resolution, prompt-rendered Codex context и success-only provider writes.
 - Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior или volume reliability доказаны.
 - Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, stable compatibility for experimental CLI commands или any stable JS/TS API завершены.
+- Feature-level `Limited/beta` classifications доказывают, что completed external beta program, beta-user validation или public-readiness approval уже существуют.
 
 ## Блокеры Запуска
 

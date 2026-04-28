@@ -23,6 +23,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 - [Observability, Support, And Operations](./observability-support-operations.md)
 - [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md)
 - [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md)
+- [External Beta Readiness](./external-beta-readiness.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -45,6 +46,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 - Stage 13 records the local-only support bundle, redacted runtime diagnostics, support/security routing, support matrix, telemetry boundary, and local incident runbooks.
 - Stage 14 records public docs, onboarding, examples, and claim-review rules in [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md).
 - Stage 15 records local integrated public-environment product-flow evidence and claim boundaries in [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md).
+- Stage 16 records the external beta plan, participant/workflow criteria, bug bar, privacy-safe feedback routing, and `not-run` evidence gate in [External Beta Readiness](./external-beta-readiness.md).
 
 ## Current Truthful Scope
 
@@ -54,6 +56,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 - Local tarball proof is limited to controlled `.tgz` install/uninstall and optional explicit two-tarball upgrade/rollback smoke.
 - Public docs and examples must keep model, runtime, memory, package, hosted, support, and production claims inside the boundaries in this section.
 - Integrated public-environment flow claims must distinguish local/offline proof from live runtime, public package, provider, hosted, builder, and managed-subagent readiness.
+- Feature-level `limited/beta` labels are not external beta completion claims; Stage 16 remains `not-run` until real external participants and dated accepted evidence exist.
 
 ## Still Forbidden
 
@@ -64,5 +67,6 @@ Do not claim:
 - full Codex App Server certification, all models/options support, account/rate-limit guarantees, or broad runtime-provider reliability;
 - native App Server memory, broad memory-provider support, durable provider cleanup beyond documented scoped behavior, provider-wide cleanup, true restore, or provider reliability;
 - full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness, stable compatibility for experimental CLI commands, or any stable JS/TS API.
+- completed external beta, beta-user validation, or public-readiness approval before Stage 16 records real participant evidence and accepted exit review.
 
 Public-facing docs should use [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md), [Public Launch Scope](./public-launch-scope.md), and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as starting locks before changing scope or claiming evidence.
