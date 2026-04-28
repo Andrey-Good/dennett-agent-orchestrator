@@ -382,9 +382,8 @@ describe('Stage 7 interaction edge cases', () => {
 	it('rejects late replies after the prompt run has completed', async () => {
 		const harness = await createHarness()
 		const adapter = await startWaitingRun(harness)
-		harness.stateStore.appendVisibleChatMessage({
+		harness.stateStore.recordUserPromptReply({
 			run_id: RUN_ID,
-			kind: 'user_message',
 			payload: {
 				kind: 'text',
 				prompt_id: PROMPT_ID,
@@ -423,7 +422,7 @@ describe('Stage 7 interaction edge cases', () => {
 		expect(harness.stateStore.getPersistedRunSnapshot(RUN_ID)?.resume.pending_prompt).toBeNull()
 	})
 
-	it('records duplicate prompt replies append-only until resume consumes the latest match', async () => {
+	it('records duplicate prompt replies idempotently until resume consumes the first-class reply', async () => {
 		const harness = await createHarness()
 		const adapter = await startWaitingRun(harness)
 		const deliveredReplies: Array<{ execution: unknown; response: UserChatResponsePayload }> = []
@@ -455,19 +454,11 @@ describe('Stage 7 interaction edge cases', () => {
 		)
 
 		expect(firstReply.stdout).toBe('Prompt reply delivered.\n')
-		expect(duplicateReply.stdout).toBe('Prompt reply delivered.\n')
-		expect(deliveredReplies).toHaveLength(2)
+		expect(duplicateReply.stdout).toBe('Prompt reply already recorded.\n')
+		expect(deliveredReplies).toHaveLength(1)
 		expect(userMessages).toEqual([
 			expect.objectContaining({
 				message_sequence: 2,
-				payload: {
-					kind: 'text',
-					prompt_id: PROMPT_ID,
-					text: 'Duplicate approval.',
-				},
-			}),
-			expect.objectContaining({
-				message_sequence: 3,
 				payload: {
 					kind: 'text',
 					prompt_id: PROMPT_ID,
@@ -487,7 +478,7 @@ describe('Stage 7 interaction edge cases', () => {
 		expect(snapshot?.resume.pending_prompt).toBeNull()
 	})
 
-	it('uses the newest matching reply when a pending prompt is superseded before resume', async () => {
+	it('rejects conflicting duplicate replies before resume', async () => {
 		const harness = await createHarness()
 		const adapter = await startWaitingRun(harness)
 		vi.spyOn(CodexAppServerRuntimeAdapter.prototype, 'deliverUserChatResponse').mockImplementation(
@@ -499,11 +490,18 @@ describe('Stage 7 interaction edge cases', () => {
 			stateDbPath: harness.stateDbPath,
 			text: 'Older approval.',
 		})
-		await recordCliTextReply({
-			agentFilePath: harness.agentFilePath,
-			stateDbPath: harness.stateDbPath,
-			text: 'Newer approval.',
-		})
+		const error = await expectCliAppError([
+			'reply',
+			harness.agentFilePath,
+			'--run-id',
+			RUN_ID,
+			'--prompt-id',
+			PROMPT_ID,
+			'--text',
+			'Newer approval.',
+			'--state-db',
+			harness.stateDbPath,
+		])
 		adapter.enqueueSession(successSession('Completed after superseded reply.'))
 
 		const resumeResult = await resumeAgentRun(harness.agentFile, adapter, RUN_ID, {
@@ -515,8 +513,9 @@ describe('Stage 7 interaction edge cases', () => {
 		expect(adapter.requests[1]?.interaction.user_chat_reply).toEqual({
 			kind: 'text',
 			prompt_id: PROMPT_ID,
-			text: 'Newer approval.',
+			text: 'Older approval.',
 		})
+		expect(error.code).toBe('PROMPT_REPLY_ALREADY_RECORDED')
 		expect(snapshot?.visible_messages.map((message) => message.payload)).toEqual([
 			expect.objectContaining({
 				kind: 'text',
@@ -527,11 +526,6 @@ describe('Stage 7 interaction edge cases', () => {
 				kind: 'text',
 				prompt_id: PROMPT_ID,
 				text: 'Older approval.',
-			},
-			{
-				kind: 'text',
-				prompt_id: PROMPT_ID,
-				text: 'Newer approval.',
 			},
 		])
 		expect(resumeResult).toMatchObject({

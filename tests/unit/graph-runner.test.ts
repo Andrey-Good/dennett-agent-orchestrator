@@ -2912,9 +2912,8 @@ describe('graph-runner durable execution', () => {
 			},
 		})
 
-		store.appendVisibleChatMessage({
+		store.recordUserPromptReply({
 			run_id: 'run-prompt-flow',
-			kind: 'user_message',
 			payload: {
 				kind: 'text',
 				prompt_id: 'prompt-1',

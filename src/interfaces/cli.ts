@@ -23,6 +23,7 @@ import type {
 	MemoryProviderCapability,
 	MemoryProviderRecord,
 	MemoryProviderTransport,
+	PersistedRunSnapshot,
 } from '../core/state/types.js'
 import type {
 	MemoryCleanupPreviewResult,
@@ -379,6 +380,71 @@ export function buildOptionReplyPayload(args: {
 		...(args.promptId ? { prompt_id: args.promptId } : {}),
 		option_id: args.optionId,
 		value: matchedOption.value,
+	}
+}
+
+export function buildRunInteractionStatus(snapshot: PersistedRunSnapshot) {
+	const activeAttempt = getLatestActiveAttempt(snapshot)
+	const pendingPrompt = snapshot.resume.pending_prompt
+	const promptPayload =
+		pendingPrompt?.payload !== null && typeof pendingPrompt?.payload === 'object'
+			? (pendingPrompt.payload as { kind?: unknown; require_response?: unknown })
+			: null
+	const reply = pendingPrompt?.reply ?? null
+
+	return {
+		run: {
+			run_id: snapshot.run.run_id,
+			status: snapshot.run.status,
+			resolved_revision_id: snapshot.run.resolved_revision_id,
+			entry_node_id: snapshot.run.entry_node_id,
+			last_boundary_sequence: snapshot.run.last_boundary_sequence,
+		},
+		active_attempt: activeAttempt
+			? {
+					node_id: activeAttempt.node_id,
+					state: activeAttempt.state,
+					has_runtime_handle: activeAttempt.runtime_handle !== null,
+				}
+			: null,
+		interaction: {
+			waiting_for_user: snapshot.run.status === 'waiting_for_user',
+			pending_prompt: pendingPrompt
+				? {
+						prompt_id: pendingPrompt.prompt_id,
+						attempt_id: pendingPrompt.attempt_id,
+						kind: typeof promptPayload?.kind === 'string' ? promptPayload.kind : null,
+						require_response:
+							typeof promptPayload?.require_response === 'boolean'
+								? promptPayload.require_response
+								: null,
+						has_request_handle: pendingPrompt.request_handle !== null,
+						reply: reply
+							? {
+									reply_id: reply.reply_id,
+									prompt_id: reply.prompt_id,
+									delivery_status: reply.delivery_status,
+									recorded_at: reply.recorded_at,
+									delivered_at: reply.delivered_at,
+								}
+							: null,
+					}
+				: null,
+			visible_transcript_messages: snapshot.visible_messages.length,
+		},
+		resume: {
+			native_resume_available: snapshot.resume.native_resume_available,
+			local_resume_available: snapshot.resume.local_resume_available,
+			last_durable_boundary_sequence: snapshot.resume.last_durable_boundary_sequence,
+			last_durable_boundary_kind: snapshot.resume.last_durable_boundary_kind,
+			has_native_session_handle: snapshot.resume.native_session_handle !== null,
+		},
+		redaction: {
+			prompt_payload_omitted: pendingPrompt !== null,
+			reply_payload_omitted: reply !== null,
+			reason:
+				'run-status omits prompt and reply payload content; use the local state database only under the project data-retention policy.',
+		},
 	}
 }
 
@@ -1632,6 +1698,24 @@ export function buildCliProgram(): Command {
 		)
 
 	program
+		.command('run-status')
+		.requiredOption('--run-id <id>', 'run id to inspect')
+		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
+		.action(async (options: { runId: string; stateDb: string }) => {
+			const stateStore = await createStateStore(options.stateDb)
+
+			try {
+				const snapshot = stateStore.getPersistedRunSnapshot(options.runId)
+				if (!snapshot) {
+					throw new AppError('RUN_NOT_FOUND', `Run "${options.runId}" does not exist.`)
+				}
+				printJson(buildRunInteractionStatus(snapshot))
+			} finally {
+				stateStore.close()
+			}
+		})
+
+	program
 		.command('comment')
 		.argument('<agent-file>', 'path to the same pinned agent JSON file')
 		.requiredOption('--run-id <id>', 'run id to comment on')
@@ -1829,12 +1913,30 @@ export function buildCliProgram(): Command {
 
 					const capabilities = adapter.describeCapabilities()
 					const execution = resolveReplyExecutionHandle(snapshot)
+					const recordedReply = stateStore.recordUserPromptReply({
+						run_id: options.runId,
+						prompt_id: promptId ?? null,
+						payload: response,
+					})
 					let deliveredLive = false
-					if (capabilities.supports_builtin_user_chat_mcp && execution !== null) {
+					if (
+						recordedReply.accepted &&
+						capabilities.supports_builtin_user_chat_mcp &&
+						execution !== null
+					) {
 						try {
 							await adapter.deliverUserChatResponse(execution, response)
+							stateStore.markUserPromptReplyDelivered({
+								run_id: options.runId,
+								reply_id: recordedReply.reply.reply_id,
+							})
 							deliveredLive = true
 						} catch (error) {
+							stateStore.markUserPromptReplyDeliveryFailed({
+								run_id: options.runId,
+								reply_id: recordedReply.reply.reply_id,
+								error_message: error instanceof Error ? error.message : 'Unknown error.',
+							})
 							process.stderr.write(
 								`Live prompt delivery was unavailable: ${
 									error instanceof Error ? error.message : 'Unknown error.'
@@ -1843,13 +1945,19 @@ export function buildCliProgram(): Command {
 						}
 					}
 
-					stateStore.appendVisibleChatMessage({
-						run_id: options.runId,
-						kind: 'user_message',
-						payload: response,
-					})
+					if (recordedReply.accepted) {
+						stateStore.appendVisibleChatMessage({
+							run_id: options.runId,
+							kind: 'user_message',
+							payload: response,
+						})
+					}
 					process.stdout.write(
-						deliveredLive ? 'Prompt reply delivered.\n' : 'Prompt reply recorded for resume.\n',
+						recordedReply.accepted
+							? deliveredLive
+								? 'Prompt reply delivered.\n'
+								: 'Prompt reply recorded for resume.\n'
+							: 'Prompt reply already recorded.\n',
 					)
 				} finally {
 					stateStore.close()

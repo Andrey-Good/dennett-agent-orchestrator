@@ -261,7 +261,10 @@ This transcript is generated from normalized CLI assertions in \`tests/integrati
 6. \`$ dennett-agent-orchestrator reply <live-agent-file> --run-id ${RUN_ID} --prompt-id ${PROMPT_ID} --text "${REPLY_TEXT}" --state-db <temp-state-db>\`
    - exit: 0
    - stdout: Prompt reply delivered.
-7. \`$ dennett-agent-orchestrator resume <live-agent-file> --run-id ${RUN_ID} --state-db <temp-state-db>\`
+7. \`$ dennett-agent-orchestrator run-status --run-id ${RUN_ID} --state-db <temp-state-db>\`
+   - exit: 0
+   - stdout: run.status=waiting_for_user; pending_prompt.prompt_id=${PROMPT_ID}; pending_prompt.reply.delivery_status=delivered_live
+8. \`$ dennett-agent-orchestrator resume <live-agent-file> --run-id ${RUN_ID} --state-db <temp-state-db>\`
    - exit: 0
    - stderr: Run ID: ${RUN_ID}
    - stdout: final output="Approved Stage 7 CLI proof after offline prompt reply."
@@ -436,6 +439,28 @@ describe('Stage 7 CLI integrated flow', () => {
 		expect(reply.exitCode).toBeUndefined()
 		expect(reply.stdout).toBe('Prompt reply delivered.\n')
 		expect(reply.stderr).toBe('')
+
+		const runStatus = await runCli(['run-status', '--run-id', RUN_ID, '--state-db', stateDbPath])
+		expect(runStatus.exitCode).toBeUndefined()
+		expect(runStatus.stderr).toBe('')
+		const runStatusOutput = asJsonObject(
+			parseJsonDocuments(runStatus.stdout)[0],
+			'run status output',
+		)
+		expect(readObjectPath(runStatusOutput, ['run', 'status'])).toBe('waiting_for_user')
+		expect(readObjectPath(runStatusOutput, ['interaction', 'pending_prompt', 'prompt_id'])).toBe(
+			PROMPT_ID,
+		)
+		expect(
+			readObjectPath(runStatusOutput, [
+				'interaction',
+				'pending_prompt',
+				'reply',
+				'delivery_status',
+			]),
+		).toBe('delivered_live')
+		expect(readObjectPath(runStatusOutput, ['redaction', 'prompt_payload_omitted'])).toBe(true)
+		expect(readObjectPath(runStatusOutput, ['redaction', 'reply_payload_omitted'])).toBe(true)
 
 		const resume = await runCli([
 			'resume',

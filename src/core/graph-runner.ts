@@ -174,23 +174,9 @@ function resolvePendingUserChatReply(
 	snapshot: PersistedRunSnapshot,
 ): UserChatResponsePayload | null {
 	const pendingPrompt = snapshot.resume.pending_prompt
-	const promptId = pendingPrompt?.prompt_id
-
-	for (let index = snapshot.visible_messages.length - 1; index >= 0; index -= 1) {
-		const message = snapshot.visible_messages[index]
-		if (message?.kind !== 'user_message') {
-			continue
-		}
-		if (!isUserChatResponsePayload(message.payload)) {
-			continue
-		}
-		if (promptId && message.payload.prompt_id && message.payload.prompt_id !== promptId) {
-			continue
-		}
-		if (promptId && message.payload.prompt_id === undefined) {
-			continue
-		}
-		return message.payload
+	const replyPayload = pendingPrompt?.reply?.payload
+	if (isUserChatResponsePayload(replyPayload)) {
+		return replyPayload
 	}
 
 	return null

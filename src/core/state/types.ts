@@ -81,6 +81,8 @@ export type VisibleChatMessageKind =
 	| 'runtime_status'
 	| 'blocking_prompt'
 
+export type UserPromptReplyDeliveryStatus = 'recorded' | 'delivered_live' | 'delivery_failed'
+
 export type NodeOutputRecord = { mode: 'text'; text: string } | { mode: 'json'; json: JsonObject }
 
 export interface ChatPolicySnapshot {
@@ -165,6 +167,20 @@ export interface PendingUserPromptRecord {
 	request_handle: JsonValue | null
 	unresolved: true
 	blocks_forward_progress: true
+	reply?: UserPromptReplyRecord | null
+}
+
+export interface UserPromptReplyRecord {
+	reply_id: string
+	run_id: RunId
+	attempt_id: NodeAttemptId
+	prompt_id: string | null
+	payload: JsonValue
+	idempotency_key: string
+	delivery_status: UserPromptReplyDeliveryStatus
+	delivery_error_message: string | null
+	recorded_at: string
+	delivered_at: string | null
 }
 
 export interface ResumeMetadataRecord {
@@ -452,6 +468,26 @@ export interface AppendVisibleChatMessageInput {
 	kind: VisibleChatMessageKind
 	payload: JsonValue
 	created_at?: string
+}
+
+export interface RecordUserPromptReplyInput {
+	run_id: RunId
+	prompt_id?: string | null
+	payload: JsonValue
+	reply_id?: string
+	recorded_at?: string
+}
+
+export interface RecordUserPromptReplyResult {
+	reply: UserPromptReplyRecord
+	accepted: boolean
+}
+
+export interface MarkUserPromptReplyDeliveryInput {
+	run_id: RunId
+	reply_id: string
+	delivered_at?: string
+	error_message?: string | null
 }
 
 export interface StartNodeAttemptInput {

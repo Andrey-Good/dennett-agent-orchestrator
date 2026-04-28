@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -31,6 +31,7 @@ import type {
 	MarkEventDispatchedInput,
 	MarkEventDispatchFailedInput,
 	MarkManagedSubagentTerminalInput,
+	MarkUserPromptReplyDeliveryInput,
 	MemoryProviderCapability,
 	MemoryProviderRecord,
 	MemoryProviderStatus,
@@ -40,6 +41,8 @@ import type {
 	PendingUserPromptRecord,
 	PersistedRunSnapshot,
 	PromoteAgentRevisionInput,
+	RecordUserPromptReplyInput,
+	RecordUserPromptReplyResult,
 	ResumeMetadataInput,
 	ResumeMetadataRecord,
 	RunRecord,
@@ -52,6 +55,7 @@ import type {
 	UpsertAgentRevisionInput,
 	UpsertMemoryProviderInput,
 	UpsertTriggerRecordInput,
+	UserPromptReplyRecord,
 	VisibleChatMessageKind,
 	VisibleChatMessageRecord,
 } from './types.js'
@@ -239,6 +243,19 @@ function stringifyJson(value: JsonValue): string {
 	return JSON.stringify(value)
 }
 
+function stableStringify(value: JsonValue): string {
+	if (value === null || typeof value !== 'object') {
+		return JSON.stringify(value)
+	}
+	if (Array.isArray(value)) {
+		return `[${value.map((item) => stableStringify(item)).join(',')}]`
+	}
+	const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+	return `{${entries
+		.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+		.join(',')}}`
+}
+
 function stringifyOptionalJson(value: JsonValue | null | undefined): string | null {
 	return value === null || value === undefined ? null : JSON.stringify(value)
 }
@@ -311,6 +328,24 @@ function chatPoliciesEqual(left: ChatPolicySnapshot, right: ChatPolicySnapshot):
 		left.store_context_window === right.store_context_window &&
 		left.allow_fresh_start === right.allow_fresh_start
 	)
+}
+
+function buildPromptReplyIdempotencyKey(args: {
+	run_id: string
+	attempt_id: string
+	prompt_id: string | null
+	payload: JsonValue
+}): string {
+	const hash = createHash('sha256')
+	hash.update(
+		stableStringify({
+			run_id: args.run_id,
+			attempt_id: args.attempt_id,
+			prompt_id: args.prompt_id,
+			payload: args.payload,
+		}),
+	)
+	return `reply:${hash.digest('hex')}`
 }
 
 export interface SQLiteLocalStateStoreOptions {
@@ -906,6 +941,101 @@ export class SQLiteLocalStateStore {
 				.run(createdAt, input.run_id)
 
 			return this.getVisibleChatMessageOrThrow(messageId)
+		})
+	}
+
+	recordUserPromptReply(input: RecordUserPromptReplyInput): RecordUserPromptReplyResult {
+		const recordedAt = input.recorded_at ?? nowIso()
+
+		return this.withTransaction(() => {
+			const run = this.getRunOrThrow(input.run_id)
+			if (run.status !== 'waiting_for_user') {
+				throw new AppError(
+					'RUN_NOT_WAITING_FOR_USER',
+					`Run "${input.run_id}" is not waiting on a built-in user-chat prompt.`,
+				)
+			}
+
+			const resume = this.getResumeMetadataOrThrow(input.run_id)
+			const pendingPrompt = resume.pending_prompt
+			if (!pendingPrompt) {
+				throw new AppError(
+					'RUN_NOT_WAITING_FOR_USER',
+					`Run "${input.run_id}" is not waiting on a built-in user-chat prompt.`,
+				)
+			}
+
+			const promptId = input.prompt_id ?? pendingPrompt.prompt_id
+			if (pendingPrompt.prompt_id !== null && promptId !== pendingPrompt.prompt_id) {
+				throw new AppError(
+					'UNSUPPORTED_INTERACTION',
+					`Run "${input.run_id}" is waiting for prompt "${pendingPrompt.prompt_id}", not "${promptId ?? '<unknown>'}".`,
+				)
+			}
+
+			const idempotencyKey = buildPromptReplyIdempotencyKey({
+				run_id: input.run_id,
+				attempt_id: pendingPrompt.attempt_id,
+				prompt_id: promptId,
+				payload: input.payload,
+			})
+			const existingReply = pendingPrompt.reply ?? null
+			if (existingReply) {
+				if (existingReply.idempotency_key === idempotencyKey) {
+					return {
+						reply: existingReply,
+						accepted: false,
+					}
+				}
+				throw new AppError(
+					'PROMPT_REPLY_ALREADY_RECORDED',
+					`Run "${input.run_id}" already has a recorded reply for prompt "${pendingPrompt.prompt_id ?? '<unknown>'}".`,
+				)
+			}
+
+			const reply: UserPromptReplyRecord = {
+				reply_id: input.reply_id ?? randomUUID(),
+				run_id: input.run_id,
+				attempt_id: pendingPrompt.attempt_id,
+				prompt_id: promptId,
+				payload: input.payload,
+				idempotency_key: idempotencyKey,
+				delivery_status: 'recorded',
+				delivery_error_message: null,
+				recorded_at: recordedAt,
+				delivered_at: null,
+			}
+			const updatedPrompt: PendingUserPromptRecord = {
+				...pendingPrompt,
+				reply,
+			}
+
+			this.updatePendingPrompt(input.run_id, updatedPrompt, recordedAt)
+
+			return {
+				reply,
+				accepted: true,
+			}
+		})
+	}
+
+	markUserPromptReplyDelivered(input: MarkUserPromptReplyDeliveryInput): UserPromptReplyRecord {
+		const deliveredAt = input.delivered_at ?? nowIso()
+		return this.updateUserPromptReplyDelivery(input.run_id, input.reply_id, {
+			delivery_status: 'delivered_live',
+			delivery_error_message: null,
+			delivered_at: deliveredAt,
+		})
+	}
+
+	markUserPromptReplyDeliveryFailed(
+		input: MarkUserPromptReplyDeliveryInput,
+	): UserPromptReplyRecord {
+		const deliveredAt = input.delivered_at ?? nowIso()
+		return this.updateUserPromptReplyDelivery(input.run_id, input.reply_id, {
+			delivery_status: 'delivery_failed',
+			delivery_error_message: input.error_message ?? 'Live prompt delivery was unavailable.',
+			delivered_at: deliveredAt,
 		})
 	}
 
@@ -2870,6 +3000,63 @@ export class SQLiteLocalStateStore {
 				args.updated_at,
 				args.run_id,
 			)
+	}
+
+	private updatePendingPrompt(
+		runId: string,
+		pendingPrompt: PendingUserPromptRecord,
+		updatedAt: string,
+	): void {
+		this.database
+			.prepare(
+				`
+          UPDATE resume_metadata
+          SET pending_prompt_json = ?, updated_at = ?
+          WHERE run_id = ?
+        `,
+			)
+			.run(stringifyJson(pendingPrompt as unknown as JsonObject), updatedAt, runId)
+	}
+
+	private updateUserPromptReplyDelivery(
+		runId: string,
+		replyId: string,
+		delivery: Pick<
+			UserPromptReplyRecord,
+			'delivery_status' | 'delivery_error_message' | 'delivered_at'
+		>,
+	): UserPromptReplyRecord {
+		return this.withTransaction(() => {
+			const resume = this.getResumeMetadataOrThrow(runId)
+			const pendingPrompt = resume.pending_prompt
+			const existingReply = pendingPrompt?.reply ?? null
+			if (!pendingPrompt || !existingReply) {
+				throw new AppError(
+					'RUN_NOT_WAITING_FOR_USER',
+					`Run "${runId}" is not waiting on a built-in user-chat prompt with a recorded reply.`,
+				)
+			}
+			if (existingReply.reply_id !== replyId) {
+				throw new AppError(
+					'PROMPT_REPLY_NOT_FOUND',
+					`Run "${runId}" does not have recorded reply "${replyId}" on its pending prompt.`,
+				)
+			}
+
+			const updatedReply: UserPromptReplyRecord = {
+				...existingReply,
+				...delivery,
+			}
+			this.updatePendingPrompt(
+				runId,
+				{
+					...pendingPrompt,
+					reply: updatedReply,
+				},
+				delivery.delivered_at ?? nowIso(),
+			)
+			return updatedReply
+		})
 	}
 
 	private mapRunRow(row: RunRow): RunRecord {

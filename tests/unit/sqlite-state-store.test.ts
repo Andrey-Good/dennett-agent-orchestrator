@@ -395,6 +395,101 @@ describe('SQLiteLocalStateStore', () => {
 		expect(store.getLatestCommittedNodeOutput(run.run_id, 'node-chat')).toBeNull()
 	})
 
+	it('records one first-class prompt reply idempotently and rejects conflicting duplicates', async () => {
+		const store = await createStore()
+		const run = store.createRun({
+			run_id: 'run-prompt-reply-state',
+			resolved_revision_id: 'rev-prompt-reply-state',
+			entry_node_id: 'node-chat',
+			started_via: 'direct',
+		})
+		const attempt = store.startNodeAttempt({
+			run_id: run.run_id,
+			node_id: 'node-chat',
+			output_mode: 'text',
+		})
+		store.commitBlockedAttempt({
+			attempt_id: attempt.attempt_id,
+			pending_prompt: {
+				prompt_id: 'prompt-reply-state',
+				payload: {
+					kind: 'text',
+					text: 'Need your answer',
+					require_response: true,
+				},
+			},
+			resume: {
+				native_resume_available: false,
+				local_resume_available: true,
+			},
+			committed_at: '2026-04-22T10:05:10.000Z',
+		})
+
+		const firstReply = store.recordUserPromptReply({
+			run_id: run.run_id,
+			prompt_id: 'prompt-reply-state',
+			payload: {
+				kind: 'text',
+				prompt_id: 'prompt-reply-state',
+				text: 'Approved',
+			},
+			reply_id: 'reply-1',
+			recorded_at: '2026-04-22T10:05:11.000Z',
+		})
+		const duplicateReply = store.recordUserPromptReply({
+			run_id: run.run_id,
+			prompt_id: 'prompt-reply-state',
+			payload: {
+				kind: 'text',
+				prompt_id: 'prompt-reply-state',
+				text: 'Approved',
+			},
+			recorded_at: '2026-04-22T10:05:12.000Z',
+		})
+
+		expect(firstReply).toEqual({
+			accepted: true,
+			reply: expect.objectContaining({
+				reply_id: 'reply-1',
+				prompt_id: 'prompt-reply-state',
+				delivery_status: 'recorded',
+				recorded_at: '2026-04-22T10:05:11.000Z',
+			}),
+		})
+		expect(duplicateReply).toEqual({
+			accepted: false,
+			reply: firstReply.reply,
+		})
+		expect(() =>
+			store.recordUserPromptReply({
+				run_id: run.run_id,
+				prompt_id: 'prompt-reply-state',
+				payload: {
+					kind: 'text',
+					prompt_id: 'prompt-reply-state',
+					text: 'Changed answer',
+				},
+			}),
+		).toThrow(/already has a recorded reply/)
+
+		store.markUserPromptReplyDelivered({
+			run_id: run.run_id,
+			reply_id: 'reply-1',
+			delivered_at: '2026-04-22T10:05:13.000Z',
+		})
+
+		expect(store.getResumeMetadata(run.run_id)?.pending_prompt?.reply).toMatchObject({
+			reply_id: 'reply-1',
+			delivery_status: 'delivered_live',
+			delivered_at: '2026-04-22T10:05:13.000Z',
+			payload: {
+				kind: 'text',
+				prompt_id: 'prompt-reply-state',
+				text: 'Approved',
+			},
+		})
+	})
+
 	it('suppresses visible transcript persistence when chat policy disables it while keeping blocked prompt state', async () => {
 		const store = await createStore()
 		const run = store.createRun({

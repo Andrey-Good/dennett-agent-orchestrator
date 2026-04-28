@@ -30,7 +30,10 @@ This transcript is generated from normalized CLI assertions in `tests/integratio
 6. `$ dennett-agent-orchestrator reply <live-agent-file> --run-id run-stage7-cli --prompt-id stage7-approval --text "Approved through the offline CLI fixture." --state-db <temp-state-db>`
    - exit: 0
    - stdout: Prompt reply delivered.
-7. `$ dennett-agent-orchestrator resume <live-agent-file> --run-id run-stage7-cli --state-db <temp-state-db>`
+7. `$ dennett-agent-orchestrator run-status --run-id run-stage7-cli --state-db <temp-state-db>`
+   - exit: 0
+   - stdout: run.status=waiting_for_user; pending_prompt.prompt_id=stage7-approval; pending_prompt.reply.delivery_status=delivered_live
+8. `$ dennett-agent-orchestrator resume <live-agent-file> --run-id run-stage7-cli --state-db <temp-state-db>`
    - exit: 0
    - stderr: Run ID: run-stage7-cli
    - stdout: final output="Approved Stage 7 CLI proof after offline prompt reply."
