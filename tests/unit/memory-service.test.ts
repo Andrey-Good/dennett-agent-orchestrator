@@ -11,9 +11,14 @@ import {
 import { MemoryService } from '../../src/core/memory-service.js'
 import { SQLiteLocalStateStore } from '../../src/core/state/index.js'
 import type { MemoryAdapter } from '../../src/ports/memory.js'
-import { acquireMem0ChromaTestLock, cleanupMem0TempDir } from './mem0-test-helpers.js'
+import {
+	acquireMem0ChromaTestLock,
+	cleanupMem0TempDir,
+	MEM0_LOCAL_PYTHON,
+	shouldRunLocalMem0Tests,
+} from './mem0-test-helpers.js'
 
-const MEM0_PYTHON = path.resolve(process.cwd(), '.local', 'mem0-venv', 'Scripts', 'python.exe')
+const localMem0It = shouldRunLocalMem0Tests() ? it : it.skip
 
 const storesToClose: SQLiteLocalStateStore[] = []
 const tempDirsToRemove: string[] = []
@@ -21,6 +26,10 @@ const mem0LocksToRelease: Array<() => Promise<void>> = []
 
 interface HarnessOptions {
 	acquireMem0Lock?: boolean
+}
+
+function mem0PythonForHarness(options: HarnessOptions): string {
+	return options.acquireMem0Lock ? MEM0_LOCAL_PYTHON : process.execPath
 }
 
 async function createHarness(
@@ -55,7 +64,7 @@ async function createHarness(
 		transport: 'sdk',
 		supported_capabilities: ['read', 'write', 'user_scoped', 'infer_extract'],
 		config: {
-			python_executable: MEM0_PYTHON,
+			python_executable: mem0PythonForHarness(options),
 			working_directory: process.cwd(),
 			mem0_config: {
 				vector_store: {
@@ -206,52 +215,56 @@ afterEach(async () => {
 })
 
 describe('MemoryService', () => {
-	it('resolves a portable memory binding to the registered Mem0 adapter and performs a live round-trip', async () => {
-		const harness = await createHarness('dennett-phase13-memory-service-binding-', {
-			acquireMem0Lock: true,
-		})
-		const binding = createPortableBinding()
+	localMem0It(
+		'resolves a portable memory binding to the registered Mem0 adapter and performs a live round-trip',
+		async () => {
+			const harness = await createHarness('dennett-phase13-memory-service-binding-', {
+				acquireMem0Lock: true,
+			})
+			const binding = createPortableBinding()
 
-		const writeResult = await harness.memoryService.writeForBinding(binding, {
-			content: 'Phase 13 service binding memory',
-			scope: {
-				user_id: 'binding-user',
-			},
-			infer: false,
-			metadata: {
-				source: 'memory-service-binding-test',
-			},
-		})
+			const writeResult = await harness.memoryService.writeForBinding(binding, {
+				content: 'Phase 13 service binding memory',
+				scope: {
+					user_id: 'binding-user',
+				},
+				infer: false,
+				metadata: {
+					source: 'memory-service-binding-test',
+				},
+			})
 
-		expect(writeResult.records).toHaveLength(1)
-		const memoryId = writeResult.records[0]?.id
-		expect(memoryId).toBeTruthy()
+			expect(writeResult.records).toHaveLength(1)
+			const memoryId = writeResult.records[0]?.id
+			expect(memoryId).toBeTruthy()
 
-		const searchResult = await harness.memoryService.searchForBinding(binding, {
-			query: 'service binding memory',
-			scope: {
-				user_id: 'binding-user',
-			},
-			limit: 5,
-		})
+			const searchResult = await harness.memoryService.searchForBinding(binding, {
+				query: 'service binding memory',
+				scope: {
+					user_id: 'binding-user',
+				},
+				limit: 5,
+			})
 
-		expect(searchResult.records).toHaveLength(1)
-		expect(searchResult.records[0]?.id).toBe(memoryId)
+			expect(searchResult.records).toHaveLength(1)
+			expect(searchResult.records[0]?.id).toBe(memoryId)
 
-		const readResult = await harness.memoryService.readForBinding(binding, {
-			memory_id: memoryId ?? '',
-		})
-		expect(readResult).toMatchObject({
-			id: memoryId,
-			content: 'Phase 13 service binding memory',
-			scope: {
-				user_id: 'binding-user',
-			},
-		})
+			const readResult = await harness.memoryService.readForBinding(binding, {
+				memory_id: memoryId ?? '',
+			})
+			expect(readResult).toMatchObject({
+				id: memoryId,
+				content: 'Phase 13 service binding memory',
+				scope: {
+					user_id: 'binding-user',
+				},
+			})
 
-		const provider = harness.registry.getProviderOrThrow('mem0-local')
-		expect(provider.status).toBe('available')
-	}, 180000)
+			const provider = harness.registry.getProviderOrThrow('mem0-local')
+			expect(provider.status).toBe('available')
+		},
+		180000,
+	)
 
 	it('rejects portable bindings whose provider_extension.config is not a JSON object', async () => {
 		const harness = await createHarness('dennett-phase13-memory-service-invalid-config-')
@@ -283,7 +296,7 @@ describe('MemoryService', () => {
 			transport: 'api',
 			supported_capabilities: ['read', 'write', 'user_scoped'],
 			config: {
-				python_executable: MEM0_PYTHON,
+				python_executable: process.execPath,
 				working_directory: process.cwd(),
 				mem0_config: {
 					vector_store: {
@@ -322,7 +335,7 @@ describe('MemoryService', () => {
 			transport: 'sdk',
 			supported_capabilities: ['read', 'write', 'user_scoped', 'graph_context'],
 			config: {
-				python_executable: MEM0_PYTHON,
+				python_executable: process.execPath,
 				working_directory: process.cwd(),
 				mem0_config: {
 					vector_store: {
@@ -527,60 +540,64 @@ describe('MemoryService', () => {
 		)
 	})
 
-	it('prepares provider-neutral runtime memory context with searched records and write eligibility', async () => {
-		const harness = await createHarness('dennett-task321-memory-service-runtime-context-', {
-			acquireMem0Lock: true,
-		})
-		const binding = createPortableBinding()
-		const scope = {
-			agent_id: 'agent-runtime',
-			run_id: 'run-runtime',
-			user_id: 'runtime-user',
-		}
+	localMem0It(
+		'prepares provider-neutral runtime memory context with searched records and write eligibility',
+		async () => {
+			const harness = await createHarness('dennett-task321-memory-service-runtime-context-', {
+				acquireMem0Lock: true,
+			})
+			const binding = createPortableBinding()
+			const scope = {
+				agent_id: 'agent-runtime',
+				run_id: 'run-runtime',
+				user_id: 'runtime-user',
+			}
 
-		const writeResult = await harness.memoryService.writeForBinding(binding, {
-			content: 'Runtime helper should retrieve this memory',
-			scope,
-			infer: false,
-			metadata: {
-				source: 'runtime-context-test',
-			},
-		})
-		const memoryId = writeResult.records[0]?.id
-		expect(memoryId).toBeTruthy()
+			const writeResult = await harness.memoryService.writeForBinding(binding, {
+				content: 'Runtime helper should retrieve this memory',
+				scope,
+				infer: false,
+				metadata: {
+					source: 'runtime-context-test',
+				},
+			})
+			const memoryId = writeResult.records[0]?.id
+			expect(memoryId).toBeTruthy()
 
-		const prepared = await harness.memoryService.prepareRuntimeMemoryBindingContext({
-			binding,
-			scope,
-			read: {
-				query: 'retrieve this memory',
-				limit: 5,
-			},
-		})
+			const prepared = await harness.memoryService.prepareRuntimeMemoryBindingContext({
+				binding,
+				scope,
+				read: {
+					query: 'retrieve this memory',
+					limit: 5,
+				},
+			})
 
-		expect(prepared.provider.provider_id).toBe('mem0-local')
-		expect(prepared.read_enabled).toBe(true)
-		expect(prepared.write_enabled).toBe(true)
-		expect(prepared.required_capabilities).toEqual(['read', 'write', 'user_scoped'])
-		expect(prepared.context).toMatchObject({
-			binding_id: 'primary_memory_binding',
-			codex_ref: 'primary_memory',
-			intent: {
-				summary: 'Primary user memory for live Phase 13 proof.',
-			},
-			required_capabilities: ['read', 'write', 'user_scoped'],
-			scope,
-			read: {
-				query: 'retrieve this memory',
-			},
-			write: {
-				enabled: true,
-				mode: 'node_success_output',
-			},
-		})
-		expect(prepared.context.read?.records.some((record) => record.id === memoryId)).toBe(true)
-		expect(prepared.context.read?.records[0]?.scope).toMatchObject(scope)
-	}, 180000)
+			expect(prepared.provider.provider_id).toBe('mem0-local')
+			expect(prepared.read_enabled).toBe(true)
+			expect(prepared.write_enabled).toBe(true)
+			expect(prepared.required_capabilities).toEqual(['read', 'write', 'user_scoped'])
+			expect(prepared.context).toMatchObject({
+				binding_id: 'primary_memory_binding',
+				codex_ref: 'primary_memory',
+				intent: {
+					summary: 'Primary user memory for live Phase 13 proof.',
+				},
+				required_capabilities: ['read', 'write', 'user_scoped'],
+				scope,
+				read: {
+					query: 'retrieve this memory',
+				},
+				write: {
+					enabled: true,
+					mode: 'node_success_output',
+				},
+			})
+			expect(prepared.context.read?.records.some((record) => record.id === memoryId)).toBe(true)
+			expect(prepared.context.read?.records[0]?.scope).toMatchObject(scope)
+		},
+		180000,
+	)
 
 	it('prepares runtime memory context without read or write when capabilities are absent', async () => {
 		const harness = await createHarness('dennett-task321-memory-service-runtime-eligibility-')
@@ -749,57 +766,61 @@ describe('MemoryService', () => {
 		})
 	})
 
-	it('writes successful runtime memory output and records Dennett write metadata', async () => {
-		const harness = await createHarness('dennett-task321-memory-service-success-write-', {
-			acquireMem0Lock: true,
-		})
-		const binding = createPortableBinding()
-		const scope = {
-			agent_id: 'agent-success',
-			run_id: 'run-success',
-			user_id: 'success-user',
-		}
+	localMem0It(
+		'writes successful runtime memory output and records Dennett write metadata',
+		async () => {
+			const harness = await createHarness('dennett-task321-memory-service-success-write-', {
+				acquireMem0Lock: true,
+			})
+			const binding = createPortableBinding()
+			const scope = {
+				agent_id: 'agent-success',
+				run_id: 'run-success',
+				user_id: 'success-user',
+			}
 
-		const result = await harness.memoryService.writeRuntimeMemoryOnSuccess({
-			binding,
-			scope,
-			node_id: 'node-success',
-			attempt_id: 'attempt-success',
-			output_mode: 'text',
-			output_hash: 'sha256:success-output',
-			content: 'Successful runtime output to remember',
-			outcome: 'success',
-			infer: false,
-		})
+			const result = await harness.memoryService.writeRuntimeMemoryOnSuccess({
+				binding,
+				scope,
+				node_id: 'node-success',
+				attempt_id: 'attempt-success',
+				output_mode: 'text',
+				output_hash: 'sha256:success-output',
+				content: 'Successful runtime output to remember',
+				outcome: 'success',
+				infer: false,
+			})
 
-		expect(result.status).toBe('written')
-		if (result.status !== 'written') {
-			throw new Error('Expected runtime memory write.')
-		}
-		expect(result.dennett_write_key).toBe(
-			'dennett:run-success:node-success:primary_memory_binding:sha256%3Asuccess-output',
-		)
-		expect(result.result.records).toHaveLength(1)
-		expect(result.metadata).toMatchObject({
-			dennett_kind: 'runtime_node_output',
-			agent_id: 'agent-success',
-			run_id: 'run-success',
-			node_id: 'node-success',
-			binding_id: 'primary_memory_binding',
-			attempt_id: 'attempt-success',
-			output_mode: 'text',
-			output_hash: 'sha256:success-output',
-			dennett_write_key:
+			expect(result.status).toBe('written')
+			if (result.status !== 'written') {
+				throw new Error('Expected runtime memory write.')
+			}
+			expect(result.dennett_write_key).toBe(
 				'dennett:run-success:node-success:primary_memory_binding:sha256%3Asuccess-output',
-			dennett_write_mode: 'node_success_output',
-			dennett_binding_id: 'primary_memory_binding',
-			dennett_codex_ref: 'primary_memory',
-			dennett_agent_id: 'agent-success',
-			dennett_run_id: 'run-success',
-			dennett_node_id: 'node-success',
-			dennett_attempt_id: 'attempt-success',
-		})
-	}, 180000)
+			)
+			expect(result.result.records).toHaveLength(1)
+			expect(result.metadata).toMatchObject({
+				dennett_kind: 'runtime_node_output',
+				agent_id: 'agent-success',
+				run_id: 'run-success',
+				node_id: 'node-success',
+				binding_id: 'primary_memory_binding',
+				attempt_id: 'attempt-success',
+				output_mode: 'text',
+				output_hash: 'sha256:success-output',
+				dennett_write_key:
+					'dennett:run-success:node-success:primary_memory_binding:sha256%3Asuccess-output',
+				dennett_write_mode: 'node_success_output',
+				dennett_binding_id: 'primary_memory_binding',
+				dennett_codex_ref: 'primary_memory',
+				dennett_agent_id: 'agent-success',
+				dennett_run_id: 'run-success',
+				dennett_node_id: 'node-success',
+				dennett_attempt_id: 'attempt-success',
+			})
+		},
+		180000,
+	)
 
 	it('propagates provider write errors through runtime success writes and marks provider status', async () => {
 		const harness = await createHarness('dennett-task321-memory-service-provider-error-')
@@ -970,70 +991,74 @@ describe('MemoryService', () => {
 		expect(provider.status_code).toBe('MEMORY_PROVIDER_TRANSIENT_SEARCH_FAILED')
 	})
 
-	it('uses direct codex_ref operations for read, list, update, and delete', async () => {
-		const harness = await createHarness('dennett-phase13-memory-service-direct-', {
-			acquireMem0Lock: true,
-		})
+	localMem0It(
+		'uses direct codex_ref operations for read, list, update, and delete',
+		async () => {
+			const harness = await createHarness('dennett-phase13-memory-service-direct-', {
+				acquireMem0Lock: true,
+			})
 
-		const writeResult = await harness.memoryService.writeForCodexRef('primary_memory', {
-			content: 'Phase 13 direct codex ref memory',
-			scope: {
-				user_id: 'direct-user',
-			},
-			infer: false,
-		})
+			const writeResult = await harness.memoryService.writeForCodexRef('primary_memory', {
+				content: 'Phase 13 direct codex ref memory',
+				scope: {
+					user_id: 'direct-user',
+				},
+				infer: false,
+			})
 
-		const memoryId = writeResult.records[0]?.id ?? ''
-		expect(memoryId).not.toBe('')
+			const memoryId = writeResult.records[0]?.id ?? ''
+			expect(memoryId).not.toBe('')
 
-		const readBack = await harness.memoryService.readForCodexRef('primary_memory', {
-			memory_id: memoryId,
-		})
-		expect(readBack).toMatchObject({
-			id: memoryId,
-			content: 'Phase 13 direct codex ref memory',
-			scope: {
-				user_id: 'direct-user',
-			},
-		})
-
-		const listed = await harness.memoryService.listForCodexRef('primary_memory', {
-			scope: {
-				user_id: 'direct-user',
-			},
-			limit: 10,
-		})
-		expect(listed).toHaveLength(1)
-		expect(listed[0]?.id).toBe(memoryId)
-
-		const updated = await harness.memoryService.updateForCodexRef('primary_memory', {
-			memory_id: memoryId,
-			content: 'Phase 13 updated direct memory',
-			metadata: {
-				source: 'updated',
-			},
-		})
-		expect(updated).toMatchObject({
-			id: memoryId,
-			content: 'Phase 13 updated direct memory',
-			metadata: {
-				source: 'updated',
-			},
-		})
-
-		const deleted = await harness.memoryService.deleteForCodexRef('primary_memory', {
-			memory_id: memoryId,
-		})
-		expect(deleted).toEqual({
-			deleted: true,
-		})
-
-		await expect(
-			harness.memoryService.readForCodexRef('primary_memory', {
+			const readBack = await harness.memoryService.readForCodexRef('primary_memory', {
 				memory_id: memoryId,
-			}),
-		).resolves.toBeNull()
-	}, 180000)
+			})
+			expect(readBack).toMatchObject({
+				id: memoryId,
+				content: 'Phase 13 direct codex ref memory',
+				scope: {
+					user_id: 'direct-user',
+				},
+			})
+
+			const listed = await harness.memoryService.listForCodexRef('primary_memory', {
+				scope: {
+					user_id: 'direct-user',
+				},
+				limit: 10,
+			})
+			expect(listed).toHaveLength(1)
+			expect(listed[0]?.id).toBe(memoryId)
+
+			const updated = await harness.memoryService.updateForCodexRef('primary_memory', {
+				memory_id: memoryId,
+				content: 'Phase 13 updated direct memory',
+				metadata: {
+					source: 'updated',
+				},
+			})
+			expect(updated).toMatchObject({
+				id: memoryId,
+				content: 'Phase 13 updated direct memory',
+				metadata: {
+					source: 'updated',
+				},
+			})
+
+			const deleted = await harness.memoryService.deleteForCodexRef('primary_memory', {
+				memory_id: memoryId,
+			})
+			expect(deleted).toEqual({
+				deleted: true,
+			})
+
+			await expect(
+				harness.memoryService.readForCodexRef('primary_memory', {
+					memory_id: memoryId,
+				}),
+			).resolves.toBeNull()
+		},
+		180000,
+	)
 
 	it('previews cleanup through a registry-resolved codex_ref adapter and normalizes scope', async () => {
 		const harness = await createHarness('dennett-task353-memory-service-preview-cleanup-')

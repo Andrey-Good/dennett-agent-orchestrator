@@ -18,9 +18,10 @@ import {
 	writeRegisteredMemory,
 } from '../../src/interfaces/cli.js'
 import type { MemoryScope } from '../../src/ports/memory.js'
+import { MEM0_LOCAL_PYTHON, shouldRunLocalMem0Tests } from './mem0-test-helpers.js'
 
 const tempDirsToRemove: string[] = []
-const MEM0_PYTHON = path.resolve(process.cwd(), '.local', 'mem0-venv', 'Scripts', 'python.exe')
+const localMem0It = shouldRunLocalMem0Tests() ? it : it.skip
 
 async function createHarness(prefix: string): Promise<{
 	stateDbPath: string
@@ -37,7 +38,7 @@ async function createHarness(prefix: string): Promise<{
 			providerFamily: 'mem0',
 			displayName: 'Primary Mem0',
 			config: {
-				python_executable: MEM0_PYTHON,
+				python_executable: MEM0_LOCAL_PYTHON,
 				working_directory: process.cwd(),
 				mem0_config: {
 					vector_store: {
@@ -351,84 +352,88 @@ describe('memory CLI helpers', () => {
 		expect(rawShown.config).toEqual(rawConfig)
 	})
 
-	it('performs a full registered Mem0 round-trip through the CLI helper surface', async () => {
-		const harness = await createHarness('dennett-phase13-memory-cli-')
+	localMem0It(
+		'performs a full registered Mem0 round-trip through the CLI helper surface',
+		async () => {
+			const harness = await createHarness('dennett-phase13-memory-cli-')
 
-		const writeResult = await writeRegisteredMemory(
-			'primary_memory',
-			{
-				text: 'Phase 13 CLI helper memory',
-				scope: harness.scope,
-				metadata: {
-					source: 'cli-helper',
+			const writeResult = await writeRegisteredMemory(
+				'primary_memory',
+				{
+					text: 'Phase 13 CLI helper memory',
+					scope: harness.scope,
+					metadata: {
+						source: 'cli-helper',
+					},
+					infer: false,
 				},
-				infer: false,
-			},
-			harness.stateDbPath,
-		)
+				harness.stateDbPath,
+			)
 
-		expect(writeResult.records).toHaveLength(1)
-		const memoryId = writeResult.records[0]?.id ?? ''
-		expect(memoryId).not.toBe('')
+			expect(writeResult.records).toHaveLength(1)
+			const memoryId = writeResult.records[0]?.id ?? ''
+			expect(memoryId).not.toBe('')
 
-		const searched = await searchRegisteredMemory(
-			'primary_memory',
-			{
-				query: 'CLI helper memory',
-				scope: harness.scope,
-				limit: 5,
-			},
-			harness.stateDbPath,
-		)
-		expect(searched.records).toHaveLength(1)
-		expect(searched.records[0]?.id).toBe(memoryId)
+			const searched = await searchRegisteredMemory(
+				'primary_memory',
+				{
+					query: 'CLI helper memory',
+					scope: harness.scope,
+					limit: 5,
+				},
+				harness.stateDbPath,
+			)
+			expect(searched.records).toHaveLength(1)
+			expect(searched.records[0]?.id).toBe(memoryId)
 
-		const readBack = await readRegisteredMemory('primary_memory', memoryId, harness.stateDbPath)
-		expect(readBack).toMatchObject({
-			id: memoryId,
-			content: 'Phase 13 CLI helper memory',
-			scope: {
-				user_id: 'cli-user',
-			},
-		})
+			const readBack = await readRegisteredMemory('primary_memory', memoryId, harness.stateDbPath)
+			expect(readBack).toMatchObject({
+				id: memoryId,
+				content: 'Phase 13 CLI helper memory',
+				scope: {
+					user_id: 'cli-user',
+				},
+			})
 
-		const listed = await listRegisteredMemory(
-			'primary_memory',
-			{
-				scope: harness.scope,
-				limit: 10,
-			},
-			harness.stateDbPath,
-		)
-		expect(listed).toHaveLength(1)
-		expect(listed[0]?.id).toBe(memoryId)
+			const listed = await listRegisteredMemory(
+				'primary_memory',
+				{
+					scope: harness.scope,
+					limit: 10,
+				},
+				harness.stateDbPath,
+			)
+			expect(listed).toHaveLength(1)
+			expect(listed[0]?.id).toBe(memoryId)
 
-		const updated = await updateRegisteredMemory(
-			'primary_memory',
-			{
-				memoryId,
-				text: 'Phase 13 CLI helper memory updated',
+			const updated = await updateRegisteredMemory(
+				'primary_memory',
+				{
+					memoryId,
+					text: 'Phase 13 CLI helper memory updated',
+					metadata: {
+						source: 'cli-helper-updated',
+					},
+				},
+				harness.stateDbPath,
+			)
+			expect(updated).toMatchObject({
+				id: memoryId,
+				content: 'Phase 13 CLI helper memory updated',
 				metadata: {
 					source: 'cli-helper-updated',
 				},
-			},
-			harness.stateDbPath,
-		)
-		expect(updated).toMatchObject({
-			id: memoryId,
-			content: 'Phase 13 CLI helper memory updated',
-			metadata: {
-				source: 'cli-helper-updated',
-			},
-		})
+			})
 
-		const deleted = await deleteRegisteredMemory('primary_memory', memoryId, harness.stateDbPath)
-		expect(deleted).toEqual({
-			deleted: true,
-		})
+			const deleted = await deleteRegisteredMemory('primary_memory', memoryId, harness.stateDbPath)
+			expect(deleted).toEqual({
+				deleted: true,
+			})
 
-		await expect(
-			readRegisteredMemory('primary_memory', memoryId, harness.stateDbPath),
-		).resolves.toBeNull()
-	}, 120000)
+			await expect(
+				readRegisteredMemory('primary_memory', memoryId, harness.stateDbPath),
+			).resolves.toBeNull()
+		},
+		120000,
+	)
 })

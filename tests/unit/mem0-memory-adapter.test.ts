@@ -11,13 +11,19 @@ import {
 	MemoryExecutionError,
 	type MemoryRecord,
 } from '../../src/ports/memory.js'
-import { acquireMem0ChromaTestLock, cleanupMem0TempDir } from './mem0-test-helpers.js'
+import {
+	acquireMem0ChromaTestLock,
+	cleanupMem0TempDir,
+	MEM0_LOCAL_PYTHON,
+	shouldRunLocalMem0Tests,
+} from './mem0-test-helpers.js'
 
-const MEM0_PYTHON = path.resolve(process.cwd(), '.local', 'mem0-venv', 'Scripts', 'python.exe')
 const DENNETT_NAMESPACE_METADATA_KEY = 'dennett_namespace_id'
+const localMem0It = shouldRunLocalMem0Tests() ? it : it.skip
 
 interface AdapterHarnessOptions {
 	acquireMem0Lock?: boolean
+	useLocalMem0?: boolean
 }
 
 function createMem0Config(
@@ -64,7 +70,7 @@ async function createAdapter(
 	const collectionName = `phase13-${path.basename(tempDir)}`
 
 	const adapter = new Mem0MemoryAdapter({
-		python_executable: MEM0_PYTHON,
+		python_executable: options.useLocalMem0 ? MEM0_LOCAL_PYTHON : process.execPath,
 		working_directory: process.cwd(),
 		mem0_config: createMem0Config(chromaPath, historyDbPath, collectionName, namespaceId),
 	})
@@ -90,7 +96,7 @@ async function createSharedNamespaceHarness(prefix: string) {
 
 	function createNamespacedAdapter(namespaceId: string, historyDbName: string): Mem0MemoryAdapter {
 		return new Mem0MemoryAdapter({
-			python_executable: MEM0_PYTHON,
+			python_executable: MEM0_LOCAL_PYTHON,
 			working_directory: process.cwd(),
 			mem0_config: createMem0Config(
 				chromaPath,
@@ -252,227 +258,238 @@ describe('Mem0MemoryAdapter', () => {
 		}
 	})
 
-	it('performs real local Mem0 write, read, search, list, update, and delete operations', async () => {
-		const harness = await createAdapter('dennett-mem0-live-', undefined, {
-			acquireMem0Lock: true,
-		})
-		const scope = { user_id: 'phase13-live-user' }
+	localMem0It(
+		'performs real local Mem0 write, read, search, list, update, and delete operations',
+		async () => {
+			const harness = await createAdapter('dennett-mem0-live-', undefined, {
+				acquireMem0Lock: true,
+				useLocalMem0: true,
+			})
+			const scope = { user_id: 'phase13-live-user' }
 
-		try {
-			const writeResult = await harness.adapter.writeMemory({
-				content: 'Phase 13 live memory record',
-				scope,
-				metadata: {
-					source: 'vitest',
-					stage: 13,
-				},
-				infer: false,
-			})
+			try {
+				const writeResult = await harness.adapter.writeMemory({
+					content: 'Phase 13 live memory record',
+					scope,
+					metadata: {
+						source: 'vitest',
+						stage: 13,
+					},
+					infer: false,
+				})
 
-			expect(writeResult.records).toHaveLength(1)
-			const writtenRecord = requireRecord(writeResult.records, 0)
-			const recordId = writtenRecord.id
-			expect(recordId).toBeTruthy()
-			expect(writtenRecord).toMatchObject({
-				content: 'Phase 13 live memory record',
-				scope: {
-					user_id: 'phase13-live-user',
-				},
-				provider_data: {
-					event: 'ADD',
-					role: 'user',
-					actor_id: null,
-				},
-			})
+				expect(writeResult.records).toHaveLength(1)
+				const writtenRecord = requireRecord(writeResult.records, 0)
+				const recordId = writtenRecord.id
+				expect(recordId).toBeTruthy()
+				expect(writtenRecord).toMatchObject({
+					content: 'Phase 13 live memory record',
+					scope: {
+						user_id: 'phase13-live-user',
+					},
+					provider_data: {
+						event: 'ADD',
+						role: 'user',
+						actor_id: null,
+					},
+				})
 
-			const readBack = await harness.adapter.readMemory({
-				memory_id: recordId ?? '',
-			})
-			expect(readBack).toMatchObject({
-				id: recordId,
-				content: 'Phase 13 live memory record',
-				scope: {
-					user_id: 'phase13-live-user',
-				},
-				metadata: {
-					source: 'vitest',
-					stage: 13,
-				},
-			})
-
-			const searchResult = await harness.adapter.searchMemory({
-				query: 'live memory record',
-				scope,
-				limit: 5,
-			})
-			expect(searchResult.records).toHaveLength(1)
-			expect(searchResult.records[0]?.id).toBe(recordId)
-			expect(searchResult.records[0]?.score).toEqual(expect.any(Number))
-
-			const listed = await harness.adapter.listMemories({
-				scope,
-				limit: 10,
-			})
-			expect(listed).toHaveLength(1)
-			expect(listed[0]?.id).toBe(recordId)
-
-			const updated = await harness.adapter.updateMemory({
-				memory_id: recordId ?? '',
-				content: 'Phase 13 updated memory record',
-				metadata: {
-					source: 'vitest-updated',
-				},
-			})
-			expect(updated).toMatchObject({
-				id: recordId,
-				content: 'Phase 13 updated memory record',
-				scope: {
-					user_id: 'phase13-live-user',
-				},
-				metadata: {
-					source: 'vitest-updated',
-				},
-			})
-
-			const deleted = await harness.adapter.deleteMemory({
-				memory_id: recordId ?? '',
-			})
-			expect(deleted).toEqual({
-				deleted: true,
-			})
-
-			await expect(
-				harness.adapter.readMemory({
+				const readBack = await harness.adapter.readMemory({
 					memory_id: recordId ?? '',
-				}),
-			).resolves.toBeNull()
-		} finally {
-			await harness.cleanup()
-		}
-	}, 180000)
+				})
+				expect(readBack).toMatchObject({
+					id: recordId,
+					content: 'Phase 13 live memory record',
+					scope: {
+						user_id: 'phase13-live-user',
+					},
+					metadata: {
+						source: 'vitest',
+						stage: 13,
+					},
+				})
 
-	it('injects namespace metadata, filters CRUD by namespace, and performs verified scoped cleanup', async () => {
-		const harness = await createSharedNamespaceHarness('dennett-mem0-namespace-cleanup-')
-		const scope = { user_id: 'phase13-namespace-user' }
+				const searchResult = await harness.adapter.searchMemory({
+					query: 'live memory record',
+					scope,
+					limit: 5,
+				})
+				expect(searchResult.records).toHaveLength(1)
+				expect(searchResult.records[0]?.id).toBe(recordId)
+				expect(searchResult.records[0]?.score).toEqual(expect.any(Number))
 
-		try {
-			const targetOne = await harness.target.writeMemory({
-				content: 'Phase 13 namespace cleanup target alpha',
-				scope,
-				metadata: {
-					source: 'target-one',
-					dennett_namespace_id: 'spoofed-by-request',
-				},
-				infer: false,
-			})
-			const targetWrongScope = await harness.target.writeMemory({
-				content: 'Phase 13 namespace cleanup wrong scope beta',
-				scope: { user_id: 'phase13-namespace-other-user' },
-				metadata: {
-					source: 'target-wrong-scope',
-				},
-				infer: false,
-			})
-			const control = await harness.control.writeMemory({
-				content: 'Phase 13 namespace cleanup control gamma',
-				scope,
-				metadata: {
-					source: 'control',
-				},
-				infer: false,
-			})
+				const listed = await harness.adapter.listMemories({
+					scope,
+					limit: 10,
+				})
+				expect(listed).toHaveLength(1)
+				expect(listed[0]?.id).toBe(recordId)
 
-			const targetOneId = requireRecord(targetOne.records, 0).id
-			const targetWrongScopeId = requireRecord(targetWrongScope.records, 0).id
-			const controlId = requireRecord(control.records, 0).id
+				const updated = await harness.adapter.updateMemory({
+					memory_id: recordId ?? '',
+					content: 'Phase 13 updated memory record',
+					metadata: {
+						source: 'vitest-updated',
+					},
+				})
+				expect(updated).toMatchObject({
+					id: recordId,
+					content: 'Phase 13 updated memory record',
+					scope: {
+						user_id: 'phase13-live-user',
+					},
+					metadata: {
+						source: 'vitest-updated',
+					},
+				})
 
-			await expect(harness.target.readMemory({ memory_id: controlId })).resolves.toBeNull()
-			await expect(
-				harness.target.updateMemory({
-					memory_id: controlId,
-					content: 'Phase 13 namespace cleanup should not update control',
-				}),
-			).resolves.toBeNull()
-			await expect(harness.target.deleteMemory({ memory_id: controlId })).resolves.toEqual({
-				deleted: false,
-			})
+				const deleted = await harness.adapter.deleteMemory({
+					memory_id: recordId ?? '',
+				})
+				expect(deleted).toEqual({
+					deleted: true,
+				})
 
-			const targetReadBack = await harness.target.readMemory({ memory_id: targetOneId })
-			expect(targetReadBack).toMatchObject({
-				id: targetOneId,
-				metadata: {
-					source: 'target-one',
-					dennett_namespace_id: 'target-namespace',
-				},
-			})
+				await expect(
+					harness.adapter.readMemory({
+						memory_id: recordId ?? '',
+					}),
+				).resolves.toBeNull()
+			} finally {
+				await harness.cleanup()
+			}
+		},
+		180000,
+	)
 
-			const targetList = await harness.target.listMemories({ scope, limit: 10 })
-			expect(targetList.map((record) => record.id)).toEqual([targetOneId])
-			expect(
-				targetList.every((record) => record.metadata?.dennett_namespace_id === 'target-namespace'),
-			).toBe(true)
+	localMem0It(
+		'injects namespace metadata, filters CRUD by namespace, and performs verified scoped cleanup',
+		async () => {
+			const harness = await createSharedNamespaceHarness('dennett-mem0-namespace-cleanup-')
+			const scope = { user_id: 'phase13-namespace-user' }
 
-			const targetSearch = await harness.target.searchMemory({
-				query: 'namespace cleanup target',
-				scope,
-				limit: 10,
-			})
-			expect(targetSearch.records.map((record) => record.id)).toEqual([targetOneId])
+			try {
+				const targetOne = await harness.target.writeMemory({
+					content: 'Phase 13 namespace cleanup target alpha',
+					scope,
+					metadata: {
+						source: 'target-one',
+						dennett_namespace_id: 'spoofed-by-request',
+					},
+					infer: false,
+				})
+				const targetWrongScope = await harness.target.writeMemory({
+					content: 'Phase 13 namespace cleanup wrong scope beta',
+					scope: { user_id: 'phase13-namespace-other-user' },
+					metadata: {
+						source: 'target-wrong-scope',
+					},
+					infer: false,
+				})
+				const control = await harness.control.writeMemory({
+					content: 'Phase 13 namespace cleanup control gamma',
+					scope,
+					metadata: {
+						source: 'control',
+					},
+					infer: false,
+				})
 
-			const preview = await harness.target.previewMemoryCleanup({ scope })
-			expect(preview).toEqual({
-				namespace_id: 'target-namespace',
-				candidate_ids: [targetOneId],
-				candidate_count: 1,
-				limit: 10000,
-				truncated: false,
-			})
+				const targetOneId = requireRecord(targetOne.records, 0).id
+				const targetWrongScopeId = requireRecord(targetWrongScope.records, 0).id
+				const controlId = requireRecord(control.records, 0).id
 
-			const cleanup = await harness.target.deleteMemoryCleanup({
-				scope,
-				candidate_ids: [...preview.candidate_ids, targetWrongScopeId, controlId],
-			})
-			expect(cleanup).toEqual({
-				namespace_id: 'target-namespace',
-				limit: 10000,
-				requested_ids: [...preview.candidate_ids, targetWrongScopeId, controlId],
-				deleted_ids: [targetOneId],
-				skipped_ids: [targetWrongScopeId, controlId],
-				remaining_ids: [],
-				requested_truncated: false,
-				remaining_truncated: false,
-				verified_empty: true,
-			})
+				await expect(harness.target.readMemory({ memory_id: controlId })).resolves.toBeNull()
+				await expect(
+					harness.target.updateMemory({
+						memory_id: controlId,
+						content: 'Phase 13 namespace cleanup should not update control',
+					}),
+				).resolves.toBeNull()
+				await expect(harness.target.deleteMemory({ memory_id: controlId })).resolves.toEqual({
+					deleted: false,
+				})
 
-			await expect(harness.target.readMemory({ memory_id: targetOneId })).resolves.toBeNull()
-			await expect(
-				harness.target.readMemory({ memory_id: targetWrongScopeId }),
-			).resolves.toMatchObject({
-				id: targetWrongScopeId,
-				content: 'Phase 13 namespace cleanup wrong scope beta',
-				scope: {
-					user_id: 'phase13-namespace-other-user',
-				},
-				metadata: {
-					source: 'target-wrong-scope',
-					dennett_namespace_id: 'target-namespace',
-				},
-			})
+				const targetReadBack = await harness.target.readMemory({ memory_id: targetOneId })
+				expect(targetReadBack).toMatchObject({
+					id: targetOneId,
+					metadata: {
+						source: 'target-one',
+						dennett_namespace_id: 'target-namespace',
+					},
+				})
 
-			const controlReadBack = await harness.control.readMemory({ memory_id: controlId })
-			expect(controlReadBack).toMatchObject({
-				id: controlId,
-				content: 'Phase 13 namespace cleanup control gamma',
-				metadata: {
-					source: 'control',
-					dennett_namespace_id: 'control-namespace',
-				},
-			})
-			expect(await harness.control.listMemories({ scope, limit: 10 })).toHaveLength(1)
-		} finally {
-			await harness.cleanup()
-		}
-	}, 150000)
+				const targetList = await harness.target.listMemories({ scope, limit: 10 })
+				expect(targetList.map((record) => record.id)).toEqual([targetOneId])
+				expect(
+					targetList.every(
+						(record) => record.metadata?.dennett_namespace_id === 'target-namespace',
+					),
+				).toBe(true)
+
+				const targetSearch = await harness.target.searchMemory({
+					query: 'namespace cleanup target',
+					scope,
+					limit: 10,
+				})
+				expect(targetSearch.records.map((record) => record.id)).toEqual([targetOneId])
+
+				const preview = await harness.target.previewMemoryCleanup({ scope })
+				expect(preview).toEqual({
+					namespace_id: 'target-namespace',
+					candidate_ids: [targetOneId],
+					candidate_count: 1,
+					limit: 10000,
+					truncated: false,
+				})
+
+				const cleanup = await harness.target.deleteMemoryCleanup({
+					scope,
+					candidate_ids: [...preview.candidate_ids, targetWrongScopeId, controlId],
+				})
+				expect(cleanup).toEqual({
+					namespace_id: 'target-namespace',
+					limit: 10000,
+					requested_ids: [...preview.candidate_ids, targetWrongScopeId, controlId],
+					deleted_ids: [targetOneId],
+					skipped_ids: [targetWrongScopeId, controlId],
+					remaining_ids: [],
+					requested_truncated: false,
+					remaining_truncated: false,
+					verified_empty: true,
+				})
+
+				await expect(harness.target.readMemory({ memory_id: targetOneId })).resolves.toBeNull()
+				await expect(
+					harness.target.readMemory({ memory_id: targetWrongScopeId }),
+				).resolves.toMatchObject({
+					id: targetWrongScopeId,
+					content: 'Phase 13 namespace cleanup wrong scope beta',
+					scope: {
+						user_id: 'phase13-namespace-other-user',
+					},
+					metadata: {
+						source: 'target-wrong-scope',
+						dennett_namespace_id: 'target-namespace',
+					},
+				})
+
+				const controlReadBack = await harness.control.readMemory({ memory_id: controlId })
+				expect(controlReadBack).toMatchObject({
+					id: controlId,
+					content: 'Phase 13 namespace cleanup control gamma',
+					metadata: {
+						source: 'control',
+						dennett_namespace_id: 'control-namespace',
+					},
+				})
+				expect(await harness.control.listMemories({ scope, limit: 10 })).toHaveLength(1)
+			} finally {
+				await harness.cleanup()
+			}
+		},
+		150000,
+	)
 
 	it('reports cleanup bounds explicitly and rejects non-positive cleanup limits', async () => {
 		const adapter = createScriptedCleanupAdapter('bounded-namespace')
@@ -620,19 +637,24 @@ describe('Mem0MemoryAdapter', () => {
 		}
 	})
 
-	it('surfaces provider execution failures clearly for invalid delete operations', async () => {
-		const harness = await createAdapter('dennett-mem0-provider-error-', undefined, {
-			acquireMem0Lock: true,
-		})
+	localMem0It(
+		'surfaces provider execution failures clearly for invalid delete operations',
+		async () => {
+			const harness = await createAdapter('dennett-mem0-provider-error-', undefined, {
+				acquireMem0Lock: true,
+				useLocalMem0: true,
+			})
 
-		try {
-			await expect(
-				harness.adapter.deleteMemory({
-					memory_id: 'missing-memory-id',
-				}),
-			).rejects.toThrow(MemoryExecutionError)
-		} finally {
-			await harness.cleanup()
-		}
-	}, 15000)
+			try {
+				await expect(
+					harness.adapter.deleteMemory({
+						memory_id: 'missing-memory-id',
+					}),
+				).rejects.toThrow(MemoryExecutionError)
+			} finally {
+				await harness.cleanup()
+			}
+		},
+		15000,
+	)
 })

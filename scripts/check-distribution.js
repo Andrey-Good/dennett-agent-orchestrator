@@ -1,12 +1,5 @@
 import { execFile } from 'node:child_process'
-import {
-	access,
-	mkdir,
-	mkdtemp,
-	readdir,
-	rm,
-	writeFile,
-} from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -45,7 +38,7 @@ async function pathExists(filePath) {
 
 function quoteWindowsShellArg(value) {
 	const stringValue = String(value)
-	if (/^[A-Za-z0-9_./:=@\\-]+$/.test(stringValue)) {
+	if (/^[-A-Za-z0-9_./:=@\\]+$/.test(stringValue)) {
 		return stringValue
 	}
 
@@ -156,11 +149,9 @@ async function packCurrentArtifact(tempRoot) {
 }
 
 async function installTgz(consumerDirectory, tgzPath) {
-	await execTool(
-		'npm',
-		['install', '--ignore-scripts', '--no-audit', '--fund=false', tgzPath],
-		{ cwd: consumerDirectory },
-	)
+	await execTool('npm', ['install', '--ignore-scripts', '--no-audit', '--fund=false', tgzPath], {
+		cwd: consumerDirectory,
+	})
 }
 
 async function uninstallPackage(consumerDirectory) {
@@ -185,11 +176,38 @@ async function smokeInstalledBin(consumerDirectory) {
 	return stdout
 }
 
+async function smokeInstalledSupportBundle(consumerDirectory) {
+	const binPath = installedBinPath(consumerDirectory)
+	const stateDbPath = path.join(consumerDirectory, 'local-state.sqlite')
+	await writeFile(stateDbPath, 'local package proof state placeholder', 'utf8')
+
+	const { stdout } = await execPath(binPath, ['support-bundle', '--state-db', stateDbPath], {
+		cwd: consumerDirectory,
+	})
+	const supportBundle = JSON.parse(stdout)
+
+	if (supportBundle?.local_only !== true) {
+		throw new Error('Installed support-bundle output must be marked local_only.')
+	}
+	if (supportBundle?.state_db?.exists !== true || supportBundle.state_db.path_redacted !== true) {
+		throw new Error('Installed support-bundle output must summarize a redacted existing state DB.')
+	}
+	if (!supportBundle?.support_boundary?.stable_safety_protocol?.includes?.('support-bundle')) {
+		throw new Error(
+			'Installed support-bundle output must include support-bundle in the safety protocol boundary.',
+		)
+	}
+
+	return supportBundle
+}
+
 async function assertPackageUnavailable(consumerDirectory) {
 	const errors = []
 
 	if (await pathExists(installedPackagePath(consumerDirectory))) {
-		errors.push(`Package directory still exists after uninstall: ${installedPackagePath(consumerDirectory)}`)
+		errors.push(
+			`Package directory still exists after uninstall: ${installedPackagePath(consumerDirectory)}`,
+		)
 	}
 	if (await pathExists(installedBinPath(consumerDirectory))) {
 		errors.push(`Package bin still exists after uninstall: ${installedBinPath(consumerDirectory)}`)
@@ -336,7 +354,9 @@ export async function runDistributionCheck() {
 	)
 
 	if (vitestConfigArtifacts.length > 0) {
-		throw new Error(`Build emitted forbidden vitest config artifacts: ${vitestConfigArtifacts.join(', ')}`)
+		throw new Error(
+			`Build emitted forbidden vitest config artifacts: ${vitestConfigArtifacts.join(', ')}`,
+		)
 	}
 
 	const { stdout } = await execFileAsync(process.execPath, [cliPath, '--help'], {
@@ -354,10 +374,11 @@ export async function runLocalPackageInstallProof(options = { keepTemp: false })
 		const consumerDirectory = await createConsumerProject(tempRoot)
 		await installTgz(consumerDirectory, tgzPath)
 		await smokeInstalledBin(consumerDirectory)
+		await smokeInstalledSupportBundle(consumerDirectory)
 		await uninstallPackage(consumerDirectory)
 		await assertPackageUnavailable(consumerDirectory)
 
-		console.log(`Local package install/uninstall proof passed for ${tgzPath}.`)
+		console.log(`Local package install/support-bundle/uninstall proof passed for ${tgzPath}.`)
 		if (options.keepTemp) {
 			console.log(`Kept proof workspace: ${tempRoot}`)
 		}

@@ -22,6 +22,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 - [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md)
 - [Observability, Support, And Operations](./observability-support-operations.md)
 - [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md)
+- [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -43,6 +44,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 - Stage 12 records the canonical hosted/managed deployment deferral lock and gap matrix.
 - Stage 13 records the local-only support bundle, redacted runtime diagnostics, support/security routing, support matrix, telemetry boundary, and local incident runbooks.
 - Stage 14 records public docs, onboarding, examples, and claim-review rules in [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md).
+- Stage 15 records local integrated public-environment product-flow evidence and claim boundaries in [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md).
 
 ## Current Truthful Scope
 
@@ -51,6 +53,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 - Local support diagnostics are provided by `support-bundle` and redacted runtime diagnostics by `runtime-env-inspect --redacted`.
 - Local tarball proof is limited to controlled `.tgz` install/uninstall and optional explicit two-tarball upgrade/rollback smoke.
 - Public docs and examples must keep model, runtime, memory, package, hosted, support, and production claims inside the boundaries in this section.
+- Integrated public-environment flow claims must distinguish local/offline proof from live runtime, public package, provider, hosted, builder, and managed-subagent readiness.
 
 ## Still Forbidden
 

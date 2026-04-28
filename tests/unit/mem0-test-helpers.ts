@@ -1,8 +1,16 @@
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
+export const MEM0_LOCAL_PYTHON = path.resolve(
+	process.cwd(),
+	'.local',
+	'mem0-venv',
+	'Scripts',
+	'python.exe',
+)
 const MEM0_CHROMA_LOCK_DIR = path.join(os.tmpdir(), 'dennett-mem0-chroma-vitest.lock')
 const LOCK_POLL_MS = 250
 const LOCK_TIMEOUT_MS = 10 * 60 * 1000
@@ -15,6 +23,10 @@ interface Mem0ChromaTestLock {
 
 interface Mem0ChromaLockOwner {
 	pid?: number
+}
+
+export function shouldRunLocalMem0Tests(): boolean {
+	return process.env.DENNETT_RUN_MEM0_TESTS === '1' && existsSync(MEM0_LOCAL_PYTHON)
 }
 
 function isFilesystemBusyError(error: unknown): boolean {

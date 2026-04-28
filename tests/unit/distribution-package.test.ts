@@ -119,6 +119,8 @@ describe('package distribution metadata', () => {
 			'package:local-install:proof': 'node scripts/check-distribution.js local-install-proof',
 			'package:upgrade-rollback:proof': 'node scripts/check-distribution.js upgrade-rollback-proof',
 			'supply-chain:local:proof': 'node scripts/check-distribution.js local-sbom-proof',
+			'stage15:integrated-flow:proof': 'node scripts/check-stage15-integrated-flow.js',
+			'test:mem0': 'node scripts/run-mem0-tests.js',
 			'package:check':
 				'pnpm build && pnpm dist:check && pnpm packlist:check && pnpm public-release-foundation:check',
 		})
