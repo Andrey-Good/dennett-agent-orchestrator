@@ -9,6 +9,7 @@ Documents:
 
 - [Public Launch Scope](./public-launch-scope.md)
 - [Security, Privacy, And Legal Foundation](./security-privacy-legal-foundation.md)
+- [Release Engineering And Supply Chain](./release-engineering-and-supply-chain.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -35,6 +36,7 @@ Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and 
 
 - [Public Launch Scope](./public-launch-scope.md)
 - [Security, Privacy, And Legal Foundation](./security-privacy-legal-foundation.md)
+- [Release Engineering And Supply Chain](./release-engineering-and-supply-chain.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)

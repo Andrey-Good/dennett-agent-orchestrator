@@ -2,6 +2,7 @@
 	"name": "dennett-agent-orchestrator",
 	"version": "0.0.0",
 	"private": true,
+	"license": "Apache-2.0",
 	"type": "module",
 	"bin": {
 		"dennett-agent-orchestrator": "./dist/src/interfaces/cli.js"
@@ -19,8 +20,9 @@
 		"dist:clean": "node scripts/clean-dist.js",
 		"dist:check": "node scripts/check-distribution.js",
 		"packlist:check": "node scripts/check-packlist.js",
+		"public-release-foundation:check": "node scripts/check-public-release-foundation.js",
 		"release-candidate:check": "node scripts/check-release-candidate.js",
-		"package:check": "pnpm build && pnpm dist:check && pnpm packlist:check",
+		"package:check": "pnpm build && pnpm dist:check && pnpm packlist:check && pnpm public-release-foundation:check",
 		"test": "vitest run --config vitest.config.ts",
 		"test:watch": "vitest --config vitest.config.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
