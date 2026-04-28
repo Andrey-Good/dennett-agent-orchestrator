@@ -14,13 +14,14 @@ Related documents:
 - [Memory Bindings](../08-extensions/memory-bindings.md)
 - [Runtime Adapter Contract](../03-contracts/runtime-adapter-contract.md)
 - [Builder Agent](../08-extensions/builder-agent.md)
+- [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md)
 - [Security Policy](../../SECURITY.md)
 
 ## Stage 3 Decision
 
 The first public-launch target remains CLI/package-first. It runs on a user-controlled machine, uses user-provided runtime and memory-provider accounts, and stores operational state locally unless a configured runtime or provider receives data as part of execution.
 
-Hosted and managed service launch remains deferred. No Stage 3 text may be used to infer hosted operation, multi-tenant isolation, uptime, managed incident response, hosted rollback, or SaaS data-processing readiness.
+Hosted and managed service launch remains deferred. No Stage 3 text may be used to infer hosted operation, multi-tenant isolation, uptime, managed incident response, hosted rollback, hosted telemetry/audit readiness, cloud deployment, production hosted/load readiness, or SaaS data-processing readiness. Stage 12 owns the canonical hosted blocker list in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md).
 
 ## Threat Model For CLI/Package-First
 
@@ -203,7 +204,7 @@ Stage 3 policy boundary:
 
 ## Hosted-Future Blockers
 
-Hosted or managed launch cannot proceed until a later scope decision and evidence cover at least:
+Hosted or managed launch cannot proceed under the current public-launch scope. [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md) is the canonical Stage 12 owner for the hosted gap matrix and forbidden hosted claims. A later scope decision and evidence must cover at least:
 
 - tenant isolation for local state equivalents, memory providers, runtime sessions, logs, artifacts, and Builder drafts;
 - server-side secret storage, rotation, access control, audit, and break-glass rules;

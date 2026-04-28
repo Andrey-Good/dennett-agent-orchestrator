@@ -19,6 +19,7 @@ Related documents:
 - [Install, Upgrade, Uninstall, And Rollback](./install-upgrade-uninstall-rollback.md)
 - [Package Identity And Registry](./package-identity-and-registry.md)
 - [Supply Chain Attestation](./supply-chain-attestation.md)
+- [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md)
 
 ## Decision
 
@@ -28,11 +29,11 @@ The selected Part 1 public-launch target is:
 
 This means the first public launch should be a user-installed CLI/package distribution, with repository checkout support preserved for contributors and early technical users.
 
-The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted or managed service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
+The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted or managed service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Stage 12 owns the canonical hosted/managed deployment deferral lock in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md). Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
 
 ## Hosted And Managed Status
 
-Hosted and managed product launch is explicitly deferred.
+Hosted and managed product launch is explicitly deferred. [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md) is the canonical owner for the hosted gap matrix, code/config evidence, and forbidden hosted claims.
 
 Deferred hosted/managed scope includes:
 
@@ -42,6 +43,7 @@ Deferred hosted/managed scope includes:
 - multi-tenant isolation claims;
 - hosted rollback or disablement;
 - hosted observability, incident response, and support operations.
+- hosted telemetry, audit logs, deletion/export/legal-hold operations, production load readiness, and operational ownership.
 
 Hosted or managed launch may enter scope only through a later scope decision that names the deployment artifact, runtime environment, rollback path, operational owner, security/privacy/legal posture, and live evidence requirements.
 
@@ -52,7 +54,7 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | Launch form | Selected target: CLI/package-first. | Not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen public artifact. |
 | Repository checkout | Supported as contributor and local-user path by the bounded `local-cli-repository-readiness` evidence. | Users build from checkout with `pnpm build`; generated `dist` is not promised in a clean checkout. |
 | Package distribution | Local tarball proof exists; public registry publication is not proven. | Stage 11 proves controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration. It does not prove public npm publication, signing, provenance, retained SBOMs, or public registry install. |
-| Hosted/managed service | Deferred. | No hosted, managed, SaaS, uptime, multi-tenant, or hosted rollback claim. |
+| Hosted/managed service | Deferred by Stage 12. | No hosted, managed, SaaS, uptime, multi-tenant, cloud deployment, hosted telemetry/audit, production load, or hosted rollback claim. |
 | Primary OS evidence | Windows local evidence. | Windows is the only evidenced OS baseline for current local release proof. |
 | Linux and macOS | CI package-proof jobs are configured as evidence candidates. | No public support claim until green package proof, gates, CLI smoke, and runtime/provider proof are recorded for each claimed OS. |
 | Node.js | `package.json` requires `>=22.13.0`; evidence records Node v22.17.1 and `node:sqlite` import proof. | Public launch must require Node.js `>=22.13.0` unless Stage 4 changes package metadata through its own approved task. |
@@ -95,7 +97,7 @@ These claims are allowed only after the later Part 1 stages produce the required
 Do not claim:
 
 - Dennett is already publicly launched, generally available, fully released, or production ready because Stage 2 selected a launch target.
-- Hosted service operation, managed deployment, SaaS readiness, uptime, multi-tenancy, hosted rollback, or hosted support operations are in scope.
+- Hosted service operation, managed deployment, SaaS readiness, uptime, multi-tenancy, hosted rollback, hosted telemetry/audit readiness, cloud deployment, production hosted/load readiness, or hosted support operations are in scope.
 - npm publication, installer distribution, container distribution, signed artifacts, provenance, retained SBOMs, or public package rollback are proven by Stage 11 local tarball proof.
 - Linux or macOS are publicly supported before OS-specific evidence exists.
 - Full Codex App Server certification is complete.
@@ -119,6 +121,7 @@ The CLI/package-first public launch remains blocked until all selected launch-sc
 - Stage 8 records the bounded local CLI managed-subagent operator surface and keeps broader orchestration explicitly deferred.
 - Stage 9 records the bounded audited draft-first Builder 2.0 authoring surface and keeps complete public Builder readiness explicitly deferred.
 - Stage 10 freezes only the bounded public CLI/API contract and compatibility policy documented in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md).
+- Stage 12 keeps hosted/managed deployment explicitly out of current public-launch scope and records the hosted gap matrix in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md).
 - README and user-facing docs use the same scope language as this document.
 
 ## Decision Criteria For Later Scope Changes

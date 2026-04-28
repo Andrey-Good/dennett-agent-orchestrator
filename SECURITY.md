@@ -4,7 +4,7 @@
 
 This policy covers vulnerabilities in this repository and in the documented CLI/package-first launch path.
 
-Current public-launch readiness does not include a hosted service, managed deployment, installer, container, public npm publication, SLA, or long-term support promise. Reports about those deferred surfaces are useful as design input, but they are not supported deployed surfaces in this stage.
+Current public-launch readiness does not include a hosted service, managed deployment, cloud deployment, installer, container, public npm publication, SLA, hosted telemetry/audit readiness, hosted incident response, hosted rollback, or long-term support promise. Reports about those deferred surfaces are useful as design input, but they are not supported deployed surfaces in this stage. The canonical hosted/managed deferral lock is [`docs/21-public-launch-readiness/hosted-managed-deployment-scope.md`](./docs/21-public-launch-readiness/hosted-managed-deployment-scope.md).
 
 ## Supported Versions
 

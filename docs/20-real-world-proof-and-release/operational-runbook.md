@@ -11,7 +11,7 @@ Use this runbook to prove that the release target can be configured, run, observ
 
 ## Current Release Target
 
-The current Phase 19 release target is [Release Scope Lock](./release-scope-lock.md) target `local-cli-repository-readiness`: a local CLI and repository-state release for contributors and local users. It is not a hosted service deployment and it does not yet have a package publishing, installer, container, or hosted rollout artifact.
+The current Phase 19 release target is [Release Scope Lock](./release-scope-lock.md) target `local-cli-repository-readiness`: a local CLI and repository-state release for contributors and local users. It is not a hosted service deployment and it does not yet have a package publishing, installer, container, or hosted rollout artifact. Stage 12 keeps hosted/managed deployment explicitly deferred in [Hosted And Managed Deployment Scope](../21-public-launch-readiness/hosted-managed-deployment-scope.md).
 
 Operational evidence for this target is therefore split into:
 
@@ -152,7 +152,7 @@ Current proven recovery:
 
 Current not proven:
 
-- Hosted deployment rollback is `not-run` and not applicable to the current local CLI/repository release scope because there is no hosted deployment artifact.
+- Hosted deployment rollback is `not-run` and not applicable to the current local CLI/repository release scope because there is no hosted deployment artifact and Stage 12 explicitly defers hosted/managed deployment.
 - Package, installer, container, or published artifact rollback is `not-run` because the repository is `private`, has no publish workflow, and no release packaging artifact is defined.
 - Live external provider data rollback is not proven by the disposable registration proof; provider-specific cleanup must be proven when a release scope creates durable external provider resources.
 - Production-scale crash recovery, live provider crash recovery, and hosted service recovery are not proven by the deterministic local Stage 8 test.
