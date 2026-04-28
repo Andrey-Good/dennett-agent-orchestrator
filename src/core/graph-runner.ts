@@ -665,6 +665,26 @@ function assertSupportedRuntimeContext(
 				`Node "${node.id}" declares ${unsupportedFeatures.join(', ')}, which is not implemented in the current execution slice.`,
 			)
 		}
+
+		const runtimeOptions = node.runtime_options ?? {}
+		if ('reasoning_effort' in runtimeOptions && !capabilities.supports_reasoning_effort) {
+			throw new AppError(
+				'UNSUPPORTED_RUNTIME_CONTEXT',
+				`Node "${node.id}" declares runtime option "reasoning_effort", but the runtime adapter does not support it.`,
+			)
+		}
+		if ('speed_tier' in runtimeOptions && !capabilities.supports_speed_tiers) {
+			throw new AppError(
+				'UNSUPPORTED_RUNTIME_CONTEXT',
+				`Node "${node.id}" declares runtime option "speed_tier", but the runtime adapter does not support it.`,
+			)
+		}
+		if ('personality' in runtimeOptions && !capabilities.supports_personality) {
+			throw new AppError(
+				'UNSUPPORTED_RUNTIME_CONTEXT',
+				`Node "${node.id}" declares runtime option "personality", but the runtime adapter does not support it.`,
+			)
+		}
 	}
 
 	assertCommentInteractionPolicy(agentFile)

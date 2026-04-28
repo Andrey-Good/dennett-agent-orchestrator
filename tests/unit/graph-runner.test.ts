@@ -1348,6 +1348,75 @@ describe('graph-runner durable execution', () => {
 		expect(store.getPersistedRunSnapshot('run-runtime-options')).toBeNull()
 	})
 
+	it('rejects supported runtime option keys when the selected adapter lacks the matching capability', async () => {
+		const cases = [
+			{
+				runId: 'run-runtime-options-no-reasoning-effort',
+				runtimeOptions: {
+					reasoning_effort: 'medium',
+				},
+				message:
+					'Node "node-a" declares runtime option "reasoning_effort", but the runtime adapter does not support it.',
+			},
+			{
+				runId: 'run-runtime-options-no-speed-tier',
+				runtimeOptions: {
+					speed_tier: 'fast',
+				},
+				message:
+					'Node "node-a" declares runtime option "speed_tier", but the runtime adapter does not support it.',
+			},
+			{
+				runId: 'run-runtime-options-no-personality',
+				runtimeOptions: {
+					personality: 'pragmatic',
+				},
+				message:
+					'Node "node-a" declares runtime option "personality", but the runtime adapter does not support it.',
+			},
+		] as const
+
+		for (const testCase of cases) {
+			const store = await createStore()
+			const agentFile = buildAgentFile()
+
+			const firstNode = agentFile.nodes[0]
+			if (firstNode?.kind !== 'runtime_agent') {
+				throw new Error('expected runtime_agent test node')
+			}
+			firstNode.runtime_options = testCase.runtimeOptions
+
+			const { adapter, requests } = createStubAdapter([
+				{
+					outcome: 'success',
+					output: JSON_OBJECT_OUTPUT,
+					output_json: {
+						summary: 'should-not-run',
+						count: 1,
+					},
+				},
+			])
+
+			await expect(
+				runAgentFile(
+					agentFile,
+					adapter,
+					{ topic: 'runtime-option-capabilities' },
+					{
+						state_store: store,
+						resolved_revision_id: 'rev-runtime-option-capabilities',
+						run_id: testCase.runId,
+					},
+				),
+			).rejects.toMatchObject({
+				code: 'UNSUPPORTED_RUNTIME_CONTEXT',
+				message: testCase.message,
+			} satisfies Pick<AppError, 'code' | 'message'>)
+			expect(requests).toHaveLength(0)
+			expect(store.getPersistedRunSnapshot(testCase.runId)).toBeNull()
+		}
+	})
+
 	it('rejects unsupported top-level skill bindings before creating a run and before resuming one', async () => {
 		const store = await createStore()
 		const agentFile = buildAgentFile()
