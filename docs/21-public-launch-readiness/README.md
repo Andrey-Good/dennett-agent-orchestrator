@@ -8,6 +8,7 @@ Status: canonical owner section for Part 1 public-launch readiness planning. Sta
 Documents:
 
 - [Public Launch Scope](./public-launch-scope.md)
+- [Security, Privacy, And Legal Foundation](./security-privacy-legal-foundation.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -33,6 +34,7 @@ Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and 
 Документы:
 
 - [Public Launch Scope](./public-launch-scope.md)
+- [Security, Privacy, And Legal Foundation](./security-privacy-legal-foundation.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
