@@ -356,6 +356,37 @@ describe('runtime CLI helpers', () => {
 		})
 	})
 
+	it('supports redacted runtime environment inspection output', async () => {
+		const harness = createRuntimeSurfaceAdapter({
+			environment: {
+				auth: {
+					authenticated: true,
+					auth_method: 'chatgpt',
+					requires_openai_auth: false,
+				},
+				account: {
+					status: 'available',
+					account_type: 'chatgpt',
+					email: 'alice@example.com',
+				},
+				rate_limits: [],
+				config: {
+					model: 'gpt-5.3-codex',
+					profile: 'C:\\Users\\Alice\\private\\profile.toml',
+				},
+			},
+		})
+
+		const result = await inspectRuntimeEnvironment(harness.adapter, { redacted: true })
+		const serialized = JSON.stringify(result)
+
+		expect(serialized).not.toContain('alice@example.com')
+		expect(serialized).not.toContain('C:\\Users\\Alice')
+		expect(serialized).toContain('[REDACTED_EMAIL]')
+		expect(serialized).toContain('[REDACTED_PATH]')
+		expect(serialized).toContain('gpt-5.3-codex')
+	})
+
 	it('fails fast when the adapter does not support model discovery', async () => {
 		const harness = createRuntimeSurfaceAdapter({
 			supportsModelDiscovery: false,
@@ -432,6 +463,7 @@ describe('runtime CLI helpers', () => {
 		expect(runtimeEnv?.options.map((option) => option.long)).toContain(
 			'--codex-app-server-environment-timeout-ms',
 		)
+		expect(runtimeEnv?.options.map((option) => option.long)).toContain('--redacted')
 		expect(run?.options.map((option) => option.long)).toContain(
 			'--codex-app-server-execution-timeout-ms',
 		)

@@ -279,6 +279,7 @@ describe('CLI contract freeze', () => {
 		expect(contracts.map(({ name, stability }) => ({ name, stability }))).toEqual([
 			{ name: 'runtime-model-list', stability: 'experimental' },
 			{ name: 'runtime-env-inspect', stability: 'experimental' },
+			{ name: 'support-bundle', stability: 'stable_safety_protocol' },
 			{ name: 'memory-provider-register', stability: 'experimental' },
 			{ name: 'memory-provider-list', stability: 'experimental' },
 			{ name: 'memory-provider-show', stability: 'experimental' },
@@ -333,6 +334,8 @@ describe('CLI contract freeze', () => {
 		expect(help).toContain('[stable/safety-protocol]')
 		expect(help).toContain('runtime-model-list')
 		expect(help).toContain('[experimental] list models through the current runtime adapter')
+		expect(help).toContain('support-bundle')
+		expect(help).toContain('[stable/safety-protocol] emit a local-only redacted diagnostics')
 		expect(help).toContain('help [command]')
 		expect(help).toContain('[stable] display help for command')
 	})

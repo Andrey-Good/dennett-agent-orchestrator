@@ -20,6 +20,7 @@ Related documents:
 - [Package Identity And Registry](./package-identity-and-registry.md)
 - [Supply Chain Attestation](./supply-chain-attestation.md)
 - [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md)
+- [Observability, Support, And Operations](./observability-support-operations.md)
 
 ## Decision
 
@@ -54,7 +55,8 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | Launch form | Selected target: CLI/package-first. | Not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen public artifact. |
 | Repository checkout | Supported as contributor and local-user path by the bounded `local-cli-repository-readiness` evidence. | Users build from checkout with `pnpm build`; generated `dist` is not promised in a clean checkout. |
 | Package distribution | Local tarball proof exists; public registry publication is not proven. | Stage 11 proves controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration. It does not prove public npm publication, signing, provenance, retained SBOMs, or public registry install. |
-| Hosted/managed service | Deferred by Stage 12. | No hosted, managed, SaaS, uptime, multi-tenant, cloud deployment, hosted telemetry/audit, production load, or hosted rollback claim. |
+| Hosted/managed service | Deferred by Stage 12. | No hosted, managed, SaaS, uptime, multi-tenant, cloud deployment, hosted telemetry/audit, production load, hosted support operations, status page, SLA, or hosted rollback claim. |
+| Support diagnostics | Local-only support bundle and redacted runtime environment inspection exist for Stage 13. | Diagnostics are generated locally and reviewed by the user before sharing. They do not upload data, create hosted telemetry, or prove managed support operations. |
 | Primary OS evidence | Windows local evidence. | Windows is the only evidenced OS baseline for current local release proof. |
 | Linux and macOS | CI package-proof jobs are configured as evidence candidates. | No public support claim until green package proof, gates, CLI smoke, and runtime/provider proof are recorded for each claimed OS. |
 | Node.js | `package.json` requires `>=22.13.0`; evidence records Node v22.17.1 and `node:sqlite` import proof. | Public launch must require Node.js `>=22.13.0` unless Stage 4 changes package metadata through its own approved task. |
@@ -73,6 +75,7 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | Local graph execution | Included target for proven local CLI paths. | Does not imply hosted execution, production load, or automatic live crash recovery. |
 | Codex App Server runtime | Limited/beta for the certified subset. | Stage 5 must name supported models/options and unsupported cases before public claims expand. |
 | Runtime discovery and environment inspection | Limited/beta for local authenticated Codex path. | Redact account data and avoid account/rate-limit promises. |
+| Support bundle and redacted diagnostics | Included as local support safety protocols for CLI/package-first triage. | `support-bundle` summarizes package, environment, CLI inventory, git status, and state DB metadata with redaction. `runtime-env-inspect --redacted` is required before sharing runtime diagnostics. Neither command creates a hosted support or telemetry path. |
 | Direct local Mem0 memory operations | Limited/beta for registered local Mem0 provider path. | Stage 6 must lock provider limits, cleanup guarantees, reliability boundaries, and unsupported cases. |
 | Runtime memory with Codex plus Mem0 | Limited/beta for prompt-rendered context and success-only writes. | Not native App Server memory and not broad provider support. |
 | User prompt wait/reply/resume | Limited/beta for currently tested prompt shapes. | Stage 7 must prove full user-visible interaction semantics before broader claims. |
@@ -99,6 +102,7 @@ Do not claim:
 - Dennett is already publicly launched, generally available, fully released, or production ready because Stage 2 selected a launch target.
 - Hosted service operation, managed deployment, SaaS readiness, uptime, multi-tenancy, hosted rollback, hosted telemetry/audit readiness, cloud deployment, production hosted/load readiness, or hosted support operations are in scope.
 - npm publication, installer distribution, container distribution, signed artifacts, provenance, retained SBOMs, or public package rollback are proven by Stage 11 local tarball proof.
+- local support diagnostics imply SLA, managed support, status-page monitoring, automatic telemetry, or hosted incident response.
 - Linux or macOS are publicly supported before OS-specific evidence exists.
 - Full Codex App Server certification is complete.
 - Any non-Codex runtime provider is publicly supported.
@@ -122,6 +126,7 @@ The CLI/package-first public launch remains blocked until all selected launch-sc
 - Stage 9 records the bounded audited draft-first Builder 2.0 authoring surface and keeps complete public Builder readiness explicitly deferred.
 - Stage 10 freezes only the bounded public CLI/API contract and compatibility policy documented in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md).
 - Stage 12 keeps hosted/managed deployment explicitly out of current public-launch scope and records the hosted gap matrix in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md).
+- Stage 13 keeps support and operations local-only, documents `support-bundle`, `runtime-env-inspect --redacted`, support/security routing, and incident runbooks in [Observability, Support, And Operations](./observability-support-operations.md).
 - README and user-facing docs use the same scope language as this document.
 
 ## Decision Criteria For Later Scope Changes

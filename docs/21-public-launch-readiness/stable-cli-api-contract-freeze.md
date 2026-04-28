@@ -44,8 +44,11 @@ These commands are stable only as safety protocols:
 | --- | --- | --- |
 | `memory-cleanup-preview` | stable/safety-protocol | Previews the bounded memory cleanup safety envelope before deletion. |
 | `memory-cleanup-verified-delete` | stable/safety-protocol | Deletes only candidates verified from the preview safety envelope. |
+| `support-bundle` | stable/safety-protocol | Emits the documented local-only redacted support-bundle JSON summary for user-reviewed diagnostics. |
 
 The safety-protocol label freezes the cleanup handshake, explicit scope requirement, preview-before-delete flow, and confirmation-token semantics. It does not certify provider-wide cleanup, true restore, provider reliability, throttling behavior, or broad external memory support.
+
+For `support-bundle`, the safety/support protocol freezes only the documented local-only support-bundle schema and redaction boundary backed by tests. It does not create hosted telemetry, remote upload, SLA, managed support operations, complete redaction guarantees for unknown future fields, or a promise that user-added logs and attachments are safe to share without separate review.
 
 ## Experimental Command Inventory
 
@@ -53,7 +56,7 @@ These commands are intentionally not stable, even when implemented and useful:
 
 | Command family | Commands |
 | --- | --- |
-| Runtime metadata | `runtime-model-list`, `runtime-env-inspect` |
+| Runtime metadata | `runtime-model-list`, `runtime-env-inspect` including `runtime-env-inspect --redacted` |
 | Memory provider registry | `memory-provider-register`, `memory-provider-list`, `memory-provider-show` |
 | Direct memory operations | `memory-write`, `memory-read`, `memory-search`, `memory-list`, `memory-update`, `memory-delete` |
 | Managed subagent operator surface | `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control`, `subagent-close` |

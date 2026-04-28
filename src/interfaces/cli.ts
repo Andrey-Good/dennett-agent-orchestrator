@@ -11,6 +11,7 @@ import {
 } from '../adapters/codex/codex-app-server-runtime-adapter.js'
 import { AgentLifecycleService } from '../core/agent-lifecycle.js'
 import { BuilderAgentService } from '../core/builder-service.js'
+import { redactDiagnosticsValue } from '../core/diagnostics-redaction.js'
 import { AppError, isAppError } from '../core/errors.js'
 import { resumeAgentRun, runAgentFile } from '../core/graph-runner.js'
 import type { JsonObject, JsonValue } from '../core/json.js'
@@ -32,6 +33,7 @@ import {
 	ManagedSubagentService,
 	normalizeManagedSubagentWriteSet,
 } from '../core/subagent-service.js'
+import { buildSupportBundle } from '../core/support-bundle.js'
 import type {
 	MemoryCleanupPreviewResult,
 	MemoryScope,
@@ -70,6 +72,11 @@ const CLI_COMMAND_CONTRACTS = [
 		name: 'runtime-env-inspect',
 		stability: 'experimental',
 		summary: 'inspect runtime auth, account, config, and limit metadata',
+	},
+	{
+		name: 'support-bundle',
+		stability: 'stable_safety_protocol',
+		summary: 'emit a local-only redacted diagnostics support bundle',
 	},
 	{
 		name: 'memory-provider-register',
@@ -1466,7 +1473,8 @@ export async function listRuntimeModels(
 
 export async function inspectRuntimeEnvironment(
 	adapter?: RuntimeAdapter,
-): Promise<RuntimeEnvironmentInspectionResult> {
+	options: { redacted?: boolean } = {},
+): Promise<RuntimeEnvironmentInspectionResult | JsonValue> {
 	const runtimeAdapter = adapter ?? createCodexAppServerAdapter()
 	const capabilities = runtimeAdapter.describeCapabilities()
 	if (!capabilities.supports_runtime_environment_introspection) {
@@ -1476,7 +1484,8 @@ export async function inspectRuntimeEnvironment(
 		)
 	}
 
-	return await runtimeAdapter.inspectRuntimeEnvironment()
+	const result = await runtimeAdapter.inspectRuntimeEnvironment()
+	return options.redacted ? redactDiagnosticsValue(result as unknown as JsonValue) : result
 }
 
 function assertActiveRunCompatibility(
@@ -1558,15 +1567,29 @@ export function buildCliProgram(): Command {
 			'--codex-app-server-environment-timeout-ms <ms>',
 			'Codex App Server environment inspection timeout in milliseconds',
 		)
-		.action(async (options: { codexAppServerEnvironmentTimeoutMs?: string }) => {
-			const result = await inspectRuntimeEnvironment(
-				createCodexAppServerAdapter({
-					environment_timeout_ms: parseTimeoutOption(
-						options.codexAppServerEnvironmentTimeoutMs,
-						'--codex-app-server-environment-timeout-ms',
-					),
-				}),
-			)
+		.option('--redacted', 'omit private account/config fields from runtime environment output')
+		.action(
+			async (options: { codexAppServerEnvironmentTimeoutMs?: string; redacted?: boolean }) => {
+				const result = await inspectRuntimeEnvironment(
+					createCodexAppServerAdapter({
+						environment_timeout_ms: parseTimeoutOption(
+							options.codexAppServerEnvironmentTimeoutMs,
+							'--codex-app-server-environment-timeout-ms',
+						),
+					}),
+					{ redacted: options.redacted === true },
+				)
+				printJson(result)
+			},
+		)
+
+	defineCliCommand(program, 'support-bundle')
+		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
+		.action(async (options: { stateDb: string }) => {
+			const result = await buildSupportBundle({
+				stateDbPath: options.stateDb,
+				commandContracts: getCliCommandContracts(),
+			})
 			printJson(result)
 		})
 

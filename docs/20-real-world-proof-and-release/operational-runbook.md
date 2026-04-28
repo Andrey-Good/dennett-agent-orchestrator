@@ -3,7 +3,7 @@
 <a id="english"></a>
 # Operational Runbook
 
-Status: operational runbook with TASK-291 local CLI setup, recovery, cleanup, and rollback-classification evidence. It does not assert final release approval.
+Status: operational runbook with TASK-291 local CLI setup, recovery, cleanup, rollback-classification evidence, and Stage 13 local support diagnostics. It does not assert final release approval, hosted support operations, SLA, or managed incident response.
 
 ## Purpose
 
@@ -54,18 +54,20 @@ pnpm --version
 git rev-parse --short HEAD
 (Get-Content -Raw -LiteralPath package.json | ConvertFrom-Json).version
 node .\dist\src\interfaces\cli.js --help
-node .\dist\src\interfaces\cli.js runtime-env-inspect
+node .\dist\src\interfaces\cli.js runtime-env-inspect --redacted
+node .\dist\src\interfaces\cli.js support-bundle
 ```
 
 Expected result:
 
-- Node satisfies the package engine requirement of `>=22`.
+- Node satisfies the package engine requirement of `>=22.13.0`.
 - pnpm matches the package manager line, currently `pnpm@10.33.0`.
 - package version is recorded.
 - CLI help lists runtime, memory, lifecycle, run, interaction, and resume commands.
-- runtime inspection returns authentication and runtime config metadata without requiring secret values.
+- redacted runtime inspection returns authentication and runtime config metadata without printing private account/config fields.
+- `support-bundle` returns local-only redacted JSON with package, environment, CLI inventory, git summary, state DB metadata, support boundary, and redaction metadata.
 
-Redaction rule: never paste account email, account IDs, tokens, cookies, authorization headers, or full provider transcripts into shared evidence. Record account email as `account-email-redacted`.
+Redaction rule: never paste account email, account IDs, tokens, cookies, authorization headers, private prompts, memory contents, provider config, local SQLite contents, or full provider transcripts into shared evidence. Use `runtime-env-inspect --redacted` and review `support-bundle` output locally before sharing.
 
 ## Disposable State Recovery And Cleanup Procedure
 
@@ -115,19 +117,19 @@ Operators must be able to:
 
 ## Incident Response
 
-Record the expected response for:
+These local incident procedures are support runbooks, not hosted incident-response promises.
 
-- provider authentication failure;
-- provider rate limit or quota exhaustion;
-- runtime model unavailable;
-- interrupted graph execution;
-- duplicate or missing final output;
-- storage corruption or partial write;
-- blocked user prompt that cannot resume;
-- managed child run that does not close;
-- memory provider read/write/search failure.
+| Incident | Detection signal | Immediate containment | Recovery or rollback action | Evidence to preserve |
+| --- | --- | --- | --- | --- |
+| Install, uninstall, or package proof failure | `pnpm package:local-install:proof`, `pnpm package:upgrade-rollback:proof`, `pnpm package:check`, or installed CLI smoke fails. | Stop release, public package, and rollback claims; do not commit generated tarballs or temp consumers. | Re-run from a clean checkout; verify `pnpm build`, Node `>=22.13.0`, pnpm `10.33.0`, and Stage 11 proof docs; defer package/publication claims if unresolved. | Command, exit code, redacted logs, commit, package version, Node/npm/pnpm versions, support bundle. |
+| Runtime auth, model, rate-limit, or quota failure | `runtime-env-inspect --redacted`, model list, or run command reports auth, quota, timeout, rate-limit, or model unavailable. | Stop retry loops; do not paste unredacted account data. | Verify local runtime authentication privately; collect redacted runtime inspection; use only a documented supported runtime path; classify provider limits as provider-owned when applicable. | Redacted runtime inspection, command, error code, timestamp, safe provider request id if available. |
+| Local SQLite state corruption or partial write | SQLite open/query error, missing state after crash, duplicate active run, or inconsistent `run-status`. | Stop mutating the affected DB; make a private copy; do not attach the DB publicly. | Restore from a known-good local backup if available; reproduce against disposable state; classify unproven recovery as residual risk. | Support bundle, DB size/path hash, command sequence, crash timing, private DB copy when required for private triage. |
+| Memory provider failure or cleanup issue | Memory read/write/search/cleanup fails, returns unexpected scoped results, or provider rejects credentials. | Stop additional provider mutations; do not run broad provider cleanup outside documented scope. | Verify provider registration/capabilities; use preview-before-delete for supported cleanup; use provider-owned tools for data outside Dennett scope. | Redacted command output, provider family/id without secrets, cleanup preview metadata when safe, support bundle. |
+| Stuck prompt or resume | `run-status` shows a pending prompt, `reply` does not unblock, or `resume` rejects state. | Avoid duplicate replies; inspect state before retrying; do not edit SQLite manually. | Use `run-status`; record or deliver exactly one intended reply; retry `resume`; classify incompatible active state through documented local controls where supported. | Redacted `run-status`, command sequence, run id, support bundle. |
+| Managed subagent stuck state | `subagent-wait` times out, child remains active, control is recorded but not live-delivered, or close fails. | Do not launch overlapping workers with conflicting write scopes; record state before intervention. | Use `subagent-list` and `subagent-show`; record control/cancel state; close only through documented CLI; keep durable background runner/live cancellation gaps deferred. | Redacted subagent output, parent/child ids, role, write-scope summary, support bundle. |
+| Accidental sensitive log disclosure | Secret, token, private prompt, memory content, account data, or unredacted provider config is posted or committed. | Remove public content if possible; rotate affected credentials immediately; stop public discussion if exploit details are involved. | Recreate the report with `support-bundle` and reviewed redacted excerpts; use the private security disclosure path for vulnerabilities or credential exposure. | What was exposed, where it was exposed, rotation/removal action, safe redacted replacement. |
 
-Each incident path must name the detection signal, immediate containment, recovery or rollback action, evidence to preserve, and owner to notify.
+Each incident must name an owner to notify. In the current scope the owner is a project maintainer or local operator, not a hosted on-call team.
 
 ## Rollback And Recovery
 
@@ -172,6 +174,8 @@ The release package must include:
 - commands or procedures for collecting support diagnostics;
 - redaction rules for logs and transcripts;
 - escalation contacts or owner roles.
+
+Stage 13 support handoff uses [Observability, Support, And Operations](../21-public-launch-readiness/observability-support-operations.md) as the canonical support-bundle, redacted diagnostics, support/security routing, telemetry-boundary, and local incident-runbook owner.
 
 <a id="russian"></a>
 # Операционный runbook
@@ -227,18 +231,20 @@ pnpm --version
 git rev-parse --short HEAD
 (Get-Content -Raw -LiteralPath package.json | ConvertFrom-Json).version
 node .\dist\src\interfaces\cli.js --help
-node .\dist\src\interfaces\cli.js runtime-env-inspect
+node .\dist\src\interfaces\cli.js runtime-env-inspect --redacted
+node .\dist\src\interfaces\cli.js support-bundle
 ```
 
 Ожидаемый результат:
 
-- Node удовлетворяет package engine requirement `>=22`.
+- Node удовлетворяет package engine requirement `>=22.13.0`.
 - pnpm совпадает со строкой package manager, сейчас `pnpm@10.33.0`.
 - package version записана.
 - CLI help перечисляет runtime, memory, lifecycle, run, interaction и resume commands.
-- runtime inspection возвращает authentication и runtime config metadata без необходимости выводить secret values.
+- redacted runtime inspection возвращает authentication и runtime config metadata без вывода private account/config fields.
+- `support-bundle` возвращает локальный redacted JSON с package, environment, CLI inventory, git summary, state DB metadata, support boundary и redaction metadata.
 
-Правило редактирования: никогда не вставляйте account email, account IDs, tokens, cookies, authorization headers или полные provider transcripts в shared evidence. Записывайте account email как `account-email-redacted`.
+Правило редактирования: никогда не вставляйте account email, account IDs, tokens, cookies, authorization headers, private prompts, memory contents, provider config, local SQLite contents или полные provider transcripts в shared evidence. Используйте `runtime-env-inspect --redacted` и локально проверяйте вывод `support-bundle` перед публикацией.
 
 ## Процедура disposable state recovery и cleanup
 

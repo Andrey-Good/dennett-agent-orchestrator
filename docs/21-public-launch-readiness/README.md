@@ -21,6 +21,7 @@ Documents:
 - [Package Identity And Registry](./package-identity-and-registry.md)
 - [Supply Chain Attestation](./supply-chain-attestation.md)
 - [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md)
+- [Observability, Support, And Operations](./observability-support-operations.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -40,6 +41,7 @@ Documents:
 - Stage 10 records the bounded stable CLI/API contract freeze.
 - Stage 11 records local tarball distribution proof, controlled install/uninstall proof, upgrade/rollback harness boundaries, private package identity, and local SBOM validation.
 - Stage 12 records the canonical hosted/managed deployment deferral lock and gap matrix.
+- Stage 13 records the local-only support bundle, redacted runtime diagnostics, support/security routing, support matrix, telemetry boundary, and local incident runbooks.
 
 ## Scope
 
@@ -58,8 +60,9 @@ The current truthful release state remains:
 - Stage 11 proves only controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SPDX SBOM validation, and CI package-proof job configuration in [Stage 11 Distribution Proof](./distribution-proof.md);
 - Stage 11 does not approve production code changes, npm publication, public package metadata finalization, tags, commits, pushes, releases, or hosted deployment;
 - Stage 12 keeps hosted/managed deployment explicitly out of current public-launch scope in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md).
+- Stage 13 provides only local diagnostics and support routing in [Observability, Support, And Operations](./observability-support-operations.md); it does not create hosted support, SLA, automatic telemetry, status-page, public npm, signing, provenance, or managed-operations claims.
 
-Part 1 stages 3-12 must use [Public Launch Scope](./public-launch-scope.md) and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as starting locks before changing scope or claiming evidence.
+Part 1 stages 3-13 must use [Public Launch Scope](./public-launch-scope.md) and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as starting locks before changing scope or claiming evidence.
 
 <a id="russian"></a>
 # Готовность к публичному запуску

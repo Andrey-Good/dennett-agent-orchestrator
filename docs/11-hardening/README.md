@@ -24,6 +24,10 @@ Normative documents in this section:
 - [Validation Matrix](./validation-matrix.md): which risks must be checked, how they are checked, and whether the check is automated or manual at the current stage.
 - [Operational Readiness](./operational-readiness.md): the honest current-stage readiness envelope, residual risks, and what this project still does not promise.
 
+Related launch-readiness operations owner:
+
+- [Observability, Support, And Operations](../21-public-launch-readiness/observability-support-operations.md): Stage 13 local support bundle, redacted runtime diagnostics, support/security routing, telemetry boundary, and local incident runbooks.
+
 Section boundary:
 
 - Product meaning and stack lock remain owned by [Foundations](../01-foundations/README.md).

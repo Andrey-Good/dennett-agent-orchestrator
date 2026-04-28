@@ -6,7 +6,7 @@
 Status: normative.
 Owns: the current-stage operational-readiness envelope, release-claim boundaries, and residual-risk framing.
 Does not own: subsystem semantics, hosted-service operations, or future support promises.
-Primary sources: [hardening scope](./hardening-scope.md), [release gates](./release-gates.md), [atomic write policy](../05-state/atomic-write-policy.md), [draft-live-deploy](../07-lifecycle/draft-live-deploy.md), [builder agent](../08-extensions/builder-agent.md), [Phase 19 real-world proof and release](../20-real-world-proof-and-release/README.md).
+Primary sources: [hardening scope](./hardening-scope.md), [release gates](./release-gates.md), [atomic write policy](../05-state/atomic-write-policy.md), [draft-live-deploy](../07-lifecycle/draft-live-deploy.md), [builder agent](../08-extensions/builder-agent.md), [Phase 19 real-world proof and release](../20-real-world-proof-and-release/README.md), [Observability, Support, And Operations](../21-public-launch-readiness/observability-support-operations.md).
 
 ## 1. Current-Stage Readiness Envelope
 
@@ -29,6 +29,7 @@ Even after Phase 11, the repository must not claim:
 - compatibility guarantees for agent sources or runtimes that do not yet exist in the repository;
 - zero known limitations in interaction, lifecycle, or extension behavior.
 - Phase 19 release readiness while live proof, stress/regression evidence, operational evidence, or the release decision record is still missing or blocked.
+- hosted support operations, SLA, automatic Dennett-owned telemetry, public status page, managed incident response, or long-term support versions from local support diagnostics.
 
 ## 3. Release-Facing Operational Expectations
 
@@ -38,6 +39,7 @@ For the current stage, operational readiness means:
 - a maintainer can rely on CI rather than private local state for basic release confidence;
 - documented recovery-sensitive behavior is backed by explicit checks or manual review;
 - the repository can be evolved without silently changing accepted contracts.
+- local support diagnostics can be collected through `support-bundle` and redacted runtime inspection can be collected through `runtime-env-inspect --redacted` without implying hosted telemetry or managed support.
 
 This is a repository-readiness standard, not a cloud-operations standard.
 

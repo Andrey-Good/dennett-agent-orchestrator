@@ -1,0 +1,11 @@
+name: Security report redirect
+description: Do not file security vulnerabilities as public issues.
+title: "Security report redirect"
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, credentials, private prompts, provider config, or vulnerability details in a public issue.
+
+        Use the repository security reporting process instead. If you already pasted sensitive data into an issue, rotate the affected credential immediately.

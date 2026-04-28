@@ -15,6 +15,7 @@ Related documents:
 - [Runtime Adapter Contract](../03-contracts/runtime-adapter-contract.md)
 - [Builder Agent](../08-extensions/builder-agent.md)
 - [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md)
+- [Observability, Support, And Operations](./observability-support-operations.md)
 - [Security Policy](../../SECURITY.md)
 
 ## Stage 3 Decision
@@ -171,6 +172,14 @@ For the CLI/package-first launch target:
 
 Before public package launch, docs must state whether the CLI sends any Dennett-owned telemetry. If none exists, the claim must be limited to Dennett-owned telemetry and must not cover third-party providers.
 
+Stage 13 current diagnostics boundary:
+
+- `support-bundle` is a local-only redacted diagnostics command that writes JSON to stdout and does not upload data;
+- `runtime-env-inspect --redacted` is the shareable runtime diagnostics path; unredacted runtime inspection remains private local diagnostics;
+- support bundles, redacted runtime output, terminal logs, and issue attachments are user- or maintainer-controlled artifacts, not automatic product telemetry;
+- no Dennett-owned automatic telemetry is documented for the current CLI/package-first scope;
+- third-party runtimes, memory providers, package registries, MCP servers, plugins, skills, and dependency tools may still collect their own telemetry or logs under their own policies.
+
 ## Legal And Trust Boundaries
 
 This document is product documentation, not legal advice.
@@ -201,6 +210,8 @@ Stage 3 policy boundary:
 - no hosted service, managed deployment, SLA, or long-term support version promise exists in this stage;
 - sensitive reports should not include exploit details in public issues;
 - security reports about third-party runtimes, providers, MCP servers, plugins, or dependencies may need to be reported to the upstream owner as well as to this project when Dennett integration behavior is involved.
+
+Ordinary product support, local setup failures, docs issues, expected-behavior questions, and non-sensitive bugs should use the public issue templates. Security disclosure is reserved for vulnerabilities, credential exposure, redaction bypasses involving sensitive data, exploitable unsafe access, or reports that require private prompts, memory records, account data, exploit details, or unredacted logs.
 
 ## Hosted-Future Blockers
 

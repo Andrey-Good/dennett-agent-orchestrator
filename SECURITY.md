@@ -35,6 +35,14 @@ Please include, when safe:
 - minimal reproduction steps using synthetic data;
 - expected impact and any known workaround.
 
+## Product Support Is Separate
+
+Use public bug, documentation, or support issue templates for ordinary local setup problems, CLI defects, docs gaps, support-bundle questions, runtime auth/rate-limit failures, memory provider setup issues, stuck prompt/resume state, or managed-subagent state that does not expose a vulnerability.
+
+Do not use a public support issue when explaining the report requires exploit details, credentials, private prompts, private memory records, provider config, account data, unredacted logs, or a redaction-bypass example containing real sensitive data. Use the vulnerability reporting path instead.
+
+For non-sensitive support triage, prefer reviewed output from `support-bundle` and `runtime-env-inspect --redacted`. These commands generate local diagnostics only; they do not upload data. Review all output before sharing.
+
 ## Third-Party Providers And Dependencies
 
 Dennett integrates with runtimes, memory providers, MCP servers, plugins, skills, package registries, and language ecosystems. If the vulnerability is in a third-party service or dependency, report it to the upstream owner as well. Also report it here when Dennett's integration, documentation, configuration, or packaging makes the issue exploitable for Dennett users.
