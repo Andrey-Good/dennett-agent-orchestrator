@@ -164,6 +164,23 @@ function printJson(value: unknown): void {
 	process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
 }
 
+type RedactedMemoryProviderRecord = Omit<MemoryProviderRecord, 'config'> & {
+	config: {
+		redacted: true
+		reason: string
+	}
+}
+
+function redactMemoryProviderRecord(record: MemoryProviderRecord): RedactedMemoryProviderRecord {
+	return {
+		...record,
+		config: {
+			redacted: true,
+			reason: 'Provider configuration is local/private and omitted from default CLI output.',
+		},
+	}
+}
+
 function printLifecycleStatus(status: AgentLifecycleStatusRecord): void {
 	printJson({
 		agent: status.agent,
@@ -174,7 +191,11 @@ function printLifecycleStatus(status: AgentLifecycleStatusRecord): void {
 }
 
 function printMemoryProviderRecord(record: MemoryProviderRecord): void {
-	printJson(record)
+	printJson(redactMemoryProviderRecord(record))
+}
+
+function printMemoryProviderRecords(records: MemoryProviderRecord[]): void {
+	printJson(records.map((record) => redactMemoryProviderRecord(record)))
 }
 
 function buildMemoryScope(args: {
@@ -986,7 +1007,7 @@ export function buildCliProgram(): Command {
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (options: { family?: string; stateDb: string }) => {
 			const records = await listRegisteredMemoryProviders(options.stateDb, options.family)
-			printJson(records)
+			printMemoryProviderRecords(records)
 		})
 
 	program

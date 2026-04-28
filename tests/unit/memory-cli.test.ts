@@ -13,6 +13,7 @@ import {
 	readRegisteredMemory,
 	registerMemoryProvider,
 	searchRegisteredMemory,
+	showRegisteredMemoryProvider,
 	updateRegisteredMemory,
 	writeRegisteredMemory,
 } from '../../src/interfaces/cli.js'
@@ -284,6 +285,70 @@ describe('memory CLI helpers', () => {
 				(option) => option.flags === '--confirm-token <token>' && option.required === true,
 			),
 		).toBe(true)
+	})
+
+	it('redacts provider config from default memory-provider CLI output', async () => {
+		const stateDbPath = await createStatePath('dennett-task534-memory-cli-redaction-')
+		const rawConfig = {
+			python_executable: 'C:/Users/Alice/private/python.exe',
+			api_key: 'super-secret-token',
+			mem0_config: {
+				vector_store: {
+					provider: 'chroma',
+					config: {
+						path: 'C:/Users/Alice/private/chroma',
+					},
+				},
+			},
+		}
+		let stdout = ''
+		const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+			stdout += String(chunk)
+			return true
+		})
+
+		try {
+			const program = buildCliProgram()
+			program.exitOverride()
+
+			await program.parseAsync(
+				[
+					'memory-provider-register',
+					'mem0-local',
+					'--family',
+					'mem0',
+					'--codex-ref',
+					'primary_memory',
+					'--display-name',
+					'Primary Mem0',
+					'--config',
+					JSON.stringify(rawConfig),
+					'--state-db',
+					stateDbPath,
+				],
+				{ from: 'user' },
+			)
+			await program.parseAsync(['memory-provider-show', 'mem0-local', '--state-db', stateDbPath], {
+				from: 'user',
+			})
+			await program.parseAsync(['memory-provider-list', '--state-db', stateDbPath], {
+				from: 'user',
+			})
+		} finally {
+			stdoutSpy.mockRestore()
+		}
+
+		expect(stdout).not.toContain('super-secret-token')
+		expect(stdout).not.toContain('C:/Users/Alice/private/python.exe')
+		expect(stdout).not.toContain('C:/Users/Alice/private/chroma')
+		expect(stdout).not.toContain('api_key')
+		expect(stdout).toContain('"redacted": true')
+		expect(stdout).toContain(
+			'Provider configuration is local/private and omitted from default CLI output.',
+		)
+
+		const rawShown = await showRegisteredMemoryProvider('mem0-local', stateDbPath)
+		expect(rawShown.config).toEqual(rawConfig)
 	})
 
 	it('performs a full registered Mem0 round-trip through the CLI helper surface', async () => {

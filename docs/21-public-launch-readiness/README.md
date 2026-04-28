@@ -3,7 +3,7 @@
 <a id="english"></a>
 # Public Launch Readiness
 
-Status: canonical owner section for Part 1 public-launch readiness planning. Stage 1 is only a baseline gap and forbidden-claim lock; Stage 2 selects a CLI/package-first launch target and keeps hosted/managed launch deferred; Stage 3 records security/privacy/legal boundaries; Stage 4 records private package and supply-chain foundation; Stage 5 records the limited Runtime/App Server certification subset. No stage expands the current release target or claims public readiness by itself.
+Status: canonical owner section for Part 1 public-launch readiness planning. Stage 1 is only a baseline gap and forbidden-claim lock; Stage 2 selects a CLI/package-first launch target and keeps hosted/managed launch deferred; Stage 3 records security/privacy/legal boundaries; Stage 4 records private package and supply-chain foundation; Stage 5 records the limited Runtime/App Server certification subset; Stage 6 records the limited local Mem0-first memory productization subset. No stage expands the current release target or claims public readiness by itself.
 
 Documents:
 
@@ -11,6 +11,7 @@ Documents:
 - [Security, Privacy, And Legal Foundation](./security-privacy-legal-foundation.md)
 - [Release Engineering And Supply Chain](./release-engineering-and-supply-chain.md)
 - [Runtime App Server Certification](./runtime-app-server-certification.md)
+- [Memory Productization](./memory-productization.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -25,6 +26,7 @@ The current truthful release state remains:
 - bounded `release` for `local-cli-repository-readiness` only;
 - no hosted, managed, packaged, installer, container, production SaaS, broad provider, full App Server certification, full user interaction, operator-facing managed-subagent, or public Builder 2.0 readiness claim;
 - Stage 5 certifies only the limited local CLI/package Codex App Server subset in [Runtime App Server Certification](./runtime-app-server-certification.md);
+- Stage 6 productizes only the limited local Mem0-first memory subset in [Memory Productization](./memory-productization.md);
 - no change to source, tests, package metadata, CI, tags, commits, or publication state from Stage 1 or Stage 2.
 
 Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as the starting locks before changing scope or claiming evidence.
@@ -40,6 +42,7 @@ Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and 
 - [Security, Privacy, And Legal Foundation](./security-privacy-legal-foundation.md)
 - [Release Engineering And Supply Chain](./release-engineering-and-supply-chain.md)
 - [Runtime App Server Certification](./runtime-app-server-certification.md)
+- [Memory Productization](./memory-productization.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
