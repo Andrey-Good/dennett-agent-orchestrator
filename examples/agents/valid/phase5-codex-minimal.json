@@ -4,6 +4,13 @@
     "id": "phase5-codex-minimal",
     "name": "Phase 5 Codex Minimal"
   },
+  "params": {
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic to summarize in one sentence."
+    }
+  },
   "entry_node_id": "start",
   "nodes": [
     {
