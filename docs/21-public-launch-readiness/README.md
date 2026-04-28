@@ -24,6 +24,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 - [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md)
 - [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md)
 - [External Beta Readiness](./external-beta-readiness.md)
+- [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -47,10 +48,12 @@ This section governs the public-launch readiness path after the bounded `local-c
 - Stage 14 records public docs, onboarding, examples, and claim-review rules in [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md).
 - Stage 15 records local integrated public-environment product-flow evidence and claim boundaries in [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md).
 - Stage 16 records the external beta plan, participant/workflow criteria, bug bar, privacy-safe feedback routing, and `not-run` evidence gate in [External Beta Readiness](./external-beta-readiness.md).
+- Stage 17 records the final evidence gate in [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md): public launch blocked / local-package-readiness-only.
 
 ## Current Truthful Scope
 
 - The current accepted release state is bounded `release` for `local-cli-repository-readiness` only.
+- The current Stage 17 final gate blocks public launch and allows only bounded local/package readiness continuation.
 - Local checkout users build with `pnpm build`; generated `dist` is not promised in a clean checkout.
 - Local support diagnostics are provided by `support-bundle` and redacted runtime diagnostics by `runtime-env-inspect --redacted`.
 - Local tarball proof is limited to controlled `.tgz` install/uninstall and optional explicit two-tarball upgrade/rollback smoke.
@@ -68,5 +71,6 @@ Do not claim:
 - native App Server memory, broad memory-provider support, durable provider cleanup beyond documented scoped behavior, provider-wide cleanup, true restore, or provider reliability;
 - full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness, stable compatibility for experimental CLI commands, or any stable JS/TS API.
 - completed external beta, beta-user validation, or public-readiness approval before Stage 16 records real participant evidence and accepted exit review.
+- public launch approval before Stage 17 is replaced by a later evidence-backed approval decision.
 
-Public-facing docs should use [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md), [Public Launch Scope](./public-launch-scope.md), and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as starting locks before changing scope or claiming evidence.
+Public-facing docs should use [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md), [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md), [Public Launch Scope](./public-launch-scope.md), and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as starting locks before changing scope or claiming evidence.

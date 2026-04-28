@@ -48,6 +48,15 @@ type DistributionValidator = {
 	validateSbomDocument(sbomDocument: unknown): string[]
 }
 
+type PublicReleaseFoundationValidator = {
+	validatePublicClaims(input: {
+		documents: Array<{ filePath: string; text: string }>
+		externalBetaNotRun: boolean
+		missingPublicArtifactProof: boolean
+		packagePrivate: boolean
+	}): string[]
+}
+
 async function readPackageJson(): Promise<PackageJson> {
 	return JSON.parse(await readFile('package.json', 'utf8')) as PackageJson
 }
@@ -65,6 +74,13 @@ async function loadReleaseCandidateValidator(): Promise<ReleaseCandidateValidato
 async function loadDistributionValidator(): Promise<DistributionValidator> {
 	// @ts-expect-error The distribution validator is a Node ESM script, not TS source.
 	return (await import('../../scripts/check-distribution.js')) as DistributionValidator
+}
+
+async function loadPublicReleaseFoundationValidator(): Promise<PublicReleaseFoundationValidator> {
+	// @ts-expect-error The public release validator is a Node ESM script, not TS source.
+	const validator = await import('../../scripts/check-public-release-foundation.js')
+
+	return validator as PublicReleaseFoundationValidator
 }
 
 describe('package distribution metadata', () => {
@@ -267,6 +283,95 @@ describe('package distribution metadata', () => {
 			'npm provenance is deferred because package publication is blocked by private: true and no npm publish command may run in this stage.',
 			'Package signing is deferred because no local signing identity or publication signing infrastructure is configured in this stage.',
 		])
+	})
+
+	it('rejects public launch claims while the package remains private', async () => {
+		const { validatePublicClaims } = await loadPublicReleaseFoundationValidator()
+
+		expect(
+			validatePublicClaims({
+				documents: [
+					{
+						filePath: 'docs/claim.md',
+						text: 'Public launch is approved for general availability.',
+					},
+				],
+				externalBetaNotRun: false,
+				missingPublicArtifactProof: false,
+				packagePrivate: true,
+			}),
+		).toEqual([
+			'docs/claim.md:1 claims public launch, GA, or production approval claim while package.json private is true: Public launch is approved for general availability.',
+		])
+	})
+
+	it('rejects completed external beta claims while Stage 16 is not-run', async () => {
+		const { validatePublicClaims } = await loadPublicReleaseFoundationValidator()
+
+		expect(
+			validatePublicClaims({
+				documents: [
+					{
+						filePath: 'docs/beta.md',
+						text: 'External beta has been completed.',
+					},
+				],
+				externalBetaNotRun: true,
+				missingPublicArtifactProof: false,
+				packagePrivate: false,
+			}),
+		).toEqual([
+			'docs/beta.md:1 claims external beta completion claim while external beta evidence is not-run: External beta has been completed.',
+		])
+	})
+
+	it('rejects public provenance SBOM and registry claims without proof', async () => {
+		const { validatePublicClaims } = await loadPublicReleaseFoundationValidator()
+
+		expect(
+			validatePublicClaims({
+				documents: [
+					{
+						filePath: 'docs/supply.md',
+						text: [
+							'npm provenance is available.',
+							'SBOM retention is complete.',
+							'public registry install is supported.',
+						].join('\n'),
+					},
+				],
+				externalBetaNotRun: false,
+				missingPublicArtifactProof: true,
+				packagePrivate: false,
+			}),
+		).toEqual([
+			'docs/supply.md:1 claims public provenance claim while public provenance/SBOM/registry proof is missing: npm provenance is available.',
+			'docs/supply.md:2 claims retained or public SBOM claim while public provenance/SBOM/registry proof is missing: SBOM retention is complete.',
+			'docs/supply.md:3 claims public registry proof claim while public provenance/SBOM/registry proof is missing: public registry install is supported.',
+		])
+	})
+
+	it('allows explicit forbidden-claim boundary text', async () => {
+		const { validatePublicClaims } = await loadPublicReleaseFoundationValidator()
+
+		expect(
+			validatePublicClaims({
+				documents: [
+					{
+						filePath: 'docs/boundary.md',
+						text: [
+							'Do not claim public launch is approved.',
+							'Public launch is blocked.',
+							'External beta is not-run and completed beta claims are forbidden.',
+							'SBOM retention is deferred.',
+						].join('\n'),
+					},
+				],
+				externalBetaNotRun: true,
+				missingPublicArtifactProof: true,
+				packagePrivate: true,
+			}),
+		).toEqual([])
 	})
 })
 

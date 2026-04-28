@@ -7,7 +7,7 @@ Primary sources: [canonical specification](./agent_orchestrator_final_spec_v2.md
 
 `dennett-agent-orchestrator` is a Codex-first orchestrator for portable agent runs. It stores agents as JSON files, executes their graphs through runtime adapters, preserves only the operational state needed for chats and resume, and keeps the agent definition separate from chats, events, and interfaces. The product CLI is a user-facing interface over Core; Codex execution belongs behind the App Server-native runtime adapter boundary.
 
-The current executable scope is bounded local CLI/repository readiness. It includes local graph execution, local SQLite state, a Codex App Server adapter path for the documented subset, local memory-provider registration, a Mem0-first provider path, support diagnostics, and selected stable CLI commands. It does not claim public npm publication, hosted service operation, production readiness, broad provider support, native App Server memory, full App Server certification, full user interaction readiness, complete managed-subagent orchestration, or complete public Builder 2.0 readiness.
+The current executable scope is bounded local CLI/repository readiness. Stage 17 explicitly blocks public launch and allows only bounded local/package readiness continuation. The local scope includes local graph execution, local SQLite state, a Codex App Server adapter path for the documented subset, local memory-provider registration, a Mem0-first provider path, support diagnostics, and selected stable CLI commands. It does not claim public npm publication, hosted service operation, production readiness, broad provider support, native App Server memory, full App Server certification, full user interaction readiness, complete managed-subagent orchestration, completed external beta, or complete public Builder 2.0 readiness.
 
 ## Clean Checkout Quickstart
 
@@ -34,7 +34,7 @@ That command proves only a controlled local `.tgz` install/uninstall smoke in a 
 
 ## Public Claim Boundary
 
-Before writing README text, examples, release notes, issue templates, or public-facing docs, check [Public Docs, Onboarding, And Claims](./docs/21-public-launch-readiness/public-docs-onboarding-and-claims.md). Public claims must stay inside the bounded local CLI/repository evidence unless a later owner document records the required proof and explicitly expands the scope.
+Before writing README text, examples, release notes, issue templates, or public-facing docs, check [Final Public Launch Gate Decision](./docs/21-public-launch-readiness/final-public-launch-gate-decision.md) and [Public Docs, Onboarding, And Claims](./docs/21-public-launch-readiness/public-docs-onboarding-and-claims.md). Public claims must stay inside the bounded local CLI/repository evidence unless a later owner document records the required proof and explicitly expands the scope.
 
 Allowed high-level claim:
 
