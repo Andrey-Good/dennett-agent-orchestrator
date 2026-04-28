@@ -3,7 +3,7 @@
 <a id="english"></a>
 # Release Engineering And Supply Chain
 
-Status: canonical Stage 4 release-engineering and supply-chain foundation for the `cli-package-first-public-launch` target. This document records the current package foundation, deterministic guards, and remaining blockers. It is not publication proof, a provenance attestation, or a public distribution claim.
+Status: canonical Stage 4 release-engineering and supply-chain foundation for the `cli-package-first-public-launch` target. This document records the private package foundation, deterministic guards, and publication blockers. Stage 11 owns local tarball distribution proof. This document is not publication proof, a provenance attestation, or a public distribution claim.
 
 Related documents:
 
@@ -13,12 +13,14 @@ Related documents:
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
 - [Release Gates](../11-hardening/release-gates.md)
+- [Stage 11 Distribution Proof](./distribution-proof.md)
+- [Supply Chain Attestation](./supply-chain-attestation.md)
 
 ## Stage 4 Decision
 
-The selected launch shape remains CLI/package-first, but the package must stay private until Stage 11 distribution proof or a later explicit release-approval task changes that state.
+The selected launch shape remains CLI/package-first, but the package must stay private until a later explicit release-approval task changes that state.
 
-Stage 4 may establish deterministic local checks and unambiguous package metadata. It must not publish to npm, set `private` to `false`, create tags, push commits, claim package installation proof, or imply public distribution readiness.
+Stage 4 establishes deterministic local checks and unambiguous private package metadata. It must not publish to npm, set `private` to `false`, create tags, push commits, claim public package installation proof, or imply public distribution readiness. Local `.tgz` install/uninstall proof, upgrade/rollback harness boundaries, and local SBOM validation are owned by [Stage 11 Distribution Proof](./distribution-proof.md).
 
 ## Current Package Foundation
 
@@ -30,11 +32,12 @@ The current foundation is:
 - package contents are constrained by the `files` allowlist;
 - `scripts/check-packlist.js` validates the dry-run npm package inventory;
 - `scripts/check-distribution.js` validates generated distribution shape and CLI help;
+- `scripts/check-distribution.js` also owns Stage 11 local package install/uninstall proof, explicit two-tarball upgrade/rollback proof, and local SBOM validation;
 - `scripts/check-release-candidate.js` validates repository hygiene for candidate contents;
 - `SECURITY.md` defines the current vulnerability-reporting and supported-surface boundary;
 - CI runs typecheck, lint, tests, build, generated distribution checks, package inventory checks, and release-candidate hygiene checks.
 
-These controls are foundation checks only. They do not prove that the package is published, installable from a public registry, signed, reproducible across platforms, or safe for general availability.
+These controls are private package foundation checks plus local artifact proof hooks. They do not prove that the package is published, installable from a public registry, signed, reproducible across platforms, or safe for general availability.
 
 ## Deterministic Foundation Guard
 
@@ -55,10 +58,10 @@ The guard may report future publication blockers as non-failing output when they
 The CLI/package-first public launch remains blocked until later stages produce evidence for:
 
 - package namespace ownership and final package metadata such as repository, bugs, homepage, and keywords;
-- clean install, upgrade, uninstall, and rollback proof from the selected artifact;
+- public registry install, upgrade, uninstall, and rollback proof from the selected public artifact;
 - public registry publication dry run or actual approved publication evidence;
-- SBOM generation and retention policy;
-- provenance, signing, or an explicit decision that names what is not signed and why;
+- retained SBOM artifact path, publication attachment, and retention policy;
+- provenance, signing, or an explicit public-release decision that names what is not signed and why;
 - dependency audit posture and license-review process;
 - release notes, changelog, versioning, branch, tag, and rollback process;
 - OS-specific install and CLI smoke proof for every claimed supported OS;
@@ -71,7 +74,7 @@ Do not claim:
 
 - the package has been published;
 - npm or another public registry distribution is proven;
-- public install, upgrade, uninstall, rollback, SBOM, signing, provenance, or reproducible-build proof exists;
+- public registry install, upgrade, uninstall, rollback, retained SBOM, signing, provenance, or reproducible-build proof exists;
 - package namespace ownership has been verified unless the proving task records evidence;
 - hosted, managed, installer, container, or signed-binary launch is in scope;
 - Stage 4 alone makes the product generally available or production ready.

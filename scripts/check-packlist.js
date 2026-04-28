@@ -20,7 +20,10 @@ const REQUIRED_PACKAGE_SCRIPTS = [
 	'dist:check',
 	'packlist:check',
 	'public-release-foundation:check',
+	'package:local-install:proof',
+	'package:upgrade-rollback:proof',
 	'package:check',
+	'supply-chain:local:proof',
 	'typecheck',
 ]
 
@@ -93,6 +96,17 @@ export function validatePackageMetadata(packageJson) {
 
 	if (!isNodeFloorSupported(packageJson.engines?.node)) {
 		errors.push('package.json engines.node must be >=22.13.0 or stricter.')
+	}
+
+	if (typeof packageJson.description !== 'string' || packageJson.description.length === 0) {
+		errors.push('package.json description must describe the local package artifact.')
+	}
+
+	if (
+		packageJson.repository?.type !== 'git' ||
+		packageJson.repository?.url !== 'https://github.com/Andrey-Good/dennett-agent-orchestrator'
+	) {
+		errors.push('package.json repository metadata must match the verified origin remote.')
 	}
 
 	if (JSON.stringify(packageJson.files) !== JSON.stringify(EXPECTED_FILES_ALLOWLIST)) {

@@ -51,7 +51,7 @@ Primary threat categories:
 | Unsafe filesystem, process, or network access | CLI execution runs with the user's local OS privileges and may invoke runtimes or tools that can reach local resources. | Do not imply sandboxing beyond verified runtime capability. Capability-gate any filesystem/process/network surface and document the effective runtime policy. |
 | Memory provider data leakage | Memory writes may persist sensitive content in Mem0 or another provider. Prompt-rendered memory may be sent to the runtime. | Require explicit memory bindings, user-owned provider registration, visible provider boundaries, scoped cleanup language, and no broad deletion or restore claims. |
 | Runtime/provider data exposure | Prompts, inputs, memory context, outputs, and account metadata may flow to a runtime provider. | Document exactly what the adapter sends, distinguish local diagnostics from provider processing, and require provider-specific user notice. |
-| Dependency and supply-chain risk | Package install executes code and depends on the JavaScript and Python ecosystems plus runtime/provider tooling. | Stage 4 must prove artifact inventory, clean install, provenance/signing decision, lockfile posture, and rollback or uninstall behavior. |
+| Dependency and supply-chain risk | Package install executes code and depends on the JavaScript and Python ecosystems plus runtime/provider tooling. | Stage 4 must keep the private package foundation and inventory guards; Stage 11 must own local tarball install/uninstall proof, upgrade/rollback harness limits, local SBOM validation, and provenance/signing deferrals. |
 | Dangerous Builder output | Builder-authored drafts may include unsafe bindings, unsupported fields, or risky instructions. | Treat Builder output as untrusted draft JSON until validation and human review; Builder must not register providers, store secrets, deploy silently, or bypass contracts. |
 | MCP/plugin/skill risk | MCP servers, plugins, and skills can expand tool access and data movement. | Treat them as capability grants, not passive metadata; require explicit binding, runtime support, and permission documentation before public claims. |
 | Hosted-future isolation risk | A later hosted service would add tenants, shared infrastructure, server-side secrets, support access, observability, and incident obligations. | Keep hosted launch blocked until tenant isolation, data-processing, abuse, incident, observability, and deletion controls are designed and proven. |
@@ -155,9 +155,9 @@ Retention baseline:
 
 - local state remains on the user's machine until the user deletes the relevant workspace, database, config, provider storage, or generated artifacts;
 - external memory/provider state remains with that provider until deleted through the provider or a proven supported cleanup path;
-- package uninstall alone must not be described as deleting all local or provider data unless Stage 4 proves that behavior for the selected artifact.
+- package uninstall alone must not be described as deleting all local or provider data. Stage 11 proves only removal of the installed package directory and bin from a temporary npm consumer project.
 
-Before public package launch, documentation must provide a deletion map for the selected CLI/package artifact: local state locations, generated artifact locations, provider registry/config locations, what uninstall removes, what it leaves behind, and how to remove Mem0/provider data within the supported scope.
+Before public package launch, documentation must provide a deletion map for the selected CLI/package artifact: local state locations, generated artifact locations, provider registry/config locations, what uninstall removes, what it leaves behind, and how to remove Mem0/provider data within the supported scope. Stage 11 provides only the local package uninstall boundary, not a full application-data deletion map.
 
 ## Telemetry Policy
 
@@ -220,7 +220,7 @@ Hosted or managed launch cannot proceed until a later scope decision and evidenc
 
 Later public-launch stages must not move the CLI/package-first target forward unless the following are satisfied or explicitly kept deferred:
 
-- Stage 4 proves the selected package artifact, inventory, clean install, uninstall or rollback behavior, provenance/signing decision, and dependency/license posture.
+- Stage 4 records the selected private package foundation and inventory controls; Stage 11 records local tarball install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and unsigned/unattested deferrals.
 - Stage 5 publishes the exact supported Codex App Server subset and runtime data-handling boundaries.
 - Stage 6 publishes provider-specific memory data handling, cleanup, retention, and unsupported cases.
 - Stage 7 publishes user-visible interaction data handling for prompts, replies, blocked waits, and resume.
@@ -279,7 +279,7 @@ Hosted и managed запуск остаются отложенными. Текс
 | Unsafe filesystem, process или network access | CLI запускается с локальными правами пользователя и может вызывать runtimes или tools с доступом к local resources. | Не обещать sandboxing сверх проверенной runtime capability. Capability-gate любые filesystem/process/network surfaces и документировать effective runtime policy. |
 | Memory provider data leakage | Memory writes могут сохранять sensitive content в Mem0 или другом provider. Prompt-rendered memory может отправляться runtime. | Требовать explicit memory bindings, user-owned provider registration, видимые provider boundaries, scoped cleanup language и отсутствие broad deletion/restore claims. |
 | Runtime/provider data exposure | Prompts, inputs, memory context, outputs и account metadata могут передаваться runtime provider. | Документировать, что отправляет adapter, отделять local diagnostics от provider processing и требовать provider-specific user notice. |
-| Dependency and supply-chain risk | Package install выполняет code и зависит от JavaScript/Python ecosystems и runtime/provider tooling. | Stage 4 должен доказать artifact inventory, clean install, provenance/signing decision, lockfile posture и rollback/uninstall behavior. |
+| Dependency and supply-chain risk | Package install выполняет code и зависит от JavaScript/Python ecosystems и runtime/provider tooling. | Stage 4 keeps private package foundation and inventory guards; Stage 11 owns local tarball install/uninstall proof, upgrade/rollback harness limits, local SBOM validation и provenance/signing deferrals. |
 | Dangerous Builder output | Builder drafts могут содержать unsafe bindings, unsupported fields или risky instructions. | Считать Builder output недоверенным draft JSON до validation и human review; Builder не должен register providers, store secrets, silently deploy или bypass contracts. |
 | MCP/plugin/skill risk | MCP servers, plugins и skills расширяют tool access и data movement. | Считать их capability grants, требовать explicit binding, runtime support и permission documentation. |
 | Hosted-future isolation risk | Hosted service добавит tenants, shared infrastructure, server-side secrets, support access, observability и incident obligations. | Блокировать hosted launch до design и proof для tenant isolation, data processing, abuse, incident, observability и deletion controls. |
@@ -383,7 +383,7 @@ Baseline retention:
 
 - local state остается на машине пользователя, пока пользователь не удалит workspace, database, config, provider storage или generated artifacts;
 - external memory/provider state остается у provider, пока не удалено через provider или доказанный supported cleanup path;
-- package uninstall нельзя описывать как удаление всех local/provider data, пока Stage 4 не докажет это для selected artifact.
+- package uninstall нельзя описывать как удаление всех local/provider data. Stage 11 доказывает только removal of the installed package directory and bin from a temporary npm consumer project.
 
 До public package launch документация должна дать deletion map для selected CLI/package artifact: local state locations, generated artifact locations, provider registry/config locations, что uninstall удаляет, что остается, и как удалить Mem0/provider data в supported scope.
 
@@ -448,7 +448,7 @@ Hosted или managed launch невозможен, пока later scope decision
 
 Следующие public-launch stages не должны продвигать CLI/package-first target, пока эти пункты не выполнены или явно не оставлены deferred:
 
-- Stage 4 доказывает selected package artifact, inventory, clean install, uninstall или rollback behavior, provenance/signing decision и dependency/license posture.
+- Stage 4 records selected private package foundation and inventory controls; Stage 11 records local tarball install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation и unsigned/unattested deferrals.
 - Stage 5 публикует exact supported Codex App Server subset и runtime data-handling boundaries.
 - Stage 6 публикует provider-specific memory data handling, cleanup, retention и unsupported cases.
 - Stage 7 публикует user-visible interaction data handling для prompts, replies, blocked waits и resume.

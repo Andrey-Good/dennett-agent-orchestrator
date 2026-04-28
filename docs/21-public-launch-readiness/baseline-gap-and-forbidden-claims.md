@@ -48,7 +48,7 @@ These items may be described only inside the local CLI/repository boundary:
 | --- | --- | --- |
 | Stage 2: Public Launch Scope Decision | No public launch target is selected beyond the bounded local release. | Explicit scope document naming included/excluded launch surfaces, user personas, support boundary, rollback expectations, and public claim language. |
 | Stage 3: Security, Privacy, Legal Foundation | No public security, privacy, or legal readiness claim is made. | Threat model, secret-handling review, privacy/data-retention statement, license/package review, disclosure process, and evidence that docs and examples do not expose secrets or unsupported data promises. |
-| Stage 4: Release Engineering And Supply Chain | No npm/public package, installer, container, signed artifact, provenance, or artifact rollback readiness is proven. | Clean-environment install or deployment proof for each selected artifact, reproducible build expectations, artifact inventory, provenance/signing decision, rollback/uninstall proof, and CI parity with local gates. |
+| Stage 4: Release Engineering And Supply Chain | Stage 4 proves only the private package and release-engineering foundation; no npm/public package, installer, container, signed artifact, provenance, or public artifact rollback readiness is proven. | Private packaging boundaries, repository-local release gates, artifact inventory inputs, and reproducible-build expectations. Clean-environment install/deployment proof for selected distribution artifacts, provenance/signing/publication decisions, rollback/uninstall proof, and CI OS parity remain Stage 11 or later release-approval evidence. |
 | Stage 5: Runtime/App Server Certification | No full App Server certification is claimed. | Supported runtime matrix, App Server primitive mapping, model/options compatibility evidence, timeout/failure-mode evidence, auth/account/rate-limit behavior, and redacted live runs for each certified surface. |
 | Stage 6: Memory Productization | Memory remains bounded to local provider registration, Mem0-first direct use, and narrow prompt-rendered runtime memory. | Provider readiness matrix, durable cleanup/restore semantics where claimed, provider isolation proof, reliability/throttling proof, backup or deletion guarantees, and documented limits for every supported provider. |
 | Stage 7: Full User Interaction Layer | Current interaction proof is narrower than a full public user-interaction surface. | End-to-end evidence for blocked prompts, replies, resume-after-reply, unsupported prompt errors, risky mid-run change policy, CLI/user-facing semantics, and redacted transcripts across supported runtimes. |
@@ -95,7 +95,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 
 - Stage 2 may narrow, defer, or select a public-launch scope, but it must not erase this forbidden-claim lock.
 - Stage 3 must decide security, privacy, and legal prerequisites before public distribution or hosted claims.
-- Stage 4 must prove each selected distribution artifact instead of inferring artifact readiness from repository gates.
+- Stage 4 owns the private package foundation only; Stage 11 must prove each selected distribution artifact instead of inferring artifact readiness from repository gates.
 - Stage 5 must certify supported runtime/App Server surfaces explicitly.
 - Stage 6 must productize memory only for provider behavior that has real cleanup, reliability, and support evidence.
 - Stage 7 must prove full interaction semantics before user-facing interaction claims expand.
@@ -151,7 +151,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 | --- | --- | --- |
 | Stage 2: Public Launch Scope Decision | Public launch target не выбран за пределами bounded local release. | Explicit scope document с included/excluded launch surfaces, user personas, support boundary, rollback expectations и public claim language. |
 | Stage 3: Security, Privacy, Legal Foundation | Нет claim о public security, privacy или legal readiness. | Threat model, secret-handling review, privacy/data-retention statement, license/package review, disclosure process и evidence, что docs/examples не раскрывают secrets или unsupported data promises. |
-| Stage 4: Release Engineering And Supply Chain | Нет доказанной готовности npm/public package, installer, container, signed artifact, provenance или artifact rollback. | Clean-environment install или deployment proof для каждого выбранного artifact, reproducible build expectations, artifact inventory, provenance/signing decision, rollback/uninstall proof и CI parity с local gates. |
+| Stage 4: Release Engineering And Supply Chain | Stage 4 доказывает только private package и release-engineering foundation; готовность npm/public package, installer, container, signed artifact, provenance или public artifact rollback не доказана. | Private packaging boundaries, repository-local release gates, artifact inventory inputs и reproducible-build expectations. Clean-environment install/deployment proof для выбранных distribution artifacts, provenance/signing/publication decisions, rollback/uninstall proof и CI OS parity остаются evidence для Stage 11 или later release approval. |
 | Stage 5: Runtime/App Server Certification | Full App Server certification не заявляется. | Supported runtime matrix, App Server primitive mapping, model/options compatibility evidence, timeout/failure-mode evidence, auth/account/rate-limit behavior и redacted live runs для каждой certified surface. |
 | Stage 6: Memory Productization | Memory ограничена local provider registration, Mem0-first direct use и narrow prompt-rendered runtime memory. | Provider readiness matrix, durable cleanup/restore semantics where claimed, provider isolation proof, reliability/throttling proof, backup или deletion guarantees и documented limits для каждого supported provider. |
 | Stage 7: Full User Interaction Layer | Текущий interaction proof уже, чем полный public user-interaction surface. | End-to-end evidence для blocked prompts, replies, resume-after-reply, unsupported prompt errors, risky mid-run change policy, CLI/user-facing semantics и redacted transcripts across supported runtimes. |
@@ -198,7 +198,7 @@ Stage 1 не выбирает public launch scope. Он создает baseline,
 
 - Stage 2 может сузить, отложить или выбрать public-launch scope, но не должен стирать этот forbidden-claim lock.
 - Stage 3 должен решить security, privacy и legal prerequisites до claims о public distribution или hosted behavior.
-- Stage 4 должен доказать каждый выбранный distribution artifact, а не выводить artifact readiness из repository gates.
+- Stage 4 владеет private package foundation only; Stage 11 должен доказать каждый выбранный distribution artifact, а не выводить artifact readiness из repository gates.
 - Stage 5 должен явно сертифицировать supported runtime/App Server surfaces.
 - Stage 6 должен productize memory только для provider behavior с реальным cleanup, reliability и support evidence.
 - Stage 7 должен доказать full interaction semantics перед расширением user-facing interaction claims.

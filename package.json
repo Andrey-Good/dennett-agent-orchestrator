@@ -1,9 +1,14 @@
 {
 	"name": "dennett-agent-orchestrator",
 	"version": "0.0.0",
+	"description": "Codex-first orchestrator for portable agent runs.",
 	"private": true,
 	"license": "Apache-2.0",
 	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Andrey-Good/dennett-agent-orchestrator"
+	},
 	"bin": {
 		"dennett-agent-orchestrator": "./dist/src/interfaces/cli.js"
 	},
@@ -26,6 +31,9 @@
 		"packlist:check": "node scripts/check-packlist.js",
 		"public-release-foundation:check": "node scripts/check-public-release-foundation.js",
 		"release-candidate:check": "node scripts/check-release-candidate.js",
+		"package:local-install:proof": "node scripts/check-distribution.js local-install-proof",
+		"package:upgrade-rollback:proof": "node scripts/check-distribution.js upgrade-rollback-proof",
+		"supply-chain:local:proof": "node scripts/check-distribution.js local-sbom-proof",
 		"package:check": "pnpm build && pnpm dist:check && pnpm packlist:check && pnpm public-release-foundation:check",
 		"test": "vitest run --config vitest.config.ts",
 		"test:watch": "vitest --config vitest.config.ts",

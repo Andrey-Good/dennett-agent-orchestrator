@@ -15,6 +15,10 @@ Related documents:
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Builder 2.0 Productization](./builder-2-0-productization.md)
 - [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
+- [Stage 11 Distribution Proof](./distribution-proof.md)
+- [Install, Upgrade, Uninstall, And Rollback](./install-upgrade-uninstall-rollback.md)
+- [Package Identity And Registry](./package-identity-and-registry.md)
+- [Supply Chain Attestation](./supply-chain-attestation.md)
 
 ## Decision
 
@@ -24,7 +28,7 @@ The selected Part 1 public-launch target is:
 
 This means the first public launch should be a user-installed CLI/package distribution, with repository checkout support preserved for contributors and early technical users.
 
-The launch target is selected because current evidence supports a local CLI/repository product shape and build-local package dry-run checks better than it supports any hosted or managed service. Stage 4 must still prove the actual selected package or install artifact before any publication or install claim is made.
+The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted or managed service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
 
 ## Hosted And Managed Status
 
@@ -45,15 +49,15 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 
 | Area | Stage 2 launch-scope status | Public-launch boundary |
 | --- | --- | --- |
-| Launch form | Selected target: CLI/package-first. | Not ready or published until Stage 3 security/legal and Stage 4 release-engineering gates pass for the chosen artifact. |
+| Launch form | Selected target: CLI/package-first. | Not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen public artifact. |
 | Repository checkout | Supported as contributor and local-user path by the bounded `local-cli-repository-readiness` evidence. | Users build from checkout with `pnpm build`; generated `dist` is not promised in a clean checkout. |
-| Package distribution | In target, but not yet proven for publication. | Stage 4 must prove clean install, CLI smoke, package inventory, uninstall or rollback, provenance/signing decision, and CI parity before publication. |
+| Package distribution | Local tarball proof exists; public registry publication is not proven. | Stage 11 proves controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration. It does not prove public npm publication, signing, provenance, retained SBOMs, or public registry install. |
 | Hosted/managed service | Deferred. | No hosted, managed, SaaS, uptime, multi-tenant, or hosted rollback claim. |
 | Primary OS evidence | Windows local evidence. | Windows is the only evidenced OS baseline for current local release proof. |
-| Linux and macOS | Target candidates only. | No public support claim until clean install, gates, CLI smoke, and runtime/provider proof are recorded on each OS. |
+| Linux and macOS | CI package-proof jobs are configured as evidence candidates. | No public support claim until green package proof, gates, CLI smoke, and runtime/provider proof are recorded for each claimed OS. |
 | Node.js | `package.json` requires `>=22.13.0`; evidence records Node v22.17.1 and `node:sqlite` import proof. | Public launch must require Node.js `>=22.13.0` unless Stage 4 changes package metadata through its own approved task. |
-| Package manager | Canonical workflow is `pnpm`; package metadata records `pnpm@10.33.0`. | Contributors and source-checkout users should use `pnpm 10.33.0` or a compatible pnpm 10.x path proven by Stage 4. `npm` may be used only where the package/install path explicitly requires it. |
-| npm package manager | Compatibility tool only at Stage 2. | Do not claim npm is the canonical repository workflow. Do not claim npm publication before Stage 4 proof. |
+| Package manager | Canonical workflow is `pnpm`; package metadata records `pnpm@10.33.0`. | Contributors and source-checkout users should use `pnpm 10.33.0` or a compatible pnpm 10.x path proven by later evidence. `npm` may be used only where the package/install path explicitly requires it. |
+| npm package manager | Consumer-package tool for local tarball proof. | Do not claim npm is the canonical repository workflow. Do not claim npm publication or public `npm install dennett-agent-orchestrator` support before later registry proof and release approval. |
 | Runtime provider | Codex App Server adapter path only, with narrow local proof for runtime discovery, environment inspection, and minimal graph execution. | Do not claim full App Server certification, all model/options support, or broad runtime-provider reliability. |
 | Memory provider | Direct local Mem0 provider path, plus narrow prompt-rendered Codex memory context and success-only provider writes. | Do not claim native App Server memory, broad memory-provider support, durable cleanup beyond verified scoped Mem0 namespace cleanup, true restore, provider-wide cleanup, or provider reliability. |
 | Local state | SQLite local metadata and run state. | SQLite remains local and derivative, not hosted storage or a distributed operational backend. |
@@ -62,7 +66,7 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 
 | Capability | Public-launch classification | Boundary |
 | --- | --- | --- |
-| CLI execution from installed package or local checkout | Included target, pending Stage 4 artifact proof. | Only commands and outputs frozen by Stage 10 may be called stable. |
+| CLI execution from installed package or local checkout | Included target for repository checkout and local `.tgz` proof. | Only commands and outputs frozen by Stage 10 may be called stable. Public registry install remains unproven. |
 | Agent JSON validation and contract examples | Included target. | Must stay within documented schemas and examples; no hidden builder-only or hosted-only behavior. |
 | Local graph execution | Included target for proven local CLI paths. | Does not imply hosted execution, production load, or automatic live crash recovery. |
 | Codex App Server runtime | Limited/beta for the certified subset. | Stage 5 must name supported models/options and unsupported cases before public claims expand. |
@@ -92,7 +96,7 @@ Do not claim:
 
 - Dennett is already publicly launched, generally available, fully released, or production ready because Stage 2 selected a launch target.
 - Hosted service operation, managed deployment, SaaS readiness, uptime, multi-tenancy, hosted rollback, or hosted support operations are in scope.
-- npm publication, installer distribution, container distribution, signed artifacts, provenance, or package rollback are proven before Stage 4.
+- npm publication, installer distribution, container distribution, signed artifacts, provenance, retained SBOMs, or public package rollback are proven by Stage 11 local tarball proof.
 - Linux or macOS are publicly supported before OS-specific evidence exists.
 - Full Codex App Server certification is complete.
 - Any non-Codex runtime provider is publicly supported.
@@ -106,7 +110,9 @@ Do not claim:
 The CLI/package-first public launch remains blocked until all selected launch-scope gates pass:
 
 - Stage 3 security, privacy, legal, secret-handling, license/package, disclosure, and data-retention decisions are complete.
-- Stage 4 selects the actual artifact and proves clean install, CLI smoke, package inventory, uninstall or rollback, provenance/signing decision, and CI parity.
+- Stage 4 records the private package and supply-chain foundation.
+- Stage 11 records controlled local `.tgz` install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration.
+- A later release-approval task records registry ownership, public publication controls, retained evidence, signing/provenance decisions, and public install proof.
 - Stage 5 certifies the exact Codex App Server runtime subset and unsupported model/option cases.
 - Stage 6 productizes the exact memory provider boundary and cleanup/reliability limits.
 - Stage 7 records user-visible interaction semantics and unsupported prompt/reply cases.
@@ -150,7 +156,7 @@ A later stage may expand the scope only when:
 
 Это означает, что первый публичный запуск должен быть CLI/package distribution, устанавливаемой пользователем, при сохранении repository checkout как пути для контрибьюторов и ранних технических пользователей.
 
-Цель выбрана потому, что текущие доказательства лучше поддерживают локальный CLI/repository product shape и build-local package dry-run checks, чем hosted или managed service. Stage 4 все еще должен доказать фактический выбранный package или install artifact перед любым claim о публикации или установке.
+Цель выбрана потому, что текущие доказательства лучше поддерживают локальный CLI/repository product shape и controlled local package proof, чем hosted или managed service. Stage 4 владеет private package and supply-chain foundation. Stage 11 владеет local `.tgz` distribution proof. Public registry publication остается blocked до отдельной release-approval task с registry ownership, publication controls, retained evidence и public install proof.
 
 ## Статус Hosted И Managed
 
@@ -171,15 +177,15 @@ Hosted или managed launch может войти в scope только чер�
 
 | Область | Stage 2 статус launch-scope | Граница публичного запуска |
 | --- | --- | --- |
-| Launch form | Выбранная цель: CLI/package-first. | Не готово и не опубликовано, пока Stage 3 security/legal и Stage 4 release-engineering gates не пройдут для выбранного artifact. |
+| Launch form | Выбранная цель: CLI/package-first. | Не готово и не опубликовано, пока security/legal, release-engineering, Stage 11 distribution proof и later release-approval gates не пройдут для выбранного public artifact. |
 | Repository checkout | Поддерживается как путь для контрибьюторов и локальных пользователей доказательствами bounded `local-cli-repository-readiness`. | Пользователи собирают из checkout через `pnpm build`; generated `dist` не обещается в clean checkout. |
-| Package distribution | В target, но еще не доказана для publication. | Stage 4 должен доказать clean install, CLI smoke, package inventory, uninstall или rollback, provenance/signing decision и CI parity перед publication. |
+| Package distribution | Local tarball proof существует; public registry publication не доказана. | Stage 11 доказывает controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation и CI package-proof job configuration. Это не доказывает public npm publication, signing, provenance, retained SBOMs или public registry install. |
 | Hosted/managed service | Отложено. | Нет hosted, managed, SaaS, uptime, multi-tenant или hosted rollback claim. |
 | Primary OS evidence | Windows local evidence. | Windows - единственный evidenced OS baseline для текущего local release proof. |
-| Linux и macOS | Только target candidates. | Нет public support claim до clean install, gates, CLI smoke и runtime/provider proof на каждой OS. |
+| Linux и macOS | CI package-proof jobs are configured as evidence candidates. | Нет public support claim до green package proof, gates, CLI smoke и runtime/provider proof на каждой claimed OS. |
 | Node.js | `package.json` требует `>=22.13.0`; evidence фиксирует Node v22.17.1 и `node:sqlite` import proof. | Public launch должен требовать Node.js `>=22.13.0`, если Stage 4 не изменит package metadata в своей approved task. |
-| Package manager | Канонический workflow - `pnpm`; package metadata фиксирует `pnpm@10.33.0`. | Контрибьюторы и source-checkout users должны использовать `pnpm 10.33.0` или compatible pnpm 10.x path, доказанный Stage 4. `npm` может использоваться только там, где package/install path явно этого требует. |
-| npm package manager | Compatibility tool только на Stage 2. | Не заявлять, что npm является canonical repository workflow. Не заявлять npm publication до Stage 4 proof. |
+| Package manager | Канонический workflow - `pnpm`; package metadata фиксирует `pnpm@10.33.0`. | Контрибьюторы и source-checkout users должны использовать `pnpm 10.33.0` или compatible pnpm 10.x path, доказанный later evidence. `npm` может использоваться только там, где package/install path явно этого требует. |
+| npm package manager | Consumer-package tool для local tarball proof. | Не заявлять, что npm является canonical repository workflow. Не заявлять npm publication или public `npm install dennett-agent-orchestrator` support до later registry proof and release approval. |
 | Runtime provider | Только Codex App Server adapter path, с узким local proof для runtime discovery, environment inspection и minimal graph execution. | Не заявлять full App Server certification, all model/options support или broad runtime-provider reliability. |
 | Memory provider | Direct local Mem0 provider path плюс narrow prompt-rendered Codex memory context и success-only provider writes. | Не заявлять native App Server memory, broad memory-provider support, durable cleanup beyond verified scoped Mem0 namespace cleanup, true restore, provider-wide cleanup или provider reliability. |
 | Local state | SQLite local metadata and run state. | SQLite остается local and derivative, а не hosted storage или distributed operational backend. |
@@ -188,7 +194,7 @@ Hosted или managed launch может войти в scope только чер�
 
 | Capability | Public-launch classification | Boundary |
 | --- | --- | --- |
-| CLI execution from installed package or local checkout | Included target, pending Stage 4 artifact proof. | Только commands and outputs, frozen by Stage 10, могут называться stable. |
+| CLI execution from installed package or local checkout | Included target для repository checkout и local `.tgz` proof. | Только commands and outputs, frozen by Stage 10, могут называться stable. Public registry install remains unproven. |
 | Agent JSON validation and contract examples | Included target. | Должны оставаться внутри documented schemas and examples; без hidden builder-only или hosted-only behavior. |
 | Local graph execution | Included target для proven local CLI paths. | Не означает hosted execution, production load или automatic live crash recovery. |
 | Codex App Server runtime | Limited/beta для certified subset. | Stage 5 должен назвать supported models/options и unsupported cases до расширения public claims. |
@@ -218,7 +224,7 @@ Hosted или managed launch может войти в scope только чер�
 
 - Dennett уже publicly launched, generally available, fully released или production ready из-за того, что Stage 2 выбрал launch target.
 - Hosted service operation, managed deployment, SaaS readiness, uptime, multi-tenancy, hosted rollback или hosted support operations входят в scope.
-- npm publication, installer distribution, container distribution, signed artifacts, provenance или package rollback доказаны до Stage 4.
+- npm publication, installer distribution, container distribution, signed artifacts, provenance, retained SBOMs или public package rollback доказаны Stage 11 local tarball proof.
 - Linux или macOS публично поддерживаются до появления OS-specific evidence.
 - Full Codex App Server certification завершена.
 - Любой non-Codex runtime provider публично поддерживается.
@@ -232,7 +238,9 @@ Hosted или managed launch может войти в scope только чер�
 CLI/package-first public launch остается blocked, пока все selected launch-scope gates не пройдут:
 
 - Stage 3 security, privacy, legal, secret-handling, license/package, disclosure и data-retention decisions завершены.
-- Stage 4 выбирает actual artifact и доказывает clean install, CLI smoke, package inventory, uninstall или rollback, provenance/signing decision и CI parity.
+- Stage 4 records the private package and supply-chain foundation.
+- Stage 11 records controlled local `.tgz` install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation и CI package-proof job configuration.
+- Later release-approval task records registry ownership, public publication controls, retained evidence, signing/provenance decisions и public install proof.
 - Stage 5 сертифицирует exact Codex App Server runtime subset и unsupported model/option cases.
 - Stage 6 productizes exact memory provider boundary и cleanup/reliability limits.
 - Stage 7 фиксирует user-visible interaction semantics и unsupported prompt/reply cases.

@@ -4,7 +4,7 @@
 
 This policy covers vulnerabilities in this repository and in the documented CLI/package-first launch path.
 
-Current public-launch readiness does not include a hosted service, managed deployment, installer, container, SLA, or long-term support promise. Reports about those deferred surfaces are useful as design input, but they are not supported deployed surfaces in this stage.
+Current public-launch readiness does not include a hosted service, managed deployment, installer, container, public npm publication, SLA, or long-term support promise. Reports about those deferred surfaces are useful as design input, but they are not supported deployed surfaces in this stage.
 
 ## Supported Versions
 
@@ -15,9 +15,9 @@ After the bounded Stage 10 CLI/API freeze, security reports are triaged for:
 - the commands labeled `[stable]` by CLI help;
 - the `[stable/safety-protocol]` memory cleanup flow;
 - exported JSON schema artifacts under `contracts/json-schema/*.schema.json`;
-- the selected CLI/package-first path once a later stage proves and publishes the package artifact.
+- the controlled local `.tgz` package proof path documented for Stage 11.
 
-Commands labeled `[experimental]`, deep imports from `dist` or `src`, older commits, forks, private modifications, generated local artifacts, and third-party provider deployments are outside this project's direct support boundary.
+Commands labeled `[experimental]`, deep imports from `dist` or `src`, older commits, forks, private modifications, generated local artifacts outside the documented Stage 11 proof path, public npm publication, and third-party provider deployments are outside this project's direct support boundary.
 
 ## Reporting A Vulnerability
 

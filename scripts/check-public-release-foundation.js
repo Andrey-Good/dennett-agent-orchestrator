@@ -12,7 +12,10 @@ const REQUIRED_SCRIPTS = [
 	'public-release-foundation:check',
 	'packlist:check',
 	'release-candidate:check',
+	'package:local-install:proof',
+	'package:upgrade-rollback:proof',
 	'package:check',
+	'supply-chain:local:proof',
 ]
 
 const REQUIRED_GUARD_FILES = [
@@ -90,9 +93,9 @@ async function validatePublicReleaseFoundation() {
 		futureBlockers.push('package.json keywords are not set.')
 	}
 
-	futureBlockers.push('SBOM generation and retention are not implemented.')
-	futureBlockers.push('Package provenance/signing proof is not implemented.')
-	futureBlockers.push('Public install, upgrade, uninstall, and rollback proof is not recorded.')
+	futureBlockers.push('SBOM retention and publication attachment are not implemented.')
+	futureBlockers.push('Package provenance/signing proof remains deferred to publication infrastructure.')
+	futureBlockers.push('Public registry install, upgrade, uninstall, and rollback proof is not recorded.')
 
 	return { errors, futureBlockers }
 }

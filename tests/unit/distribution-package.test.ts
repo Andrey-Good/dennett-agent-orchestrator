@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { PersistedRunSnapshot } from '../../src/core/state/types.js'
 import {
@@ -8,7 +9,12 @@ import {
 } from '../../src/interfaces/cli.js'
 
 type PackageJson = {
+	description?: string
 	private?: boolean
+	repository?: {
+		type?: string
+		url?: string
+	}
 	engines?: {
 		node?: string
 	}
@@ -28,6 +34,20 @@ type ReleaseCandidateValidator = {
 	}): string[]
 }
 
+type DistributionValidator = {
+	getSupplyChainDeferrals(): string[]
+	parseLocalInstallProofArgs(argv: string[]): { keepTemp: boolean }
+	parseLocalSbomProofArgs(
+		argv: string[],
+		cwd?: string,
+	): { fromTgz: string | undefined; keepTemp: boolean }
+	parseUpgradeRollbackProofArgs(
+		argv: string[],
+		cwd?: string,
+	): { fromTgz: string; toTgz: string; keepTemp: boolean }
+	validateSbomDocument(sbomDocument: unknown): string[]
+}
+
 async function readPackageJson(): Promise<PackageJson> {
 	return JSON.parse(await readFile('package.json', 'utf8')) as PackageJson
 }
@@ -42,12 +62,27 @@ async function loadReleaseCandidateValidator(): Promise<ReleaseCandidateValidato
 	return (await import('../../scripts/check-release-candidate.js')) as ReleaseCandidateValidator
 }
 
+async function loadDistributionValidator(): Promise<DistributionValidator> {
+	// @ts-expect-error The distribution validator is a Node ESM script, not TS source.
+	return (await import('../../scripts/check-distribution.js')) as DistributionValidator
+}
+
 describe('package distribution metadata', () => {
 	it('keeps the package private with an explicit node:sqlite engine floor', async () => {
 		const packageJson = await readPackageJson()
 
 		expect(packageJson.private).toBe(true)
 		expect(packageJson.engines?.node).toBe('>=22.13.0')
+	})
+
+	it('sets only repository-local package metadata for the private artifact', async () => {
+		const packageJson = await readPackageJson()
+
+		expect(packageJson.description).toBe('Codex-first orchestrator for portable agent runs.')
+		expect(packageJson.repository).toEqual({
+			type: 'git',
+			url: 'https://github.com/Andrey-Good/dennett-agent-orchestrator',
+		})
 	})
 
 	it('keeps package inventory constrained to built CLI and JSON schema contracts', async () => {
@@ -81,6 +116,9 @@ describe('package distribution metadata', () => {
 			'packlist:check': 'node scripts/check-packlist.js',
 			'release-candidate:check': 'node scripts/check-release-candidate.js',
 			'public-release-foundation:check': 'node scripts/check-public-release-foundation.js',
+			'package:local-install:proof': 'node scripts/check-distribution.js local-install-proof',
+			'package:upgrade-rollback:proof': 'node scripts/check-distribution.js upgrade-rollback-proof',
+			'supply-chain:local:proof': 'node scripts/check-distribution.js local-sbom-proof',
 			'package:check':
 				'pnpm build && pnpm dist:check && pnpm packlist:check && pnpm public-release-foundation:check',
 		})
@@ -166,6 +204,67 @@ describe('package distribution metadata', () => {
 		).toContain(
 			'Product path is visible but not tracked or staged (src/**): src/core/agent-file.ts',
 		)
+	})
+
+	it('validates local package install proof arguments without accepting fake artifacts', async () => {
+		const { parseLocalInstallProofArgs } = await loadDistributionValidator()
+
+		expect(parseLocalInstallProofArgs([])).toEqual({ keepTemp: false })
+		expect(parseLocalInstallProofArgs(['--keep-temp'])).toEqual({ keepTemp: true })
+		expect(() => parseLocalInstallProofArgs(['--from-tgz', 'old.tgz'])).toThrow(
+			'Unknown argument for local install proof: --from-tgz',
+		)
+	})
+
+	it('requires explicit old and new tarballs for upgrade and rollback proof', async () => {
+		const { parseUpgradeRollbackProofArgs } = await loadDistributionValidator()
+		const proofCwd = path.resolve('proof-root')
+
+		expect(() => parseUpgradeRollbackProofArgs([])).toThrow(
+			'Upgrade/rollback proof requires --from-tgz <path> and --to-tgz <path>; no previous artifact means rollback proof is not available.',
+		)
+		expect(() => parseUpgradeRollbackProofArgs(['--from-tgz'])).toThrow(
+			'Missing value for --from-tgz.',
+		)
+		expect(() =>
+			parseUpgradeRollbackProofArgs(['--from-tgz', 'same.tgz', '--to-tgz', 'same.tgz'], proofCwd),
+		).toThrow('Upgrade/rollback proof requires distinct --from-tgz and --to-tgz artifacts.')
+		expect(
+			parseUpgradeRollbackProofArgs(
+				['--from-tgz', 'old.tgz', '--to-tgz', 'new.tgz', '--keep-temp'],
+				proofCwd,
+			),
+		).toEqual({
+			fromTgz: path.join(proofCwd, 'old.tgz'),
+			toTgz: path.join(proofCwd, 'new.tgz'),
+			keepTemp: true,
+		})
+	})
+
+	it('keeps SBOM proof local while recording provenance and signing deferrals', async () => {
+		const { getSupplyChainDeferrals, parseLocalSbomProofArgs, validateSbomDocument } =
+			await loadDistributionValidator()
+		const proofCwd = path.resolve('proof-root')
+
+		expect(parseLocalSbomProofArgs(['--from-tgz', 'candidate.tgz'], proofCwd)).toEqual({
+			fromTgz: path.join(proofCwd, 'candidate.tgz'),
+			keepTemp: false,
+		})
+		expect(
+			validateSbomDocument({
+				spdxVersion: 'SPDX-2.3',
+				name: 'dennett-agent-orchestrator',
+				packages: [{ name: 'dennett-agent-orchestrator' }],
+			}),
+		).toEqual([])
+		expect(validateSbomDocument({ name: 'other' })).toEqual([
+			'SBOM output must include an SPDX version.',
+			'SBOM output must include package entries.',
+		])
+		expect(getSupplyChainDeferrals()).toEqual([
+			'npm provenance is deferred because package publication is blocked by private: true and no npm publish command may run in this stage.',
+			'Package signing is deferred because no local signing identity or publication signing infrastructure is configured in this stage.',
+		])
 	})
 })
 
