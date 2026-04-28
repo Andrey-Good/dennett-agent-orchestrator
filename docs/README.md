@@ -26,6 +26,7 @@ Use the documentation tree in this order:
 9. The Builder 2.0 authoring upgrade lives in [`18-builder-2-0`](./18-builder-2-0/README.md). That section owns Phase 17 builder authoring boundaries without claiming Phase 18 integrated product flows.
 10. Integrated product-flow ownership lives in [`19-integrated-product-flows`](./19-integrated-product-flows/README.md). That section owns Phase 18 cross-subsystem flow definitions and acceptance boundaries without claiming Phase 19 external proof or release readiness.
 11. Real-world proof and release decision ownership lives in [`20-real-world-proof-and-release`](./20-real-world-proof-and-release/README.md). That section owns Phase 19 live-proof evidence, stress/regression proof, operational runbooks, evidence logs, and the release decision record required before release-readiness claims.
+12. Public launch readiness ownership lives in [`21-public-launch-readiness`](./21-public-launch-readiness/README.md). That section owns the CLI/package-first public-launch boundary and the bounded Stage 10 stable CLI/API freeze without implying public launch or production readiness.
 
 If two documents appear to disagree, treat the more canonical and more specific owner as authoritative only if it does not contradict the top-level canon. Otherwise the mismatch is a documentation defect that must be corrected, not a license to pick whichever text is convenient.
 
@@ -52,6 +53,7 @@ If two documents appear to disagree, treat the more canonical and more specific 
 | 18 | [`18-builder-2-0`](./18-builder-2-0/README.md) | Governs the Phase 17 Builder 2.0 authoring boundary for public-contract-only drafts that may reference memory, runtime, interaction, and managed-subagent surfaces. |
 | 19 | [`19-integrated-product-flows`](./19-integrated-product-flows/README.md) | Governs Phase 18 integrated product-flow definitions across lifecycle, builder, runtime, interaction, memory, and subagents without promoting those flows to Phase 19 external proof or release readiness. |
 | 20 | [`20-real-world-proof-and-release`](./20-real-world-proof-and-release/README.md) | Governs Phase 19 real-world proof and release readiness: live runtime/provider evidence, stress and regression proof, operational runbooks, evidence logs, and the release decision record. |
+| 21 | [`21-public-launch-readiness`](./21-public-launch-readiness/README.md) | Governs public-launch readiness boundaries, forbidden public claims, and the bounded Stage 10 stable CLI/API contract freeze. |
 
 ## Section Responsibilities
 
@@ -73,6 +75,7 @@ If two documents appear to disagree, treat the more canonical and more specific 
 - [`18-builder-2-0`](./18-builder-2-0/README.md) owns the Phase 17 Builder 2.0 authoring boundary and routes detailed behavior back to the public contracts that own memory, runtime, interaction, lifecycle, and managed subagents.
 - [`19-integrated-product-flows`](./19-integrated-product-flows/README.md) owns Phase 18 integrated product-flow acceptance definitions and subsystem handoff rules without owning Phase 19 external proof, release runbooks, or release readiness.
 - [`20-real-world-proof-and-release`](./20-real-world-proof-and-release/README.md) owns Phase 19 real-world proof, stress/regression proof, operational runbooks, evidence logging, and the release decision record; no release-readiness claim is valid without that evidence and decision.
+- [`21-public-launch-readiness`](./21-public-launch-readiness/README.md) owns Part 1 public-launch readiness boundaries, the selected CLI/package-first target, forbidden claims, and the bounded stable CLI/API contract freeze.
 
 The subagent system is intentionally split across several owner docs: [`02-architecture/subagent-orchestration-model.md`](./02-architecture/subagent-orchestration-model.md) owns the overall model, [`03-contracts/subagent-mcp-contract.md`](./03-contracts/subagent-mcp-contract.md) owns the managed child-run MCP surface, [`04-execution/subagent-task-lifecycle.md`](./04-execution/subagent-task-lifecycle.md) owns delegated-task sequencing, [`05-state/subagent-context-and-memory.md`](./05-state/subagent-context-and-memory.md) owns lineage and persisted child context, and [`08-extensions/builder-agent.md`](./08-extensions/builder-agent.md) consumes that model without redefining it.
 

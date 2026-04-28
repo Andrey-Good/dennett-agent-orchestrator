@@ -8,13 +8,16 @@ Current public-launch readiness does not include a hosted service, managed deplo
 
 ## Supported Versions
 
-Until a later stage freezes the public CLI/API contract and package release policy, security reports are triaged for:
+After the bounded Stage 10 CLI/API freeze, security reports are triaged for:
 
 - the current public repository state;
 - the latest documented bounded local CLI/repository release candidate;
+- the commands labeled `[stable]` by CLI help;
+- the `[stable/safety-protocol]` memory cleanup flow;
+- exported JSON schema artifacts under `contracts/json-schema/*.schema.json`;
 - the selected CLI/package-first path once a later stage proves and publishes the package artifact.
 
-Older commits, forks, private modifications, generated local artifacts, and third-party provider deployments are outside this project's direct support boundary.
+Commands labeled `[experimental]`, deep imports from `dist` or `src`, older commits, forks, private modifications, generated local artifacts, and third-party provider deployments are outside this project's direct support boundary.
 
 ## Reporting A Vulnerability
 

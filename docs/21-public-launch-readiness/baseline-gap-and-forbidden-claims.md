@@ -16,6 +16,7 @@ Related documents:
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Phase 17 Builder 2.0](../18-builder-2-0/phase-17-builder-2-0.md)
 - [Builder 2.0 Productization](./builder-2-0-productization.md)
+- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
 
 ## Current Baseline
 
@@ -52,8 +53,8 @@ These items may be described only inside the local CLI/repository boundary:
 | Stage 6: Memory Productization | Memory remains bounded to local provider registration, Mem0-first direct use, and narrow prompt-rendered runtime memory. | Provider readiness matrix, durable cleanup/restore semantics where claimed, provider isolation proof, reliability/throttling proof, backup or deletion guarantees, and documented limits for every supported provider. |
 | Stage 7: Full User Interaction Layer | Current interaction proof is narrower than a full public user-interaction surface. | End-to-end evidence for blocked prompts, replies, resume-after-reply, unsupported prompt errors, risky mid-run change policy, CLI/user-facing semantics, and redacted transcripts across supported runtimes. |
 | Stage 8: Managed Subagent Product Surface | A bounded local CLI operator surface exists, but complete public orchestration remains deferred. | Evidence exists for launch-and-wait, list, show, wait/reconcile, record-control, and close. Evidence is still required for durable background runners, live control delivery, live runtime cancellation, cross-process attachment, complete review/fix loops, surfaced child interaction, cancellation cleanup, and leaked-child checks. |
-| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 is productized only as bounded audited draft-first authoring, not a public complete authoring workflow. | Remaining evidence is still required for live execution proof of representative drafts, integrated builder/lifecycle/runtime/memory/interaction/subagent scenarios, user-facing rejected-candidate failure docs, and stable Stage 10 CLI/API compatibility. |
-| Stage 10: Stable CLI/API Contract Freeze | No public stable CLI/API compatibility promise is locked. | Versioned command/API inventory, backwards-compatibility policy, deprecation rules, output/error stability rules, migration tests, and examples that match the frozen contract. |
+| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 is productized only as bounded audited draft-first authoring, not a public complete authoring workflow. | Remaining evidence is still required for live execution proof of representative drafts, integrated builder/lifecycle/runtime/memory/interaction/subagent scenarios, and user-facing rejected-candidate failure docs. |
+| Stage 10: Stable CLI/API Contract Freeze | Bounded stable CLI/API compatibility is locked only for the explicitly labeled stable CLI commands, stable/safety-protocol cleanup flow, exported JSON schema artifacts, and no-JS-API package boundary. | Stable compatibility remains forbidden for experimental commands, JS/TS imports, hosted/managed APIs, unpublished package claims, and any surface not named in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). |
 
 ## Forbidden Claims
 
@@ -72,7 +73,7 @@ Until a later stage records the required evidence and updates the release scope,
 - Managed subagents are a complete operator-facing product surface.
 - Managed subagents provide durable background execution, live control-message delivery, live runtime cancellation, hosted/UI orchestration, or write-set sandboxing.
 - Builder 2.0 is a public complete authoring system, deploy authority, provider/runtime account registry, live managed-subagent orchestrator, or proof that builder-authored agents are integrated product flows.
-- Stable public CLI/API compatibility is frozen.
+- Stable public CLI/API compatibility exists outside the bounded Stage 10 freeze, including for experimental commands or JS/TS imports.
 
 ## Unlock Rules
 
@@ -100,7 +101,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 - Stage 7 must prove full interaction semantics before user-facing interaction claims expand.
 - Stage 8 records the bounded local CLI managed-subagent operator surface; later stages must prove durable background execution, live cancellation/control delivery, and complete review/fix orchestration before broader claims expand.
 - Stage 9 must prove Builder 2.0 on stable public contracts before public authoring claims expand.
-- Stage 10 must freeze CLI/API compatibility before stable public interface claims expand.
+- Stage 10 freezes only the bounded CLI/API compatibility surface named in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md); any expansion needs a later owner update and evidence.
 
 <a id="russian"></a>
 # Baseline Gap And Forbidden Claims
@@ -118,6 +119,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Phase 17 Builder 2.0](../18-builder-2-0/phase-17-builder-2-0.md)
 - [Builder 2.0 Productization](./builder-2-0-productization.md)
+- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
 
 ## Текущий baseline
 
@@ -154,8 +156,8 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 | Stage 6: Memory Productization | Memory ограничена local provider registration, Mem0-first direct use и narrow prompt-rendered runtime memory. | Provider readiness matrix, durable cleanup/restore semantics where claimed, provider isolation proof, reliability/throttling proof, backup или deletion guarantees и documented limits для каждого supported provider. |
 | Stage 7: Full User Interaction Layer | Текущий interaction proof уже, чем полный public user-interaction surface. | End-to-end evidence для blocked prompts, replies, resume-after-reply, unsupported prompt errors, risky mid-run change policy, CLI/user-facing semantics и redacted transcripts across supported runtimes. |
 | Stage 8: Managed Subagent Product Surface | Bounded local CLI operator surface существует, но complete public orchestration остается deferred. | Evidence существует для launch-and-wait, list, show, wait/reconcile, record-control и close. Evidence все еще нужно для durable background runners, live control delivery, live runtime cancellation, cross-process attachment, complete review/fix loops, surfaced child interaction, cancellation cleanup и leaked-child checks. |
-| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 productized только как bounded audited draft-first authoring, а не public complete authoring workflow. | Все еще нужны live execution proof для representative drafts, integrated builder/lifecycle/runtime/memory/interaction/subagent scenarios, user-facing rejected-candidate failure docs и stable Stage 10 CLI/API compatibility. |
-| Stage 10: Stable CLI/API Contract Freeze | Stable public CLI/API compatibility promise не зафиксирован. | Versioned command/API inventory, backwards-compatibility policy, deprecation rules, output/error stability rules, migration tests и examples, совпадающие с frozen contract. |
+| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 productized только как bounded audited draft-first authoring, а не public complete authoring workflow. | Все еще нужны live execution proof для representative drafts, integrated builder/lifecycle/runtime/memory/interaction/subagent scenarios и user-facing rejected-candidate failure docs. |
+| Stage 10: Stable CLI/API Contract Freeze | Bounded stable CLI/API compatibility зафиксирована только для explicitly labeled stable CLI commands, stable/safety-protocol cleanup flow, exported JSON schema artifacts и no-JS-API package boundary. | Stable compatibility остается forbidden для experimental commands, JS/TS imports, hosted/managed APIs, unpublished package claims и любой surface, не названной в [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). |
 
 ## Forbidden Claims
 
@@ -174,7 +176,7 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 - Managed subagents являются complete operator-facing product surface.
 - Managed subagents предоставляют durable background execution, live control-message delivery, live runtime cancellation, hosted/UI orchestration или write-set sandboxing.
 - Builder 2.0 является public complete authoring system, deploy authority, provider/runtime account registry, live managed-subagent orchestrator или proof, что builder-authored agents являются integrated product flows.
-- Stable public CLI/API compatibility зафиксирована.
+- Stable public CLI/API compatibility существует за пределами bounded Stage 10 freeze, including for experimental commands or JS/TS imports.
 
 ## Unlock Rules
 
@@ -202,4 +204,4 @@ Stage 1 не выбирает public launch scope. Он создает baseline,
 - Stage 7 должен доказать full interaction semantics перед расширением user-facing interaction claims.
 - Stage 8 фиксирует bounded local CLI managed-subagent operator surface; later stages должны доказать durable background execution, live cancellation/control delivery и complete review/fix orchestration перед расширением broader claims.
 - Stage 9 должен доказать Builder 2.0 на stable public contracts перед расширением public authoring claims.
-- Stage 10 должен freeze CLI/API compatibility перед расширением stable public interface claims.
+- Stage 10 freezes only bounded CLI/API compatibility surface, named in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md); any expansion needs a later owner update and evidence.

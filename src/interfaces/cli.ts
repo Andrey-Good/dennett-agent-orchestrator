@@ -52,6 +52,202 @@ type SQLiteLocalStateStore = import('../core/state/index.js').SQLiteLocalStateSt
 type SQLiteLocalStateStoreConstructor =
 	typeof import('../core/state/index.js').SQLiteLocalStateStore
 
+export type CliCommandStability = 'stable' | 'stable_safety_protocol' | 'experimental'
+
+export type CliCommandContract = {
+	name: string
+	stability: CliCommandStability
+	summary: string
+}
+
+const CLI_COMMAND_CONTRACTS = [
+	{
+		name: 'runtime-model-list',
+		stability: 'experimental',
+		summary: 'list models through the current runtime adapter',
+	},
+	{
+		name: 'runtime-env-inspect',
+		stability: 'experimental',
+		summary: 'inspect runtime auth, account, config, and limit metadata',
+	},
+	{
+		name: 'memory-provider-register',
+		stability: 'experimental',
+		summary: 'register a local memory provider binding',
+	},
+	{
+		name: 'memory-provider-list',
+		stability: 'experimental',
+		summary: 'list local memory provider bindings',
+	},
+	{
+		name: 'memory-provider-show',
+		stability: 'experimental',
+		summary: 'show a local memory provider binding',
+	},
+	{
+		name: 'memory-write',
+		stability: 'experimental',
+		summary: 'write through a registered memory provider',
+	},
+	{
+		name: 'memory-read',
+		stability: 'experimental',
+		summary: 'read through a registered memory provider',
+	},
+	{
+		name: 'memory-search',
+		stability: 'experimental',
+		summary: 'search through a registered memory provider',
+	},
+	{
+		name: 'memory-list',
+		stability: 'experimental',
+		summary: 'list records through a registered memory provider',
+	},
+	{
+		name: 'memory-update',
+		stability: 'experimental',
+		summary: 'update through a registered memory provider',
+	},
+	{
+		name: 'memory-delete',
+		stability: 'experimental',
+		summary: 'delete through a registered memory provider',
+	},
+	{
+		name: 'memory-cleanup-preview',
+		stability: 'stable_safety_protocol',
+		summary: 'preview the bounded memory cleanup safety envelope',
+	},
+	{
+		name: 'memory-cleanup-verified-delete',
+		stability: 'stable_safety_protocol',
+		summary: 'verify and delete only the previewed memory cleanup candidates',
+	},
+	{
+		name: 'subagent-launch',
+		stability: 'experimental',
+		summary: 'launch and wait on a managed subagent in process',
+	},
+	{
+		name: 'subagent-list',
+		stability: 'experimental',
+		summary: 'list persisted managed subagent records',
+	},
+	{
+		name: 'subagent-show',
+		stability: 'experimental',
+		summary: 'show one persisted managed subagent record',
+	},
+	{
+		name: 'subagent-wait',
+		stability: 'experimental',
+		summary: 'reconcile persisted managed subagent state',
+	},
+	{
+		name: 'subagent-record-control',
+		stability: 'experimental',
+		summary: 'record a managed subagent control message',
+	},
+	{
+		name: 'subagent-close',
+		stability: 'experimental',
+		summary: 'close a managed subagent record',
+	},
+	{
+		name: 'register',
+		stability: 'stable',
+		summary: 'register a portable agent file as a draft revision',
+	},
+	{
+		name: 'status',
+		stability: 'stable',
+		summary: 'inspect registered agent lifecycle status',
+	},
+	{
+		name: 'deploy',
+		stability: 'stable',
+		summary: 'publish a portable agent file as the live revision',
+	},
+	{
+		name: 'builder',
+		stability: 'experimental',
+		summary: 'create or revise a draft through the system builder agent',
+	},
+	{
+		name: 'trigger-register',
+		stability: 'experimental',
+		summary: 'register an agent lifecycle trigger binding',
+	},
+	{
+		name: 'trigger-list',
+		stability: 'experimental',
+		summary: 'list agent lifecycle trigger bindings',
+	},
+	{
+		name: 'event-dispatch',
+		stability: 'experimental',
+		summary: 'dispatch an event through a registered trigger',
+	},
+	{
+		name: 'run-live',
+		stability: 'stable',
+		summary: 'run the current live revision for a registered agent',
+	},
+	{
+		name: 'run',
+		stability: 'stable',
+		summary: 'run a portable agent file locally',
+	},
+	{
+		name: 'run-status',
+		stability: 'stable',
+		summary: 'inspect durable run and interaction state',
+	},
+	{
+		name: 'comment',
+		stability: 'experimental',
+		summary: 'attempt live comment delivery to an active run',
+	},
+	{
+		name: 'reply',
+		stability: 'stable',
+		summary: 'record or deliver a reply to a waiting user prompt',
+	},
+	{
+		name: 'resume',
+		stability: 'stable',
+		summary: 'resume a durable local run',
+	},
+] as const satisfies readonly CliCommandContract[]
+
+const CLI_COMMAND_CONTRACTS_BY_NAME: Map<string, CliCommandContract> = new Map(
+	CLI_COMMAND_CONTRACTS.map((contract) => [contract.name, contract]),
+)
+
+export function getCliCommandContracts(): CliCommandContract[] {
+	return CLI_COMMAND_CONTRACTS.map((contract) => ({ ...contract }))
+}
+
+function formatCliCommandStabilityLabel(stability: CliCommandStability): string {
+	if (stability === 'stable_safety_protocol') {
+		return 'stable/safety-protocol'
+	}
+	return stability
+}
+
+function defineCliCommand(program: Command, name: string): Command {
+	const contract = CLI_COMMAND_CONTRACTS_BY_NAME.get(name)
+	if (!contract) {
+		throw new Error(`Missing CLI command stability contract for "${name}".`)
+	}
+	return program
+		.command(name)
+		.description(`[${formatCliCommandStabilityLabel(contract.stability)}] ${contract.summary}`)
+}
+
 let sqliteLocalStateStoreConstructor: SQLiteLocalStateStoreConstructor | null = null
 
 async function getSQLiteLocalStateStoreConstructor(): Promise<SQLiteLocalStateStoreConstructor> {
@@ -1315,10 +1511,12 @@ export function buildCliProgram(): Command {
 	const program = new Command()
 	program
 		.name('dennett-agent-orchestrator')
-		.description('Phase 8 agent lifecycle, live resolution, and durable runtime_agent execution.')
+		.description(
+			'Bounded local CLI for portable agent runs, lifecycle operations, and explicitly marked experimental surfaces. Package JavaScript internals are not a stable public API.',
+		)
+		.addHelpCommand('help [command]', '[stable] display help for command')
 
-	program
-		.command('runtime-model-list')
+	defineCliCommand(program, 'runtime-model-list')
 		.option('--cursor <cursor>', 'pagination cursor from a previous model-list response')
 		.option('--limit <count>', 'maximum number of models to return')
 		.option('--include-hidden', 'include hidden models in the returned catalog')
@@ -1355,8 +1553,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('runtime-env-inspect')
+	defineCliCommand(program, 'runtime-env-inspect')
 		.option(
 			'--codex-app-server-environment-timeout-ms <ms>',
 			'Codex App Server environment inspection timeout in milliseconds',
@@ -1373,8 +1570,7 @@ export function buildCliProgram(): Command {
 			printJson(result)
 		})
 
-	program
-		.command('memory-provider-register')
+	defineCliCommand(program, 'memory-provider-register')
 		.argument('<provider-id>', 'stable local memory provider id')
 		.requiredOption('--family <family>', 'local provider family, for example mem0')
 		.option('--codex-ref <ref>', 'codex_ref used by portable memory bindings')
@@ -1412,8 +1608,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('memory-provider-list')
+	defineCliCommand(program, 'memory-provider-list')
 		.option('--family <family>', 'optional provider family filter')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (options: { family?: string; stateDb: string }) => {
@@ -1421,8 +1616,7 @@ export function buildCliProgram(): Command {
 			printMemoryProviderRecords(records)
 		})
 
-	program
-		.command('memory-provider-show')
+	defineCliCommand(program, 'memory-provider-show')
 		.argument('<provider-id>', 'stable local memory provider id')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (providerId: string, options: { stateDb: string }) => {
@@ -1430,8 +1624,7 @@ export function buildCliProgram(): Command {
 			printMemoryProviderRecord(record)
 		})
 
-	program
-		.command('memory-write')
+	defineCliCommand(program, 'memory-write')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1470,8 +1663,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('memory-read')
+	defineCliCommand(program, 'memory-read')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1483,8 +1675,7 @@ export function buildCliProgram(): Command {
 			printJson(result)
 		})
 
-	program
-		.command('memory-search')
+	defineCliCommand(program, 'memory-search')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1523,8 +1714,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('memory-list')
+	defineCliCommand(program, 'memory-list')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1557,8 +1747,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('memory-update')
+	defineCliCommand(program, 'memory-update')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1590,8 +1779,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('memory-delete')
+	defineCliCommand(program, 'memory-delete')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1603,8 +1791,7 @@ export function buildCliProgram(): Command {
 			printJson(result)
 		})
 
-	program
-		.command('memory-cleanup-preview')
+	defineCliCommand(program, 'memory-cleanup-preview')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1637,8 +1824,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('memory-cleanup-verified-delete')
+	defineCliCommand(program, 'memory-cleanup-verified-delete')
 		.argument(
 			'<codex-ref>',
 			'portable memory binding codex_ref resolved through the local registry',
@@ -1677,8 +1863,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('subagent-launch')
+	defineCliCommand(program, 'subagent-launch')
 		.argument('<agent-ref>', 'live logical agent id to run as a managed child')
 		.requiredOption('--parent-run-id <id>', 'parent run id that owns the managed child')
 		.requiredOption('--parent-task-id <id>', 'parent task id that owns the managed child')
@@ -1744,8 +1929,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('subagent-list')
+	defineCliCommand(program, 'subagent-list')
 		.option('--parent-run-id <id>', 'filter by parent run id')
 		.option('--parent-task-id <id>', 'filter by parent task id')
 		.option('--state <state>', 'filter by state: running, cancelling, terminal, closed')
@@ -1766,8 +1950,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('subagent-show')
+	defineCliCommand(program, 'subagent-show')
 		.argument('<subagent-id>', 'managed subagent id to inspect')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (subagentId: string, options: { stateDb: string }) => {
@@ -1775,8 +1958,7 @@ export function buildCliProgram(): Command {
 			printJson(record)
 		})
 
-	program
-		.command('subagent-wait')
+	defineCliCommand(program, 'subagent-wait')
 		.argument('<subagent-id>', 'managed subagent id to reconcile or inspect')
 		.option('--wait-mode <mode>', 'terminal_only or terminal_or_update', 'terminal_or_update')
 		.option(
@@ -1801,8 +1983,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('subagent-record-control')
+	defineCliCommand(program, 'subagent-record-control')
 		.argument('<subagent-id>', 'managed subagent id to record a bounded control message for')
 		.requiredOption(
 			'--kind <kind>',
@@ -1830,8 +2011,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('subagent-close')
+	defineCliCommand(program, 'subagent-close')
 		.argument('<subagent-id>', 'managed subagent id to close')
 		.requiredOption(
 			'--disposition <disposition>',
@@ -1855,8 +2035,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('register')
+	defineCliCommand(program, 'register')
 		.argument('<agent-file>', 'path to a portable agent JSON file')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (agentFilePath: string, options: { stateDb: string }) => {
@@ -1877,8 +2056,7 @@ export function buildCliProgram(): Command {
 			}
 		})
 
-	program
-		.command('status')
+	defineCliCommand(program, 'status')
 		.argument('<agent-id>', 'logical agent id to inspect')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (logicalAgentId: string, options: { stateDb: string }) => {
@@ -1895,8 +2073,7 @@ export function buildCliProgram(): Command {
 			}
 		})
 
-	program
-		.command('deploy')
+	defineCliCommand(program, 'deploy')
 		.argument('<agent-file>', 'path to a portable agent JSON file')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (agentFilePath: string, options: { stateDb: string }) => {
@@ -1919,8 +2096,7 @@ export function buildCliProgram(): Command {
 			}
 		})
 
-	program
-		.command('builder')
+	defineCliCommand(program, 'builder')
 		.argument('<agent-id>', 'logical agent id to create or revise')
 		.requiredOption('--request <text>', 'builder request describing the desired draft')
 		.option('--name <name>', 'suggested display name for newly created drafts')
@@ -1974,8 +2150,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('trigger-register')
+	defineCliCommand(program, 'trigger-register')
 		.argument('<trigger-id>', 'stable trigger id')
 		.argument('<agent-id>', 'logical agent id to bind')
 		.requiredOption('--trigger-ref <ref>', 'trigger reference label')
@@ -1996,8 +2171,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('trigger-list')
+	defineCliCommand(program, 'trigger-list')
 		.argument('[agent-id]', 'optional logical agent id filter')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (logicalAgentId: string | undefined, options: { stateDb: string }) => {
@@ -2005,8 +2179,7 @@ export function buildCliProgram(): Command {
 			printJson(triggers)
 		})
 
-	program
-		.command('event-dispatch')
+	defineCliCommand(program, 'event-dispatch')
 		.argument('<trigger-id>', 'trigger id to dispatch')
 		.option('--event-id <id>', 'explicit event id')
 		.option('--payload <json>', 'event payload as JSON or plain scalar text')
@@ -2074,8 +2247,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('run-live')
+	defineCliCommand(program, 'run-live')
 		.argument('<agent-id>', 'logical agent id to run using the current live revision')
 		.option(
 			'--param <key=value>',
@@ -2147,8 +2319,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('run')
+	defineCliCommand(program, 'run')
 		.argument('<agent-file>', 'path to the agent JSON file')
 		.option(
 			'--param <key=value>',
@@ -2221,8 +2392,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('run-status')
+	defineCliCommand(program, 'run-status')
 		.requiredOption('--run-id <id>', 'run id to inspect')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (options: { runId: string; stateDb: string }) => {
@@ -2239,8 +2409,7 @@ export function buildCliProgram(): Command {
 			}
 		})
 
-	program
-		.command('comment')
+	defineCliCommand(program, 'comment')
 		.argument('<agent-file>', 'path to the same pinned agent JSON file')
 		.requiredOption('--run-id <id>', 'run id to comment on')
 		.requiredOption('--text <text>', 'comment text to inject')
@@ -2322,8 +2491,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('reply')
+	defineCliCommand(program, 'reply')
 		.argument('<agent-file>', 'path to the same pinned agent JSON file')
 		.requiredOption('--run-id <id>', 'run id to reply on')
 		.option('--prompt-id <id>', 'explicit prompt id to answer')
@@ -2489,8 +2657,7 @@ export function buildCliProgram(): Command {
 			},
 		)
 
-	program
-		.command('resume')
+	defineCliCommand(program, 'resume')
 		.argument('<agent-file>', 'path to the same pinned agent JSON file')
 		.requiredOption('--run-id <id>', 'run id to resume')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())

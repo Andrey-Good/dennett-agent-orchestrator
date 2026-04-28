@@ -19,11 +19,16 @@ const REQUIRED_PACKAGE_SCRIPTS = [
 	'dist:clean',
 	'dist:check',
 	'packlist:check',
+	'public-release-foundation:check',
 	'package:check',
 	'typecheck',
 ]
 
 const EXPECTED_FILES_ALLOWLIST = ['dist/src/**', 'contracts/json-schema/*.schema.json']
+const EXPECTED_PACKAGE_EXPORTS = {
+	'./package.json': './package.json',
+	'./contracts/json-schema/*.schema.json': './contracts/json-schema/*.schema.json',
+}
 
 function isAllowedPackageFile(filePath) {
 	return (
@@ -93,6 +98,12 @@ export function validatePackageMetadata(packageJson) {
 	if (JSON.stringify(packageJson.files) !== JSON.stringify(EXPECTED_FILES_ALLOWLIST)) {
 		errors.push(
 			`package.json files must be ${JSON.stringify(EXPECTED_FILES_ALLOWLIST)} to keep package inventory allowlisted.`,
+		)
+	}
+
+	if (JSON.stringify(packageJson.exports) !== JSON.stringify(EXPECTED_PACKAGE_EXPORTS)) {
+		errors.push(
+			`package.json exports must be ${JSON.stringify(EXPECTED_PACKAGE_EXPORTS)} to keep JavaScript internals out of the stable public API.`,
 		)
 	}
 

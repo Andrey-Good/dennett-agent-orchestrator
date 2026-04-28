@@ -7,6 +7,10 @@
 	"bin": {
 		"dennett-agent-orchestrator": "./dist/src/interfaces/cli.js"
 	},
+	"exports": {
+		"./package.json": "./package.json",
+		"./contracts/json-schema/*.schema.json": "./contracts/json-schema/*.schema.json"
+	},
 	"files": [
 		"dist/src/**",
 		"contracts/json-schema/*.schema.json"

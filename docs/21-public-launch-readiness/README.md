@@ -3,7 +3,7 @@
 <a id="english"></a>
 # Public Launch Readiness
 
-Status: canonical owner section for Part 1 public-launch readiness planning. Stage 1 is only a baseline gap and forbidden-claim lock; Stage 2 selects a CLI/package-first launch target and keeps hosted/managed launch deferred; Stage 3 records security/privacy/legal boundaries; Stage 4 records private package and supply-chain foundation; Stage 5 records the limited Runtime/App Server certification subset; Stage 6 records the limited local Mem0-first memory productization subset; Stage 7 records the bounded CLI/package interaction productization subset; Stage 8 records the bounded local CLI managed-subagent operator subset; Stage 9 records the bounded audited draft-first Builder 2.0 authoring subset. No stage expands the current release target or claims public readiness by itself.
+Status: canonical owner section for Part 1 public-launch readiness planning. Stage 1 is only a baseline gap and forbidden-claim lock; Stage 2 selects a CLI/package-first launch target and keeps hosted/managed launch deferred; Stage 3 records security/privacy/legal boundaries; Stage 4 records private package and supply-chain foundation; Stage 5 records the limited Runtime/App Server certification subset; Stage 6 records the limited local Mem0-first memory productization subset; Stage 7 records the bounded CLI/package interaction productization subset; Stage 8 records the bounded local CLI managed-subagent operator subset; Stage 9 records the bounded audited draft-first Builder 2.0 authoring subset; Stage 10 records the bounded stable CLI/API contract freeze. No stage expands the current release target or claims public readiness by itself.
 
 Documents:
 
@@ -15,6 +15,7 @@ Documents:
 - [User Interaction Productization](./user-interaction-productization.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Builder 2.0 Productization](./builder-2-0-productization.md)
+- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -33,6 +34,7 @@ The current truthful release state remains:
 - Stage 7 productizes only the bounded local CLI/package prompt wait/reply/status/resume subset in [User Interaction Productization](./user-interaction-productization.md);
 - Stage 8 productizes only the bounded local CLI/package managed-subagent operator subset in [Managed Subagent Productization](./managed-subagent-productization.md);
 - Stage 9 productizes only the bounded audited draft-first Builder 2.0 authoring subset in [Builder 2.0 Productization](./builder-2-0-productization.md);
+- Stage 10 freezes only the explicitly labeled stable CLI commands, stable/safety-protocol cleanup flow, package schema exports, and no-JS-API boundary in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md);
 - no change to source, tests, package metadata, CI, tags, commits, or publication state from Stage 1 or Stage 2.
 
 Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as the starting locks before changing scope or claiming evidence.
@@ -52,6 +54,7 @@ Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and 
 - [User Interaction Productization](./user-interaction-productization.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Builder 2.0 Productization](./builder-2-0-productization.md)
+- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -68,6 +71,7 @@ Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and 
 - Stage 7 productizes only the bounded local CLI/package prompt wait/reply/status/resume subset in [User Interaction Productization](./user-interaction-productization.md);
 - Stage 8 productizes only the bounded local CLI/package managed-subagent operator subset in [Managed Subagent Productization](./managed-subagent-productization.md);
 - Stage 9 productizes only the bounded audited draft-first Builder 2.0 authoring subset in [Builder 2.0 Productization](./builder-2-0-productization.md);
+- Stage 10 freezes only the explicitly labeled stable CLI commands, stable/safety-protocol cleanup flow, package schema exports, and no-JS-API boundary in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md);
 - Stage 1 и Stage 2 не меняют source, tests, package metadata, CI, tags, commits или publication state.
 
 Stages 3-10 из Part 1 должны использовать [Public Launch Scope](./public-launch-scope.md) и [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) как начальные фиксации перед изменением scope или заявлением evidence.

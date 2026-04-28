@@ -14,6 +14,7 @@ Related documents:
 - [Release Gates](../11-hardening/release-gates.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Builder 2.0 Productization](./builder-2-0-productization.md)
+- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
 
 ## Decision
 
@@ -71,7 +72,7 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | User prompt wait/reply/resume | Limited/beta for currently tested prompt shapes. | Stage 7 must prove full user-visible interaction semantics before broader claims. |
 | Managed subagent primitives | Limited/beta for the bounded local CLI operator surface. | Stage 8 supports `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control`, and `subagent-close` only within the limits in [Managed Subagent Productization](./managed-subagent-productization.md). Launch is launch-and-wait only; control and cancellation are state-recorded, not live-delivered. |
 | Builder 2.0 authoring | Limited/beta for audited draft-first authoring only. | Stage 9 supports formal builder output wrapper validation, deterministic candidate audit, diagnostics outside Agent JSON, and draft-only persistence as documented in [Builder 2.0 Productization](./builder-2-0-productization.md). It does not prove full public authoring readiness, deploy, provider registration, live managed orchestration, or execution of every draft. |
-| Stable CLI/API compatibility | Deferred until freeze. | Stage 10 must publish versioned command/API inventory, compatibility policy, and migration/deprecation rules. |
+| Stable CLI/API compatibility | Frozen only for the bounded Stage 10 surface. | Only commands labeled `[stable]`, the `[stable/safety-protocol]` cleanup flow, exported JSON schema artifacts, and the no-stable-JS-API package boundary are stable under [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). Experimental commands remain unstable. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Each requires a separate artifact, proof, rollback/uninstall path, and security/release decision. |
 
 ## Public Claims Allowed After Required Gates
@@ -98,7 +99,7 @@ Do not claim:
 - Native App Server memory is implemented or Mem0 is consumed through a native App Server memory primitive.
 - Memory behavior is broader than registered local provider resolution, prompt-rendered Codex context, and success-only provider writes.
 - Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior, or volume reliability is proven.
-- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, or stable public CLI/API compatibility is complete.
+- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, stable compatibility for experimental CLI commands, or any stable JS/TS API is complete.
 
 ## Launch Blockers
 
@@ -111,7 +112,7 @@ The CLI/package-first public launch remains blocked until all selected launch-sc
 - Stage 7 records user-visible interaction semantics and unsupported prompt/reply cases.
 - Stage 8 records the bounded local CLI managed-subagent operator surface and keeps broader orchestration explicitly deferred.
 - Stage 9 records the bounded audited draft-first Builder 2.0 authoring surface and keeps complete public Builder readiness explicitly deferred.
-- Stage 10 freezes the public CLI/API contract and compatibility policy.
+- Stage 10 freezes only the bounded public CLI/API contract and compatibility policy documented in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md).
 - README and user-facing docs use the same scope language as this document.
 
 ## Decision Criteria For Later Scope Changes
@@ -139,6 +140,7 @@ A later stage may expand the scope only when:
 - [Release Gates](../11-hardening/release-gates.md)
 - [Managed Subagent Productization](./managed-subagent-productization.md)
 - [Builder 2.0 Productization](./builder-2-0-productization.md)
+- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
 
 ## Решение
 
@@ -196,7 +198,7 @@ Hosted или managed launch может войти в scope только чер�
 | User prompt wait/reply/resume | Limited/beta для currently tested prompt shapes. | Stage 7 должен доказать full user-visible interaction semantics до broad claims. |
 | Managed subagent primitives | Limited/beta для bounded local CLI operator surface. | Stage 8 поддерживает только `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control` и `subagent-close` в пределах [Managed Subagent Productization](./managed-subagent-productization.md). Launch является только launch-and-wait; control и cancellation записываются в state, а не live-deliver-ятся. |
 | Builder 2.0 authoring | Limited/beta только для audited draft-first authoring. | Stage 9 поддерживает formal builder output wrapper validation, deterministic candidate audit, diagnostics вне Agent JSON и draft-only persistence по [Builder 2.0 Productization](./builder-2-0-productization.md). Это не доказывает full public authoring readiness, deploy, provider registration, live managed orchestration или execution каждого draft. |
-| Stable CLI/API compatibility | Deferred until freeze. | Stage 10 должен опубликовать versioned command/API inventory, compatibility policy и migration/deprecation rules. |
+| Stable CLI/API compatibility | Frozen only for the bounded Stage 10 surface. | Только commands с label `[stable]`, `[stable/safety-protocol]` cleanup flow, exported JSON schema artifacts и no-stable-JS-API package boundary являются stable по [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). Experimental commands остаются unstable. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Каждый требует separate artifact, proof, rollback/uninstall path и security/release decision. |
 
 ## Разрешенные Public Claims После Нужных Gates
@@ -223,7 +225,7 @@ Hosted или managed launch может войти в scope только чер�
 - Native App Server memory реализована или Mem0 потребляется через native App Server memory primitive.
 - Memory behavior шире registered local provider resolution, prompt-rendered Codex context и success-only provider writes.
 - Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior или volume reliability доказаны.
-- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring или stable public CLI/API compatibility завершены.
+- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, stable compatibility for experimental CLI commands или any stable JS/TS API завершены.
 
 ## Блокеры Запуска
 
@@ -236,7 +238,7 @@ CLI/package-first public launch остается blocked, пока все select
 - Stage 7 фиксирует user-visible interaction semantics и unsupported prompt/reply cases.
 - Stage 8 фиксирует bounded local CLI managed-subagent operator surface и явно оставляет broader orchestration deferred.
 - Stage 9 фиксирует bounded audited draft-first Builder 2.0 authoring surface и явно оставляет complete public Builder readiness deferred.
-- Stage 10 freezes public CLI/API contract и compatibility policy.
+- Stage 10 freezes only bounded public CLI/API contract и compatibility policy, documented in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md).
 - README и user-facing docs используют тот же scope language, что и этот документ.
 
 ## Критерии Решения Для Поздних Изменений Scope
