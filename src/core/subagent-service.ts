@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import type { RuntimeAdapter } from '../ports/runtime.js'
 import type {
 	ManagedSubagentBudgetLimits,
@@ -18,6 +19,7 @@ import type {
 	ManagedSubagentTerminalResult,
 	ManagedSubagentWaitRequest,
 	ManagedSubagentWaitResponse,
+	ManagedSubagentWriteSet,
 } from '../ports/subagents.js'
 import type { AgentFile } from './agent-file.js'
 import { AgentLifecycleService } from './agent-lifecycle.js'
@@ -44,6 +46,9 @@ const managedSubagentBudgetKeys = [
 	'max_children',
 	'max_review_loops',
 ] as const
+
+const managedSubagentWriteSetKeys = ['mode', 'items'] as const
+const managedSubagentWriteTargetKeys = ['resource_kind', 'resource_ref', 'scope', 'access'] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -91,6 +96,92 @@ function normalizeManagedSubagentBudgets(
 		normalized[key] = value
 	}
 	return normalized
+}
+
+export function normalizeManagedSubagentWriteSet(writeSet: unknown): ManagedSubagentWriteSet {
+	if (!isRecord(writeSet)) {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent write_set must be a JSON object.',
+		)
+	}
+	assertClosedObjectKeys(
+		writeSet,
+		managedSubagentWriteSetKeys,
+		'INVALID_SUBAGENT_REQUEST',
+		'Managed subagent write_set',
+	)
+	if (writeSet.mode !== 'allow_list') {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent write_set must use allow_list mode.',
+		)
+	}
+	if (!Array.isArray(writeSet.items) || writeSet.items.length === 0) {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent write_set must include at least one item.',
+		)
+	}
+
+	const items: ManagedSubagentWriteSet['items'] = writeSet.items.map((entry, index) => {
+		if (!isRecord(entry)) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent write_set item ${index + 1} must be a JSON object.`,
+			)
+		}
+		assertClosedObjectKeys(
+			entry,
+			managedSubagentWriteTargetKeys,
+			'INVALID_SUBAGENT_REQUEST',
+			`Managed subagent write_set item ${index + 1}`,
+		)
+		if (
+			entry.resource_kind !== 'file' &&
+			entry.resource_kind !== 'directory' &&
+			entry.resource_kind !== 'generic_resource'
+		) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent write_set item ${index + 1} resource_kind must be one of: file, directory, generic_resource.`,
+			)
+		}
+		if (typeof entry.resource_ref !== 'string' || entry.resource_ref.trim().length === 0) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent write_set item ${index + 1} resource_ref must be a non-empty string.`,
+			)
+		}
+		if (entry.scope !== 'exact' && entry.scope !== 'descendants') {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent write_set item ${index + 1} scope must be one of: exact, descendants.`,
+			)
+		}
+		if (
+			entry.access !== 'modify_existing' &&
+			entry.access !== 'create_within' &&
+			entry.access !== 'create_or_modify' &&
+			entry.access !== 'delete'
+		) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent write_set item ${index + 1} access must be one of: modify_existing, create_within, create_or_modify, delete.`,
+			)
+		}
+		return {
+			resource_kind: entry.resource_kind,
+			resource_ref: entry.resource_ref.trim(),
+			scope: entry.scope,
+			access: entry.access,
+		}
+	}) as ManagedSubagentWriteSet['items']
+
+	return {
+		mode: 'allow_list',
+		items,
+	}
 }
 
 function isManagedSubagentBudgetTighterOrEqual(
@@ -151,20 +242,7 @@ function assertManagedSubagentLaunchRequest(request: ManagedSubagentLaunchReques
 			'Managed subagent input_message must be a non-empty string.',
 		)
 	}
-	if (request.write_set.mode !== 'allow_list' || request.write_set.items.length === 0) {
-		throw new AppError(
-			'INVALID_SUBAGENT_REQUEST',
-			'Managed subagent write_set must use allow_list mode with at least one item.',
-		)
-	}
-	for (const target of request.write_set.items) {
-		if (target.resource_ref.trim().length === 0) {
-			throw new AppError(
-				'INVALID_SUBAGENT_REQUEST',
-				'Managed subagent write_set items must use non-empty resource_ref values.',
-			)
-		}
-	}
+	normalizeManagedSubagentWriteSet(request.write_set)
 	for (const prohibition of request.prohibitions ?? []) {
 		if (prohibition.trim().length === 0) {
 			throw new AppError(
@@ -432,6 +510,16 @@ function buildManagedSubagentCloseResponse(
 	}
 }
 
+function isSameManagedControlMessageIntent(
+	message: ManagedSubagentControlMessage,
+	request: ManagedSubagentSendRequest,
+): boolean {
+	return (
+		message.message_kind === request.message_kind &&
+		isDeepStrictEqual(message.payload, request.payload)
+	)
+}
+
 export class ManagedSubagentService implements ManagedSubagentPort {
 	private readonly stateStore: SQLiteLocalStateStore
 	private readonly runtimeAdapter: RuntimeAdapter
@@ -450,6 +538,7 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 		const resolvedChild = await this.lifecycleService.resolveLiveAgentFile(request.agent_ref)
 		assertChildLaunchCompatibility(resolvedChild.agent_file)
 		this.assertLaunchBudgetCaps(request)
+		const writeSet = normalizeManagedSubagentWriteSet(request.write_set)
 
 		const timestamp = nowIso()
 		const taskPackage: ManagedSubagentTaskPackage = {
@@ -458,7 +547,7 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 			input_message: request.input_message,
 			acceptance_criteria: request.acceptance_criteria,
 			prohibitions: request.prohibitions ?? [],
-			write_set: request.write_set,
+			write_set: writeSet,
 			budgets: normalizeManagedSubagentBudgets(request.budgets),
 			control_messages: [],
 		}
@@ -547,6 +636,20 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 				'SUBAGENT_NOT_FOUND',
 				`Managed subagent "${request.subagent_id}" does not exist.`,
 			)
+		}
+		const existingControlMessage = current.task_package.control_messages?.find(
+			(message) => message.message_id === request.message_id,
+		)
+		if (existingControlMessage) {
+			if (!isSameManagedControlMessageIntent(existingControlMessage, request)) {
+				return this.rejectManagedControlMessage(current, 'invalid_control_message')
+			}
+			return {
+				subagent_id: current.subagent_id,
+				delivery_state: 'accepted',
+				state: current.state,
+				reason_code: null,
+			}
 		}
 		if (current.state === 'closed' || current.state === 'terminal') {
 			return {

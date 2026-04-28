@@ -452,6 +452,54 @@ describe('ManagedSubagentService', () => {
 		} satisfies Pick<AppError, 'code' | 'message'>)
 	})
 
+	it('rejects structurally invalid managed-subagent write sets before resolving a child', async () => {
+		const store = await createStore()
+		store.createRun({
+			run_id: 'parent-run-write-set-shape',
+			resolved_revision_id: 'rev-parent-write-set-shape',
+			entry_node_id: 'entry',
+			started_via: 'direct',
+		})
+
+		const { adapter } = createStubAdapter([])
+		const service = new ManagedSubagentService({
+			state_store: store,
+			runtime_adapter: adapter,
+		})
+
+		await expect(
+			service.launch({
+				parent_run_id: 'parent-run-write-set-shape',
+				parent_task_id: 'task-write-set-shape',
+				child_role: 'worker',
+				agent_ref: 'agent.phase16.child.write-set-shape',
+				objective: 'Worker with malformed write set',
+				input_message: 'input',
+				acceptance_criteria: ['Finish'],
+				write_set: {
+					mode: 'allow_list',
+					items: [
+						{
+							resource_kind: 'file',
+							resource_ref: 'src/core/write-set-shape.ts',
+							scope: 'recursive',
+							access: 'create_or_modify',
+						},
+					],
+				} as unknown as Parameters<ManagedSubagentService['launch']>[0]['write_set'],
+			}),
+		).rejects.toMatchObject({
+			code: 'INVALID_SUBAGENT_REQUEST',
+			message: 'Managed subagent write_set item 1 scope must be one of: exact, descendants.',
+		} satisfies Pick<AppError, 'code' | 'message'>)
+
+		expect(
+			store.listManagedSubagentRecords({
+				parent_run_id: 'parent-run-write-set-shape',
+			}),
+		).toHaveLength(0)
+	})
+
 	it('returns reviewer findings and enforces the review-loop ceiling', async () => {
 		const store = await createStore()
 		store.createRun({
@@ -649,6 +697,41 @@ describe('ManagedSubagentService', () => {
 			state: 'running',
 			reason_code: null,
 		})
+		expect(
+			store.getManagedSubagentRecord(launched.subagent_id)?.task_package.control_messages,
+		).toHaveLength(1)
+
+		const duplicateStatusMessage = await service.send({
+			subagent_id: launched.subagent_id,
+			message_id: 'msg-status',
+			message_kind: 'request_status',
+			payload: {},
+		})
+		expect(duplicateStatusMessage).toMatchObject({
+			delivery_state: 'accepted',
+			state: 'running',
+			reason_code: null,
+		})
+		expect(
+			store.getManagedSubagentRecord(launched.subagent_id)?.task_package.control_messages,
+		).toHaveLength(1)
+
+		const conflictingDuplicateStatusMessage = await service.send({
+			subagent_id: launched.subagent_id,
+			message_id: 'msg-status',
+			message_kind: 'clarify_scope',
+			payload: {
+				summary: 'Different control intent with a reused id',
+			},
+		})
+		expect(conflictingDuplicateStatusMessage).toMatchObject({
+			delivery_state: 'rejected',
+			state: 'running',
+			reason_code: 'invalid_control_message',
+		})
+		expect(
+			store.getManagedSubagentRecord(launched.subagent_id)?.task_package.control_messages,
+		).toHaveLength(1)
 
 		const budgetMessage = await service.send({
 			subagent_id: launched.subagent_id,
