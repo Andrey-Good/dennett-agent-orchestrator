@@ -592,14 +592,30 @@ describe('Stage 4 deterministic provider reliability matrix', () => {
 			},
 		})
 
-		store.appendVisibleChatMessage({
+		const approvalReply = {
+			kind: 'text',
+			prompt_id: 'stage4-approval',
+			text: 'Approved',
+		} as const
+		const recordedReply = store.recordUserPromptReply({
 			run_id: 'stage4-waiting',
-			kind: 'user_message',
-			payload: {
-				kind: 'text',
+			prompt_id: 'stage4-approval',
+			payload: approvalReply,
+		})
+		expect(recordedReply).toMatchObject({
+			accepted: true,
+			reply: {
 				prompt_id: 'stage4-approval',
-				text: 'Approved',
+				payload: approvalReply,
+				delivery_status: 'recorded',
 			},
+		})
+		expect(
+			store.getPersistedRunSnapshot('stage4-waiting')?.resume.pending_prompt?.reply,
+		).toMatchObject({
+			prompt_id: 'stage4-approval',
+			payload: approvalReply,
+			delivery_status: 'recorded',
 		})
 
 		const resumedWaiting = await resumeAgentRun(agentFile, adapter, 'stage4-waiting', {
