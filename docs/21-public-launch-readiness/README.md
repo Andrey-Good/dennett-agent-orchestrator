@@ -3,10 +3,11 @@
 <a id="english"></a>
 # Public Launch Readiness
 
-Status: canonical owner section for Part 1 public-launch readiness planning. Stage 1 is only a baseline gap and forbidden-claim lock; it does not expand the current release target.
+Status: canonical owner section for Part 1 public-launch readiness planning. Stage 1 is only a baseline gap and forbidden-claim lock; Stage 2 selects a CLI/package-first launch target and keeps hosted/managed launch deferred. Neither stage expands the current release target or claims public readiness.
 
 Documents:
 
+- [Public Launch Scope](./public-launch-scope.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -20,17 +21,18 @@ The current truthful release state remains:
 
 - bounded `release` for `local-cli-repository-readiness` only;
 - no hosted, managed, packaged, installer, container, production SaaS, broad provider, full App Server certification, full user interaction, operator-facing managed-subagent, or public Builder 2.0 readiness claim;
-- no change to source, tests, package metadata, CI, tags, commits, or publication state from Stage 1.
+- no change to source, tests, package metadata, CI, tags, commits, or publication state from Stage 1 or Stage 2.
 
-Part 1 stages 2-10 must use [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as the starting lock before changing scope or claiming evidence.
+Part 1 stages 3-10 must use [Public Launch Scope](./public-launch-scope.md) and [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) as the starting locks before changing scope or claiming evidence.
 
 <a id="russian"></a>
 # Готовность к публичному запуску
 
-Статус: канонический раздел-владелец для планирования Part 1 public-launch readiness. Stage 1 является только фиксацией baseline gaps и forbidden claims; он не расширяет текущую цель выпуска.
+Статус: канонический раздел-владелец для планирования Part 1 public-launch readiness. Stage 1 является только фиксацией baseline gaps и forbidden claims; Stage 2 выбирает CLI/package-first launch target и оставляет hosted/managed launch deferred. Ни один stage не расширяет текущую цель выпуска и не заявляет public readiness.
 
 Документы:
 
+- [Public Launch Scope](./public-launch-scope.md)
 - [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
 - [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
 - [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
@@ -44,6 +46,6 @@ Part 1 stages 2-10 must use [Baseline Gap And Forbidden Claims](./baseline-gap-a
 
 - bounded `release` только для `local-cli-repository-readiness`;
 - нет claims о hosted, managed, packaged, installer, container, production SaaS, broad provider, full App Server certification, full user interaction, operator-facing managed-subagent или public Builder 2.0 readiness;
-- Stage 1 не меняет source, tests, package metadata, CI, tags, commits или publication state.
+- Stage 1 и Stage 2 не меняют source, tests, package metadata, CI, tags, commits или publication state.
 
-Stages 2-10 из Part 1 должны использовать [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) как начальную фиксацию перед изменением scope или заявлением evidence.
+Stages 3-10 из Part 1 должны использовать [Public Launch Scope](./public-launch-scope.md) и [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md) как начальные фиксации перед изменением scope или заявлением evidence.
