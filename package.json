@@ -5,10 +5,21 @@
 	"private": true,
 	"license": "Apache-2.0",
 	"type": "module",
+	"keywords": [
+		"agent-orchestration",
+		"agent-runtime",
+		"codex",
+		"cli",
+		"workflow"
+	],
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/Andrey-Good/dennett-agent-orchestrator"
 	},
+	"bugs": {
+		"url": "https://github.com/Andrey-Good/dennett-agent-orchestrator/issues"
+	},
+	"homepage": "https://github.com/Andrey-Good/dennett-agent-orchestrator#readme",
 	"bin": {
 		"dennett-agent-orchestrator": "./dist/src/interfaces/cli.js"
 	},

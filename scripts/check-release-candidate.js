@@ -6,9 +6,14 @@ const execFileAsync = promisify(execFile)
 
 const REQUIRED_CANDIDATE_PATHS = [
 	{ label: '.github/workflows/ci.yml', matches: (filePath) => filePath === '.github/workflows/ci.yml' },
+	{
+		label: '.github/workflows/release.yml',
+		matches: (filePath) => filePath === '.github/workflows/release.yml',
+	},
 	{ label: '.gitignore', matches: (filePath) => filePath === '.gitignore' },
 	{ label: 'AGENTS.md', matches: (filePath) => filePath === 'AGENTS.md' },
 	{ label: 'README.md', matches: (filePath) => filePath === 'README.md' },
+	{ label: 'SECURITY.md', matches: (filePath) => filePath === 'SECURITY.md' },
 	{
 		label: 'agent_orchestrator_final_spec_v2.md',
 		matches: (filePath) => filePath === 'agent_orchestrator_final_spec_v2.md',
@@ -29,9 +34,28 @@ const REQUIRED_CANDIDATE_PATHS = [
 		matches: (filePath) => /^contracts\/typescript\/[^/]+\.ts$/.test(filePath),
 	},
 	{ label: 'docs/**', matches: (filePath) => filePath.startsWith('docs/') },
+	{
+		label: 'docs/21-public-launch-readiness/baseline-gap-and-forbidden-claims.md',
+		matches: (filePath) =>
+			filePath === 'docs/21-public-launch-readiness/baseline-gap-and-forbidden-claims.md',
+	},
+	{
+		label: 'docs/21-public-launch-readiness/final-public-launch-gate-decision.md',
+		matches: (filePath) =>
+			filePath === 'docs/21-public-launch-readiness/final-public-launch-gate-decision.md',
+	},
+	{
+		label: 'docs/21-public-launch-readiness/public-docs-onboarding-and-claims.md',
+		matches: (filePath) =>
+			filePath === 'docs/21-public-launch-readiness/public-docs-onboarding-and-claims.md',
+	},
 	{ label: 'examples/**', matches: (filePath) => filePath.startsWith('examples/') },
 	{ label: 'scripts/check-distribution.js', matches: (filePath) => filePath === 'scripts/check-distribution.js' },
 	{ label: 'scripts/check-packlist.js', matches: (filePath) => filePath === 'scripts/check-packlist.js' },
+	{
+		label: 'scripts/check-public-release-foundation.js',
+		matches: (filePath) => filePath === 'scripts/check-public-release-foundation.js',
+	},
 	{
 		label: 'scripts/check-release-candidate.js',
 		matches: (filePath) => filePath === 'scripts/check-release-candidate.js',

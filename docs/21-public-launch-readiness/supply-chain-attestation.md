@@ -1,6 +1,6 @@
 # Supply Chain Attestation
 
-Status: Stage 11 supply-chain attestation record for local package proof. This document distinguishes local SBOM validation from retained SBOMs, signatures, provenance, and public release attestations.
+Status: Stage 11 supply-chain attestation record for local package proof and the later OSS release-candidate workflow. This document distinguishes local SBOM validation and retained release-candidate artifacts from signatures, npm provenance, and completed public release attestations.
 
 Related documents:
 
@@ -35,6 +35,25 @@ The resulting JSON must include an SPDX version and a package entry named `denne
 
 There is no canonical SBOM file path in the repository or release artifacts. The script validates the generated SBOM in memory and removes the temporary workspace unless `--keep-temp` is supplied. SBOM retention, release attachment, and long-term evidence storage remain deferred.
 
+For release-candidate CI, the same proof script may retain the generated SPDX JSON:
+
+```powershell
+pnpm supply-chain:local:proof -- --from-tgz C:\path\to\candidate.tgz --output C:\path\to\candidate.spdx.json
+```
+
+The `--output` file is release-candidate evidence only. It records the SBOM generated from the candidate tarball in that workflow run; it is not proof that the package has been published, that npm provenance exists, or that the artifact is suitable for general availability.
+
+## Release-Candidate Evidence
+
+`.github/workflows/release.yml` creates the following retained artifacts for tag-triggered and manually dispatched release-candidate runs:
+
+- npm package tarball produced by `npm pack --ignore-scripts`;
+- retained SPDX SBOM JSON generated from the candidate tarball;
+- `npm-pack.json` metadata from the pack command;
+- `SHA256SUMS` covering the tarball, SBOM, and pack metadata.
+
+When the repository is public, the workflow also requests GitHub artifact attestations for the candidate tarball and the SBOM. These attestations describe what the workflow built and attached in GitHub Actions; they do not replace npm provenance for the package version published to the public npm registry.
+
 ## Provenance And Signing Status
 
 Current status:
@@ -43,11 +62,12 @@ Current status:
 | --- | --- | --- |
 | npm provenance | Deferred. | Package publication is blocked by `private: true`, and Stage 11 must not run `npm publish`. |
 | Package signing | Deferred. | No local signing identity or publication signing infrastructure is configured. |
-| Signed SBOM | Deferred. | No retained canonical SBOM artifact exists. |
-| Artifact hash manifest | Deferred. | The local proof creates temporary tarballs but does not record a canonical hash manifest. |
+| GitHub artifact attestation | Conditional release-candidate control. | `.github/workflows/release.yml` requests tarball and SBOM attestations only when the repository is public and the release-candidate workflow runs. |
+| Signed SBOM | Deferred. | Release-candidate CI can retain and attest an SBOM, but no canonical signed SBOM is attached to an approved public release yet. |
+| Artifact hash manifest | Conditional release-candidate control. | Release-candidate CI records `SHA256SUMS`; local proof without the release workflow still creates temporary tarballs and does not retain a canonical hash manifest. |
 | Git tag or GitHub release attestation | Deferred. | Stage 11 must not create tags, push commits, or create releases. |
 
-The proof script prints the provenance and signing deferrals as explicit output during local SBOM proof.
+The proof script prints the provenance and signing deferrals as explicit output during local SBOM proof. npm trusted publishing, once configured for the `release.yml` workflow and run against a public package from a public repository, is expected to publish npm provenance automatically; until that publish run succeeds, npm provenance remains deferred.
 
 ## Artifact Hash And Evidence Expectations
 
@@ -71,7 +91,7 @@ The following remain unsigned or unattested:
 
 - locally packed `.tgz` files;
 - generated `dist` contents;
-- local SBOM output;
+- local SBOM output outside the release-candidate workflow;
 - package inventory dry-run output;
 - CI logs unless a later release process archives them;
 - docs and README updates;
@@ -85,7 +105,7 @@ Do not claim:
 - artifacts are signed;
 - npm provenance exists;
 - SBOMs are retained, published, or attached to releases;
+- release-candidate SBOM retention is equivalent to release SBOM publication;
 - local SBOM validation is equivalent to public release attestation;
 - reproducible builds are proven;
 - package hashes are recorded unless a later evidence document records them.
-

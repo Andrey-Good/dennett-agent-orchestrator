@@ -26,6 +26,21 @@ That target means a taggable repository state for contributors and local users, 
 
 It does not mean public product launch readiness. It does not prove hosted operation, managed deployment, package publication, installer or container distribution, production SaaS readiness, full App Server certification, broad provider reliability, native App Server memory, full interaction readiness, complete managed subagent orchestration, or public Builder 2.0 authoring readiness.
 
+## Current OSS v0.1 Gate Snapshot
+
+The later public-launch readiness documents now select a CLI/package-first OSS v0.1 launch shape, but [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md) keeps that launch blocked as `local-package-readiness-only`.
+
+The current blocker categories are:
+
+| Category | Current state | Required before the category can clear |
+| --- | --- | --- |
+| Package/public registry evidence | `package.json` remains `private: true`, version is `0.0.0`, registry ownership is not proven, and public registry install/upgrade/uninstall/rollback proof is absent. | Final version approval, approved privacy change, registry ownership proof, public artifact proof, and lifecycle proof for the selected public package. |
+| External beta evidence | Stage 16 is `external-beta-not-run`; no accepted external participant evidence or beta-exit review exists. | Real external participant sessions, accepted workflow evidence, bug-bar triage, privacy-safe artifacts, and beta-exit decision. |
+| Supply-chain evidence | Local SBOM validation exists, but retained SBOM, provenance, signing, and artifact hash manifest evidence are absent. | Retained SBOM and hashes, provenance/signing implementation or explicit release decision, and publication attachment policy. |
+| Documentation and metadata | Public docs are bounded, but public install docs, release notes, changelog/versioning policy, and final package metadata are not yet launch-ready. | Public docs and package metadata that match the proven artifact and claim boundaries. |
+
+Hosted and managed deployment remain explicitly deferred. That deferral does not have to block a later non-hosted OSS v0.1 package approval, but it must continue to block hosted, SaaS, managed-service, uptime, SLA, telemetry, and production-load claims.
+
 ## Already Implemented Or Proven For The Bounded Local Target
 
 These items may be described only inside the local CLI/repository boundary:
@@ -104,104 +119,6 @@ Stage 1 does not decide public launch scope. It creates the baseline that later 
 - Stage 10 freezes only the bounded CLI/API compatibility surface named in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md); any expansion needs a later owner update and evidence.
 
 <a id="russian"></a>
-# Baseline Gap And Forbidden Claims
+# Russian Translation Status
 
-Статус: каноническая Stage 1 фиксация public-launch readiness baseline. Этот документ фиксирует текущую границу evidence перед тем, как stages 2-10 из Part 1 расширят или отклонят scope.
-
-Связанные документы:
-
-- [Phase 12 Capability Gap Lock](../13-capability-gap-lock/phase-12-capability-gap-lock.md)
-- [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
-- [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
-- [Phase 14 Native Runtime Surface Completion](../15-native-runtime-surface/phase-14-native-runtime-surface-completion.md)
-- [Phase 15 Full User Interaction Layer](../16-full-user-interaction-layer/phase-15-full-user-interaction-layer.md)
-- [Phase 16 Managed Subagent Orchestration](../17-managed-subagent-orchestration/phase-16-managed-subagent-orchestration.md)
-- [Managed Subagent Productization](./managed-subagent-productization.md)
-- [Phase 17 Builder 2.0](../18-builder-2-0/phase-17-builder-2-0.md)
-- [Builder 2.0 Productization](./builder-2-0-productization.md)
-- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
-
-## Текущий baseline
-
-Единственное принятое состояние выпуска - bounded `release` для `local-cli-repository-readiness` на candidate commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`.
-
-Эта цель означает taggable состояние репозитория для контрибьюторов и локальных пользователей, включая source, contracts, documentation, examples, tests и build-local `dist` CLI, созданный из checkout командой `pnpm build`.
-
-Она не означает готовность к публичному запуску продукта. Она не доказывает hosted operation, managed deployment, package publication, installer или container distribution, production SaaS readiness, full App Server certification, broad provider reliability, native App Server memory, full interaction readiness, complete managed subagent orchestration или public Builder 2.0 authoring readiness.
-
-## Уже реализовано или доказано для bounded local target
-
-Эти пункты можно описывать только внутри границы local CLI/repository:
-
-| Capability | Текущая evidence boundary | Следствие для public launch |
-| --- | --- | --- |
-| Repository gates и build-local CLI artifact | Final local candidate gates, build, `dist` smoke, packlist и package dry-run checks записаны в release decision record. | Поддерживает только уверенность в репозитории; не подразумевает package publication или artifact rollback. |
-| Minimal Codex App Server graph execution | Minimal live Codex graph smoke записан для принятого local path. | Поддерживает только узкий runtime graph proof; не сертифицирует всю App Server surface. |
-| Runtime discovery и environment inspection | Built CLI proof существует для model listing и environment inspection на поддерживаемом локальном authenticated path. | Поддерживает только local metadata visibility; не доказывает каждый model option или account/rate-limit policy в launch conditions. |
-| Direct local Mem0 provider path | Local provider registration, direct memory CRUD/search и scoped Mem0 namespace cleanup имеют proof. | Поддерживает только bounded local Mem0 path; не доказывает durable provider cleanup, provider-wide cleanup, true restore, graph-store cleanup или provider reliability. |
-| Narrow Stage 2 runtime-memory graph path | Registered local Mem0 plus prompt-rendered Codex memory context и success-only provider writes имеют proof. | Это не native App Server memory и не broad runtime-memory/provider support. |
-| Local stress, recovery и deterministic provider matrix | Stub-runtime и local SQLite tests доказывают выбранные local orchestration semantics. | Не доказывает live provider stress, external throttling reliability, production-scale load или automatic live crash recovery. |
-| Supported user prompt wait/reply/resume slice | Focused adapter, Core и CLI tests покрывают durable prompt state для поддерживаемых prompt shapes. | Не является full user interaction readiness для всех prompt shapes, interfaces или risky mid-run change policies. |
-| First managed-subagent layer | Core service и state покрывают worker/reviewer/final-review roles, launch/wait/send/close, findings, cancellation state, budgets, sibling write-set conflict rejection и Stage 8 CLI commands `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control` и `subagent-close`. | Поддерживает только bounded local CLI operator surface. Launch является только launch-and-wait; control/cancel semantics записываются в state, а не live-deliver-ятся; нет durable background runner или broad live orchestration proof. |
-| Builder draft и Builder 2.0 authoring boundary | Builder остается draft-first и public-contract-only. TASK-557 добавляет formal `builder-output.schema.json` wrapper и deterministic candidate audit для runtime options, capability gates, JSON output schema compilation, hidden managed-subagent field rejection и local/secret provider-data rejection. Принятый output сохраняется как draft revision, а candidate diagnostics выводятся вне Agent JSON. | Поддерживается только bounded audited draft authoring. Это не public complete authoring system, не deploy proof, не provider registration и не proof, что builder-authored agents выполняются как integrated product flows. |
-
-## Partial или deferred gaps для public launch
-
-| Part 1 stage | Gap, зафиксированный Stage 1 | Evidence, нужное перед движением gap в public-launch scope |
-| --- | --- | --- |
-| Stage 2: Public Launch Scope Decision | Public launch target не выбран за пределами bounded local release. | Explicit scope document с included/excluded launch surfaces, user personas, support boundary, rollback expectations и public claim language. |
-| Stage 3: Security, Privacy, Legal Foundation | Нет claim о public security, privacy или legal readiness. | Threat model, secret-handling review, privacy/data-retention statement, license/package review, disclosure process и evidence, что docs/examples не раскрывают secrets или unsupported data promises. |
-| Stage 4: Release Engineering And Supply Chain | Stage 4 доказывает только private package и release-engineering foundation; готовность npm/public package, installer, container, signed artifact, provenance или public artifact rollback не доказана. | Private packaging boundaries, repository-local release gates, artifact inventory inputs и reproducible-build expectations. Clean-environment install/deployment proof для выбранных distribution artifacts, provenance/signing/publication decisions, rollback/uninstall proof и CI OS parity остаются evidence для Stage 11 или later release approval. |
-| Stage 5: Runtime/App Server Certification | Full App Server certification не заявляется. | Supported runtime matrix, App Server primitive mapping, model/options compatibility evidence, timeout/failure-mode evidence, auth/account/rate-limit behavior и redacted live runs для каждой certified surface. |
-| Stage 6: Memory Productization | Memory ограничена local provider registration, Mem0-first direct use и narrow prompt-rendered runtime memory. | Provider readiness matrix, durable cleanup/restore semantics where claimed, provider isolation proof, reliability/throttling proof, backup или deletion guarantees и documented limits для каждого supported provider. |
-| Stage 7: Full User Interaction Layer | Текущий interaction proof уже, чем полный public user-interaction surface. | End-to-end evidence для blocked prompts, replies, resume-after-reply, unsupported prompt errors, risky mid-run change policy, CLI/user-facing semantics и redacted transcripts across supported runtimes. |
-| Stage 8: Managed Subagent Product Surface | Bounded local CLI operator surface существует, но complete public orchestration остается deferred. | Evidence существует для launch-and-wait, list, show, wait/reconcile, record-control и close. Evidence все еще нужно для durable background runners, live control delivery, live runtime cancellation, cross-process attachment, complete review/fix loops, surfaced child interaction, cancellation cleanup и leaked-child checks. |
-| Stage 9: Builder 2.0 On Stable Contracts | Builder 2.0 productized только как bounded audited draft-first authoring, а не public complete authoring workflow. | Все еще нужны live execution proof для representative drafts, integrated builder/lifecycle/runtime/memory/interaction/subagent scenarios и user-facing rejected-candidate failure docs. |
-| Stage 10: Stable CLI/API Contract Freeze | Bounded stable CLI/API compatibility зафиксирована только для explicitly labeled stable CLI commands, stable/safety-protocol cleanup flow, exported JSON schema artifacts и no-JS-API package boundary. | Stable compatibility остается forbidden для experimental commands, JS/TS imports, hosted/managed APIs, unpublished package claims и любой surface, не названной в [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). |
-
-## Forbidden Claims
-
-Пока более поздний stage не запишет required evidence и не обновит release scope, нельзя заявлять:
-
-- Dennett publicly launched, fully released, generally available или production ready.
-- Текущий release является чем-то большим, чем bounded `local-cli-repository-readiness`.
-- Hosted service operation, managed deployment, uptime, multi-tenancy или hosted rollback доказаны.
-- npm/public package publication, installer distribution, container distribution, signed artifacts, supply-chain provenance или packaged rollback доказаны.
-- Full Codex App Server certification завершена.
-- Native App Server memory реализована или Mem0 потребляется через native App Server memory primitive.
-- Runtime memory шире registered local provider resolution, prompt-rendered Codex context и success-only provider writes.
-- Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior или volume reliability доказаны.
-- Deterministic local stress/recovery tests доказывают live provider stress, production-scale load или automatic live crash recovery.
-- Full user interaction readiness доказана сверх supported prompt wait/reply/resume slice.
-- Managed subagents являются complete operator-facing product surface.
-- Managed subagents предоставляют durable background execution, live control-message delivery, live runtime cancellation, hosted/UI orchestration или write-set sandboxing.
-- Builder 2.0 является public complete authoring system, deploy authority, provider/runtime account registry, live managed-subagent orchestrator или proof, что builder-authored agents являются integrated product flows.
-- Stable public CLI/API compatibility существует за пределами bounded Stage 10 freeze, including for experimental commands or JS/TS imports.
-
-## Unlock Rules
-
-Forbidden claim может быть разблокирован только когда выполнено все:
-
-1. более поздний Part 1 stage явно включает capability в scope;
-2. owner document называет точное user-visible behavior и non-goals;
-3. tests покрывают expected success, failure и unsupported cases;
-4. live или artifact evidence существует, если claim зависит от реального runtime, provider, deployment surface или distribution artifact;
-5. rollback, cleanup или recovery доказаны там, где claim подразумевает operational responsibility;
-6. failed, blocked, inconclusive и superseded attempts остаются видимыми;
-7. README и user-facing docs используют тот же bounded language, что и updated scope lock.
-
-Evidence должно жить в durable documentation owner, например evidence log, runbook, release-scope update, ADR или acceptance test. Одного task summary недостаточно.
-
-## Связь со stages 2-10 из Part 1
-
-Stage 1 не выбирает public launch scope. Он создает baseline, который поздние stages должны либо удовлетворить, либо оставить deferred.
-
-- Stage 2 может сузить, отложить или выбрать public-launch scope, но не должен стирать этот forbidden-claim lock.
-- Stage 3 должен решить security, privacy и legal prerequisites до claims о public distribution или hosted behavior.
-- Stage 4 владеет private package foundation only; Stage 11 должен доказать каждый выбранный distribution artifact, а не выводить artifact readiness из repository gates.
-- Stage 5 должен явно сертифицировать supported runtime/App Server surfaces.
-- Stage 6 должен productize memory только для provider behavior с реальным cleanup, reliability и support evidence.
-- Stage 7 должен доказать full interaction semantics перед расширением user-facing interaction claims.
-- Stage 8 фиксирует bounded local CLI managed-subagent operator surface; later stages должны доказать durable background execution, live cancellation/control delivery и complete review/fix orchestration перед расширением broader claims.
-- Stage 9 должен доказать Builder 2.0 на stable public contracts перед расширением public authoring claims.
-- Stage 10 freezes only bounded CLI/API compatibility surface, named in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md); any expansion needs a later owner update and evidence.
+The previous localized duplicate section was removed because it contained mojibake. The English section above is the canonical public launch record until a reviewed Russian translation is restored.

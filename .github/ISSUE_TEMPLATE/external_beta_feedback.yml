@@ -9,6 +9,8 @@ body:
         **Sensitive data warning:** Do not paste credentials, API keys/tokens, provider config, account/profile data, private prompts/replies, memory records, unredacted logs, raw runtime-env output, local state databases, provider storage, or proprietary inputs/outputs into this public issue.
 
         Security vulnerabilities, credential exposure, data leakage, or unsafe redaction reports must follow `SECURITY.md` instead of this public template.
+
+        **Invitation guard:** This template is only for maintainer-invited Stage 16 beta runs. The current public beta remains `not-run` unless a maintainer records accepted dated workflow evidence; unsolicited issues or planning notes do not prove external beta completion, beta-user validation, or public-launch readiness.
   - type: dropdown
     id: workflow-id
     attributes:

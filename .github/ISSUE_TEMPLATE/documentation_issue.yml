@@ -21,3 +21,17 @@ body:
       description: What is missing, inaccurate, or hard to follow?
     validations:
       required: true
+  - type: dropdown
+    id: claim-boundary
+    attributes:
+      label: Claim boundary risk
+      description: Does the issue involve launch, package, hosted, runtime, memory, Builder, or subagent readiness claims?
+      options:
+        - No claim-boundary concern
+        - Public launch or GA wording
+        - Public npm or package distribution wording
+        - Hosted, SaaS, or production-readiness wording
+        - Runtime, memory, Builder, or managed-subagent capability wording
+        - Not sure
+    validations:
+      required: true

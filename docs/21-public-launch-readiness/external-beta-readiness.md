@@ -42,6 +42,22 @@ Minimum participant criteria before the beta can start:
 - at least one participant is willing to exercise support/feedback routing without sharing sensitive data;
 - any participant using live runtime or memory providers owns the relevant account, storage, and cleanup responsibility.
 
+## OSS Launch Beta Execution Package
+
+The OSS public-launch beta gate is executable only when a maintainer prepares a dated beta packet before inviting participants. The packet may live outside the public repository if it contains private roster data, but the public evidence log must record the redacted results.
+
+Minimum packet contents:
+
+- beta artifact: exact commit, local tarball, or package candidate under test;
+- participant aliases: at least `beta-user-1`, `beta-user-2`, and `beta-user-3`, with private real identities retained only by maintainers;
+- selected workflows: the required workflow IDs for the session and any deliberately skipped workflow IDs with reasons;
+- maintainer owner: one named maintainer for triage, redaction review, and evidence acceptance;
+- feedback route: public issue route for redacted ordinary feedback and private security route through `SECURITY.md`;
+- response window: target first-response window for S0/S1 issues and ordinary beta feedback;
+- stop rule: any `S0-security-privacy` issue pauses further beta invites until the issue is fixed or the affected workflow is removed from scope with participant notice.
+
+For the current OSS public-launch decision, the minimum beta packet should include `EB-WF-01`, `EB-WF-02`, `EB-WF-03`, `EB-WF-08`, and at least one of `EB-WF-04`, `EB-WF-05`, `EB-WF-06`, or `EB-WF-07` if that capability is included in public-facing claims. A workflow that cannot be safely run must be recorded as `blocked` or removed from public-launch scope; it must not be replaced by maintainer-only or mocked evidence.
+
 ## Workflow IDs
 
 Beta evidence must identify at least one workflow ID per session.
@@ -128,6 +144,18 @@ Stage 16 may be marked completed only after all criteria are met:
 - a final beta review records whether the product may proceed, must defer, or must re-run selected workflows.
 
 Until these criteria are met, Stage 16 remains `not-run` or `incomplete`; it must not be described as successful.
+
+## Launch Approval Tie
+
+External beta is a required blocker check for any OSS public-launch approval that claims user validation. The final gate must remain blocked for completed-beta or beta-user-validation claims until:
+
+- at least three participant aliases have accepted evidence rows;
+- each required workflow in the beta packet has `pass`, accepted `fail` with a documented non-shipping decision, or explicit removal from public scope;
+- no unresolved `S0-security-privacy` or beta-scope `S1-critical` issue remains;
+- every accepted evidence row links to redacted public artifacts or explains why artifacts are private;
+- the evidence log records the final beta review status and decision effect.
+
+If these conditions are not met, public docs may describe only beta planning and local/offline proof. They must not imply that external users have validated the product.
 
 ## Evidence Schema
 

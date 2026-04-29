@@ -32,6 +32,53 @@ Record each scenario in [Evidence Log](./evidence-log.md):
 
 If a scenario is outside the release scope, mark it `not-run` with `decision_effect: supports-defer` and link the release-scope decision. If it is inside scope and cannot run, mark it `blocked`.
 
+## OSS v0.1 Provider Proof Matrix
+
+Use this matrix before any OSS public-launch provider claim expands beyond the current local/package boundary. It separates local/offline checks, user-owned Mem0 flows, Codex/App Server live flows, and unsupported claims.
+
+| Claim class | Scenario IDs | Current claim status | Required proof before claim expands |
+| --- | --- | --- | --- |
+| Local/offline CLI and graph semantics | `P19-LIVE-LOCAL-001` | Evidence exists only through repository gates, local examples, deterministic tests, and local package proof. | Run the documented local gates for the exact candidate artifact and record commit, package version, OS, Node.js, command list, and final result. |
+| User-owned Mem0 direct provider path | `P19-LIVE-MEM0-DIRECT-001` | Narrow local Mem0 registration, read, write, search, and scoped namespace cleanup have historical evidence. | For OSS v0.1 claims, rerun against a disposable user-owned provider namespace or local SDK store, record registration config class, operation IDs, cleanup result, and redactions. |
+| Codex plus registered Mem0 runtime-memory path | `P19-LIVE-MEM0-CODEX-001` | Historical evidence proves only prompt-rendered memory context plus success-only Core writes. | Rerun the runtime-memory fixture against the candidate artifact, prove memory-influenced output and post-success write metadata, and keep native App Server memory explicitly out of scope unless separately proven. |
+| Codex/App Server live runtime graph | `P19-LIVE-CODEX-CLI-001` | Historical narrow live smoke exists for a minimal graph, not broad model/options support. | Rerun a quota-safe graph against the exact candidate artifact, record App Server version or capability metadata, model/options used, final output, run ID, and redacted account evidence. |
+| Runtime discovery and account/config introspection | `P19-LIVE-CODEX-DISCOVERY-001` | Historical local authenticated discovery exists. | Rerun `runtime-env-inspect --redacted` and model discovery against the candidate artifact; record only redacted metadata and unsupported/unknown fields. |
+| External provider reliability, throttling, latency, or volume | `P19-LIVE-PROVIDER-RELIABILITY-001` | Not proven for public claims. Deterministic local stub tests are not live reliability proof. | Run quota-safe live-provider reliability scenarios with named limits, retry behavior, failure handling, cleanup debt, and residual risk. Mark `blocked` if accounts, quota, or safe cleanup are unavailable. |
+| Native App Server memory, non-Codex runtimes, hosted provider operations, provider-wide cleanup | `P19-LIVE-UNSUPPORTED-001` | Unsupported or unproven. | Add implementation and live evidence first, or keep these claims forbidden/deferred in launch docs. |
+
+## Provider Proof Evidence Schema
+
+Use this schema for each provider proof row before adding it to the evidence log. A blocked row is acceptable evidence of missing prerequisites; it is not a successful provider proof.
+
+```yaml
+id: P19-YYYY-MM-DD-PROVIDER-...
+type: live-proof | regression | manual-review
+scenario_id: P19-LIVE-CODEX-CLI-001
+claim_class: local-offline | mem0-direct | mem0-codex | codex-live | provider-reliability | unsupported
+target_claim: ""
+environment:
+  os: ""
+  node: ""
+  package_manager: ""
+  runtime_or_provider: ""
+  account_or_namespace_class: redacted | disposable | not-used
+artifact_or_commit: ""
+commands_or_procedure: ""
+result: pass | fail | blocked | inconclusive | not-run
+decision_effect: supports-release | blocks-release | supports-defer | informational
+proof_observed:
+  final_output: ""
+  persisted_state: ""
+  provider_objects: ""
+  cleanup_or_retention: ""
+redactions:
+  - ""
+claim_boundary: ""
+missing_prerequisites:
+  - ""
+review_status: unreviewed | accepted | rejected | superseded
+```
+
 ## Execution Steps
 
 1. Record environment metadata before the run.

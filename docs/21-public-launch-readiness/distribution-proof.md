@@ -29,7 +29,7 @@ The package remains private. Stage 11 does not run `npm publish`, set `private: 
 | Evidence area | Command or owner | Proven result | Limit |
 | --- | --- | --- | --- |
 | Generated distribution shape | `pnpm dist:check` | `dist/src/interfaces/cli.js` exists, forbidden `dist/vitest.config.*` output is absent, and CLI help contains the command identity. | Requires `pnpm build`; `dist` is build-local and not tracked source. |
-| Package inventory and metadata | `pnpm packlist:check` | Package contents are allowlisted to package metadata, README, LICENSE, built CLI files, and JSON schemas; package remains private; Node floor is `>=22.13.0`; repository metadata matches the verified repository URL. | Does not prove public registry availability or final public metadata completeness. |
+| Package inventory and metadata | `pnpm packlist:check` | Package contents are allowlisted to package metadata, README, LICENSE, built CLI files, and JSON schemas; package remains private; Node floor is `>=22.13.0`; repository, bugs, homepage, and keyword metadata match the launch-readiness allowlist. | Does not prove public registry availability, registry ownership, publication approval, or final release version selection. |
 | Local install and uninstall | `pnpm package:local-install:proof` | Builds and packs the current checkout, installs the resulting `.tgz` into a temporary npm consumer project, smokes the installed bin, uninstalls the package, and verifies package/bin removal. | Proves package removal from a temporary consumer project only, not local app-state or provider-data deletion. |
 | Upgrade and rollback harness | `pnpm package:upgrade-rollback:proof -- --from-tgz <old.tgz> --to-tgz <new.tgz>` | Installs `from`, smokes CLI help, installs `to`, smokes CLI help, reinstalls `from`, and smokes CLI help again. | Requires two distinct existing tarballs. No prior artifact means rollback proof is unavailable. |
 | Local SBOM proof | `pnpm supply-chain:local:proof` or `pnpm supply-chain:local:proof -- --from-tgz <candidate.tgz>` | Installs a local tarball into a temporary consumer project and validates that `npm sbom --sbom-format=spdx --sbom-type=application` returns an SPDX document naming the package. | Does not retain a canonical SBOM file, attach an SBOM to a release, sign the SBOM, or publish it. |
@@ -71,4 +71,3 @@ Do not claim:
 - Linux, Windows, or macOS are publicly supported without recorded green evidence for the specific claimed environment;
 - artifacts, SBOMs, releases, or provenance are signed or retained;
 - public package launch, general availability, production readiness, hosted operation, installer distribution, or container distribution is complete.
-

@@ -21,9 +21,9 @@ Current package metadata:
 | `description` | `Codex-first orchestrator for portable agent runs.` | Present. |
 | `license` | `Apache-2.0` | Matches root `LICENSE`. |
 | `repository` | `https://github.com/Andrey-Good/dennett-agent-orchestrator` | Verified repository metadata only. |
-| `bugs` | absent | Public metadata incomplete. |
-| `homepage` | absent | Public metadata incomplete. |
-| `keywords` | absent | Public metadata incomplete. |
+| `bugs` | `https://github.com/Andrey-Good/dennett-agent-orchestrator/issues` | Public issue-routing metadata is present. |
+| `homepage` | `https://github.com/Andrey-Good/dennett-agent-orchestrator#readme` | Public homepage metadata is present. |
+| `keywords` | `agent-orchestration`, `agent-runtime`, `codex`, `cli`, `workflow` | Public discovery metadata is present. |
 
 The package exposes only:
 
@@ -45,13 +45,14 @@ Current truthful state:
 - no npm package page is claimed;
 - no public registry install path is claimed;
 - no ownership transfer, namespace reservation, organization setup, or npm automation token readiness is recorded.
+- public-ready metadata is present in `package.json`, but metadata presence is not publication approval and does not prove registry ownership.
 
 ## Conditions Before `private: false`
 
 Do not set `private` to `false` unless a later explicit release-approval task records at least:
 
 - registry or namespace ownership proof for the chosen final package name;
-- final package metadata, including `bugs`, `homepage`, and `keywords` when required by the public launch decision;
+- final package metadata review approval, including confirmation that `bugs`, `homepage`, and `keywords` remain correct for the chosen public release identity;
 - versioning policy and changelog/release-note requirements;
 - publication account, token, 2FA, automation, and access-control policy;
 - clean public-registry install proof or an approved equivalent dry-run proof;
@@ -70,6 +71,5 @@ Do not claim:
 - the npm package name or namespace is owned or reserved;
 - `npm install dennett-agent-orchestrator` is supported;
 - the package is ready for public users because local tarball proof passes;
-- public metadata is complete while `bugs`, `homepage`, and `keywords` remain absent;
+- public-ready metadata by itself approves publication, proves registry ownership, or establishes a supported public install path;
 - package identity implies stable JS API, hosted service readiness, installer readiness, or production support.
-

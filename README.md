@@ -32,6 +32,17 @@ pnpm package:local-install:proof
 
 That command proves only a controlled local `.tgz` install/uninstall smoke in a temporary npm consumer project. It is not npm publication, public registry install, signing, provenance, retained SBOM, hosted deployment, or general availability proof.
 
+## Project Status For First-Time Users
+
+This repository is preparing a bounded OSS-facing local CLI path, but public launch is still blocked by the current gate record. The package is private in `package.json`, so use a source checkout and the commands above rather than `npm install`, `npx`, or public registry instructions.
+
+For contribution and support basics:
+
+- Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening implementation or documentation changes.
+- Use [SECURITY.md](./SECURITY.md) for vulnerability reporting and sensitive disclosure boundaries.
+- Check [CHANGELOG.md](./CHANGELOG.md) for public-facing change notes and launch-boundary status.
+- Use the GitHub issue templates for bugs, documentation issues, support requests, security redirects, and bounded beta feedback.
+
 ## Public Claim Boundary
 
 Before writing README text, examples, release notes, issue templates, or public-facing docs, check [Final Public Launch Gate Decision](./docs/21-public-launch-readiness/final-public-launch-gate-decision.md) and [Public Docs, Onboarding, And Claims](./docs/21-public-launch-readiness/public-docs-onboarding-and-claims.md). Public claims must stay inside the bounded local CLI/repository evidence unless a later owner document records the required proof and explicitly expands the scope.

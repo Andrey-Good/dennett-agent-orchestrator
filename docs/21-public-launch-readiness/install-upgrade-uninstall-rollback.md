@@ -21,6 +21,19 @@ Required tools:
 
 The package is still private. There is no supported `npm install dennett-agent-orchestrator` public-registry command.
 
+## Public Registry Mode
+
+Public registry install, upgrade, uninstall, and rollback proof is blocked until a later gate records a real public prerelease or release artifact and the approved registry path. Do not substitute the local `.tgz` harness for public registry proof.
+
+Future public-registry proof must record at least:
+
+- the exact package name, version, registry, and install command used;
+- registry or namespace ownership evidence for the package name;
+- install and CLI smoke evidence for each claimed supported OS;
+- upgrade and rollback evidence between real public artifacts or an explicitly approved dry-run equivalent;
+- uninstall boundary evidence for the public artifact path;
+- publication-time supply-chain evidence required by the release gate.
+
 ## Current Artifact Install And Uninstall Proof
 
 From the repository root:
@@ -105,4 +118,3 @@ The following paths remain unsupported by Stage 11:
 - rollback without an explicit previous tarball;
 - rollback of local app state or provider data;
 - public support claims for an OS without recorded green proof for that OS.
-

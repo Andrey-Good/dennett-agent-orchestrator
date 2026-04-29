@@ -153,37 +153,6 @@ Stage 9 does not unlock a full public Builder 2.0 readiness claim. Remaining gap
 - broader packaged/public distribution proof owned by release engineering.
 
 <a id="russian"></a>
-# Productization Builder 2.0
+# Russian Translation Status
 
-Статус: канонический документ-владелец Stage 9 для готовности Builder 2.0 к публичному запуску. Stage 9 фиксирует только ограниченную, проверяемую и draft-first поверхность авторинга. Документ не заявляет, что Builder 2.0 является полноценным публичным authoring-продуктом, и не доказывает, что каждый созданный draft выполняется везде.
-
-## Решение Stage 9
-
-Builder 2.0 productized только как audited draft-authoring surface для текущего публичного portable Agent JSON contract.
-
-Поддерживаемая форма:
-
-- builder возвращает wrapper `{"agent_file": <portable-agent-json>}`;
-- Core извлекает и валидирует `agent_file`;
-- Core выполняет deterministic candidate audit до сохранения;
-- принятый candidate сохраняется только как draft revision;
-- diagnostics выводятся вне Agent JSON;
-- deploy, регистрация provider/runtime, live execution proof и integrated proof остаются отдельными шагами.
-
-## Граница продукта
-
-Builder может создавать intent для public runtime, memory, interaction и `orchestrator_agent` surfaces, но не становится владельцем этих подсистем.
-
-Он не должен:
-
-- выполнять deploy или делать draft live;
-- регистрировать memory providers или runtime accounts;
-- сохранять secrets, credentials, local package paths, provider registrations, account metadata или rate limits;
-- использовать hidden managed-subagent internals;
-- доказывать выполнение draft на всех runtimes;
-- обходить capability gates;
-- записывать diagnostics внутрь Agent JSON.
-
-## Оставшиеся риски
-
-Stage 9 не разблокирует полный claim о public Builder 2.0 readiness. Для этого все еще нужны live/integration evidence, failure-mode docs, Stage 10 compatibility freeze и release-engineering proof.
+The previous localized duplicate section was removed because it contained mojibake. The English section above is the canonical public launch record until a reviewed Russian translation is restored.

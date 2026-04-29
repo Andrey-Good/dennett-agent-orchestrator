@@ -3,7 +3,7 @@
 <a id="english"></a>
 # Public Launch Scope
 
-Status: canonical Stage 2 public-launch scope decision for Part 1. This document selects the public-launch target shape only; it does not claim the target is ready, published, hosted, or generally available.
+Status: canonical Stage 2 OSS v0.1 public-launch scope decision for Part 1. This document selects the public-launch target shape only; it does not claim the target is ready, published, hosted, commercially supported, or generally available.
 
 Related documents:
 
@@ -28,9 +28,11 @@ The selected Part 1 public-launch target is:
 
 `cli-package-first-public-launch`
 
-This means the first public launch should be a user-installed CLI/package distribution, with repository checkout support preserved for contributors and early technical users.
+This means the first public launch is an open-source v0.1 local product launch: a public repository plus an optional public CLI/package distribution once package gates pass. Repository checkout support remains available for contributors and early technical users.
 
-The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted or managed service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Stage 12 owns the canonical hosted/managed deployment deferral lock in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md). Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
+The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted, managed, commercial, SLA-backed, or cloud service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Stage 12 owns the canonical hosted/managed deployment deferral lock in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md). Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
+
+The OSS v0.1 scope is intentionally non-hosted. Hosted/managed gaps are launch blockers only for hosted or commercial claims; they are not implementation prerequisites for an OSS local CLI/package launch when the public docs explicitly preserve the non-hosted boundary.
 
 ## Hosted And Managed Status
 
@@ -52,10 +54,10 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 
 | Area | Stage 2 launch-scope status | Public-launch boundary |
 | --- | --- | --- |
-| Launch form | Selected target: CLI/package-first. | Not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen public artifact. |
+| Launch form | Selected target: OSS v0.1 CLI/package-first. | Not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen public repository/package artifact. |
 | Repository checkout | Supported as contributor and local-user path by the bounded `local-cli-repository-readiness` evidence. | Users build from checkout with `pnpm build`; generated `dist` is not promised in a clean checkout. |
 | Package distribution | Local tarball proof exists; public registry publication is not proven. | Stage 11 proves controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration. It does not prove public npm publication, signing, provenance, retained SBOMs, or public registry install. |
-| Hosted/managed service | Deferred by Stage 12. | No hosted, managed, SaaS, uptime, multi-tenant, cloud deployment, hosted telemetry/audit, production load, hosted support operations, status page, SLA, or hosted rollback claim. |
+| Hosted/managed service | Deferred by Stage 12 and outside OSS v0.1 scope. | No hosted, managed, SaaS, uptime, multi-tenant, cloud deployment, hosted telemetry/audit, production load, hosted support operations, status page, SLA, or hosted rollback claim. These gaps block hosted/commercial claims, not the non-hosted OSS scope. |
 | Support diagnostics | Local-only support bundle and redacted runtime environment inspection exist for Stage 13. | Diagnostics are generated locally and reviewed by the user before sharing. They do not upload data, create hosted telemetry, or prove managed support operations. |
 | Primary OS evidence | Windows local evidence. | Windows is the only evidenced OS baseline for current local release proof. |
 | Linux and macOS | CI package-proof jobs are configured as evidence candidates. | No public support claim until green package proof, gates, CLI smoke, and runtime/provider proof are recorded for each claimed OS. |
@@ -85,11 +87,11 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | External beta program | Not run. | Stage 16 is governed by [External Beta Readiness](./external-beta-readiness.md). Feature-level `Limited/beta` classifications above do not prove external beta completion, participant validation, or public-readiness approval. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Each requires a separate artifact, proof, rollback/uninstall path, and security/release decision. |
 
-## Public Claims Allowed After Required Gates
+## Public Claims Allowed After Required OSS Gates
 
-These claims are allowed only after the later Part 1 stages produce the required evidence for the selected CLI/package-first target:
+These claims are allowed only after the later Part 1 stages produce the required evidence for the selected non-hosted OSS CLI/package-first target:
 
-- Dennett provides a public CLI/package-first launch for the documented supported environment.
+- Dennett provides an OSS v0.1 public repository plus documented local CLI/package-first launch path for the supported environment.
 - The documented CLI package or install path has passed clean-environment install and smoke validation.
 - The documented command set is supported within the Stage 10 compatibility policy.
 - Codex App Server integration is supported only for the certified subset named by Stage 5.
@@ -100,7 +102,7 @@ These claims are allowed only after the later Part 1 stages produce the required
 
 Do not claim:
 
-- Dennett is already publicly launched, generally available, fully released, or production ready because Stage 2 selected a launch target.
+- Dennett is already publicly launched, generally available, fully released, commercially supported, or production ready because Stage 2 selected a launch target.
 - Hosted service operation, managed deployment, SaaS readiness, uptime, multi-tenancy, hosted rollback, hosted telemetry/audit readiness, cloud deployment, production hosted/load readiness, or hosted support operations are in scope.
 - npm publication, installer distribution, container distribution, signed artifacts, provenance, retained SBOMs, or public package rollback are proven by Stage 11 local tarball proof.
 - local support diagnostics imply SLA, managed support, status-page monitoring, automatic telemetry, or hosted incident response.
@@ -113,23 +115,32 @@ Do not claim:
 - Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, stable compatibility for experimental CLI commands, or any stable JS/TS API is complete.
 - Feature-level `Limited/beta` classifications prove that a completed external beta program, beta-user validation, or public-readiness approval exists.
 
-## Launch Blockers
+## OSS v0.1 Launch Blockers And Deferrals
 
-The CLI/package-first public launch remains blocked until all selected launch-scope gates pass:
+The OSS v0.1 CLI/package-first public launch remains blocked until all required OSS repository/package gates pass:
 
 - Stage 3 security, privacy, legal, secret-handling, license/package, disclosure, and data-retention decisions are complete.
 - Stage 4 records the private package and supply-chain foundation.
 - Stage 11 records controlled local `.tgz` install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration.
 - A later release-approval task records registry ownership, public publication controls, retained evidence, signing/provenance decisions, and public install proof.
+- The public repository/package decision is tied to the then-current commit, package metadata, artifact hashes, retained evidence, and explicit claim-review result.
+- README and user-facing docs use the same OSS v0.1 non-hosted scope language as this document.
+
+The following capabilities are included only as bounded local or limited/beta claims and must stay within their narrower evidence records:
+
 - Stage 5 certifies the exact Codex App Server runtime subset and unsupported model/option cases.
 - Stage 6 productizes the exact memory provider boundary and cleanup/reliability limits.
 - Stage 7 records user-visible interaction semantics and unsupported prompt/reply cases.
 - Stage 8 records the bounded local CLI managed-subagent operator surface and keeps broader orchestration explicitly deferred.
 - Stage 9 records the bounded audited draft-first Builder 2.0 authoring surface and keeps complete public Builder readiness explicitly deferred.
 - Stage 10 freezes only the bounded public CLI/API contract and compatibility policy documented in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md).
-- Stage 12 keeps hosted/managed deployment explicitly out of current public-launch scope and records the hosted gap matrix in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md).
 - Stage 13 keeps support and operations local-only, documents `support-bundle`, `runtime-env-inspect --redacted`, support/security routing, and incident runbooks in [Observability, Support, And Operations](./observability-support-operations.md).
-- README and user-facing docs use the same scope language as this document.
+
+The following are deferred hosted/commercial capabilities. They must remain forbidden claims, but they are not required implementation work for a non-hosted OSS v0.1 local CLI/package launch:
+
+- Stage 12 keeps hosted/managed deployment explicitly out of current public-launch scope and records the hosted gap matrix in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md).
+- Hosted service operation, managed deployments, cloud deployment, uptime/SLA, status page, hosted telemetry/audit, hosted incident response, production hosted/load readiness, and hosted rollback remain deferred until a later hosted scope decision records implementation and live evidence.
+- Commercial support, managed support operations, and long-term service commitments remain deferred unless a later release decision explicitly adds and proves them.
 
 ## Decision Criteria For Later Scope Changes
 
@@ -143,131 +154,6 @@ A later stage may expand the scope only when:
 6. public docs include limitations and forbidden claims with no contradictory marketing language.
 
 <a id="russian"></a>
-# Область публичного запуска
+# Russian Translation Status
 
-Статус: каноническое Stage 2 решение об области публичного запуска для Part 1. Этот документ выбирает только форму цели публичного запуска; он не утверждает, что цель готова, опубликована, размещена как сервис или общедоступна.
-
-Связанные документы:
-
-- [Baseline Gap And Forbidden Claims](./baseline-gap-and-forbidden-claims.md)
-- [Release Scope Lock](../20-real-world-proof-and-release/release-scope-lock.md)
-- [Release Decision Record](../20-real-world-proof-and-release/release-decision-record.md)
-- [Phase 12 Capability Gap Lock](../13-capability-gap-lock/phase-12-capability-gap-lock.md)
-- [Release Gates](../11-hardening/release-gates.md)
-- [Managed Subagent Productization](./managed-subagent-productization.md)
-- [Builder 2.0 Productization](./builder-2-0-productization.md)
-- [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md)
-
-## Решение
-
-Выбранная цель публичного запуска Part 1:
-
-`cli-package-first-public-launch`
-
-Это означает, что первый публичный запуск должен быть CLI/package distribution, устанавливаемой пользователем, при сохранении repository checkout как пути для контрибьюторов и ранних технических пользователей.
-
-Цель выбрана потому, что текущие доказательства лучше поддерживают локальный CLI/repository product shape и controlled local package proof, чем hosted или managed service. Stage 4 владеет private package and supply-chain foundation. Stage 11 владеет local `.tgz` distribution proof. Public registry publication остается blocked до отдельной release-approval task с registry ownership, publication controls, retained evidence и public install proof.
-
-## Статус Hosted И Managed
-
-Hosted и managed product launch явно отложены.
-
-Отложенная hosted/managed область включает:
-
-- hosted SaaS operation;
-- managed deployments;
-- uptime, availability или service-level promises;
-- multi-tenant isolation claims;
-- hosted rollback или disablement;
-- hosted observability, incident response и support operations.
-
-Hosted или managed launch может войти в scope только через более позднее scope decision, которое называет deployment artifact, runtime environment, rollback path, operational owner, security/privacy/legal posture и live evidence requirements.
-
-## Матрица Поддержки Для Выбранной Цели Запуска
-
-| Область | Stage 2 статус launch-scope | Граница публичного запуска |
-| --- | --- | --- |
-| Launch form | Выбранная цель: CLI/package-first. | Не готово и не опубликовано, пока security/legal, release-engineering, Stage 11 distribution proof и later release-approval gates не пройдут для выбранного public artifact. |
-| Repository checkout | Поддерживается как путь для контрибьюторов и локальных пользователей доказательствами bounded `local-cli-repository-readiness`. | Пользователи собирают из checkout через `pnpm build`; generated `dist` не обещается в clean checkout. |
-| Package distribution | Local tarball proof существует; public registry publication не доказана. | Stage 11 доказывает controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation и CI package-proof job configuration. Это не доказывает public npm publication, signing, provenance, retained SBOMs или public registry install. |
-| Hosted/managed service | Отложено. | Нет hosted, managed, SaaS, uptime, multi-tenant или hosted rollback claim. |
-| Primary OS evidence | Windows local evidence. | Windows - единственный evidenced OS baseline для текущего local release proof. |
-| Linux и macOS | CI package-proof jobs are configured as evidence candidates. | Нет public support claim до green package proof, gates, CLI smoke и runtime/provider proof на каждой claimed OS. |
-| Node.js | `package.json` требует `>=22.13.0`; evidence фиксирует Node v22.17.1 и `node:sqlite` import proof. | Public launch должен требовать Node.js `>=22.13.0`, если Stage 4 не изменит package metadata в своей approved task. |
-| Package manager | Канонический workflow - `pnpm`; package metadata фиксирует `pnpm@10.33.0`. | Контрибьюторы и source-checkout users должны использовать `pnpm 10.33.0` или compatible pnpm 10.x path, доказанный later evidence. `npm` может использоваться только там, где package/install path явно этого требует. |
-| npm package manager | Consumer-package tool для local tarball proof. | Не заявлять, что npm является canonical repository workflow. Не заявлять npm publication или public `npm install dennett-agent-orchestrator` support до later registry proof and release approval. |
-| Runtime provider | Только Codex App Server adapter path, с узким local proof для runtime discovery, environment inspection и minimal graph execution. | Не заявлять full App Server certification, all model/options support или broad runtime-provider reliability. |
-| Memory provider | Direct local Mem0 provider path плюс narrow prompt-rendered Codex memory context и success-only provider writes. | Не заявлять native App Server memory, broad memory-provider support, durable cleanup beyond verified scoped Mem0 namespace cleanup, true restore, provider-wide cleanup или provider reliability. |
-| Local state | SQLite local metadata and run state. | SQLite остается local and derivative, а не hosted storage или distributed operational backend. |
-
-## Область Возможностей
-
-| Capability | Public-launch classification | Boundary |
-| --- | --- | --- |
-| CLI execution from installed package or local checkout | Included target для repository checkout и local `.tgz` proof. | Только commands and outputs, frozen by Stage 10, могут называться stable. Public registry install remains unproven. |
-| Agent JSON validation and contract examples | Included target. | Должны оставаться внутри documented schemas and examples; без hidden builder-only или hosted-only behavior. |
-| Local graph execution | Included target для proven local CLI paths. | Не означает hosted execution, production load или automatic live crash recovery. |
-| Codex App Server runtime | Limited/beta для certified subset. | Stage 5 должен назвать supported models/options и unsupported cases до расширения public claims. |
-| Runtime discovery and environment inspection | Limited/beta для local authenticated Codex path. | Account data редактировать; не давать account/rate-limit promises. |
-| Direct local Mem0 memory operations | Limited/beta для registered local Mem0 provider path. | Stage 6 должен зафиксировать provider limits, cleanup guarantees, reliability boundaries и unsupported cases. |
-| Runtime memory with Codex plus Mem0 | Limited/beta для prompt-rendered context и success-only writes. | Не native App Server memory и не broad provider support. |
-| User prompt wait/reply/resume | Limited/beta для currently tested prompt shapes. | Stage 7 должен доказать full user-visible interaction semantics до broad claims. |
-| Managed subagent primitives | Limited/beta для bounded local CLI operator surface. | Stage 8 поддерживает только `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control` и `subagent-close` в пределах [Managed Subagent Productization](./managed-subagent-productization.md). Launch является только launch-and-wait; control и cancellation записываются в state, а не live-deliver-ятся. |
-| Builder 2.0 authoring | Limited/beta только для audited draft-first authoring. | Stage 9 поддерживает formal builder output wrapper validation, deterministic candidate audit, diagnostics вне Agent JSON и draft-only persistence по [Builder 2.0 Productization](./builder-2-0-productization.md). Это не доказывает full public authoring readiness, deploy, provider registration, live managed orchestration или execution каждого draft. |
-| Stable CLI/API compatibility | Frozen only for the bounded Stage 10 surface. | Только commands с label `[stable]`, `[stable/safety-protocol]` cleanup flow, exported JSON schema artifacts и no-stable-JS-API package boundary являются stable по [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). Experimental commands остаются unstable. |
-| External beta program | Not run. | Stage 16 governed by [External Beta Readiness](./external-beta-readiness.md). Feature-level `Limited/beta` classifications выше не доказывают external beta completion, participant validation или public-readiness approval. |
-| Containers, installers, signed binaries, hosted deployments | Deferred. | Каждый требует separate artifact, proof, rollback/uninstall path и security/release decision. |
-
-## Разрешенные Public Claims После Нужных Gates
-
-Эти claims разрешены только после того, как более поздние Part 1 stages дадут required evidence для выбранного CLI/package-first target:
-
-- Dennett предоставляет public CLI/package-first launch для documented supported environment.
-- Documented CLI package или install path прошел clean-environment install and smoke validation.
-- Documented command set поддерживается внутри Stage 10 compatibility policy.
-- Codex App Server integration поддерживается только для certified subset, названного Stage 5.
-- Mem0 memory integration поддерживается только для provider behavior, названного Stage 6.
-- Limitations, unsupported providers, unsupported OSes и beta/limited features публичны и видимы.
-
-## Запрещенные Claims
-
-Не заявлять:
-
-- Dennett уже publicly launched, generally available, fully released или production ready из-за того, что Stage 2 выбрал launch target.
-- Hosted service operation, managed deployment, SaaS readiness, uptime, multi-tenancy, hosted rollback или hosted support operations входят в scope.
-- npm publication, installer distribution, container distribution, signed artifacts, provenance, retained SBOMs или public package rollback доказаны Stage 11 local tarball proof.
-- Linux или macOS публично поддерживаются до появления OS-specific evidence.
-- Full Codex App Server certification завершена.
-- Любой non-Codex runtime provider публично поддерживается.
-- Native App Server memory реализована или Mem0 потребляется через native App Server memory primitive.
-- Memory behavior шире registered local provider resolution, prompt-rendered Codex context и success-only provider writes.
-- Durable external provider cleanup, true restore, graph-store cleanup, provider-wide cleanup, delete-all, throttling behavior или volume reliability доказаны.
-- Full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness beyond audited draft-first authoring, stable compatibility for experimental CLI commands или any stable JS/TS API завершены.
-- Feature-level `Limited/beta` classifications доказывают, что completed external beta program, beta-user validation или public-readiness approval уже существуют.
-
-## Блокеры Запуска
-
-CLI/package-first public launch остается blocked, пока все selected launch-scope gates не пройдут:
-
-- Stage 3 security, privacy, legal, secret-handling, license/package, disclosure и data-retention decisions завершены.
-- Stage 4 records the private package and supply-chain foundation.
-- Stage 11 records controlled local `.tgz` install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation и CI package-proof job configuration.
-- Later release-approval task records registry ownership, public publication controls, retained evidence, signing/provenance decisions и public install proof.
-- Stage 5 сертифицирует exact Codex App Server runtime subset и unsupported model/option cases.
-- Stage 6 productizes exact memory provider boundary и cleanup/reliability limits.
-- Stage 7 фиксирует user-visible interaction semantics и unsupported prompt/reply cases.
-- Stage 8 фиксирует bounded local CLI managed-subagent operator surface и явно оставляет broader orchestration deferred.
-- Stage 9 фиксирует bounded audited draft-first Builder 2.0 authoring surface и явно оставляет complete public Builder readiness deferred.
-- Stage 10 freezes only bounded public CLI/API contract и compatibility policy, documented in [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md).
-- README и user-facing docs используют тот же scope language, что и этот документ.
-
-## Критерии Решения Для Поздних Изменений Scope
-
-Более поздний stage может расширить scope только когда:
-
-1. expansion называет exact user-visible behavior и non-goals;
-2. implementation, docs и tests соответствуют той же boundary;
-3. artifact, runtime, provider или hosted claims имеют live или clean-environment evidence;
-4. rollback, uninstall, cleanup или recovery доказаны там, где claim подразумевает operational responsibility;
-5. failed, blocked, inconclusive и superseded evidence остаются видимыми;
-6. public docs включают limitations и forbidden claims без contradictory marketing language.
+The previous localized duplicate section was removed because it contained mojibake. The English section above is the canonical public launch record until a reviewed Russian translation is restored.

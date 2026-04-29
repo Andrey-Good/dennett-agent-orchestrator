@@ -284,6 +284,7 @@ export function parseUpgradeRollbackProofArgs(argv, cwd = process.cwd()) {
 export function parseLocalSbomProofArgs(argv, cwd = process.cwd()) {
 	const options = {
 		fromTgz: undefined,
+		output: undefined,
 		keepTemp: false,
 	}
 
@@ -295,6 +296,11 @@ export function parseLocalSbomProofArgs(argv, cwd = process.cwd()) {
 		}
 		if (arg === '--from-tgz') {
 			options.fromTgz = path.resolve(cwd, requireFlagValue(argv, index, arg))
+			index += 1
+			continue
+		}
+		if (arg === '--output') {
+			options.output = path.resolve(cwd, requireFlagValue(argv, index, arg))
 			index += 1
 			continue
 		}
@@ -441,8 +447,15 @@ export async function runLocalSbomProof(options = { fromTgz: undefined, keepTemp
 		if (sbomErrors.length > 0) {
 			throw new Error(sbomErrors.join('\n'))
 		}
+		if (options.output !== undefined) {
+			await mkdir(path.dirname(options.output), { recursive: true })
+			await writeFile(options.output, `${JSON.stringify(sbomDocument, null, 2)}\n`, 'utf8')
+		}
 
 		console.log(`Local SPDX SBOM generation proof passed for ${tgzPath}.`)
+		if (options.output !== undefined) {
+			console.log(`Retained SPDX SBOM artifact: ${options.output}`)
+		}
 		console.log('Deferred supply-chain publication controls:')
 		for (const deferral of getSupplyChainDeferrals()) {
 			console.log(`- ${deferral}`)

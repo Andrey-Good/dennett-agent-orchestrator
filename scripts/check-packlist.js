@@ -32,6 +32,18 @@ const EXPECTED_PACKAGE_EXPORTS = {
 	'./package.json': './package.json',
 	'./contracts/json-schema/*.schema.json': './contracts/json-schema/*.schema.json',
 }
+const EXPECTED_PACKAGE_BUGS = {
+	url: 'https://github.com/Andrey-Good/dennett-agent-orchestrator/issues',
+}
+const EXPECTED_PACKAGE_HOMEPAGE =
+	'https://github.com/Andrey-Good/dennett-agent-orchestrator#readme'
+const EXPECTED_PACKAGE_KEYWORDS = [
+	'agent-orchestration',
+	'agent-runtime',
+	'codex',
+	'cli',
+	'workflow',
+]
 
 function isAllowedPackageFile(filePath) {
 	return (
@@ -107,6 +119,22 @@ export function validatePackageMetadata(packageJson) {
 		packageJson.repository?.url !== 'https://github.com/Andrey-Good/dennett-agent-orchestrator'
 	) {
 		errors.push('package.json repository metadata must match the verified origin remote.')
+	}
+
+	if (JSON.stringify(packageJson.bugs) !== JSON.stringify(EXPECTED_PACKAGE_BUGS)) {
+		errors.push(
+			`package.json bugs must be ${JSON.stringify(EXPECTED_PACKAGE_BUGS)} for public issue routing metadata.`,
+		)
+	}
+
+	if (packageJson.homepage !== EXPECTED_PACKAGE_HOMEPAGE) {
+		errors.push(`package.json homepage must be ${EXPECTED_PACKAGE_HOMEPAGE}.`)
+	}
+
+	if (JSON.stringify(packageJson.keywords) !== JSON.stringify(EXPECTED_PACKAGE_KEYWORDS)) {
+		errors.push(
+			`package.json keywords must be ${JSON.stringify(EXPECTED_PACKAGE_KEYWORDS)} for public package discovery metadata.`,
+		)
 	}
 
 	if (JSON.stringify(packageJson.files) !== JSON.stringify(EXPECTED_FILES_ALLOWLIST)) {

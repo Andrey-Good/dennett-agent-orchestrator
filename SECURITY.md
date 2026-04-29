@@ -28,6 +28,8 @@ Preferred reporting path:
 1. Use GitHub private vulnerability reporting if it is enabled for this repository.
 2. If private reporting is not available, open a minimal public issue that says a security report exists and request a private contact path. Do not include reproduction details publicly.
 
+Do not use the public security redirect issue template for full vulnerability details. It exists only to steer reporters away from posting sensitive material publicly.
+
 Please include, when safe:
 
 - affected commit, branch, package artifact, or documentation path;

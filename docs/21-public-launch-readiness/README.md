@@ -1,8 +1,8 @@
 # Public Launch Readiness
 
-Status: canonical owner section for public-launch readiness planning. No stage expands the current release target or claims public readiness by itself.
+Status: canonical owner section for OSS v0.1 public-launch readiness planning. No stage expands the current release target or claims public readiness by itself.
 
-This section governs the public-launch readiness path after the bounded `local-cli-repository-readiness` release. It exists to prevent broader public claims from being inferred from local repository, local CLI, or local tarball evidence.
+This section governs the OSS v0.1 public-launch readiness path after the bounded `local-cli-repository-readiness` release. The target is a public open-source repository plus an optional public CLI/package path after package gates pass. It exists to prevent broader public, hosted, managed, commercial, or production claims from being inferred from local repository, local CLI, or local tarball evidence.
 
 ## Documents
 
@@ -33,7 +33,7 @@ This section governs the public-launch readiness path after the bounded `local-c
 ## Stage List
 
 - Stage 1 locks baseline gaps and forbidden claims.
-- Stage 2 selects the CLI/package-first public-launch target and keeps hosted/managed launch deferred.
+- Stage 2 selects the non-hosted OSS v0.1 CLI/package-first public-launch target and keeps hosted/managed launch deferred.
 - Stage 3 records security, privacy, legal, and trust boundaries for CLI/package-first launch.
 - Stage 4 records the private package and supply-chain foundation.
 - Stage 5 records the limited Runtime/App Server certification subset.
@@ -48,12 +48,13 @@ This section governs the public-launch readiness path after the bounded `local-c
 - Stage 14 records public docs, onboarding, examples, and claim-review rules in [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md).
 - Stage 15 records local integrated public-environment product-flow evidence and claim boundaries in [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md).
 - Stage 16 records the external beta plan, participant/workflow criteria, bug bar, privacy-safe feedback routing, and `not-run` evidence gate in [External Beta Readiness](./external-beta-readiness.md).
-- Stage 17 records the final evidence gate in [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md): public launch blocked / local-package-readiness-only.
+- Stage 17 records the final evidence gate in [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md): OSS v0.1 public launch blocked / local-package-readiness-only.
 
 ## Current Truthful Scope
 
 - The current accepted release state is bounded `release` for `local-cli-repository-readiness` only.
-- The current Stage 17 final gate blocks public launch and allows only bounded local/package readiness continuation.
+- The current Stage 17 final gate blocks OSS v0.1 public launch and allows only bounded local/package readiness continuation.
+- OSS v0.1 scope means public repository plus optional public CLI/package evidence. It does not include hosted service operation, managed deployment, cloud operation, SLA, commercial support, or production-load claims.
 - Local checkout users build with `pnpm build`; generated `dist` is not promised in a clean checkout.
 - Local support diagnostics are provided by `support-bundle` and redacted runtime diagnostics by `runtime-env-inspect --redacted`.
 - Local tarball proof is limited to controlled `.tgz` install/uninstall and optional explicit two-tarball upgrade/rollback smoke.
@@ -67,6 +68,7 @@ Do not claim:
 
 - hosted, managed, SaaS, uptime, SLA, production-load, cloud deployment, hosted telemetry, hosted audit, status-page, or managed incident-response readiness;
 - public npm publication, public registry install, installer distribution, container distribution, signing, provenance, retained SBOMs, or public package rollback;
+- hosted/managed gaps block the non-hosted OSS v0.1 scope; they block only hosted, managed, commercial, SLA, cloud, and production-service claims unless a later scope decision adds that product surface;
 - full Codex App Server certification, all models/options support, account/rate-limit guarantees, or broad runtime-provider reliability;
 - native App Server memory, broad memory-provider support, durable provider cleanup beyond documented scoped behavior, provider-wide cleanup, true restore, or provider reliability;
 - full user interaction readiness, complete managed-subagent orchestration, durable background subagent execution, live subagent cancellation delivery, complete public Builder 2.0 readiness, stable compatibility for experimental CLI commands, or any stable JS/TS API.

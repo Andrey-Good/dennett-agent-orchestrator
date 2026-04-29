@@ -55,6 +55,21 @@ These capabilities remain outside the next release target. They must not be desc
 | Managed subagent orchestration as an operator-facing product surface | Managed subagent owner and QA owner | Prove create/send/wait/status/close/cancel, roles, write-scope ownership, review/fix loops, lineage, and cancellation through user-visible flows. | Close or cancel child work and verify no leaked active child runs. | Managed subagents remain partially implemented and not broadly release-proven. |
 | Builder 2.0 and integrated multi-feature product flows as public authoring workflows | Builder owner and Product integration owner | Prove builder output through validation, lifecycle publication, execution, memory/runtime/interaction/subagent boundaries, and integrated acceptance scenarios. | Clean drafts, live revisions, and proof state or prove safe rollback. | Builder and integrated flows must not be marketed as a complete public authoring system. |
 
+## OSS v0.1 Provider Claim Matrix
+
+The following matrix is the public-claim boundary for provider language until a later release-scope update records new live evidence. It must be reconciled with [Live Proof Runbook](./live-proof-runbook.md) before any public launch approval task changes provider wording.
+
+| Provider surface | Current allowed wording | Evidence status | Launch-blocking gap before broader claim |
+| --- | --- | --- | --- |
+| Local/offline runtime tests and examples | Local deterministic graph and CLI behavior are covered by repository tests and local proof only. | Historical local gates and deterministic tests exist. | Rerun local gates against the exact OSS candidate artifact before claiming current-candidate readiness. |
+| Codex App Server runtime adapter | Limited Codex/App Server path with narrow local authenticated discovery and minimal graph proof. | Historical discovery and minimal live smoke exist, but not full certification. | Candidate-specific live Codex proof with redacted account/config metadata, model/options boundary, and final output. |
+| Runtime model/options metadata | Runtime discovery may expose current local metadata when an authenticated local path is configured. | Historical discovery proof exists. | Candidate-specific discovery rerun and unsupported-fields review; no account, rate-limit, or all-models promise without provider evidence. |
+| Direct Mem0 provider operations | User-owned/local Mem0 registration and memory operations may be described only as limited and opt-in. | Historical direct Mem0 proof and scoped cleanup proof exist. | Candidate-specific disposable Mem0 proof if public docs imply current OSS usability; cleanup must be provider-verified for the claimed scope. |
+| Codex plus Mem0 runtime-memory flow | Prompt-rendered memory context plus success-only Core writes only. | Historical narrow proof exists. | Candidate-specific runtime-memory proof; native App Server memory remains forbidden unless separately implemented and proven. |
+| External provider reliability and throttling | Not proven. | Deterministic stub reliability matrix exists, but it is not live provider reliability evidence. | Quota-safe named-provider reliability proof with throttling, retries, limits, failure handling, and cleanup debt recorded. |
+| Native App Server memory | Not supported as a public claim. | No accepted evidence. | Implementation plus live proof through a documented native runtime surface. |
+| Non-Codex runtimes, hosted provider operations, provider-wide cleanup, production load | Not supported as public claims. | No accepted evidence. | Separate implementation, release scope, live proof, rollback/cleanup evidence, and operations evidence. |
+
 ## Forbidden Claims
 
 Until a later release-scope expansion changes this lock, do not claim:

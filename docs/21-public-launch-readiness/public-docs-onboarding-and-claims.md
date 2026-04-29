@@ -20,6 +20,20 @@ Stage 14 makes the public entrypoints truthful and usable for local checkout use
 
 Public docs must prefer bounded, evidence-backed language over marketing language. If a capability needs runtime auth, model access, provider setup, a generated artifact, a local state database, or a specific proof command, the public doc must say so near the command that depends on it.
 
+## OSS v0.1 Claim Gate
+
+Public-facing docs must treat [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md) as the active approval source. Its current decision is `OSS v0.1 public launch blocked / local-package-readiness-only`.
+
+Until that document is replaced by a later evidence-backed approval decision, public docs may describe only:
+
+- local source checkout onboarding;
+- controlled local `.tgz` package proof;
+- local SBOM validation;
+- limited live runtime or provider paths when the required local auth, model, and provider setup are stated;
+- hosted and managed deployment as deferred.
+
+Before claiming OSS v0.1 public launch approval, public npm availability, public registry install, completed external beta, retained SBOMs, provenance, signing, hosted readiness, SaaS readiness, or production readiness, docs must point to durable evidence in the relevant owner documents and the guard scripts must pass without contradictory blockers.
+
 ## Clean Checkout Onboarding
 
 From a clean local checkout:
@@ -80,6 +94,7 @@ Before adding or changing public-facing docs, examples, issue templates, release
 5. No claim relies on a task summary alone; it points to durable docs, tests, or proof commands.
 6. Sensitive-data guidance is visible for issue reporting, support bundles, runtime diagnostics, logs, and examples.
 7. Broken localized text or mojibake is removed from public entrypoints until reliable encoding and review exist.
+8. OSS v0.1 launch, public registry, external beta, supply-chain, and hosted/SaaS claims match the current final gate decision and do not outrun recorded evidence.
 
 ## Allowed Public Claims
 

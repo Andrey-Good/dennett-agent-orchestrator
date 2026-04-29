@@ -23,3 +23,20 @@ body:
       description: Include relevant commands, redacted errors, and a reviewed support bundle if useful.
     validations:
       required: false
+  - type: dropdown
+    id: support-area
+    attributes:
+      label: Support area
+      description: Select the closest local support area.
+      options:
+        - Clean checkout setup
+        - Build or CLI help
+        - Support bundle or runtime diagnostics
+        - Local state database
+        - Runtime auth, model access, or rate limits
+        - Memory provider setup
+        - Local tarball proof
+        - Examples or docs
+        - Not sure
+    validations:
+      required: true
