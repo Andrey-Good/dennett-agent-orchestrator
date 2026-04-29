@@ -34,7 +34,7 @@ That command proves only a controlled local `.tgz` install/uninstall smoke in a 
 
 ## Project Status For First-Time Users
 
-This repository is preparing a bounded OSS-facing local CLI path, but public launch is still blocked by the current gate record. The package is private in `package.json`, so use a source checkout and the commands above rather than `npm install`, `npx`, or public registry instructions.
+This repository is preparing a bounded OSS-facing local CLI path, but public launch is still blocked by the current gate record. The GitHub repository URL has been locally verified as publicly reachable with `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD`, which returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29. That proves repository URL accessibility only. The local `main` checkout used for the current launch-gate docs was still ahead of `origin/main` by 23 commits at local HEAD `241b4a50e084f15f04163a9dfcce6cededb45c41`, so those local changes are not proven on GitHub until pushed and re-verified. The package is private in `package.json`, so use a source checkout and the commands above rather than `npm install`, `npx`, or public registry instructions.
 
 For contribution and support basics:
 

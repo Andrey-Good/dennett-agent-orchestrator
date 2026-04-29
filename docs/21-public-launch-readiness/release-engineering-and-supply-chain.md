@@ -15,6 +15,7 @@ Related documents:
 - [Release Gates](../11-hardening/release-gates.md)
 - [Stage 11 Distribution Proof](./distribution-proof.md)
 - [Supply Chain Attestation](./supply-chain-attestation.md)
+- [Release Settings User Checklist](./release-settings-user-checklist.md)
 
 ## Stage 4 Decision
 
@@ -74,6 +75,8 @@ Before the publish gate may be used, maintainers must complete and record eviden
 - ensure the selected GitHub-hosted runner provides Node `>=22.14.0` and npm CLI `>=11.5.1`;
 - make the repository public before relying on public npm provenance or public GitHub artifact attestations;
 - define release-note, changelog, rollback, and post-publish verification ownership.
+
+The exact user/admin actions and close-out evidence for these external settings are tracked in [Release Settings User Checklist](./release-settings-user-checklist.md). Those actions are not satisfied by repository code changes alone.
 
 ## Deterministic Foundation Guard
 

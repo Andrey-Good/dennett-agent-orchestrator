@@ -23,6 +23,12 @@ The current truthful decision is bounded `release` for `local-cli-repository-rea
 
 This `release` is bounded and does not prove hosted/managed deployment, npm/public package publication, installer/container distribution, production SaaS/readiness/load, live provider stress/reliability, broad runtime-memory/provider support, native App Server memory, full App Server certification, durable provider cleanup beyond the TASK-357 verified scoped Mem0 namespace proof, true restore / graph-store/provider-wide cleanup, public Builder 2.0 readiness, full user interaction layer, or operator-facing managed subagent product readiness. The earlier TASK-333 default `pnpm test` failure is superseded by a passing TASK-334 review rerun, and the TASK-400 full-suite `pnpm test` failure is superseded by TASK-402 and TASK-495 clean gates, but both failed and superseded evidence must remain visible.
 
+## Public Repository Accessibility Note
+
+On 2026-04-29, `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`, which proves the GitHub repository URL is publicly reachable from the local environment. This is repository visibility evidence only.
+
+The same local verification showed `main` ahead of `origin/main` by 23 commits, with local HEAD `241b4a50e084f15f04163a9dfcce6cededb45c41` and `origin/main` at `716f694819c1e84af8de2dd6de46d913001d1e67`. Until the intended local launch-gate commits are pushed and re-verified remotely, current local documentation and gate updates must not be described as present on GitHub.
+
 ## Included Capabilities
 
 These capabilities are inside the bounded release target. Each one is accepted only for local CLI/repository readiness at the recorded candidate commit.

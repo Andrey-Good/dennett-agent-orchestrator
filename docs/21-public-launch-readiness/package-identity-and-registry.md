@@ -1,6 +1,6 @@
 # Package Identity And Registry
 
-Status: Stage 11 package identity and registry boundary record. This document records the current private package identity and what must change before public publication. It is not a registry ownership proof or npm launch approval.
+Status: Stage 11 package identity and registry boundary record, updated for the prepared private `0.1.0-rc.1` package metadata. This document records the current private package identity and what must change before public publication. It is not a registry ownership proof or npm launch approval.
 
 Related documents:
 
@@ -16,7 +16,7 @@ Current package metadata:
 | Field | Current value | Status |
 | --- | --- | --- |
 | `name` | `dennett-agent-orchestrator` | Local package identity used by the proof scripts. |
-| `version` | `0.0.0` | Pre-publication placeholder; not a public release version claim. |
+| `version` | `0.1.0-rc.1` | Prepared private release-candidate metadata; not a public prerelease artifact, public release version claim, or npm publication proof. |
 | `private` | `true` | Publication is blocked by metadata and policy. |
 | `description` | `Codex-first orchestrator for portable agent runs.` | Present. |
 | `license` | `Apache-2.0` | Matches root `LICENSE`. |
@@ -40,6 +40,7 @@ No public registry ownership proof is recorded for the `dennett-agent-orchestrat
 Current truthful state:
 
 - the package name is used for local tarball proof only;
+- an npm `E404` or name-lookup miss means no visible public package was found at the time of checking; it does not prove name ownership, namespace reservation, publication rights, or maintainer access;
 - the package remains private;
 - no `npm publish` has been run or approved;
 - no npm package page is claimed;

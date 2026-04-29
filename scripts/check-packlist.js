@@ -44,6 +44,7 @@ const EXPECTED_PACKAGE_KEYWORDS = [
 	'cli',
 	'workflow',
 ]
+const EXPECTED_PACKAGE_VERSION = '0.1.0-rc.1'
 
 function isAllowedPackageFile(filePath) {
 	return (
@@ -104,6 +105,12 @@ export function validatePackageMetadata(packageJson) {
 
 	if (packageJson.private !== true) {
 		errors.push('package.json must remain private.')
+	}
+
+	if (packageJson.version !== EXPECTED_PACKAGE_VERSION) {
+		errors.push(
+			`package.json version must be ${EXPECTED_PACKAGE_VERSION} for the prepared private release candidate.`,
+		)
 	}
 
 	if (!isNodeFloorSupported(packageJson.engines?.node)) {

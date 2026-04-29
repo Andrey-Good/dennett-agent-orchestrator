@@ -11,6 +11,26 @@ body:
         Security vulnerabilities, credential exposure, data leakage, or unsafe redaction reports must follow `SECURITY.md` instead of this public template.
 
         **Invitation guard:** This template is only for maintainer-invited Stage 16 beta runs. The current public beta remains `not-run` unless a maintainer records accepted dated workflow evidence; unsolicited issues or planning notes do not prove external beta completion, beta-user validation, or public-launch readiness.
+
+        Use `docs/21-public-launch-readiness/external-beta-packet.md` for the current packet instructions. Report only the artifact mode the maintainer assigned: source checkout, or future npm prerelease after publication is separately approved.
+  - type: dropdown
+    id: artifact-mode
+    attributes:
+      label: Artifact mode
+      description: Select the beta artifact path the maintainer assigned. Do not select npm prerelease unless a maintainer provided a real package version or dist-tag.
+      options:
+        - source-checkout
+        - future-npm-prerelease
+    validations:
+      required: true
+  - type: input
+    id: artifact-identity
+    attributes:
+      label: Artifact identity
+      description: Provide the commit SHA for source checkout, or package version/dist-tag for a future npm prerelease.
+      placeholder: commit <sha> or dennett-agent-orchestrator@<version-or-tag>
+    validations:
+      required: true
   - type: dropdown
     id: workflow-id
     attributes:
@@ -39,8 +59,20 @@ body:
     id: environment
     attributes:
       label: Redacted environment summary
-      description: Include OS, Node.js, package manager, artifact/commit, and runtime/provider class only if safe to share.
-      placeholder: Windows 11; Node 22.x; pnpm 10.x; local checkout commit <short-sha>; Codex App Server path; no account identifiers.
+      description: Include OS, Node.js, package manager, and runtime/provider class only if safe to share. Artifact identity belongs in the dedicated field above.
+      placeholder: Windows 11; Node 22.x; pnpm 10.x; Codex App Server path; no account identifiers.
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result proposal
+      description: Classify the workflow result from the external beta packet.
+      options:
+        - pass
+        - fail
+        - blocked
+        - inconclusive
     validations:
       required: true
   - type: textarea
@@ -85,3 +117,14 @@ body:
       description: Link safe public artifacts, or explain that sensitive artifacts are retained privately and why.
     validations:
       required: false
+  - type: dropdown
+    id: beta-exit-blocker
+    attributes:
+      label: Blocks beta exit?
+      description: Select whether this feedback should block beta exit under the Stage 16 bug bar.
+      options:
+        - "yes"
+        - "no"
+        - not sure
+    validations:
+      required: true

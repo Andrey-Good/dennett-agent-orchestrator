@@ -103,10 +103,11 @@ async function loadPublicReleaseFoundationValidator(): Promise<PublicReleaseFoun
 }
 
 describe('package distribution metadata', () => {
-	it('keeps the package private with an explicit node:sqlite engine floor', async () => {
+	it('keeps the package private with an explicit prepared release-candidate version', async () => {
 		const packageJson = await readPackageJson()
 
 		expect(packageJson.private).toBe(true)
+		expect(packageJson.version).toBe('0.1.0-rc.1')
 		expect(packageJson.engines?.node).toBe('>=22.13.0')
 	})
 
@@ -203,11 +204,13 @@ describe('package distribution metadata', () => {
 		expect(
 			validatePackageMetadata({
 				...packageJson,
+				version: '0.0.0',
 				bugs: { url: 'https://example.invalid/issues' },
 				homepage: 'https://example.invalid',
 				keywords: ['agent'],
 			}),
 		).toEqual([
+			'package.json version must be 0.1.0-rc.1 for the prepared private release candidate.',
 			'package.json bugs must be {"url":"https://github.com/Andrey-Good/dennett-agent-orchestrator/issues"} for public issue routing metadata.',
 			'package.json homepage must be https://github.com/Andrey-Good/dennett-agent-orchestrator#readme.',
 			'package.json keywords must be ["agent-orchestration","agent-runtime","codex","cli","workflow"] for public package discovery metadata.',

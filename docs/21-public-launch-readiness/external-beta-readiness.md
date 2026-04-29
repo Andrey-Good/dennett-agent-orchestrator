@@ -9,6 +9,7 @@ Related documents:
 - [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md)
 - [Observability, Support, And Operations](./observability-support-operations.md)
 - [Integrated Public Environment Product Flows](./integrated-public-environment-product-flows.md)
+- [External Beta Packet](./external-beta-packet.md)
 - [Evidence Log](../20-real-world-proof-and-release/evidence-log.md)
 
 ## Stage 16 Decision
@@ -45,6 +46,8 @@ Minimum participant criteria before the beta can start:
 ## OSS Launch Beta Execution Package
 
 The OSS public-launch beta gate is executable only when a maintainer prepares a dated beta packet before inviting participants. The packet may live outside the public repository if it contains private roster data, but the public evidence log must record the redacted results.
+
+Use [External Beta Packet](./external-beta-packet.md) as the public handoff template. It provides tester instructions for both the current source-checkout beta path and a future npm prerelease path. The future npm path is conditional only; it must not be required or treated as available while public package publication remains blocked.
 
 Minimum packet contents:
 

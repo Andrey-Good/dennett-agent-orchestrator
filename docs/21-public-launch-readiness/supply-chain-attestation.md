@@ -8,6 +8,7 @@ Related documents:
 - [Package Identity And Registry](./package-identity-and-registry.md)
 - [Install, Upgrade, Uninstall, And Rollback](./install-upgrade-uninstall-rollback.md)
 - [Release Engineering And Supply Chain](./release-engineering-and-supply-chain.md)
+- [Release Settings User Checklist](./release-settings-user-checklist.md)
 
 ## Local SBOM Status
 
@@ -68,6 +69,8 @@ Current status:
 | Git tag or GitHub release attestation | Deferred. | Stage 11 must not create tags, push commits, or create releases. |
 
 The proof script prints the provenance and signing deferrals as explicit output during local SBOM proof. npm trusted publishing, once configured for the `release.yml` workflow and run against a public package from a public repository, is expected to publish npm provenance automatically; until that publish run succeeds, npm provenance remains deferred.
+
+External npm and GitHub settings required before this can be proven are tracked in [Release Settings User Checklist](./release-settings-user-checklist.md). A configured Trusted Publisher or GitHub environment is not equivalent to provenance; provenance closes only after an approved public-package publish run produces verifiable npm evidence.
 
 ## Artifact Hash And Evidence Expectations
 

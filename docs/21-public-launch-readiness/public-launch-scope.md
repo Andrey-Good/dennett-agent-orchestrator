@@ -32,6 +32,8 @@ This means the first public launch is an open-source v0.1 local product launch: 
 
 The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted, managed, commercial, SLA-backed, or cloud service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Stage 12 owns the canonical hosted/managed deployment deferral lock in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md). Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
 
+As of 2026-04-29, the GitHub repository URL is publicly reachable: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. That evidence does not expand the launch target or prove current local changes are published. The local checkout used for the current launch-gate docs was at `241b4a50e084f15f04163a9dfcce6cededb45c41` and ahead of `origin/main` by 23 commits, so current-candidate public repository/package claims require a push and a new remote verification.
+
 The OSS v0.1 scope is intentionally non-hosted. Hosted/managed gaps are launch blockers only for hosted or commercial claims; they are not implementation prerequisites for an OSS local CLI/package launch when the public docs explicitly preserve the non-hosted boundary.
 
 ## Hosted And Managed Status
@@ -55,6 +57,7 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | Area | Stage 2 launch-scope status | Public-launch boundary |
 | --- | --- | --- |
 | Launch form | Selected target: OSS v0.1 CLI/package-first. | Not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen public repository/package artifact. |
+| Repository visibility | Public GitHub URL reachability locally verified at remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. | Visibility is not launch approval. Local `main` was 23 commits ahead of `origin/main`, so current local launch-gate updates are not remote-proven until pushed and rechecked. |
 | Repository checkout | Supported as contributor and local-user path by the bounded `local-cli-repository-readiness` evidence. | Users build from checkout with `pnpm build`; generated `dist` is not promised in a clean checkout. |
 | Package distribution | Local tarball proof exists; public registry publication is not proven. | Stage 11 proves controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration. It does not prove public npm publication, signing, provenance, retained SBOMs, or public registry install. |
 | Hosted/managed service | Deferred by Stage 12 and outside OSS v0.1 scope. | No hosted, managed, SaaS, uptime, multi-tenant, cloud deployment, hosted telemetry/audit, production load, hosted support operations, status page, SLA, or hosted rollback claim. These gaps block hosted/commercial claims, not the non-hosted OSS scope. |

@@ -1,6 +1,6 @@
 {
 	"name": "dennett-agent-orchestrator",
-	"version": "0.0.0",
+	"version": "0.1.0-rc.1",
 	"description": "Codex-first orchestrator for portable agent runs.",
 	"private": true,
 	"license": "Apache-2.0",

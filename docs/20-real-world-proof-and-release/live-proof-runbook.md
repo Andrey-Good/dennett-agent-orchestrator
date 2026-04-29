@@ -46,6 +46,25 @@ Use this matrix before any OSS public-launch provider claim expands beyond the c
 | External provider reliability, throttling, latency, or volume | `P19-LIVE-PROVIDER-RELIABILITY-001` | Not proven for public claims. Deterministic local stub tests are not live reliability proof. | Run quota-safe live-provider reliability scenarios with named limits, retry behavior, failure handling, cleanup debt, and residual risk. Mark `blocked` if accounts, quota, or safe cleanup are unavailable. |
 | Native App Server memory, non-Codex runtimes, hosted provider operations, provider-wide cleanup | `P19-LIVE-UNSUPPORTED-001` | Unsupported or unproven. | Add implementation and live evidence first, or keep these claims forbidden/deferred in launch docs. |
 
+## Stage 16 External Beta Packet Tie-In
+
+The external beta packet in [External Beta Packet](../21-public-launch-readiness/external-beta-packet.md) is the tester-facing handoff for Stage 16. It is allowed to prepare source-checkout and future npm prerelease instructions, but it is not a completed proof run.
+
+When a beta tester exercises a live runtime, memory, interaction, builder, or managed-subagent workflow, map the beta workflow ID to the closest `P19-LIVE-*` scenario before adding evidence:
+
+| Beta workflow | Related proof scenario | Evidence rule |
+| --- | --- | --- |
+| `EB-WF-01` | `P19-LIVE-LOCAL-001` or public package proof when available | Record source-checkout or package identity, commands, environment, and result. Do not infer public npm availability from source-checkout evidence. |
+| `EB-WF-02` | `P19-LIVE-LOCAL-001` | Record CLI inventory and validation evidence. This does not prove live runtime execution. |
+| `EB-WF-03` | `P19-LIVE-CODEX-CLI-001` or another named runtime scenario | Record runtime class, final status, redacted account/runtime details, and failure mode if blocked or failed. |
+| `EB-WF-04` | `P19-LIVE-MEM0-DIRECT-001` or `P19-LIVE-MEM0-CODEX-001` | Record provider family, operation IDs where safe, cleanup or retention, and redactions. |
+| `EB-WF-05` | `P19-LIVE-CHAT-001` | Record prompt/reply/resume state transitions without private prompt content. |
+| `EB-WF-06` | `P19-LIVE-BUILD-001` | Record draft/audit identity and validation or execution boundary. |
+| `EB-WF-07` | `P19-LIVE-SUB-001` | Record parent/child lineage and role/status transitions for the bounded local CLI surface. |
+| `EB-WF-08` | Support/security routing evidence | Record route selection and redaction outcome. Do not put security details in public evidence. |
+
+Until accepted participant evidence exists, record Stage 16 rows as `not-run` or `blocked`; do not use packet preparation as pass evidence.
+
 ## Provider Proof Evidence Schema
 
 Use this schema for each provider proof row before adding it to the evidence log. A blocked row is acceptable evidence of missing prerequisites; it is not a successful provider proof.

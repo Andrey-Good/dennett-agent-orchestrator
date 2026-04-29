@@ -19,7 +19,7 @@ Required tools:
 - `pnpm@10.33.0` for repository scripts;
 - npm for local package packing, temporary consumer install, uninstall, and SBOM commands.
 
-The package is still private. There is no supported `npm install dennett-agent-orchestrator` public-registry command.
+The package is still private even though `package.json` uses the prepared `0.1.0-rc.1` release-candidate version. There is no supported `npm install dennett-agent-orchestrator` public-registry command.
 
 ## Public Registry Mode
 
@@ -66,7 +66,7 @@ The proof command does not install the package globally. To inspect a tarball ma
 mkdir dennett-consumer-proof
 cd dennett-consumer-proof
 npm init -y
-npm install --ignore-scripts --no-audit --fund=false C:\path\to\dennett-agent-orchestrator-0.0.0.tgz
+npm install --ignore-scripts --no-audit --fund=false C:\path\to\dennett-agent-orchestrator-0.1.0-rc.1.tgz
 npx dennett-agent-orchestrator --help
 npm uninstall --ignore-scripts --no-audit --fund=false dennett-agent-orchestrator
 ```

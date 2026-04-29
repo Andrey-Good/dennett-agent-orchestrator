@@ -7,6 +7,8 @@ Package version: `0.0.0`
 Package privacy: `private: true`
 Decision date: `2026-04-29`
 Decision owner: `TASK-OSS-LAUNCH-06 final gate worker`
+Public repository accessibility evidence: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29.
+Local/remote divergence: local `main` at `241b4a50e084f15f04163a9dfcce6cededb45c41` is ahead of `origin/main` by 23 commits, so current local launch-gate changes are not remote-verified until push.
 
 ## Decision
 
@@ -16,15 +18,19 @@ The repository may continue bounded local checkout and local package-readiness w
 
 This decision does not approve public npm publication, public registry installation, package namespace ownership, hosted or managed deployment, SaaS operation, general availability, production readiness, completed external beta, public provenance, retained SBOM publication, signed artifacts, release tags, pushed commits, GitHub releases, or any change from `private: true`.
 
+The public GitHub URL accessibility check proves only that the repository can be reached at the remote HEAD shown above. It does not approve launch, prove that the newer local launch-gate documentation has been pushed, or replace package, beta, supply-chain, registry, and publication evidence.
+
 ## Current Evidence Matrix
 
 | Gate | Evidence status | Decision effect |
 | --- | --- | --- |
 | Repository and local CLI readiness | Historical local-scope release evidence exists for commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`; current repository gates and docs continue to describe local checkout and local package proof boundaries. | Supports bounded local checkout and local package-readiness work only. |
+| Public GitHub repository accessibility | `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`, but local `main` is ahead of `origin/main` by 23 commits. | Proves URL reachability only; remote verification of current local launch-gate docs remains blocked until push and rerun. |
 | Package metadata and publication state | `package.json` has repository, issue-routing, homepage, and discovery metadata, but remains `private: true` with version `0.0.0`. | Blocks public npm publication and public registry install claims. |
 | Package identity and registry | [Package Identity And Registry](./package-identity-and-registry.md) records no public namespace ownership proof, no approved `npm publish`, and no public registry install path. | Blocks package/public registry launch approval. |
 | Local tarball distribution proof | [Stage 11 Distribution Proof](./distribution-proof.md) records controlled local `.tgz` install/uninstall proof, optional explicit two-tarball upgrade/rollback proof, and local SBOM validation. | Allows local proof claims only; does not prove public registry or retained release artifacts. |
 | Supply chain | [Supply Chain Attestation](./supply-chain-attestation.md) records local SBOM validation but no retained canonical SBOM, no npm provenance, no signing, and no artifact hash manifest. | Blocks public provenance, signing, retained SBOM, and public artifact integrity claims. |
+| User/admin release settings | [Release Settings User Checklist](./release-settings-user-checklist.md) records required external actions for npm ownership, npm Trusted Publisher, GitHub `npm-production` environment approval, protected release tags, and final release approval. | Blocks publication until external settings are configured and proven by named commands or evidence records. |
 | External beta | [External Beta Readiness](./external-beta-readiness.md) remains `external-beta-not-run`; no real external participants, dated sessions, accepted beta evidence, or beta-exit review are recorded. | Blocks completed-beta, beta-user validation, and public-readiness approval claims. |
 | Hosted/managed deployment | [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md) explicitly defers hosted and managed deployment. | Hosted/SaaS/production claims remain forbidden; this is not an OSS v0.1 CLI/package blocker if the later approval keeps launch non-hosted. |
 | Public docs and onboarding | [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md) permits clean-checkout and local tarball proof wording only inside documented claim boundaries. | Allows bounded onboarding language; blocks launch, package, hosted, and production claims without matching evidence. |
@@ -51,6 +57,14 @@ This decision does not approve public npm publication, public registry installat
 - npm provenance remains deferred.
 - Package signing remains deferred.
 - No artifact hash manifest is recorded for a public release artifact.
+
+### User/Admin Release Settings
+
+- npm package ownership and publisher authority are not recorded.
+- npm Trusted Publisher settings for `Andrey-Good/dennett-agent-orchestrator`, workflow `release.yml`, and environment `npm-production` are not recorded as configured or proven.
+- GitHub `npm-production` environment reviewers and deployment tag restrictions are not recorded as configured.
+- Protected release tag rules for the selected `v*` release pattern are not recorded as configured.
+- No final release approval records the exact public version, source commit, tag, publish run, or post-publish verification owner.
 
 ### Documentation And Metadata
 
@@ -80,6 +94,7 @@ Do not claim:
 A later decision may approve OSS v0.1 public launch only after it records all of the following:
 
 - package privacy change approval, final version approval, registry ownership proof, and public install/upgrade/uninstall/rollback proof;
+- user/admin release settings evidence for npm Trusted Publisher, npm ownership, GitHub environment approval, protected release tags, and exact release approval as defined in [Release Settings User Checklist](./release-settings-user-checklist.md);
 - retained SBOM, provenance/signing decision or implementation, artifact hashes, and publication attachment policy;
 - completed external beta with real external participants, dated workflow evidence, privacy-safe artifacts, bug-bar triage, and accepted exit review;
 - explicit non-hosted OSS v0.1 scope or a separate hosted/managed deployment evidence set if hosted claims are added;
