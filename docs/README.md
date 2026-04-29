@@ -5,7 +5,7 @@ Owns: documentation reading order, section responsibilities, and escalation rule
 Does not own: product behavior that belongs to a narrower specification.
 Primary sources: [repository root](../README.md), [canonical specification](../agent_orchestrator_final_spec_v2.md), [ADR index](./09-adrs/README.md), and [public docs and claims owner](./21-public-launch-readiness/public-docs-onboarding-and-claims.md).
 
-This tree turns the canonical specification into smaller implementation-facing documents. The goal is not to duplicate the canon in many places, but to assign one owner document to each important rule so code and documentation changes know where to look first.
+This tree turns the canonical specification into smaller topic-focused documents. The goal is not to duplicate the canon in many places, but to assign one owner document to each important rule so contributors know where to look first.
 
 ## Source Hierarchy
 
@@ -16,8 +16,8 @@ Use the documentation tree in this order:
 3. README files define navigation, section scope, and ownership boundaries. They should summarize, route, and constrain, but they should not silently introduce detailed contract rules that belong in leaf documents.
 4. If a change is significant, contested, or has long-lived tradeoffs, capture the decision in [`09-adrs`](./09-adrs/README.md).
 5. Non-normative reference targets live in [`12-reference-targets`](./12-reference-targets/README.md). They are implementation references only and do not override canonical Dennett ownership.
-6. Post-11 capability freezing and evidence-based status tracking live in [`13-capability-gap-lock`](./13-capability-gap-lock/README.md). That section freezes what is and is not actually done.
-7. Later implementation-stage owner documents live in sections `14` through `20`; each records a bounded slice without expanding public launch claims by itself.
+6. Capability freezing and evidence-based status tracking live in [`13-capability-gap-lock`](./13-capability-gap-lock/README.md). That section records what is and is not actually done.
+7. Owner documents for sections `14` through `20` record bounded feature areas without expanding public launch claims by themselves.
 8. Public launch readiness ownership lives in [`21-public-launch-readiness`](./21-public-launch-readiness/README.md). That section owns public-launch boundaries, onboarding claims, forbidden public claims, and the bounded stable CLI/API freeze.
 
 If two documents appear to disagree, treat the more canonical and more specific owner as authoritative only if it does not contradict the top-level canon. Otherwise the mismatch is a documentation defect that must be corrected, not a license to pick whichever text is convenient.
@@ -36,22 +36,22 @@ If two documents appear to disagree, treat the more canonical and more specific 
 | 8 | [`08-extensions`](./08-extensions/README.md) | Governs memory, runtime sources, limits, and other non-core axes. |
 | 9 | [`09-adrs`](./09-adrs/README.md) | Records why contested architectural choices were made. |
 | 10 | [`10-examples`](./10-examples/README.md) | Illustrates valid usage without becoming normative. |
-| 11 | [`11-hardening`](./11-hardening/README.md) | Governs release gates, hardening scope, validation matrix, and current-stage operational readiness. |
+| 11 | [`11-hardening`](./11-hardening/README.md) | Governs release readiness rules, hardening scope, validation matrix, and operational readiness. |
 | 12 | [`12-reference-targets`](./12-reference-targets/README.md) | Reference material only; useful for deliberate reproduction work, but not canonical ownership. |
-| 13 | [`13-capability-gap-lock`](./13-capability-gap-lock/README.md) | Governs the truthful post-11 capability freeze, Mem0-first readiness framing, and handoff to later stages. |
+| 13 | [`13-capability-gap-lock`](./13-capability-gap-lock/README.md) | Governs the truthful capability freeze, Mem0-first readiness framing, and handoff to later roadmap work. |
 | 14 | [`14-native-memory-integration`](./14-native-memory-integration/README.md) | Governs the implemented Mem0-first native-memory slice and local provider registry boundary. |
 | 15 | [`15-native-runtime-surface`](./15-native-runtime-surface/README.md) | Governs model discovery, runtime-environment introspection, and executable App Server-native runtime-option controls. |
-| 16 | [`16-full-user-interaction-layer/phase-15-full-user-interaction-layer.md`](./16-full-user-interaction-layer/phase-15-full-user-interaction-layer.md) | Governs the Phase 15 user interaction layer boundary. |
-| 17 | [`17-managed-subagent-orchestration/phase-16-managed-subagent-orchestration.md`](./17-managed-subagent-orchestration/phase-16-managed-subagent-orchestration.md) | Governs the Phase 16 managed-subagent contract-completion slice and remaining proof boundary. |
-| 18 | [`18-builder-2-0`](./18-builder-2-0/README.md) | Governs the Phase 17 Builder 2.0 authoring boundary for public-contract-only drafts. |
-| 19 | [`19-integrated-product-flows`](./19-integrated-product-flows/README.md) | Governs Phase 18 integrated product-flow definitions without promoting them to external proof or release readiness. |
-| 20 | [`20-real-world-proof-and-release`](./20-real-world-proof-and-release/README.md) | Governs Phase 19 real-world proof, stress/regression proof, operational runbooks, evidence logs, and release decisions. |
+| 16 | [`16-full-user-interaction-layer`](./16-full-user-interaction-layer/) | Governs the user interaction layer boundary. |
+| 17 | [`17-managed-subagent-orchestration`](./17-managed-subagent-orchestration/) | Governs the managed-subagent contract-completion slice and remaining proof boundary. |
+| 18 | [`18-builder-2-0`](./18-builder-2-0/README.md) | Governs the Builder 2.0 authoring boundary for public-contract-only drafts. |
+| 19 | [`19-integrated-product-flows`](./19-integrated-product-flows/README.md) | Governs integrated product-flow definitions without promoting them to external proof or release readiness. |
+| 20 | [`20-real-world-proof-and-release`](./20-real-world-proof-and-release/README.md) | Governs real-world proof, stress/regression proof, operational runbooks, evidence logs, and release decisions. |
 | 21 | [`21-public-launch-readiness`](./21-public-launch-readiness/README.md) | Governs public-launch readiness boundaries, forbidden public claims, onboarding docs, and the bounded stable CLI/API freeze. |
 
 ## Section Responsibilities
 
 - [`01-foundations`](./01-foundations/README.md) owns product identity, scope, boundaries, terminology, truth sources, defaults, and stack lock.
-- [`02-architecture`](./02-architecture/README.md) owns layers, module boundaries, dependency constraints, and the staged boundary for App Server-native capability families.
+- [`02-architecture`](./02-architecture/README.md) owns layers, module boundaries, dependency constraints, and the bounded roadmap for App Server-native capability families.
 - [`03-contracts`](./03-contracts/README.md) owns formal schemas, type-level contracts, validation constraints, and the stable normalized boundary.
 - [`04-execution`](./04-execution/README.md) owns run behavior, graph traversal, node outcomes, and execution semantics.
 - [`05-state`](./05-state/README.md) owns persisted operational state such as chats and resume.
@@ -60,16 +60,16 @@ If two documents appear to disagree, treat the more canonical and more specific 
 - [`08-extensions`](./08-extensions/README.md) owns features intentionally kept outside the minimal stable core, including runtime-source-local capability metadata that must not become portable file truth.
 - [`09-adrs`](./09-adrs/README.md) owns the history and rationale of contested decisions, not the detailed operational contract itself.
 - [`10-examples`](./10-examples/README.md) owns worked examples and anti-pattern illustrations, never the underlying rule.
-- [`11-hardening`](./11-hardening/README.md) owns release-readiness rules for the current product stage.
+- [`11-hardening`](./11-hardening/README.md) owns release-readiness rules for the current product maturity point.
 - [`12-reference-targets`](./12-reference-targets/README.md) owns navigation for non-normative reference material.
-- [`13-capability-gap-lock`](./13-capability-gap-lock/README.md) owns the truthful capability matrix after stages 1-11 and the evidence model for later feature claims.
-- [`14-native-memory-integration`](./14-native-memory-integration/README.md) owns the implemented Phase 13 Mem0-first slice.
-- [`15-native-runtime-surface`](./15-native-runtime-surface/README.md) owns the implemented Phase 14 runtime surface.
-- [`16-full-user-interaction-layer/phase-15-full-user-interaction-layer.md`](./16-full-user-interaction-layer/phase-15-full-user-interaction-layer.md) owns the Phase 15 user interaction layer.
-- [`17-managed-subagent-orchestration/phase-16-managed-subagent-orchestration.md`](./17-managed-subagent-orchestration/phase-16-managed-subagent-orchestration.md) owns the Phase 16 managed-subagent orchestration slice.
-- [`18-builder-2-0`](./18-builder-2-0/README.md) owns the Phase 17 Builder 2.0 authoring boundary.
-- [`19-integrated-product-flows`](./19-integrated-product-flows/README.md) owns Phase 18 integrated product-flow acceptance definitions and subsystem handoff rules.
-- [`20-real-world-proof-and-release`](./20-real-world-proof-and-release/README.md) owns Phase 19 real-world proof, operational runbooks, evidence logging, and release decisions.
+- [`13-capability-gap-lock`](./13-capability-gap-lock/README.md) owns the truthful capability matrix after the foundational roadmap work and the evidence model for later feature claims.
+- [`14-native-memory-integration`](./14-native-memory-integration/README.md) owns the Mem0-first native-memory slice.
+- [`15-native-runtime-surface`](./15-native-runtime-surface/README.md) owns the native runtime surface.
+- [`16-full-user-interaction-layer`](./16-full-user-interaction-layer/) owns the user interaction layer.
+- [`17-managed-subagent-orchestration`](./17-managed-subagent-orchestration/) owns the managed-subagent orchestration slice.
+- [`18-builder-2-0`](./18-builder-2-0/README.md) owns the Builder 2.0 authoring boundary.
+- [`19-integrated-product-flows`](./19-integrated-product-flows/README.md) owns integrated product-flow acceptance definitions and subsystem handoff rules.
+- [`20-real-world-proof-and-release`](./20-real-world-proof-and-release/README.md) owns real-world proof, operational runbooks, evidence logging, and release decisions.
 - [`21-public-launch-readiness`](./21-public-launch-readiness/README.md) owns public-launch readiness boundaries, public docs onboarding, forbidden claims, and the bounded stable CLI/API contract freeze.
 
 The subagent system is intentionally split across several owner docs: [`02-architecture/subagent-orchestration-model.md`](./02-architecture/subagent-orchestration-model.md) owns the overall model, [`03-contracts/subagent-mcp-contract.md`](./03-contracts/subagent-mcp-contract.md) owns the managed child-run MCP surface, [`04-execution/subagent-task-lifecycle.md`](./04-execution/subagent-task-lifecycle.md) owns delegated-task sequencing, [`05-state/subagent-context-and-memory.md`](./05-state/subagent-context-and-memory.md) owns lineage and persisted child context, and [`08-extensions/builder-agent.md`](./08-extensions/builder-agent.md) consumes that model without redefining it.

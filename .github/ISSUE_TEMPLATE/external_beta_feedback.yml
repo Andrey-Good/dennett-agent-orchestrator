@@ -1,5 +1,5 @@
 name: External beta feedback
-description: Report feedback from a Stage 16 external beta workflow.
+description: Report feedback from a maintainer-invited external beta workflow.
 title: "Beta feedback: "
 labels: ["beta-feedback"]
 body:
@@ -10,7 +10,7 @@ body:
 
         Security vulnerabilities, credential exposure, data leakage, or unsafe redaction reports must follow `SECURITY.md` instead of this public template.
 
-        **Invitation guard:** This template is only for maintainer-invited Stage 16 beta runs. The current public beta remains `not-run` unless a maintainer records accepted dated workflow evidence; unsolicited issues or planning notes do not prove external beta completion, beta-user validation, or public-launch readiness.
+        **Invitation guard:** This template is only for maintainer-invited beta runs. The current public beta remains `not-run` unless a maintainer records accepted dated workflow evidence; unsolicited issues or planning notes do not prove external beta completion, beta-user validation, or public-launch readiness.
 
         Use `docs/21-public-launch-readiness/external-beta-packet.md` for the current packet instructions. Report only the artifact mode the maintainer assigned: source checkout, or future npm prerelease after publication is separately approved.
   - type: dropdown
@@ -35,7 +35,7 @@ body:
     id: workflow-id
     attributes:
       label: Beta workflow ID
-      description: Select the Stage 16 workflow this feedback covers.
+      description: Select the invited beta workflow this feedback covers.
       options:
         - EB-WF-01 onboarding
         - EB-WF-02 CLI validation
@@ -93,7 +93,7 @@ body:
     id: severity
     attributes:
       label: Proposed severity
-      description: Use the Stage 16 bug bar from external-beta-readiness.md.
+      description: Use the beta feedback bug classification from external-beta-readiness.md.
       options:
         - S0-security-privacy
         - S1-critical
@@ -118,10 +118,10 @@ body:
     validations:
       required: false
   - type: dropdown
-    id: beta-exit-blocker
+    id: broader-beta-blocker
     attributes:
-      label: Blocks beta exit?
-      description: Select whether this feedback should block beta exit under the Stage 16 bug bar.
+      label: Blocks broader beta readiness?
+      description: Select whether this feedback should require maintainer follow-up before broader beta readiness is recorded.
       options:
         - "yes"
         - "no"

@@ -50,7 +50,7 @@ Decomposition principles:
 
 ### 3. Task Document Before Delegation
 
-Before launching a subagent, I should create a task document in the projectвЂ™s designated task-tracking location.
+Before launching a subagent, I should create a task document in the project's designated task-tracking location.
 
 Each task document should include:
 
@@ -253,9 +253,9 @@ In this repository, the designated task-tracking location for subagent task docu
 
 `C:\Dev\dennett-agent-orchestrator\subagent_tasks`
 
-### Stages From Current State To Working Product
+### Roadmap Steps From Current State To Working Product
 
-These are the base stages that should guide the project from the current specification to a working product.
+These are the base roadmap steps that should guide the project from the current specification to a working product.
 
 #### 1. Canon And MVP Boundary Lock
 
@@ -383,7 +383,7 @@ Goal:
 Expected results:
 
 - a canonical docs-to-code-to-tests gap matrix;
-- explicit status labels and acceptance rules for future stages;
+- explicit status labels and acceptance rules for future roadmap steps;
 - a frozen Mem0-first readiness note that distinguishes package availability from real provider readiness;
 - a canonical post-11 roadmap owned by this file and linked from the docs tree.
 
