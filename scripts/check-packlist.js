@@ -16,6 +16,7 @@ const REQUIRED_PACKAGE_FILES = [
 
 const REQUIRED_PACKAGE_SCRIPTS = [
 	'build',
+	'dennett',
 	'dist:clean',
 	'dist:check',
 	'packlist:check',
@@ -45,6 +46,7 @@ const EXPECTED_PACKAGE_KEYWORDS = [
 	'workflow',
 ]
 const EXPECTED_PACKAGE_VERSION = '0.1.0-rc.1'
+const EXPECTED_DENNETT_SCRIPT = 'node ./dist/src/interfaces/cli.js'
 
 function isAllowedPackageFile(filePath) {
 	return (
@@ -160,6 +162,12 @@ export function validatePackageMetadata(packageJson) {
 		if (typeof packageJson.scripts?.[scriptName] !== 'string') {
 			errors.push(`package.json is missing required script "${scriptName}".`)
 		}
+	}
+
+	if (packageJson.scripts?.dennett !== EXPECTED_DENNETT_SCRIPT) {
+		errors.push(
+			`package.json script "dennett" must be ${JSON.stringify(EXPECTED_DENNETT_SCRIPT)} for source-checkout CLI usage.`,
+		)
 	}
 
 	return errors

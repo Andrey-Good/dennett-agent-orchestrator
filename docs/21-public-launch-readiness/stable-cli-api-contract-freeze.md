@@ -22,6 +22,18 @@ This freeze does not make the project publicly launched, generally available, pr
 
 The package still has no stable JavaScript or TypeScript API. Built `dist` files are included for the executable `bin` path, but package exports intentionally prevent stable deep imports.
 
+## Source Checkout Invocation
+
+The supported public invocation from an unpublished source checkout is the local package script alias:
+
+```powershell
+pnpm build
+pnpm dennett --help
+pnpm dennett run <agent-file>
+```
+
+This is not an npm registry, `npx`, installer, or published-package claim. The script is backed by the built CLI implementation under `dist`, but users should prefer `pnpm dennett` in public checkout instructions.
+
 ## Stable Command Inventory
 
 These commands are stable within the bounded local CLI/package surface:

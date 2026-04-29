@@ -37,6 +37,7 @@
 	},
 	"scripts": {
 		"build": "node scripts/clean-dist.js && tsc -p tsconfig.build.json",
+		"dennett": "node ./dist/src/interfaces/cli.js",
 		"dist:clean": "node scripts/clean-dist.js",
 		"dist:check": "node scripts/check-distribution.js",
 		"packlist:check": "node scripts/check-packlist.js",

@@ -160,6 +160,7 @@ describe('package distribution metadata', () => {
 
 		expect(packageJson.scripts).toMatchObject({
 			build: 'node scripts/clean-dist.js && tsc -p tsconfig.build.json',
+			dennett: 'node ./dist/src/interfaces/cli.js',
 			'dist:clean': 'node scripts/clean-dist.js',
 			'dist:check': 'node scripts/check-distribution.js',
 			'packlist:check': 'node scripts/check-packlist.js',
@@ -208,12 +209,14 @@ describe('package distribution metadata', () => {
 				bugs: { url: 'https://example.invalid/issues' },
 				homepage: 'https://example.invalid',
 				keywords: ['agent'],
+				scripts: { ...(packageJson.scripts ?? {}), dennett: 'node dist/src/interfaces/cli.js' },
 			}),
 		).toEqual([
 			'package.json version must be 0.1.0-rc.1 for the prepared private release candidate.',
 			'package.json bugs must be {"url":"https://github.com/Andrey-Good/dennett-agent-orchestrator/issues"} for public issue routing metadata.',
 			'package.json homepage must be https://github.com/Andrey-Good/dennett-agent-orchestrator#readme.',
 			'package.json keywords must be ["agent-orchestration","agent-runtime","codex","cli","workflow"] for public package discovery metadata.',
+			'package.json script "dennett" must be "node ./dist/src/interfaces/cli.js" for source-checkout CLI usage.',
 		])
 	})
 

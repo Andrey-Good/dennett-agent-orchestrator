@@ -20,6 +20,14 @@ Use this guide when you want to learn Dennett functionality before reading the i
 
 Start with the stable command inventory in [Stable CLI/API Contract Freeze](./21-public-launch-readiness/stable-cli-api-contract-freeze.md). Use it to distinguish stable local commands such as `register`, `deploy`, `run`, `run-live`, `run-status`, `reply`, `resume`, and `support-bundle` from commands that are still explicitly experimental.
 
+From a source checkout, build first and then use the local package script alias:
+
+```powershell
+pnpm build
+pnpm dennett --help
+pnpm dennett run <agent-file>
+```
+
 After the command inventory, read [draft/live/deploy](./07-lifecycle/draft-live-deploy.md) for registration and publishing semantics, [interaction sequences](./10-examples/interaction-sequences.md) for reply and resume flows, and [operational readiness](./11-hardening/operational-readiness.md) for local diagnostics boundaries.
 
 ## Experimental Surfaces

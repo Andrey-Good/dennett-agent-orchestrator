@@ -24,7 +24,7 @@ cd dennett-agent-orchestrator
 corepack enable
 pnpm install --frozen-lockfile
 pnpm build
-node .\dist\src\interfaces\cli.js --help
+pnpm dennett --help
 ```
 
 The default local state database is `.dennett/local-state.sqlite` inside the checkout. Stateful commands can use `--state-db <path>` when you want an isolated database.
@@ -34,7 +34,7 @@ The default local state database is `.dennett/local-state.sqlite` inside the che
 Run commands from a built source checkout:
 
 ```powershell
-node .\dist\src\interfaces\cli.js <command> ...
+pnpm dennett <command> ...
 ```
 
 Core workflow commands:
@@ -52,13 +52,13 @@ Core workflow commands:
 Examples:
 
 ```powershell
-node .\dist\src\interfaces\cli.js run <agent-file>
-node .\dist\src\interfaces\cli.js register <agent-file>
-node .\dist\src\interfaces\cli.js status <agent-id>
-node .\dist\src\interfaces\cli.js deploy <agent-file>
-node .\dist\src\interfaces\cli.js run-live <agent-id>
-node .\dist\src\interfaces\cli.js run-status
-node .\dist\src\interfaces\cli.js support-bundle
+pnpm dennett run <agent-file>
+pnpm dennett register <agent-file>
+pnpm dennett status <agent-id>
+pnpm dennett deploy <agent-file>
+pnpm dennett run-live <agent-id>
+pnpm dennett run-status
+pnpm dennett support-bundle
 ```
 
 CLI help labels commands inline as `[stable]`, `[stable/safety-protocol]`, or `[experimental]`. Experimental surfaces currently include runtime inspection and model listing, memory provider commands, the builder command, triggers and events, and managed subagent commands.
@@ -75,8 +75,8 @@ Build and inspect the CLI:
 
 ```powershell
 pnpm build
-node .\dist\src\interfaces\cli.js --help
-node .\dist\src\interfaces\cli.js support-bundle
+pnpm dennett --help
+pnpm dennett support-bundle
 ```
 
 Live example agents are listed in [examples/agents](./examples/agents/README.md). Live runs require local Codex/App Server authentication and access to the model named in the selected example agent file. Offline schema and fixture tests can pass even when a local live runtime is not available.
@@ -84,7 +84,7 @@ Live example agents are listed in [examples/agents](./examples/agents/README.md)
 ## What Works Now
 
 - Build the TypeScript project from source.
-- Run the local CLI from `dist`.
+- Run the local CLI through the `pnpm dennett` source-checkout alias.
 - Validate and run portable Agent JSON examples.
 - Use local SQLite-backed operational state for runs and interaction records.
 - Register, inspect, deploy, and run local agent revisions through CLI commands.
@@ -146,7 +146,7 @@ cd dennett-agent-orchestrator
 corepack enable
 pnpm install --frozen-lockfile
 pnpm build
-node .\dist\src\interfaces\cli.js --help
+pnpm dennett --help
 ```
 
 По умолчанию локальная база состояния создается в `.dennett/local-state.sqlite` внутри checkout. Для изолированной базы используйте `--state-db <path>` в командах, которые работают с состоянием.
@@ -156,7 +156,7 @@ node .\dist\src\interfaces\cli.js --help
 Запускайте команды из собранного исходного checkout:
 
 ```powershell
-node .\dist\src\interfaces\cli.js <command> ...
+pnpm dennett <command> ...
 ```
 
 Основной рабочий процесс:
@@ -174,13 +174,13 @@ node .\dist\src\interfaces\cli.js <command> ...
 Примеры:
 
 ```powershell
-node .\dist\src\interfaces\cli.js run <agent-file>
-node .\dist\src\interfaces\cli.js register <agent-file>
-node .\dist\src\interfaces\cli.js status <agent-id>
-node .\dist\src\interfaces\cli.js deploy <agent-file>
-node .\dist\src\interfaces\cli.js run-live <agent-id>
-node .\dist\src\interfaces\cli.js run-status
-node .\dist\src\interfaces\cli.js support-bundle
+pnpm dennett run <agent-file>
+pnpm dennett register <agent-file>
+pnpm dennett status <agent-id>
+pnpm dennett deploy <agent-file>
+pnpm dennett run-live <agent-id>
+pnpm dennett run-status
+pnpm dennett support-bundle
 ```
 
 CLI help помечает команды встроенными метками `[stable]`, `[stable/safety-protocol]` или `[experimental]`. Сейчас к экспериментальным поверхностям относятся runtime inspection и model list, команды memory provider, builder, triggers и events, а также managed subagent commands.
@@ -197,8 +197,8 @@ pnpm test -- tests/unit/public-examples.test.ts
 
 ```powershell
 pnpm build
-node .\dist\src\interfaces\cli.js --help
-node .\dist\src\interfaces\cli.js support-bundle
+pnpm dennett --help
+pnpm dennett support-bundle
 ```
 
 Live-примеры перечислены в [examples/agents](./examples/agents/README.md). Live-запуск требует локальную аутентификацию Codex/App Server и доступ к модели, указанной в выбранном файле примера. Offline-тесты схем и примеров могут проходить даже без доступного live runtime.
@@ -206,7 +206,7 @@ Live-примеры перечислены в [examples/agents](./examples/agent
 ## Что уже работает
 
 - Сборка TypeScript-проекта из исходников.
-- Запуск локального CLI из `dist`.
+- Запуск локального CLI через source-checkout alias `pnpm dennett`.
 - Валидация и запуск примеров Agent JSON.
 - Локальное SQLite-состояние для запусков и interaction records.
 - Регистрация, просмотр, deploy и запуск локальных ревизий агента через CLI.
