@@ -7,6 +7,18 @@ Primary sources: [repository root](../README.md), [canonical specification](../a
 
 This tree turns the canonical specification into smaller topic-focused documents. The goal is not to duplicate the canon in many places, but to assign one owner document to each important rule so contributors know where to look first.
 
+## Start Here
+
+If you are learning what the product does, start with the [Functionality Learning Guide](./functionality-learning-guide.md). It gives a short route through examples, core concepts, operator commands, experimental surfaces, and contributor architecture docs before you use the owner-document map below.
+
+| Need | Start with | Then read |
+| --- | --- | --- |
+| Learn the product functionality | [Functionality Learning Guide](./functionality-learning-guide.md) | [Examples](./10-examples/README.md), especially the canonical agent JSON example and interaction sequences. |
+| Understand core concepts | [Foundations](./01-foundations/README.md) | [Agent JSON contract](./03-contracts/agent-json/README.md), [graph execution](./04-execution/graph-execution.md), [chat and resume](./05-state/chat-and-resume.md), and [draft/live/deploy](./07-lifecycle/draft-live-deploy.md). |
+| Operate the local CLI | [Stable CLI/API Contract Freeze](./21-public-launch-readiness/stable-cli-api-contract-freeze.md) | [Lifecycle](./07-lifecycle/README.md), [interaction sequences](./10-examples/interaction-sequences.md), and [operational readiness](./11-hardening/operational-readiness.md). |
+| Explore optional surfaces | [Extensions](./08-extensions/README.md) | [memory bindings](./08-extensions/memory-bindings.md), [runtime sources](./08-extensions/runtime-sources.md), [builder agent](./08-extensions/builder-agent.md), [subagent model](./02-architecture/subagent-orchestration-model.md), and [events and triggers](./07-lifecycle/events-and-triggers.md). |
+| Contribute to architecture or contracts | [Architecture](./02-architecture/README.md) | [Contracts](./03-contracts/README.md), [ADRs](./09-adrs/README.md), [hardening](./11-hardening/README.md), and [public launch readiness](./21-public-launch-readiness/README.md). |
+
 ## Source Hierarchy
 
 Use the documentation tree in this order:

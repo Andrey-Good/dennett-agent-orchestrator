@@ -29,6 +29,40 @@ node .\dist\src\interfaces\cli.js --help
 
 The default local state database is `.dennett/local-state.sqlite` inside the checkout. Stateful commands can use `--state-db <path>` when you want an isolated database.
 
+## Main Commands
+
+Run commands from a built source checkout:
+
+```powershell
+node .\dist\src\interfaces\cli.js <command> ...
+```
+
+Core workflow commands:
+
+- `run <agent-file>` runs a portable Agent JSON file directly.
+- `register <agent-file>` registers an agent file as a draft revision.
+- `deploy <agent-file>` publishes an agent file as the live revision.
+- `status <agent-id>` shows registered agent lifecycle state.
+- `run-live <agent-id>` runs the current live revision of a registered agent.
+- `run-status` inspects durable run and interaction state.
+- `reply <agent-file>` records or delivers a reply to a waiting user prompt.
+- `resume <agent-file>` resumes a durable local run.
+- `support-bundle` emits a local redacted diagnostics bundle.
+
+Examples:
+
+```powershell
+node .\dist\src\interfaces\cli.js run <agent-file>
+node .\dist\src\interfaces\cli.js register <agent-file>
+node .\dist\src\interfaces\cli.js status <agent-id>
+node .\dist\src\interfaces\cli.js deploy <agent-file>
+node .\dist\src\interfaces\cli.js run-live <agent-id>
+node .\dist\src\interfaces\cli.js run-status
+node .\dist\src\interfaces\cli.js support-bundle
+```
+
+CLI help labels commands inline as `[stable]`, `[stable/safety-protocol]`, or `[experimental]`. Experimental surfaces currently include runtime inspection and model listing, memory provider commands, the builder command, triggers and events, and managed subagent commands.
+
 ## Smoke Checks
 
 Run the focused public example suite:
@@ -115,7 +149,41 @@ pnpm build
 node .\dist\src\interfaces\cli.js --help
 ```
 
-По умолчанию локальная база состояния создается в `.dennett/local-state.sqlite` внутри checkout. Для изолированной базы используйте `--state-db <path>` в stateful-командах.
+По умолчанию локальная база состояния создается в `.dennett/local-state.sqlite` внутри checkout. Для изолированной базы используйте `--state-db <path>` в командах, которые работают с состоянием.
+
+## Основные команды
+
+Запускайте команды из собранного исходного checkout:
+
+```powershell
+node .\dist\src\interfaces\cli.js <command> ...
+```
+
+Основной рабочий процесс:
+
+- `run <agent-file>` запускает portable Agent JSON файл напрямую.
+- `register <agent-file>` регистрирует файл агента как draft-ревизию.
+- `deploy <agent-file>` публикует файл агента как live-ревизию.
+- `status <agent-id>` показывает состояние зарегистрированного агента.
+- `run-live <agent-id>` запускает текущую live-ревизию зарегистрированного агента.
+- `run-status` показывает durable run и interaction state.
+- `reply <agent-file>` записывает или доставляет ответ на ожидающий user prompt.
+- `resume <agent-file>` возобновляет durable local run.
+- `support-bundle` создает локальный redacted diagnostics bundle.
+
+Примеры:
+
+```powershell
+node .\dist\src\interfaces\cli.js run <agent-file>
+node .\dist\src\interfaces\cli.js register <agent-file>
+node .\dist\src\interfaces\cli.js status <agent-id>
+node .\dist\src\interfaces\cli.js deploy <agent-file>
+node .\dist\src\interfaces\cli.js run-live <agent-id>
+node .\dist\src\interfaces\cli.js run-status
+node .\dist\src\interfaces\cli.js support-bundle
+```
+
+CLI help помечает команды встроенными метками `[stable]`, `[stable/safety-protocol]` или `[experimental]`. Сейчас к экспериментальным поверхностям относятся runtime inspection и model list, команды memory provider, builder, triggers и events, а также managed subagent commands.
 
 ## Проверка
 
@@ -144,7 +212,7 @@ Live-примеры перечислены в [examples/agents](./examples/agent
 - Регистрация, просмотр, deploy и запуск локальных ревизий агента через CLI.
 - Создание локального redacted support bundle.
 - Запуск contract, unit и focused public-example тестов.
-- Экспериментальные команды для runtime inspection, memory provider bindings, builder output, triggers и managed subagents.
+- Эксперименты с runtime inspection, memory provider bindings, builder output, triggers и managed subagent commands там, где CLI помечает их как experimental.
 
 ## Что пока не поддерживается
 

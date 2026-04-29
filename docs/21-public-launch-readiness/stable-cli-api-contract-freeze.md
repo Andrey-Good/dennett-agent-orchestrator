@@ -3,7 +3,7 @@
 <a id="english"></a>
 # Stable CLI/API Contract Freeze
 
-Status: canonical Stage 10 owner document for the bounded public CLI/API contract freeze.
+Status: canonical current-prerelease owner document for the bounded public CLI/API contract freeze.
 
 Related documents:
 
@@ -16,7 +16,7 @@ Related documents:
 
 ## Scope
 
-Stage 10 freezes only the bounded local CLI/package public surface that is explicitly labeled stable by the CLI and backed by package metadata checks after TASK-566.
+This document freezes only the bounded local CLI/package public surface that is explicitly labeled stable by the CLI and backed by package metadata checks after TASK-566.
 
 This freeze does not make the project publicly launched, generally available, production ready, hosted, managed, published to npm, available through installers or containers, certified for the full Codex App Server surface, or supported for broad providers.
 
@@ -78,7 +78,7 @@ For stable commands:
 - cwd-dependent defaults, such as the rendered absolute `--state-db` help default, are not stable byte-for-byte output;
 - aliases not shown in help are not public contract.
 
-For stable/safety-protocol commands, any change that weakens explicit scope, preview-before-delete, candidate verification, or confirmation-token safety requires a new Stage 10 update before release claims can rely on it.
+For stable/safety-protocol commands, any change that weakens explicit scope, preview-before-delete, candidate verification, or confirmation-token safety requires an update to this owner document before release claims can rely on it.
 
 For experimental commands, help labels are the only frozen part: they must not be documented as stable while they remain labeled experimental.
 
@@ -110,7 +110,7 @@ The error code prefix is more stable than the human-readable message. Message wo
 
 ## JSON Output Compatibility And Versioning
 
-Stage 10 freezes command-local JSON shapes only for stable commands and the stable/safety-protocol cleanup flow. There is no global CLI JSON envelope and no stable JSON output promise for experimental commands.
+This document freezes command-local JSON shapes only for stable commands and the stable/safety-protocol cleanup flow. There is no global CLI JSON envelope and no stable JSON output promise for experimental commands.
 
 Compatibility rules for frozen JSON outputs:
 
@@ -121,7 +121,7 @@ Compatibility rules for frozen JSON outputs:
 - sensitive payload redaction fields in `run-status` are part of the stable privacy contract;
 - schema artifacts exported from the package follow the schema policy below, not the CLI stdout policy.
 
-The current package version is `0.0.0` and the package remains private. If publication or semver policy changes later, this document must be updated before public compatibility claims rely on a versioned artifact.
+The current package version is `0.1.0-rc.1` and the package remains private. If publication or semver policy changes later, this document must be updated before public compatibility claims rely on a versioned artifact.
 
 ## Deprecation And Removal Policy
 
@@ -139,7 +139,7 @@ Experimental commands and undocumented internals do not require this process.
 
 ## Public JS/API Boundary And Package Import Policy
 
-There is no stable JS/TS package API in Stage 10.
+There is no stable JS/TS package API in the current prerelease CLI/package contract.
 
 The only exported package paths are:
 
@@ -182,7 +182,7 @@ Validation for this docs update should include `git diff --check` and a targeted
 
 ## Forbidden Inferences
 
-Do not infer any of the following from Stage 10:
+Do not infer any of the following from this bounded local CLI/package contract freeze:
 
 - public launch, production readiness, general availability, hosted operation, managed deployment, SLA, or support operations;
 - npm publication, installer distribution, container distribution, signed artifact, provenance, or rollback readiness;
