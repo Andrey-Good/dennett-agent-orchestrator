@@ -27,7 +27,7 @@ This `release` is bounded and does not prove hosted/managed deployment, npm/publ
 
 On 2026-04-29, `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`, which proves the GitHub repository URL was publicly reachable from the local environment at that time. This is repository visibility evidence only.
 
-On 2026-04-30, `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main`, matching `git rev-parse HEAD`. The committed HEAD is therefore remote-verified. This does not make the current dirty worktree a clean candidate, and uncommitted or untracked product files must not be described as part of the remote HEAD or a frozen release-candidate baseline.
+On 2026-04-30, `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main`, matching `git rev-parse HEAD` at that time. Later local evidence records current documentation/evidence baseline `4085d647d03098ade18a3d1412333a08e55c8156` with `pnpm release-candidate:check` passing locally and local-only artifacts retained under untracked `release-artifacts/`. The remote-state evidence does not prove that later local commits or local artifacts are public release artifacts.
 
 ## Included Capabilities
 

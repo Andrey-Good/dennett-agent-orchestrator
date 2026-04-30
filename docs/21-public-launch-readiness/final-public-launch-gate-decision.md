@@ -1,16 +1,17 @@
 # Final Public Launch Gate Decision
 
-Status: canonical Stage 17 final gate plus 2026-04-30 Stage 19 local evidence rerun. Final decision: OSS v0.1 public launch blocked / local-package-readiness-only.
+Status: canonical Stage 17 final gate plus accepted 2026-04-30 Stage 19 local RC evidence. Final decision: OSS v0.1 public launch blocked / local-package-readiness-only.
 
-Current local evidence baseline commit: `1f27dce0005205b4ddb8621184cf1e0b441c0dd8`
-Current local evidence baseline state: dirty worktree; `pnpm release-candidate:check` blocked by visible untracked product paths.
+Current local evidence baseline commit: `4085d647d03098ade18a3d1412333a08e55c8156`
+Current local evidence baseline state: tracked docs/evidence baseline with `pnpm release-candidate:check` passing locally; `release-artifacts/` remains local-only and untracked.
+Accepted local RC artifact source baseline: `c52ad7f97f56a2dd155562af303b176db6ee6db5`
 Previous reviewed final public-launch baseline commit: `c03c9ceb3141d4354026190bab79e68262508b75`
 Package version: `0.1.0-rc.1`
 Package privacy: `private: true`
 Decision date: `2026-04-29`; local evidence rerun date: `2026-04-30`
 Decision owner: `TASK-OSS-LAUNCH-06 final gate worker`; local evidence rerun owner: `2026-04-30-stage19-local-release-evidence-worker`
 Public repository accessibility evidence: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29.
-Current remote state evidence: `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main` on 2026-04-30, matching `git rev-parse HEAD`.
+Previous remote state evidence: `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main` on 2026-04-30, matching `git rev-parse HEAD` at that time. The current local evidence baseline is ahead of that recorded remote state and is not public publication evidence.
 
 ## Decision
 
@@ -20,14 +21,15 @@ The repository may continue bounded local checkout and local package-readiness w
 
 This decision does not approve public npm publication, public registry installation, package namespace ownership, hosted or managed deployment, SaaS operation, general availability, production readiness, completed external beta, public provenance, retained SBOM publication, signed artifacts, release tags, pushed commits, GitHub releases, or any change from `private: true`.
 
-The remote HEAD check proves only that the committed local HEAD is present on the remote main/HEAD ref. It does not approve launch, include uncommitted or untracked dirty-worktree changes in the remote HEAD, or replace clean candidate, package, beta, supply-chain, registry, and publication evidence.
+The remote HEAD check proves only the recorded remote main/HEAD state at the time it was run. It does not approve launch, prove that later local commits have been pushed, include untracked local `release-artifacts/`, or replace package, beta, supply-chain, registry, and publication evidence.
 
 ## Current Evidence Matrix
 
 | Gate | Evidence status | Decision effect |
 | --- | --- | --- |
-| Repository and local CLI readiness | Historical local-scope release evidence exists for commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. The 2026-04-30 rerun at commit `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` did not produce a clean current release-candidate baseline because `pnpm release-candidate:check` failed on visible untracked product paths. | Supports bounded local checkout and local package-readiness work only; blocks treating the current dirty worktree as a frozen clean candidate. |
-| Public GitHub repository accessibility | 2026-04-29 URL reachability was verified at remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. 2026-04-30 `origin` verification shows remote `HEAD` and `refs/heads/main` both at current local HEAD `1f27dce0005205b4ddb8621184cf1e0b441c0dd8`. | Proves repository reachability and current committed HEAD remote state only; dirty-worktree changes remain outside the remote HEAD and do not form a clean candidate. |
+| Repository and local CLI readiness | Historical local-scope release evidence exists for commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. The current 2026-04-30 local evidence baseline is commit `4085d647d03098ade18a3d1412333a08e55c8156`; `pnpm release-candidate:check` passes locally. | Supports bounded local checkout and local package-readiness work only; does not approve public launch, registry publication, or public install claims. |
+| Local RC artifact evidence | [Local RC Artifact Evidence - 2026-04-30](./local-rc-artifact-evidence-2026-04-30.md) records local-only tarball, SPDX SBOM, and SHA256SUMS evidence for source baseline `c52ad7f97f56a2dd155562af303b176db6ee6db5`, with artifact hashes retained under local `release-artifacts/`. | Supports local artifact inspection only; does not prove public registry publication, public artifact attachment, provenance, signing, or public install. |
+| Public GitHub repository accessibility | 2026-04-29 URL reachability was verified at remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. The last recorded 2026-04-30 `origin` verification showed remote `HEAD` and `refs/heads/main` both at `1f27dce0005205b4ddb8621184cf1e0b441c0dd8`; the current local evidence baseline is ahead of that recorded remote state. | Proves repository reachability and the recorded remote state only; local-only commits and untracked `release-artifacts/` are not public release evidence. |
 | Package metadata and publication state | `package.json` has repository, issue-routing, homepage, and discovery metadata, but remains `private: true` with version `0.1.0-rc.1`. | Blocks public npm publication and public registry install claims. |
 | Package identity and registry | [Package Identity And Registry](./package-identity-and-registry.md) records no public namespace ownership proof, no approved `npm publish`, and no public registry install path. | Blocks package/public registry launch approval. |
 | Local tarball distribution proof | [Stage 11 Distribution Proof](./distribution-proof.md) records controlled local `.tgz` install/uninstall proof, optional explicit two-tarball upgrade/rollback proof, and local SBOM validation. | Allows local proof claims only; does not prove public registry or retained release artifacts. |
@@ -50,11 +52,11 @@ The remote HEAD check proves only that the committed local HEAD is present on th
 
 ### Current Local Candidate Gate
 
-- The 2026-04-30 local rerun records current commit `1f27dce0005205b4ddb8621184cf1e0b441c0dd8`, package `0.1.0-rc.1`, and `private: true`.
+- The accepted 2026-04-30 local evidence baseline records current commit `4085d647d03098ade18a3d1412333a08e55c8156`, package `0.1.0-rc.1`, and `private: true`.
 - `pnpm public-release-foundation:check` passed while still reporting OSS v0.1 public launch `BLOCKED`.
 - `pnpm packlist:check` passed and validated 94 package files.
-- `pnpm release-candidate:check` failed because untracked product files are visible under `docs/**`, `scripts/**`, `src/**`, and `tests/**`.
-- Optional local package/SBOM/hash proof was not produced from this dirty blocked state, because it would not represent an approved clean candidate baseline.
+- `pnpm release-candidate:check` passed locally.
+- Local tarball, SPDX SBOM, and SHA256SUMS hashes are recorded in [Local RC Artifact Evidence - 2026-04-30](./local-rc-artifact-evidence-2026-04-30.md), while `release-artifacts/` remains untracked local evidence.
 
 ### External Beta Evidence
 

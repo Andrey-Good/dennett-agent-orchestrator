@@ -38,7 +38,7 @@ Evidence: local executable or dry run. Phase 19 is required for real external ru
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/stage7-cli-integrated-flow.test.ts` -> `builds, registers, deploys, waits for user input, replies, and resumes offline`
 
 ## Scenario 2: Memory-Aware Run With Safe Provider Boundary
@@ -64,7 +64,7 @@ Evidence: local executable with a real local provider where available, or test d
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `fails an unregistered runtime memory provider at the memory-owned gate before runtime launch without mutating lifecycle state`
 
 ## Scenario 3: User Interaction During Runtime Work
@@ -90,7 +90,7 @@ Evidence: local executable or test double. Phase 19 is required for cross-interf
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/stage7-cli-integrated-flow.test.ts` -> `builds, registers, deploys, waits for user input, replies, and resumes offline`
 - `tests/integration/stage7-interaction-edge-cases.test.ts` -> `rejects late replies after the prompt run has completed`
 - `tests/integration/stage7-interaction-edge-cases.test.ts` -> `records duplicate prompt replies append-only until resume consumes the latest match`
@@ -176,7 +176,7 @@ Evidence: local executable with test doubles allowed. Phase 19 is required for r
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `runs managed worker, reviewer, fix, and re-review through the managed subagent service boundary`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `fails unsupported runtime options at the runtime-owned gate before run creation without mutating lifecycle state`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `fails an unregistered runtime memory provider at the memory-owned gate before runtime launch without mutating lifecycle state`
@@ -221,7 +221,7 @@ Evidence: local executable или dry run. Phase 19 требуется для re
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/stage7-cli-integrated-flow.test.ts` -> `builds, registers, deploys, waits for user input, replies, and resumes offline`
 
 ## Сценарий 2: Memory-Aware Run With Safe Provider Boundary
@@ -247,7 +247,7 @@ Evidence: local executable with a real local provider where available или tes
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `fails an unregistered runtime memory provider at the memory-owned gate before runtime launch without mutating lifecycle state`
 
 ## Сценарий 3: User Interaction During Runtime Work
@@ -273,7 +273,7 @@ Evidence: local executable или test double. Phase 19 требуется дл�
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/stage7-cli-integrated-flow.test.ts` -> `builds, registers, deploys, waits for user input, replies, and resumes offline`
 - `tests/integration/stage7-interaction-edge-cases.test.ts` -> `rejects late replies after the prompt run has completed`
 - `tests/integration/stage7-interaction-edge-cases.test.ts` -> `records duplicate prompt replies append-only until resume consumes the latest match`
@@ -359,7 +359,7 @@ Evidence: local executable with test doubles allowed. Phase 19 требуетс�
 
 Executable mapping:
 
-- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, and delegates across local subsystem seams`
+- `tests/integration/phase18-integrated-product-flows.test.ts` -> `builds, deploys, prompts, resumes, delegates, and continues through managed subagents`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `runs managed worker, reviewer, fix, and re-review through the managed subagent service boundary`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `fails unsupported runtime options at the runtime-owned gate before run creation without mutating lifecycle state`
 - `tests/integration/phase18-integrated-product-flows.test.ts` -> `fails an unregistered runtime memory provider at the memory-owned gate before runtime launch without mutating lifecycle state`
