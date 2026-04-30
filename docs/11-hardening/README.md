@@ -21,6 +21,7 @@ Normative documents in this section:
 
 - [Hardening Scope](./hardening-scope.md): what Phase 11 is allowed to tighten, and what remains out of scope.
 - [Release Gates](./release-gates.md): the required checks and sign-offs before calling the current repository state release-ready.
+- [Stage Safety Gates](./stage-safety-gates.md): the operational entry, execution, review, and exit gates for future roadmap stage work.
 - [Validation Matrix](./validation-matrix.md): which risks must be checked, how they are checked, and whether the check is automated or manual at the current stage.
 - [Operational Readiness](./operational-readiness.md): the honest current-stage readiness envelope, residual risks, and what this project still does not promise.
 
@@ -40,6 +41,7 @@ How to use this section:
 
 - Read [Hardening Scope](./hardening-scope.md) before turning a quality idea into a Phase 11 requirement.
 - Read [Release Gates](./release-gates.md) before declaring a commit, tag, or branch ready for a repository release.
+- Read [Stage Safety Gates](./stage-safety-gates.md) before starting or exiting a significant roadmap stage.
 - Read [Validation Matrix](./validation-matrix.md) when deciding which checks must exist in CI and which still require explicit human review.
 - Read [Operational Readiness](./operational-readiness.md) before making claims about stability, safety, or maturity in user-facing material.
 
@@ -64,6 +66,7 @@ How to use this section:
 
 - [Hardening Scope](./hardening-scope.md): что Phase 11 вправе ужесточать и что остается вне scope.
 - [Release Gates](./release-gates.md): обязательные проверки и sign-off перед тем, как считать текущее состояние репозитория готовым к релизу.
+- [Stage Safety Gates](./stage-safety-gates.md): операционные входные, исполнительные, проверочные и выходные критерии для будущей работы по этапам roadmap.
 - [Validation Matrix](./validation-matrix.md): какие риски нужно проверять, как именно они проверяются и автоматизирована ли проверка на текущем этапе.
 - [Operational Readiness](./operational-readiness.md): честная рамка текущей готовности, остаточных рисков и того, что проект пока не обещает.
 
@@ -79,5 +82,6 @@ How to use this section:
 
 - Читайте [Hardening Scope](./hardening-scope.md) до того, как превращать идею про качество в требование Phase 11.
 - Читайте [Release Gates](./release-gates.md) перед тем, как объявлять commit, tag или branch готовыми к релизу репозитория.
+- Читайте [Stage Safety Gates](./stage-safety-gates.md) перед началом или выходом из значимого этапа roadmap.
 - Читайте [Validation Matrix](./validation-matrix.md), когда решаете, какие проверки обязаны существовать в CI, а какие пока требуют явного human review.
 - Читайте [Operational Readiness](./operational-readiness.md) до того, как делать заявления о стабильности, безопасности или зрелости в user-facing материалах.

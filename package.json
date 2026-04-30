@@ -40,6 +40,7 @@
 		"dennett": "node ./dist/src/interfaces/cli.js",
 		"dist:clean": "node scripts/clean-dist.js",
 		"dist:check": "node scripts/check-distribution.js",
+		"architecture:check": "node scripts/check-architecture-boundaries.js",
 		"packlist:check": "node scripts/check-packlist.js",
 		"public-release-foundation:check": "node scripts/check-public-release-foundation.js",
 		"release-candidate:check": "node scripts/check-release-candidate.js",

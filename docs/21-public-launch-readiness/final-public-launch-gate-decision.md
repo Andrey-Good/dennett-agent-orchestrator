@@ -1,14 +1,16 @@
 # Final Public Launch Gate Decision
 
-Status: canonical Stage 17 final gate. Final decision: OSS v0.1 public launch blocked / local-package-readiness-only.
+Status: canonical Stage 17 final gate plus 2026-04-30 Stage 19 local evidence rerun. Final decision: OSS v0.1 public launch blocked / local-package-readiness-only.
 
-Current reviewed baseline commit: `c03c9ceb3141d4354026190bab79e68262508b75`
-Package version: `0.0.0`
+Current local evidence baseline commit: `1f27dce0005205b4ddb8621184cf1e0b441c0dd8`
+Current local evidence baseline state: dirty worktree; `pnpm release-candidate:check` blocked by visible untracked product paths.
+Previous reviewed final public-launch baseline commit: `c03c9ceb3141d4354026190bab79e68262508b75`
+Package version: `0.1.0-rc.1`
 Package privacy: `private: true`
-Decision date: `2026-04-29`
-Decision owner: `TASK-OSS-LAUNCH-06 final gate worker`
+Decision date: `2026-04-29`; local evidence rerun date: `2026-04-30`
+Decision owner: `TASK-OSS-LAUNCH-06 final gate worker`; local evidence rerun owner: `2026-04-30-stage19-local-release-evidence-worker`
 Public repository accessibility evidence: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29.
-Local/remote divergence: local `main` at `241b4a50e084f15f04163a9dfcce6cededb45c41` is ahead of `origin/main` by 23 commits, so current local launch-gate changes are not remote-verified until push.
+Current remote state evidence: `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main` on 2026-04-30, matching `git rev-parse HEAD`.
 
 ## Decision
 
@@ -18,15 +20,15 @@ The repository may continue bounded local checkout and local package-readiness w
 
 This decision does not approve public npm publication, public registry installation, package namespace ownership, hosted or managed deployment, SaaS operation, general availability, production readiness, completed external beta, public provenance, retained SBOM publication, signed artifacts, release tags, pushed commits, GitHub releases, or any change from `private: true`.
 
-The public GitHub URL accessibility check proves only that the repository can be reached at the remote HEAD shown above. It does not approve launch, prove that the newer local launch-gate documentation has been pushed, or replace package, beta, supply-chain, registry, and publication evidence.
+The remote HEAD check proves only that the committed local HEAD is present on the remote main/HEAD ref. It does not approve launch, include uncommitted or untracked dirty-worktree changes in the remote HEAD, or replace clean candidate, package, beta, supply-chain, registry, and publication evidence.
 
 ## Current Evidence Matrix
 
 | Gate | Evidence status | Decision effect |
 | --- | --- | --- |
-| Repository and local CLI readiness | Historical local-scope release evidence exists for commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`; current repository gates and docs continue to describe local checkout and local package proof boundaries. | Supports bounded local checkout and local package-readiness work only. |
-| Public GitHub repository accessibility | `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`, but local `main` is ahead of `origin/main` by 23 commits. | Proves URL reachability only; remote verification of current local launch-gate docs remains blocked until push and rerun. |
-| Package metadata and publication state | `package.json` has repository, issue-routing, homepage, and discovery metadata, but remains `private: true` with version `0.0.0`. | Blocks public npm publication and public registry install claims. |
+| Repository and local CLI readiness | Historical local-scope release evidence exists for commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. The 2026-04-30 rerun at commit `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` did not produce a clean current release-candidate baseline because `pnpm release-candidate:check` failed on visible untracked product paths. | Supports bounded local checkout and local package-readiness work only; blocks treating the current dirty worktree as a frozen clean candidate. |
+| Public GitHub repository accessibility | 2026-04-29 URL reachability was verified at remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. 2026-04-30 `origin` verification shows remote `HEAD` and `refs/heads/main` both at current local HEAD `1f27dce0005205b4ddb8621184cf1e0b441c0dd8`. | Proves repository reachability and current committed HEAD remote state only; dirty-worktree changes remain outside the remote HEAD and do not form a clean candidate. |
+| Package metadata and publication state | `package.json` has repository, issue-routing, homepage, and discovery metadata, but remains `private: true` with version `0.1.0-rc.1`. | Blocks public npm publication and public registry install claims. |
 | Package identity and registry | [Package Identity And Registry](./package-identity-and-registry.md) records no public namespace ownership proof, no approved `npm publish`, and no public registry install path. | Blocks package/public registry launch approval. |
 | Local tarball distribution proof | [Stage 11 Distribution Proof](./distribution-proof.md) records controlled local `.tgz` install/uninstall proof, optional explicit two-tarball upgrade/rollback proof, and local SBOM validation. | Allows local proof claims only; does not prove public registry or retained release artifacts. |
 | Supply chain | [Supply Chain Attestation](./supply-chain-attestation.md) records local SBOM validation but no retained canonical SBOM, no npm provenance, no signing, and no artifact hash manifest. | Blocks public provenance, signing, retained SBOM, and public artifact integrity claims. |
@@ -40,11 +42,19 @@ The public GitHub URL accessibility check proves only that the repository can be
 ### Package/Public Registry Evidence
 
 - `package.json` still has `private: true`.
-- `package.json` version remains the pre-publication placeholder `0.0.0`.
-- Public package routing and discovery metadata is present, but publication remains blocked by `private: true`, the placeholder version, and missing registry proof.
+- `package.json` version is the private release-candidate version `0.1.0-rc.1`; no final public version approval is recorded.
+- Public package routing and discovery metadata is present, but publication remains blocked by `private: true`, lack of final public version approval, and missing registry proof.
 - No npm namespace or package ownership proof is recorded.
 - No approved `npm publish`, public package page, or equivalent public registry proof is recorded.
 - No public registry install, upgrade, uninstall, or rollback proof is recorded.
+
+### Current Local Candidate Gate
+
+- The 2026-04-30 local rerun records current commit `1f27dce0005205b4ddb8621184cf1e0b441c0dd8`, package `0.1.0-rc.1`, and `private: true`.
+- `pnpm public-release-foundation:check` passed while still reporting OSS v0.1 public launch `BLOCKED`.
+- `pnpm packlist:check` passed and validated 94 package files.
+- `pnpm release-candidate:check` failed because untracked product files are visible under `docs/**`, `scripts/**`, `src/**`, and `tests/**`.
+- Optional local package/SBOM/hash proof was not produced from this dirty blocked state, because it would not represent an approved clean candidate baseline.
 
 ### External Beta Evidence
 

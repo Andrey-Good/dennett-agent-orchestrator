@@ -41,6 +41,19 @@ Specifically:
 - Secret prompts and mixed options-plus-freeform prompts remain unsupported in the current slice.
 - Docs, tests, and capability reporting must stay aligned with that boundary.
 
+## Risky Mid-Run Change Policy
+
+Stage 15 does not permit mid-run runtime, model, or agent-file mutation. A run that reaches a durable `waiting_for_user` / `pending_prompt` boundary remains pinned to the original resolved revision identity captured when the run started.
+
+Policy outcomes:
+
+- changing the agent file while a run waits, including changing `runtime_options.model` or other runtime options, creates a different resolved revision and must not retarget the existing run;
+- explicit resume must compare the requested resolved revision with the stored run revision before launching runtime work;
+- a mismatch must fail with a clear `RESUME_REVISION_MISMATCH` diagnostic through both Core and the CLI path;
+- unsupported App Server prompt shapes remain unsupported and must keep failing explicitly instead of becoming a hidden fallback path for risky changes.
+
+This policy deliberately defers broader same-session mutation semantics. Future support for safe mid-run model or runtime-option changes would need a separate contract, migration rule, and regression proof before it can be claimed.
+
 ## Evidence Level
 
 The current slice is backed by:
@@ -50,6 +63,7 @@ The current slice is backed by:
 - focused adapter tests for blocking prompt events and same-session reply delivery;
 - focused graph-runner tests for durable `waiting_for_user` state and reply/resume;
 - focused CLI-path coverage for the reply/resume contract;
+- focused interaction edge-case coverage for `RESUME_REVISION_MISMATCH` when `runtime_options.model` changes during a waiting run, including a CLI resume-path assertion that no runtime execution is launched;
 - `typecheck` and the repo test suite.
 
 This document does not claim broader live proof than that evidence supports.
@@ -95,6 +109,19 @@ Phase 15 нужен затем, чтобы закрыть самый узкий 
 - Secret prompt-ы и смешанные options-plus-freeform prompt-ы остаются unsupported в текущем срезе.
 - Документация, тесты и capability reporting обязаны оставаться согласованными с этой границей.
 
+## Политика Рискованных Изменений Посреди Run
+
+Stage 15 не разрешает менять runtime, model или agent file посреди run. Run, который достиг durable `waiting_for_user` / `pending_prompt` boundary, остается привязанным к исходной resolved revision identity, зафиксированной при старте run.
+
+Правила результата:
+
+- изменение agent file во время ожидания run, включая изменение `runtime_options.model` или других runtime options, создает другую resolved revision и не должно переназначать существующий run;
+- explicit resume обязан сравнить запрошенную resolved revision с сохраненной revision run до запуска runtime work;
+- mismatch обязан завершаться понятной диагностикой `RESUME_REVISION_MISMATCH` через Core и CLI path;
+- неподдерживаемые формы App Server prompt-ов остаются unsupported и должны продолжать явно падать, а не становиться скрытым fallback path для рискованных изменений.
+
+Эта политика намеренно откладывает более широкую семантику same-session mutation. Будущая поддержка безопасных mid-run изменений model или runtime options потребует отдельного контракта, правила миграции и regression proof до того, как ее можно будет заявлять.
+
 ## Уровень Доказательств
 
 Текущий срез подтвержден:
@@ -104,6 +131,7 @@ Phase 15 нужен затем, чтобы закрыть самый узкий 
 - focused adapter tests для blocking prompt events и same-session reply delivery;
 - focused graph-runner tests для durable `waiting_for_user` state и reply/resume;
 - focused CLI-path coverage для reply/resume contract;
+- focused interaction edge-case coverage для `RESUME_REVISION_MISMATCH`, когда `runtime_options.model` меняется во время waiting run, включая CLI resume-path assertion, что runtime execution не запускается;
 - `typecheck` и repo test suite.
 
 Этот документ не заявляет более широкого live proof, чем реально подтверждает этот набор доказательств.

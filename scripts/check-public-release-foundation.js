@@ -43,6 +43,7 @@ const PUBLIC_RELEASE_ARTIFACT_HASH_EVIDENCE_MARKER =
 	'public-release-artifact-hash-evidence: recorded'
 const PUBLIC_RELEASE_ARTIFACT_HASH_RECORDED_ROW_PATTERN =
 	/\|\s*Public release artifact hash manifest\s*\|\s*Recorded\.\s*\|/i
+const STALE_PLACEHOLDER_VERSION_CLAIM = 'version is `0.0.0`'
 
 const PUBLIC_APPROVAL_PATTERNS = [
 	{
@@ -376,6 +377,10 @@ export async function validatePublicReleaseFoundation() {
 	const packageJson = await readJson('package.json')
 	const licenseText = await readFile('LICENSE', 'utf8')
 	const readinessReadme = await readFile('docs/21-public-launch-readiness/README.md', 'utf8')
+	const baselineGapDoc = await readFile(
+		'docs/21-public-launch-readiness/baseline-gap-and-forbidden-claims.md',
+		'utf8',
+	)
 	const finalGateDoc = await readFile(
 		'docs/21-public-launch-readiness/final-public-launch-gate-decision.md',
 		'utf8',
@@ -430,6 +435,20 @@ export async function validatePublicReleaseFoundation() {
 	if (!readinessReadme.includes('./public-docs-onboarding-and-claims.md')) {
 		errors.push(
 			'docs/21-public-launch-readiness/README.md must link the Stage 14 public docs/onboarding/claims document.',
+		)
+	}
+	if (
+		packageJson.private === true &&
+		packageJson.version !== '0.0.0' &&
+		baselineGapDoc.includes(STALE_PLACEHOLDER_VERSION_CLAIM)
+	) {
+		errors.push(
+			`docs/21-public-launch-readiness/baseline-gap-and-forbidden-claims.md must not claim ${STALE_PLACEHOLDER_VERSION_CLAIM} when package.json version is "${packageJson.version}".`,
+		)
+	}
+	if (!finalGateDoc.includes(`Package version: \`${packageJson.version}\``)) {
+		errors.push(
+			`docs/21-public-launch-readiness/final-public-launch-gate-decision.md must record Package version: \`${packageJson.version}\`.`,
 		)
 	}
 

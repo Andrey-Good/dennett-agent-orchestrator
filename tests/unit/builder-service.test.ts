@@ -46,6 +46,10 @@ type BuilderResponseDescriptor =
 			message: string
 	  }
 
+function repeatBuilderResponse(response: BuilderResponseDescriptor): BuilderResponseDescriptor[] {
+	return [response, response]
+}
+
 async function createStore(): Promise<SQLiteLocalStateStore> {
 	const tempDir = await mkdtemp(path.join(os.tmpdir(), 'dennett-phase10-builder-'))
 	const store = new SQLiteLocalStateStore({
@@ -553,6 +557,137 @@ describe('BuilderAgentService', () => {
 		})
 	})
 
+	it('repairs a first invalid builder wrapper once and persists only the repaired candidate', async () => {
+		const store = await createStore()
+		const lifecycle = new AgentLifecycleService({
+			state_store: store,
+		})
+		const repairedCandidate = buildCandidateAgent({
+			id: 'agent.builder.repaired',
+			name: 'Repaired Builder Agent',
+			prompt: 'Use the repaired valid draft.',
+		})
+		const { adapter, requests } = createBuilderStubAdapter([
+			{
+				kind: 'success-json',
+				value: {
+					agent_file: toJsonObject(
+						buildCandidateAgent({
+							id: 'agent.builder.repaired',
+							name: 'Invalid Wrapper Candidate',
+							prompt: 'This candidate must not persist.',
+						}),
+					),
+					diagnostics: [],
+				},
+			},
+			{
+				kind: 'success-json',
+				value: {
+					agent_file: toJsonObject(repairedCandidate),
+				},
+			},
+		])
+		const service = new BuilderAgentService({
+			state_store: store,
+			runtime_adapter: adapter,
+			builder_agent_resource: buildPermissiveBuilderAgentResource(),
+		})
+
+		const result = await service.buildAgentDraft({
+			target_agent_id: 'agent.builder.repaired',
+			request: 'Create an agent and repair validation failures if needed.',
+		})
+
+		expect(requests).toHaveLength(2)
+		expect(result.candidate_agent_file.meta.name).toBe('Repaired Builder Agent')
+		expect(result.candidate_diagnostics.status).toBe('accepted')
+		const repairContext = JSON.parse(String(requests[1]?.input_message)) as {
+			repair_attempt?: {
+				attempt_number: number
+				max_attempts: number
+				previous_failure: {
+					code: string
+					gate: string
+					extra_properties: string[]
+				}
+			}
+		}
+		expect(repairContext.repair_attempt).toMatchObject({
+			attempt_number: 2,
+			max_attempts: 2,
+			previous_failure: {
+				code: 'BUILDER_INVALID_OUTPUT',
+				gate: 'wrapper_extraction',
+				extra_properties: ['diagnostics'],
+			},
+		})
+
+		const status = await lifecycle.getAgentStatus('agent.builder.repaired')
+		expect(status.draft_revisions).toHaveLength(1)
+		await expect(loadAndValidateAgentFile(result.draft.revision.file_path)).resolves.toMatchObject({
+			meta: {
+				id: 'agent.builder.repaired',
+				name: 'Repaired Builder Agent',
+			},
+		})
+	})
+
+	it('stops after one repair attempt when the repaired candidate is still invalid', async () => {
+		const store = await createStore()
+		const lifecycle = new AgentLifecycleService({
+			state_store: store,
+		})
+		const invalidResponse: BuilderResponseDescriptor = {
+			kind: 'success-json',
+			value: {
+				agent_file: {
+					meta: {
+						id: 'agent.builder.unrepaired',
+						name: 'Still Invalid Builder Agent',
+					},
+					entry_node_id: 'start',
+					nodes: [],
+				},
+			},
+		}
+		const { adapter, requests } = createBuilderStubAdapter(repeatBuilderResponse(invalidResponse))
+		const service = new BuilderAgentService({
+			state_store: store,
+			runtime_adapter: adapter,
+		})
+
+		await expect(
+			service.buildAgentDraft({
+				target_agent_id: 'agent.builder.unrepaired',
+				request: 'Create an agent that remains invalid after repair.',
+			}),
+		).rejects.toMatchObject({
+			code: 'BUILDER_CANDIDATE_INVALID',
+			message: expect.stringContaining('Builder repair attempt failed'),
+			details: {
+				builder_repair: {
+					max_attempts: 2,
+					persisted: false,
+					attempts: [
+						expect.objectContaining({
+							attempt_number: 1,
+							gate: 'schema_validation',
+						}),
+						expect.objectContaining({
+							attempt_number: 2,
+							gate: 'schema_validation',
+						}),
+					],
+				},
+			},
+		} satisfies Partial<AppError>)
+		expect(requests).toHaveLength(2)
+		await expect(lifecycle.getAgentStatus('agent.builder.unrepaired')).rejects.toMatchObject({
+			code: 'AGENT_NOT_FOUND',
+		} satisfies Partial<AppError>)
+	})
+
 	it('updates an existing agent using draft context and persists a new draft revision', async () => {
 		const store = await createStore()
 		const tempDir = path.dirname(store.database_path)
@@ -707,8 +842,8 @@ describe('BuilderAgentService', () => {
 		const lifecycle = new AgentLifecycleService({
 			state_store: store,
 		})
-		const { adapter } = createBuilderStubAdapter([
-			{
+		const { adapter } = createBuilderStubAdapter(
+			repeatBuilderResponse({
 				kind: 'success-json',
 				value: {
 					agent_file: {
@@ -720,8 +855,8 @@ describe('BuilderAgentService', () => {
 						nodes: [],
 					},
 				},
-			},
-		])
+			}),
+		)
 		const service = new BuilderAgentService({
 			state_store: store,
 			runtime_adapter: adapter,
@@ -746,8 +881,8 @@ describe('BuilderAgentService', () => {
 		const lifecycle = new AgentLifecycleService({
 			state_store: store,
 		})
-		const { adapter } = createBuilderStubAdapter([
-			{
+		const { adapter } = createBuilderStubAdapter(
+			repeatBuilderResponse({
 				kind: 'success-json',
 				value: {
 					agent_file: toJsonObject(
@@ -759,8 +894,8 @@ describe('BuilderAgentService', () => {
 					),
 					diagnostics: [],
 				},
-			},
-		])
+			}),
+		)
 		const service = new BuilderAgentService({
 			state_store: store,
 			runtime_adapter: adapter,
@@ -863,14 +998,14 @@ describe('BuilderAgentService', () => {
 		const lifecycle = new AgentLifecycleService({
 			state_store: store,
 		})
-		const { adapter } = createBuilderStubAdapter([
-			{
+		const { adapter } = createBuilderStubAdapter(
+			repeatBuilderResponse({
 				kind: 'success-json',
 				value: {
 					agent_file: candidate,
 				},
-			},
-		])
+			}),
+		)
 		const service = new BuilderAgentService({
 			state_store: store,
 			runtime_adapter: adapter,
@@ -928,14 +1063,12 @@ describe('BuilderAgentService', () => {
 		}
 		firstNode.memory_ids = ['project_memory']
 		const { adapter } = createBuilderStubAdapter(
-			[
-				{
-					kind: 'success-json',
-					value: {
-						agent_file: candidate,
-					},
+			repeatBuilderResponse({
+				kind: 'success-json',
+				value: {
+					agent_file: candidate,
 				},
-			],
+			}),
 			{
 				supports_memory_bindings: true,
 			},
@@ -1071,14 +1204,12 @@ describe('builder CLI', () => {
 			speed_tier: 'standard',
 		}
 		const { adapter } = createBuilderStubAdapter(
-			[
-				{
-					kind: 'success-json',
-					value: {
-						agent_file: candidate,
-					},
+			repeatBuilderResponse({
+				kind: 'success-json',
+				value: {
+					agent_file: candidate,
 				},
-			],
+			}),
 			{
 				supports_speed_tiers: true,
 			},
@@ -1203,14 +1334,14 @@ describe('builder CLI', () => {
 			throw new Error('expected first node')
 		}
 		firstNode.runtime_options = runtime_options
-		const { adapter } = createBuilderStubAdapter([
-			{
+		const { adapter } = createBuilderStubAdapter(
+			repeatBuilderResponse({
 				kind: 'success-json',
 				value: {
 					agent_file: candidate,
 				},
-			},
-		])
+			}),
+		)
 		const service = new BuilderAgentService({
 			state_store: store,
 			runtime_adapter: adapter,
@@ -1266,14 +1397,14 @@ describe('builder CLI', () => {
 		}
 		firstNode.runtime_source_policy = 'prefer_first'
 		firstNode.runtime_source_ids = ['primary_codex']
-		const { adapter } = createBuilderStubAdapter([
-			{
+		const { adapter } = createBuilderStubAdapter(
+			repeatBuilderResponse({
 				kind: 'success-json',
 				value: {
 					agent_file: candidate,
 				},
-			},
-		])
+			}),
+		)
 		const service = new BuilderAgentService({
 			state_store: store,
 			runtime_adapter: adapter,
@@ -1331,14 +1462,14 @@ describe('builder CLI', () => {
 				},
 			},
 		}
-		const { adapter } = createBuilderStubAdapter([
-			{
+		const { adapter } = createBuilderStubAdapter(
+			repeatBuilderResponse({
 				kind: 'success-json',
 				value: {
 					agent_file: candidate,
 				},
-			},
-		])
+			}),
+		)
 		const service = new BuilderAgentService({
 			state_store: store,
 			runtime_adapter: adapter,

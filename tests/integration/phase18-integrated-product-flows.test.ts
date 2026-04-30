@@ -615,6 +615,432 @@ function createIntegratedStubAdapter(
 	}
 }
 
+async function proveManagedSubagentContinuationAgainstParentRun(options: {
+	store: SQLiteLocalStateStore
+	lifecycle: AgentLifecycleService
+	tempDir: string
+	parentRunId: string
+	parentTaskId: string
+	portableAgentFilePath: string
+}): Promise<void> {
+	const { store, lifecycle, tempDir, parentRunId, parentTaskId, portableAgentFilePath } = options
+	const workerAgentId = 'agent.phase18.managed.continuation.worker'
+	const reviewerAgentId = 'agent.phase18.managed.continuation.reviewer'
+	const workerPath = await writeAgentFile(
+		tempDir,
+		'phase18-managed-continuation-worker.json',
+		buildManagedWorkerAgent(workerAgentId),
+	)
+	const reviewerPath = await writeAgentFile(
+		tempDir,
+		'phase18-managed-continuation-reviewer.json',
+		buildManagedReviewerAgent(reviewerAgentId),
+	)
+
+	await lifecycle.registerAgentFile(workerPath)
+	await lifecycle.deployAgentFile(workerPath)
+	await lifecycle.registerAgentFile(reviewerPath)
+	await lifecycle.deployAgentFile(reviewerPath)
+
+	expect(store.getPersistedRunSnapshot(parentRunId)?.run.status).toBe('completed')
+
+	const { adapter, requests } = createIntegratedStubAdapter(
+		[
+			{
+				outcome: 'success',
+				output: TEXT_OUTPUT,
+				output_text: 'continuation worker produced initial managed patch',
+			},
+			{
+				outcome: 'success',
+				output: JSON_OBJECT_OUTPUT,
+				output_json: {
+					summary: 'Continuation review found one managed-flow issue.',
+					findings: [
+						{
+							finding_id: 'finding-phase18-continuation-review',
+							severity: 'high',
+							category: 'correctness',
+							summary: 'Initial continuation patch misses durable close-state assertions.',
+							evidence_refs: ['tests/integration/phase18-integrated-product-flows.test.ts'],
+							recommended_action: 'fix',
+						},
+					],
+				},
+			},
+			{
+				outcome: 'success',
+				output: TEXT_OUTPUT,
+				output_text: 'continuation fix worker added durable close-state assertions',
+			},
+			{
+				outcome: 'success',
+				output: JSON_OBJECT_OUTPUT,
+				output_json: {
+					summary: 'Continuation re-review accepted the fix.',
+					findings: [],
+				},
+			},
+		],
+		{},
+	)
+	const service = new ManagedSubagentService({
+		state_store: store,
+		runtime_adapter: adapter,
+		lifecycle_service: lifecycle,
+	})
+
+	const initialWorker = await service.launch({
+		parent_run_id: parentRunId,
+		parent_task_id: parentTaskId,
+		child_role: 'worker',
+		agent_ref: workerAgentId,
+		objective: 'Continue the completed integrated parent run with managed subagent coverage.',
+		input_message: 'Worker package: continue the completed Phase 18 parent run.',
+		acceptance_criteria: ['Return a concrete continuation worker summary.'],
+		prohibitions: ['Do not mutate portable Agent JSON with managed subagent state.'],
+		write_set: {
+			mode: 'allow_list',
+			items: [
+				{
+					resource_kind: 'file',
+					resource_ref: 'tests/integration/phase18-integrated-product-flows.test.ts',
+					scope: 'exact',
+					access: 'create_or_modify',
+				},
+			],
+		},
+		budgets: {
+			max_children: 4,
+			max_review_loops: 2,
+			max_spawn_depth: 1,
+		},
+	})
+	expect(initialWorker).toMatchObject({
+		lineage: {
+			root_run_id: parentRunId,
+			parent_run_id: parentRunId,
+			parent_task_id: parentTaskId,
+			depth: 1,
+		},
+		task_package: {
+			agent_ref: workerAgentId,
+			objective: 'Continue the completed integrated parent run with managed subagent coverage.',
+			input_message: 'Worker package: continue the completed Phase 18 parent run.',
+			acceptance_criteria: ['Return a concrete continuation worker summary.'],
+			prohibitions: ['Do not mutate portable Agent JSON with managed subagent state.'],
+		},
+	})
+	const initialWorkerResult = await service.wait({
+		subagent_id: initialWorker.subagent_id,
+		wait_mode: 'terminal_only',
+	})
+	expect(initialWorkerResult).toMatchObject({
+		state: 'terminal',
+		outcome: 'accepted',
+		final_payload: {
+			summary: 'continuation worker produced initial managed patch',
+		},
+	})
+
+	const firstReview = await service.launch({
+		parent_run_id: parentRunId,
+		parent_task_id: parentTaskId,
+		child_role: 'reviewer',
+		agent_ref: reviewerAgentId,
+		objective: 'Review the managed continuation worker result.',
+		input_message: `Review continuation worker result: ${initialWorkerResult.final_payload?.summary}`,
+		acceptance_criteria: ['Return findings when the continuation requires a fix.'],
+		prohibitions: ['Do not modify portable Agent JSON.'],
+		write_set: {
+			mode: 'allow_list',
+			items: [
+				{
+					resource_kind: 'generic_resource',
+					resource_ref: 'review://phase18/continuation-initial',
+					scope: 'exact',
+					access: 'create_or_modify',
+				},
+			],
+		},
+		budgets: {
+			max_children: 4,
+			max_review_loops: 2,
+			max_spawn_depth: 1,
+		},
+	})
+	const firstReviewResult = await service.wait({
+		subagent_id: firstReview.subagent_id,
+		wait_mode: 'terminal_only',
+	})
+	expect(firstReviewResult).toMatchObject({
+		state: 'terminal',
+		outcome: 'review_required',
+		final_payload: {
+			summary: 'Continuation review found one managed-flow issue.',
+		},
+		findings: [
+			{
+				finding_id: 'finding-phase18-continuation-review',
+				severity: 'high',
+				category: 'correctness',
+				recommended_action: 'fix',
+			},
+		],
+		reason_code: 'review_findings_raised',
+	})
+	const reviewDecision = await service.recordReviewDecision({
+		subagent_id: firstReview.subagent_id,
+		decision: 'changes_requested',
+	})
+	expect(reviewDecision.workflow_state).toMatchObject({
+		parent_task_id: parentTaskId,
+		reviewer_subagent_id: firstReview.subagent_id,
+		repair_subagent_id: null,
+		loop_index: 1,
+		max_review_loops: 2,
+		decision: 'changes_requested',
+		finding_ids: ['finding-phase18-continuation-review'],
+		outcome: 'changes_requested',
+		budget_exhausted: false,
+	})
+	const closedReviewFindings = await service.close({
+		subagent_id: firstReview.subagent_id,
+		close_disposition: 'abandoned_by_parent',
+	})
+	expect(closedReviewFindings).toMatchObject({
+		close_status: 'closed',
+		state: 'closed',
+		outcome: 'review_required',
+		reason_code: 'review_findings_raised',
+	})
+	const closedInitialWorker = await service.close({
+		subagent_id: initialWorker.subagent_id,
+		close_disposition: 'accepted_by_parent',
+	})
+	expect(closedInitialWorker).toMatchObject({
+		close_status: 'closed',
+		state: 'closed',
+		outcome: 'accepted',
+	})
+
+	const fixWorker = await service.launch({
+		parent_run_id: parentRunId,
+		parent_task_id: parentTaskId,
+		child_role: 'worker',
+		agent_ref: workerAgentId,
+		objective: 'Fix the continuation reviewer finding.',
+		input_message: 'Fix package: add durable managed continuation assertions.',
+		acceptance_criteria: ['Return a concrete continuation fix summary.'],
+		prohibitions: ['Only address finding-phase18-continuation-review.'],
+		write_set: {
+			mode: 'allow_list',
+			items: [
+				{
+					resource_kind: 'file',
+					resource_ref: 'tests/integration/phase18-integrated-product-flows.test.ts',
+					scope: 'exact',
+					access: 'create_or_modify',
+				},
+			],
+		},
+		budgets: {
+			max_children: 4,
+			max_review_loops: 2,
+			max_spawn_depth: 1,
+		},
+	})
+	const linkedRepair = await service.linkReviewRepair({
+		review_subagent_id: firstReview.subagent_id,
+		repair_subagent_id: fixWorker.subagent_id,
+	})
+	expect(linkedRepair.workflow_state).toMatchObject({
+		reviewer_subagent_id: firstReview.subagent_id,
+		repair_subagent_id: fixWorker.subagent_id,
+		outcome: 'repair_linked',
+	})
+	const fixResult = await service.wait({
+		subagent_id: fixWorker.subagent_id,
+		wait_mode: 'terminal_only',
+	})
+	expect(fixResult).toMatchObject({
+		state: 'terminal',
+		outcome: 'accepted',
+		final_payload: {
+			summary: 'continuation fix worker added durable close-state assertions',
+		},
+	})
+
+	const secondReview = await service.launch({
+		parent_run_id: parentRunId,
+		parent_task_id: parentTaskId,
+		child_role: 'reviewer',
+		agent_ref: reviewerAgentId,
+		objective: 'Re-review the managed continuation fix.',
+		input_message: `Re-review continuation fix result: ${fixResult.final_payload?.summary}`,
+		acceptance_criteria: ['Return no findings when the continuation fix is acceptable.'],
+		prohibitions: ['Do not request unrelated changes.'],
+		write_set: {
+			mode: 'allow_list',
+			items: [
+				{
+					resource_kind: 'generic_resource',
+					resource_ref: 'review://phase18/continuation-fix',
+					scope: 'exact',
+					access: 'create_or_modify',
+				},
+			],
+		},
+		budgets: {
+			max_children: 4,
+			max_review_loops: 2,
+			max_spawn_depth: 1,
+		},
+	})
+	const secondReviewResult = await service.wait({
+		subagent_id: secondReview.subagent_id,
+		wait_mode: 'terminal_only',
+	})
+	expect(secondReviewResult).toMatchObject({
+		state: 'terminal',
+		outcome: 'accepted',
+		final_payload: {
+			summary: 'Continuation re-review accepted the fix.',
+		},
+		findings: null,
+		reason_code: null,
+	})
+	const secondReviewDecision = await service.recordReviewDecision({
+		subagent_id: secondReview.subagent_id,
+		decision: 'accepted',
+	})
+	expect(secondReviewDecision.workflow_state).toMatchObject({
+		parent_task_id: parentTaskId,
+		reviewer_subagent_id: secondReview.subagent_id,
+		repair_subagent_id: null,
+		loop_index: 2,
+		max_review_loops: 2,
+		decision: 'accepted',
+		finding_ids: [],
+		outcome: 'accepted',
+		budget_exhausted: false,
+	})
+
+	const closedFixWorker = await service.close({
+		subagent_id: fixWorker.subagent_id,
+		close_disposition: 'accepted_by_parent',
+	})
+	const closedSecondReview = await service.close({
+		subagent_id: secondReview.subagent_id,
+		close_disposition: 'accepted_by_parent',
+	})
+	expect(closedFixWorker).toMatchObject({
+		close_status: 'closed',
+		state: 'closed',
+		outcome: 'accepted',
+	})
+	expect(closedSecondReview).toMatchObject({
+		close_status: 'closed',
+		state: 'closed',
+		outcome: 'accepted',
+	})
+	expect(requests.map((request) => request.input_message)).toEqual([
+		'Worker package: continue the completed Phase 18 parent run.',
+		'Review continuation worker result: continuation worker produced initial managed patch',
+		'Fix package: add durable managed continuation assertions.',
+		'Re-review continuation fix result: continuation fix worker added durable close-state assertions',
+	])
+
+	const managedRecords = store.listManagedSubagentRecords({ parent_run_id: parentRunId })
+	expect(managedRecords).toEqual([
+		expect.objectContaining({
+			subagent_id: initialWorker.subagent_id,
+			child_role: 'worker',
+			state: 'closed',
+			close_disposition: 'accepted_by_parent',
+			lineage: expect.objectContaining({
+				root_run_id: parentRunId,
+				parent_run_id: parentRunId,
+				parent_task_id: parentTaskId,
+			}),
+			task_package: expect.objectContaining({
+				input_message: 'Worker package: continue the completed Phase 18 parent run.',
+				acceptance_criteria: ['Return a concrete continuation worker summary.'],
+			}),
+			terminal_result: expect.objectContaining({
+				outcome: 'accepted',
+			}),
+		}),
+		expect.objectContaining({
+			subagent_id: firstReview.subagent_id,
+			child_role: 'reviewer',
+			state: 'closed',
+			close_disposition: 'abandoned_by_parent',
+			task_package: expect.objectContaining({
+				input_message:
+					'Review continuation worker result: continuation worker produced initial managed patch',
+			}),
+			terminal_result: expect.objectContaining({
+				outcome: 'review_required',
+				reason_code: 'review_findings_raised',
+				findings: [
+					expect.objectContaining({
+						finding_id: 'finding-phase18-continuation-review',
+					}),
+				],
+			}),
+			workflow_state: expect.objectContaining({
+				reviewer_subagent_id: firstReview.subagent_id,
+				repair_subagent_id: fixWorker.subagent_id,
+				outcome: 'repair_linked',
+			}),
+		}),
+		expect.objectContaining({
+			subagent_id: fixWorker.subagent_id,
+			child_role: 'worker',
+			state: 'closed',
+			close_disposition: 'accepted_by_parent',
+			task_package: expect.objectContaining({
+				input_message: 'Fix package: add durable managed continuation assertions.',
+			}),
+			workflow_state: expect.objectContaining({
+				reviewer_subagent_id: firstReview.subagent_id,
+				repair_subagent_id: fixWorker.subagent_id,
+				outcome: 'repair_linked',
+			}),
+		}),
+		expect.objectContaining({
+			subagent_id: secondReview.subagent_id,
+			child_role: 'reviewer',
+			state: 'closed',
+			close_disposition: 'accepted_by_parent',
+			task_package: expect.objectContaining({
+				input_message:
+					'Re-review continuation fix result: continuation fix worker added durable close-state assertions',
+			}),
+			terminal_result: expect.objectContaining({
+				outcome: 'accepted',
+				findings: null,
+			}),
+			workflow_state: expect.objectContaining({
+				reviewer_subagent_id: secondReview.subagent_id,
+				outcome: 'accepted',
+			}),
+		}),
+	])
+
+	const persistedPortableAgent = await readFile(portableAgentFilePath, 'utf8')
+	expect(persistedPortableAgent).not.toContain(initialWorker.subagent_id)
+	expect(persistedPortableAgent).not.toContain(firstReview.subagent_id)
+	expect(persistedPortableAgent).not.toContain(fixWorker.subagent_id)
+	expect(persistedPortableAgent).not.toContain(secondReview.subagent_id)
+	expect(persistedPortableAgent).not.toContain(parentTaskId)
+	expect(persistedPortableAgent).not.toContain('finding-phase18-continuation-review')
+	expect(persistedPortableAgent).not.toContain('accepted_by_parent')
+	expect(persistedPortableAgent).not.toContain('Worker package: continue')
+	expect(persistedPortableAgent).not.toContain('task_package')
+}
+
 afterEach(async () => {
 	vi.restoreAllMocks()
 
@@ -631,7 +1057,7 @@ afterEach(async () => {
 })
 
 describe('Phase 18 offline integrated product flows', () => {
-	it('builds, deploys, prompts, resumes, and delegates across local subsystem seams', async () => {
+	it('builds, deploys, prompts, resumes, delegates, and continues through managed subagents', async () => {
 		const store = await createStore()
 		const tempDir = path.dirname(store.database_path)
 		const lifecycle = new AgentLifecycleService({ state_store: store })
@@ -950,6 +1376,15 @@ describe('Phase 18 offline integrated product flows', () => {
 		expect(memoryFixture.writtenContents).toEqual([
 			'{"count":1,"summary":"approved memory-backed plan"}',
 		])
+
+		await proveManagedSubagentContinuationAgainstParentRun({
+			store,
+			lifecycle,
+			tempDir,
+			parentRunId: 'run-phase18-parent',
+			parentTaskId: 'task-phase18-managed-continuation',
+			portableAgentFilePath: deployed.live_file_path,
+		})
 	})
 
 	it('runs managed worker, reviewer, fix, and re-review through the managed subagent service boundary', async () => {

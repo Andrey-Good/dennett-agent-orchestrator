@@ -71,7 +71,7 @@ These commands are intentionally not stable, even when implemented and useful:
 | Runtime metadata | `runtime-model-list`, `runtime-env-inspect` including `runtime-env-inspect --redacted` |
 | Memory provider registry | `memory-provider-register`, `memory-provider-list`, `memory-provider-show` |
 | Direct memory operations | `memory-write`, `memory-read`, `memory-search`, `memory-list`, `memory-update`, `memory-delete` |
-| Managed subagent operator surface | `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control`, `subagent-close` |
+| Managed subagent operator surface | `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-status`, `subagent-wait`, `subagent-record-control`, `subagent-cancel`, `subagent-record-review`, `subagent-link-repair`, `subagent-close` |
 | Builder authoring | `builder` |
 | Lifecycle triggers and events | `trigger-register`, `trigger-list`, `event-dispatch` |
 | Live comments | `comment` |

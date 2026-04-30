@@ -563,4 +563,33 @@ describe('Stage 7 interaction edge cases', () => {
 			prompt_id: PROMPT_ID,
 		})
 	})
+
+	it('reports changed revision resumes through the CLI without launching runtime work', async () => {
+		const originalAgent = buildInteractionAgent({ model: 'edge-model-original' })
+		const harness = await createHarness(originalAgent)
+		await startWaitingRun(harness)
+		const changedAgent = buildInteractionAgent({ model: 'edge-model-changed' })
+		await writeAgentFile(harness.agentFilePath, changedAgent)
+		const startExecutionSpy = vi.spyOn(
+			CodexAppServerRuntimeAdapter.prototype,
+			'startExecution',
+		)
+
+		const error = await expectCliAppError([
+			'resume',
+			harness.agentFilePath,
+			'--run-id',
+			RUN_ID,
+			'--state-db',
+			harness.stateDbPath,
+		])
+
+		expect(error.code).toBe('RESUME_REVISION_MISMATCH')
+		expect(error.message).toContain(`Run "${RUN_ID}" is pinned to`)
+		expect(startExecutionSpy).not.toHaveBeenCalled()
+		expect(harness.stateStore.getPersistedRunSnapshot(RUN_ID)?.run).toMatchObject({
+			status: 'waiting_for_user',
+			resolved_revision_id: harness.resolvedRevisionId,
+		})
+	})
 })

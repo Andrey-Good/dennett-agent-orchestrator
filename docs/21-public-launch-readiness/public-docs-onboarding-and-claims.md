@@ -24,7 +24,7 @@ Public docs must prefer bounded, evidence-backed language over marketing languag
 
 Public-facing docs must treat [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md) as the active approval source. Its current decision is `OSS v0.1 public launch blocked / local-package-readiness-only`.
 
-Public docs may say the GitHub repository URL is publicly reachable only when tied to the dated command evidence: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29. That wording must also state that local `main` was ahead of `origin/main` by 23 commits at local HEAD `241b4a50e084f15f04163a9dfcce6cededb45c41`, so current local launch-gate changes are not proven on GitHub until push and remote re-verification.
+Public docs may say the GitHub repository URL was publicly reachable when tied to the dated command evidence: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29. Public docs may also say the current committed HEAD is remote-verified when tied to the 2026-04-30 evidence: `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main`, matching `git rev-parse HEAD`. That wording must still state that uncommitted or untracked dirty-worktree changes are not part of remote HEAD and do not form a clean release-candidate baseline.
 
 Until that document is replaced by a later evidence-backed approval decision, public docs may describe only:
 
@@ -106,7 +106,7 @@ These claims are allowed when the referenced commands or docs remain accurate:
 - The built local CLI can print help with `node .\dist\src\interfaces\cli.js --help`.
 - `support-bundle` emits local-only redacted diagnostics for user-reviewed sharing.
 - Controlled local tarball proof exists through `pnpm package:local-install:proof`.
-- The GitHub repository URL was publicly reachable at remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29, while current local launch-gate changes still required push and remote re-verification.
+- The GitHub repository URL was publicly reachable at remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29, and the committed local HEAD `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` matched remote `origin` HEAD and `refs/heads/main` on 2026-04-30.
 - Public examples include schema-validated Agent JSON and builder wrapper examples.
 - The Phase 5 example has an offline mocked CLI smoke test that validates parameter resolution without requiring live Codex access.
 - Live Codex and Mem0 example runs are possible only when the local environment satisfies the documented auth, model, and provider requirements.

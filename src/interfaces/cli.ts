@@ -9,9 +9,18 @@ import {
 	CodexAppServerRuntimeAdapter,
 	type CodexAppServerRuntimeAdapterOptions,
 } from '../adapters/codex/codex-app-server-runtime-adapter.js'
+import {
+	deployLifecycleAgentFile,
+	getLifecycleAgentStatus,
+	inspectRuntimeEnvironment as inspectRuntimeEnvironmentUseCase,
+	listRuntimeModels as listRuntimeModelsUseCase,
+	type InspectRuntimeEnvironmentOptions,
+	type ListRuntimeModelsInput,
+	registerLifecycleAgentFile,
+	runLocalAgent,
+} from '../app/index.js'
 import { AgentLifecycleService } from '../core/agent-lifecycle.js'
 import { BuilderAgentService } from '../core/builder-service.js'
-import { redactDiagnosticsValue } from '../core/diagnostics-redaction.js'
 import { AppError, isAppError } from '../core/errors.js'
 import { resumeAgentRun, runAgentFile } from '../core/graph-runner.js'
 import type { JsonObject, JsonValue } from '../core/json.js'
@@ -31,6 +40,9 @@ import type {
 } from '../core/state/types.js'
 import {
 	ManagedSubagentService,
+	normalizeManagedSubagentInteractionPolicy,
+	normalizeManagedSubagentReadContext,
+	normalizeManagedSubagentRequiredValidations,
 	normalizeManagedSubagentWriteSet,
 } from '../core/subagent-service.js'
 import { buildSupportBundle } from '../core/support-bundle.js'
@@ -47,6 +59,7 @@ import type {
 import type {
 	ManagedSubagentControlMessageKind,
 	ManagedSubagentLaunchRequest,
+	ManagedSubagentReviewDecision,
 	ManagedSubagentWaitMode,
 } from '../ports/subagents.js'
 
@@ -149,6 +162,11 @@ const CLI_COMMAND_CONTRACTS = [
 		summary: 'show one persisted managed subagent record',
 	},
 	{
+		name: 'subagent-status',
+		stability: 'experimental',
+		summary: 'return one managed subagent status projection',
+	},
+	{
 		name: 'subagent-wait',
 		stability: 'experimental',
 		summary: 'reconcile persisted managed subagent state',
@@ -157,6 +175,21 @@ const CLI_COMMAND_CONTRACTS = [
 		name: 'subagent-record-control',
 		stability: 'experimental',
 		summary: 'record a managed subagent control message',
+	},
+	{
+		name: 'subagent-cancel',
+		stability: 'experimental',
+		summary: 'record managed subagent cancellation intent',
+	},
+	{
+		name: 'subagent-record-review',
+		stability: 'experimental',
+		summary: 'record a managed reviewer decision in durable workflow state',
+	},
+	{
+		name: 'subagent-link-repair',
+		stability: 'experimental',
+		summary: 'link a changes-requested review cycle to a repair worker',
 	},
 	{
 		name: 'subagent-close',
@@ -316,6 +349,14 @@ function parseJsonObjectOption(rawValue: string, optionName: string): JsonObject
 		throw new AppError('INVALID_JSON_OPTION', `Option "${optionName}" must be a JSON object.`)
 	}
 	return parsedValue as JsonObject
+}
+
+function parseJsonArrayOption(rawValue: string, optionName: string): JsonValue[] {
+	const parsedValue = parseParamValue(rawValue)
+	if (!Array.isArray(parsedValue)) {
+		throw new AppError('INVALID_JSON_OPTION', `Option "${optionName}" must be a JSON array.`)
+	}
+	return parsedValue
 }
 
 function printFailure(code: string, message: string): void {
@@ -480,12 +521,18 @@ function parseManagedSubagentStateOption(
 }
 
 function parseManagedSubagentRole(rawValue: string): ManagedSubagentLaunchRequest['child_role'] {
-	if (rawValue === 'worker' || rawValue === 'reviewer' || rawValue === 'final_review') {
+	if (
+		rawValue === 'worker' ||
+		rawValue === 'reviewer' ||
+		rawValue === 'explorer' ||
+		rawValue === 'integrator' ||
+		rawValue === 'final_review'
+	) {
 		return rawValue
 	}
 	throw new AppError(
 		'INVALID_CLI_OPTION',
-		'Option "--role" must be one of: worker, reviewer, final_review.',
+		'Option "--role" must be one of: worker, reviewer, explorer, integrator, final_review.',
 	)
 }
 
@@ -529,6 +576,27 @@ function parseManagedSubagentCloseDisposition(rawValue: string): ManagedSubagent
 	)
 }
 
+function parseManagedSubagentReviewDecision(rawValue: string): ManagedSubagentReviewDecision {
+	if (rawValue === 'accepted' || rawValue === 'changes_requested') {
+		return rawValue
+	}
+	throw new AppError(
+		'INVALID_CLI_OPTION',
+		'Option "--decision" must be one of: accepted, changes_requested.',
+	)
+}
+
+function parseManagedSubagentFindingIds(rawValue: string | undefined): string[] | undefined {
+	if (rawValue === undefined) {
+		return undefined
+	}
+	const parsed = parseJsonArrayOption(rawValue, '--finding-ids')
+	if (!parsed.every((entry) => typeof entry === 'string')) {
+		throw new AppError('INVALID_JSON_OPTION', 'Option "--finding-ids" must be a JSON string array.')
+	}
+	return parsed as string[]
+}
+
 function parseManagedSubagentWriteSet(rawValue: string): ManagedSubagentLaunchRequest['write_set'] {
 	const parsed = parseJsonObjectOption(rawValue, '--write-set')
 	return normalizeManagedSubagentWriteSet(parsed)
@@ -542,6 +610,35 @@ function parseManagedSubagentBudgets(
 	}
 	const parsed = parseJsonObjectOption(rawValue, '--budgets')
 	return parsed as unknown as ManagedSubagentLaunchRequest['budgets']
+}
+
+function parseManagedSubagentReadContext(
+	rawValue: string | undefined,
+): ManagedSubagentLaunchRequest['read_context'] {
+	if (rawValue === undefined) {
+		return undefined
+	}
+	const parsed = parseJsonObjectOption(rawValue, '--read-context')
+	return normalizeManagedSubagentReadContext(parsed)
+}
+
+function parseManagedSubagentRequiredValidations(
+	rawValue: string | undefined,
+): ManagedSubagentLaunchRequest['required_validations'] {
+	if (rawValue === undefined) {
+		return undefined
+	}
+	const parsed = parseJsonArrayOption(rawValue, '--required-validations')
+	return normalizeManagedSubagentRequiredValidations(parsed)
+}
+
+function parseManagedSubagentInteractionPolicy(
+	rawValue: string | undefined,
+): ManagedSubagentLaunchRequest['interaction_policy'] {
+	if (rawValue === undefined) {
+		return undefined
+	}
+	return normalizeManagedSubagentInteractionPolicy(rawValue)
 }
 
 function createCodexAppServerAdapter(
@@ -770,6 +867,12 @@ export function buildManagedSubagentOperatorView(record: ManagedSubagentRecord) 
 			acceptance_criteria: record.task_package.acceptance_criteria,
 			prohibitions: record.task_package.prohibitions,
 			write_set: record.task_package.write_set,
+			read_context: record.task_package.read_context ?? {
+				mode: 'explicit_only',
+				items: [],
+			},
+			required_validations: record.task_package.required_validations ?? [],
+			interaction_policy: record.task_package.interaction_policy ?? 'silent',
 			budgets: record.task_package.budgets ?? {},
 			control_message_count: record.task_package.control_messages?.length ?? 0,
 			latest_control_message: latestControlMessage
@@ -782,6 +885,7 @@ export function buildManagedSubagentOperatorView(record: ManagedSubagentRecord) 
 		},
 		terminal_result: record.terminal_result,
 		findings: record.terminal_result?.findings ?? null,
+		workflow_state: record.workflow_state,
 		close_disposition: record.close_disposition,
 		timestamps: {
 			created_at: record.created_at,
@@ -794,6 +898,12 @@ export function buildManagedSubagentOperatorView(record: ManagedSubagentRecord) 
 				'metadata_conflict_checked_not_filesystem_sandbox; sibling write-set conflicts are rejected, but filesystem writes are not sandboxed by this surface.',
 			control_messages:
 				'recorded_in_task_package; this CLI surface does not live-deliver messages into an already running child process.',
+			interaction_policy:
+				'silent_no_parent_user_boundary; child interaction is not surfaced through the parent boundary by this Stage 16 slice.',
+			review_fix_workflow:
+				record.workflow_state === null
+					? 'not_recorded; review/fix workflow state is only changed by explicit operator commands.'
+					: 'durable_projection_only; decisions, repair links, and budget exhaustion are recorded but no review quality enforcement or automatic worker spawning is claimed.',
 			cancellation: cancellationRequested
 				? 'cancel_requested_in_state_not_runtime_cancel; child terminal reconciliation reports parent_cancelled, but no runtime cancel signal is claimed.'
 				: 'not_requested',
@@ -831,6 +941,26 @@ export async function showManagedSubagentForOperators(subagentId: string, stateD
 			throw new AppError('SUBAGENT_NOT_FOUND', `Managed subagent "${subagentId}" does not exist.`)
 		}
 		return buildManagedSubagentOperatorView(record)
+	} finally {
+		stateStore.close()
+	}
+}
+
+export async function statusManagedSubagentForOperators(subagentId: string, stateDbPath: string) {
+	const stateStore = await createStateStore(stateDbPath)
+	try {
+		const service = createManagedSubagentCliService(stateStore)
+		const record = await service.status({
+			subagent_id: subagentId,
+		})
+		return {
+			record: buildManagedSubagentOperatorView(record),
+			status_semantics: {
+				durable_state_projection: true,
+				live_runtime_probe: false,
+				note: 'subagent-status returns the durable managed subagent record; it does not probe or attach to a live runtime process.',
+			},
+		}
 	} finally {
 		stateStore.close()
 	}
@@ -960,6 +1090,116 @@ export async function recordManagedSubagentControlForOperators(
 						: input.messageKind === 'cancel'
 							? 'Cancel is recorded and marks the managed subagent cancelling; no runtime cancellation signal is delivered by this CLI surface.'
 							: 'Control messages are recorded in the managed task package for durable operator visibility; no live child delivery is claimed.',
+			},
+		}
+	} finally {
+		stateStore.close()
+	}
+}
+
+export async function cancelManagedSubagentForOperators(
+	subagentId: string,
+	stateDbPath: string,
+	input: {
+		messageId?: string
+		reason?: string
+	} = {},
+) {
+	const stateStore = await createStateStore(stateDbPath)
+	try {
+		const messageId = input.messageId ?? randomUUID()
+		const beforeRecord = stateStore.getManagedSubagentRecord(subagentId)
+		const existingMessage = beforeRecord?.task_package.control_messages?.find(
+			(message) => message.message_id === messageId,
+		)
+		const service = createManagedSubagentCliService(stateStore)
+		const response = await service.cancel({
+			subagent_id: subagentId,
+			message_id: messageId,
+			reason: input.reason,
+		})
+		const record = stateStore.getManagedSubagentRecord(subagentId)
+		const cancelStatus = response.cancel_status as string
+		return {
+			...response,
+			record: record ? buildManagedSubagentOperatorView(record) : null,
+			cancel_semantics: {
+				recorded_in_state:
+					cancelStatus === 'cancelling' || cancelStatus === 'already_cancelling',
+				duplicate_id_conflict: existingMessage !== undefined && cancelStatus === 'rejected',
+				runtime_cancellation_delivered: response.runtime_cancellation_delivered,
+				note:
+					cancelStatus === 'rejected'
+						? `Cancel message id "${messageId}" already exists with different kind or payload; no cancellation intent was recorded.`
+						: cancelStatus === 'already_terminal' || cancelStatus === 'already_closed'
+						? 'subagent-cancel is a durable state primitive; terminal or closed subagents are not mutated and no runtime cancellation signal is delivered.'
+						: 'subagent-cancel records parent cancellation intent and marks state; no runtime cancellation signal is delivered by this Stage 16 slice.',
+			},
+		}
+	} finally {
+		stateStore.close()
+	}
+}
+
+export async function recordManagedSubagentReviewForOperators(
+	subagentId: string,
+	stateDbPath: string,
+	input: {
+		decision: ManagedSubagentReviewDecision
+		findingIds?: string[]
+	},
+) {
+	const stateStore = await createStateStore(stateDbPath)
+	try {
+		const service = createManagedSubagentCliService(stateStore)
+		const response = await service.recordReviewDecision({
+			subagent_id: subagentId,
+			decision: input.decision,
+			finding_ids: input.findingIds,
+		})
+		const record = stateStore.getManagedSubagentRecord(subagentId)
+		return {
+			...response,
+			record: record ? buildManagedSubagentOperatorView(record) : null,
+			review_workflow_semantics: {
+				durable_state_projection: true,
+				automatic_repair_spawned: false,
+				review_quality_enforced: false,
+				note:
+					response.workflow_state.outcome === 'budget_exhausted'
+						? 'Review decision was recorded and marked budget_exhausted because no additional review loop remains in the recorded budget.'
+						: 'Review decision was recorded as workflow state only; this does not certify reviewer quality or spawn follow-up work.',
+			},
+		}
+	} finally {
+		stateStore.close()
+	}
+}
+
+export async function linkManagedSubagentRepairForOperators(
+	reviewSubagentId: string,
+	repairSubagentId: string,
+	stateDbPath: string,
+) {
+	const stateStore = await createStateStore(stateDbPath)
+	try {
+		const service = createManagedSubagentCliService(stateStore)
+		const response = await service.linkReviewRepair({
+			review_subagent_id: reviewSubagentId,
+			repair_subagent_id: repairSubagentId,
+		})
+		const reviewRecord = stateStore.getManagedSubagentRecord(reviewSubagentId)
+		const repairRecord = stateStore.getManagedSubagentRecord(repairSubagentId)
+		return {
+			...response,
+			review_record: reviewRecord ? buildManagedSubagentOperatorView(reviewRecord) : null,
+			repair_record: repairRecord ? buildManagedSubagentOperatorView(repairRecord) : null,
+			repair_workflow_semantics: {
+				durable_state_projection: true,
+				automatic_repair_spawned: false,
+				automatic_rereview_spawned: false,
+				note:
+					'Repair linkage records that an existing worker belongs to the review/fix cycle; it does not launch or wait for the repair worker.',
 			},
 		}
 	} finally {
@@ -1448,44 +1688,17 @@ export async function runLiveAgentByLogicalId(
 }
 
 export async function listRuntimeModels(
-	input: {
-		cursor?: string
-		limit?: number
-		includeHidden?: boolean
-	},
-	adapter?: RuntimeAdapter,
+	input: ListRuntimeModelsInput,
+	adapter: RuntimeAdapter = createCodexAppServerAdapter(),
 ): Promise<RuntimeModelCatalogPage> {
-	const runtimeAdapter = adapter ?? createCodexAppServerAdapter()
-	const capabilities = runtimeAdapter.describeCapabilities()
-	if (!capabilities.supports_model_discovery) {
-		throw new AppError(
-			'UNSUPPORTED_RUNTIME_SURFACE',
-			'The current runtime adapter does not support model discovery.',
-		)
-	}
-
-	return await runtimeAdapter.listModels({
-		...(input.cursor ? { cursor: input.cursor } : {}),
-		...(input.limit !== undefined ? { limit: input.limit } : {}),
-		...(input.includeHidden !== undefined ? { include_hidden: input.includeHidden } : {}),
-	})
+	return await listRuntimeModelsUseCase(input, adapter)
 }
 
 export async function inspectRuntimeEnvironment(
-	adapter?: RuntimeAdapter,
-	options: { redacted?: boolean } = {},
+	adapter: RuntimeAdapter = createCodexAppServerAdapter(),
+	options: InspectRuntimeEnvironmentOptions = {},
 ): Promise<RuntimeEnvironmentInspectionResult | JsonValue> {
-	const runtimeAdapter = adapter ?? createCodexAppServerAdapter()
-	const capabilities = runtimeAdapter.describeCapabilities()
-	if (!capabilities.supports_runtime_environment_introspection) {
-		throw new AppError(
-			'UNSUPPORTED_RUNTIME_SURFACE',
-			'The current runtime adapter does not support runtime environment introspection.',
-		)
-	}
-
-	const result = await runtimeAdapter.inspectRuntimeEnvironment()
-	return options.redacted ? redactDiagnosticsValue(result as unknown as JsonValue) : result
+	return await inspectRuntimeEnvironmentUseCase(adapter, options)
 }
 
 function assertActiveRunCompatibility(
@@ -1890,7 +2103,7 @@ export function buildCliProgram(): Command {
 		.argument('<agent-ref>', 'live logical agent id to run as a managed child')
 		.requiredOption('--parent-run-id <id>', 'parent run id that owns the managed child')
 		.requiredOption('--parent-task-id <id>', 'parent task id that owns the managed child')
-		.requiredOption('--role <role>', 'worker, reviewer, or final_review')
+		.requiredOption('--role <role>', 'worker, reviewer, explorer, integrator, or final_review')
 		.requiredOption('--objective <text>', 'bounded delegated objective')
 		.requiredOption('--input-message <text>', 'input message passed to the child run')
 		.requiredOption(
@@ -1899,6 +2112,9 @@ export function buildCliProgram(): Command {
 			collectOptionalListOption,
 		)
 		.requiredOption('--write-set <json>', 'managed write_set JSON object')
+		.option('--read-context <json>', 'managed read_context JSON object')
+		.option('--required-validations <json>', 'required_validations JSON array')
+		.option('--interaction-policy <policy>', 'interaction policy; currently only silent')
 		.option(
 			'--prohibition <text>',
 			'prohibition; repeat for multiple prohibitions',
@@ -1921,6 +2137,9 @@ export function buildCliProgram(): Command {
 					inputMessage: string
 					acceptanceCriterion: string[]
 					writeSet: string
+					readContext?: string
+					requiredValidations?: string
+					interactionPolicy?: string
 					prohibition?: string[]
 					budgets?: string
 					stateDb: string
@@ -1938,6 +2157,13 @@ export function buildCliProgram(): Command {
 						acceptance_criteria: options.acceptanceCriterion as [string, ...string[]],
 						prohibitions: options.prohibition ?? [],
 						write_set: parseManagedSubagentWriteSet(options.writeSet),
+						read_context: parseManagedSubagentReadContext(options.readContext),
+						required_validations: parseManagedSubagentRequiredValidations(
+							options.requiredValidations,
+						),
+						interaction_policy: parseManagedSubagentInteractionPolicy(
+							options.interactionPolicy,
+						),
 						budgets: parseManagedSubagentBudgets(options.budgets),
 					},
 					options.stateDb,
@@ -1979,6 +2205,14 @@ export function buildCliProgram(): Command {
 		.action(async (subagentId: string, options: { stateDb: string }) => {
 			const record = await showManagedSubagentForOperators(subagentId, options.stateDb)
 			printJson(record)
+		})
+
+	defineCliCommand(program, 'subagent-status')
+		.argument('<subagent-id>', 'managed subagent id to inspect')
+		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
+		.action(async (subagentId: string, options: { stateDb: string }) => {
+			const result = await statusManagedSubagentForOperators(subagentId, options.stateDb)
+			printJson(result)
 		})
 
 	defineCliCommand(program, 'subagent-wait')
@@ -2034,6 +2268,75 @@ export function buildCliProgram(): Command {
 			},
 		)
 
+	defineCliCommand(program, 'subagent-cancel')
+		.argument('<subagent-id>', 'managed subagent id to cancel at the durable parent boundary')
+		.option('--message-id <id>', 'explicit idempotency key/control message id')
+		.option('--reason <text>', 'operator cancellation reason recorded in durable state')
+		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
+		.action(
+			async (
+				subagentId: string,
+				options: {
+					messageId?: string
+					reason?: string
+					stateDb: string
+				},
+			) => {
+				const result = await cancelManagedSubagentForOperators(subagentId, options.stateDb, {
+					messageId: options.messageId,
+					reason: options.reason,
+				})
+				printJson(result)
+			},
+		)
+
+	defineCliCommand(program, 'subagent-record-review')
+		.argument('<subagent-id>', 'reviewer/final_review managed subagent id')
+		.requiredOption('--decision <decision>', 'accepted or changes_requested')
+		.option('--finding-ids <json>', 'JSON string array of terminal finding ids')
+		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
+		.action(
+			async (
+				subagentId: string,
+				options: {
+					decision: string
+					findingIds?: string
+					stateDb: string
+				},
+			) => {
+				const result = await recordManagedSubagentReviewForOperators(
+					subagentId,
+					options.stateDb,
+					{
+						decision: parseManagedSubagentReviewDecision(options.decision),
+						findingIds: parseManagedSubagentFindingIds(options.findingIds),
+					},
+				)
+				printJson(result)
+			},
+		)
+
+	defineCliCommand(program, 'subagent-link-repair')
+		.argument('<review-subagent-id>', 'managed reviewer subagent id with changes requested')
+		.requiredOption('--repair-subagent-id <id>', 'existing worker subagent id for the repair pass')
+		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
+		.action(
+			async (
+				reviewSubagentId: string,
+				options: {
+					repairSubagentId: string
+					stateDb: string
+				},
+			) => {
+				const result = await linkManagedSubagentRepairForOperators(
+					reviewSubagentId,
+					options.repairSubagentId,
+					options.stateDb,
+				)
+				printJson(result)
+			},
+		)
+
 	defineCliCommand(program, 'subagent-close')
 		.argument('<subagent-id>', 'managed subagent id to close')
 		.requiredOption(
@@ -2062,61 +2365,46 @@ export function buildCliProgram(): Command {
 		.argument('<agent-file>', 'path to a portable agent JSON file')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (agentFilePath: string, options: { stateDb: string }) => {
-			const stateStore = await createStateStore(options.stateDb)
-			const lifecycleService = new AgentLifecycleService({
-				state_store: stateStore,
+			const result = await registerLifecycleAgentFile({
+				agentFilePath,
+				stateDbPath: options.stateDb,
 			})
 
-			try {
-				const result = await lifecycleService.registerAgentFile(agentFilePath)
-				printLifecycleStatus(result.status)
-				printJson({
-					logical_agent_id: result.logical_agent_id,
-					revision: result.revision,
-				})
-			} finally {
-				stateStore.close()
-			}
+			printLifecycleStatus(result.status)
+			printJson({
+				logical_agent_id: result.logical_agent_id,
+				revision: result.revision,
+			})
 		})
 
 	defineCliCommand(program, 'status')
 		.argument('<agent-id>', 'logical agent id to inspect')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (logicalAgentId: string, options: { stateDb: string }) => {
-			const stateStore = await createStateStore(options.stateDb)
-			const lifecycleService = new AgentLifecycleService({
-				state_store: stateStore,
+			const status = await getLifecycleAgentStatus({
+				logicalAgentId,
+				stateDbPath: options.stateDb,
 			})
 
-			try {
-				const status = await lifecycleService.getAgentStatus(logicalAgentId)
-				printLifecycleStatus(status)
-			} finally {
-				stateStore.close()
-			}
+			printLifecycleStatus(status)
 		})
 
 	defineCliCommand(program, 'deploy')
 		.argument('<agent-file>', 'path to a portable agent JSON file')
 		.option('--state-db <path>', 'path to the local state database', defaultStateDatabasePath())
 		.action(async (agentFilePath: string, options: { stateDb: string }) => {
-			const stateStore = await createStateStore(options.stateDb)
-			const lifecycleService = new AgentLifecycleService({
-				state_store: stateStore,
+			const result = await deployLifecycleAgentFile({
+				agentFilePath,
+				stateDbPath: options.stateDb,
 			})
 
-			try {
-				const result = await lifecycleService.deployAgentFile(agentFilePath)
-				printLifecycleStatus(result.status)
-				printJson({
-					logical_agent_id: result.logical_agent_id,
-					source_revision_id: result.source_revision_id,
-					live_file_path: result.live_file_path,
-					revision: result.revision,
-				})
-			} finally {
-				stateStore.close()
-			}
+			printLifecycleStatus(result.status)
+			printJson({
+				logical_agent_id: result.logical_agent_id,
+				source_revision_id: result.source_revision_id,
+				live_file_path: result.live_file_path,
+				revision: result.revision,
+			})
 		})
 
 	defineCliCommand(program, 'builder')
@@ -2372,45 +2660,37 @@ export function buildCliProgram(): Command {
 					codexAppServerExecutionTimeoutMs?: string
 				},
 			) => {
-				const resolvedAgentFilePath = path.resolve(process.cwd(), agentFilePath)
 				const params = parseParams(options.param ?? [])
-				const [agentFile, resolvedRevisionId] = await Promise.all([
-					loadAndValidateAgentFile(resolvedAgentFilePath),
-					computeResolvedRevisionId(resolvedAgentFilePath),
-				])
 				const adapter = createCodexAppServerAdapter({
 					execution_timeout_ms: parseTimeoutOption(
 						options.codexAppServerExecutionTimeoutMs,
 						'--codex-app-server-execution-timeout-ms',
 					),
 				})
-				const stateStore = await createStateStore(options.stateDb)
+				const result = await runLocalAgent({
+					agentFilePath,
+					cwd: process.cwd(),
+					stateDbPath: options.stateDb,
+					adapter,
+					params,
+					runId: options.runId,
+					runtimeSourceIds: options.runtimeSourceId,
+				})
 
-				try {
-					const result = await runAgentFile(agentFile, adapter, params, {
-						state_store: stateStore,
-						resolved_revision_id: resolvedRevisionId,
-						run_id: options.runId,
-						user_runtime_source_ids: options.runtimeSourceId,
-					})
-
-					printRunId(result.run_id)
-					if (result.status !== 'success') {
-						if (result.resume_available) {
-							process.stderr.write('Local resume remains available.\n')
-						}
-						printFailure(result.code, result.message)
-						process.exitCode = 1
-						return
+				printRunId(result.run_id)
+				if (result.status !== 'success') {
+					if (result.resume_available) {
+						process.stderr.write('Local resume remains available.\n')
 					}
+					printFailure(result.code, result.message)
+					process.exitCode = 1
+					return
+				}
 
-					if (result.final_output_mode === 'text') {
-						process.stdout.write(`${result.final_output}\n`)
-					} else if (result.final_output_mode === 'json') {
-						process.stdout.write(`${JSON.stringify(result.final_output, null, 2)}\n`)
-					}
-				} finally {
-					stateStore.close()
+				if (result.final_output_mode === 'text') {
+					process.stdout.write(`${result.final_output}\n`)
+				} else if (result.final_output_mode === 'json') {
+					process.stdout.write(`${JSON.stringify(result.final_output, null, 2)}\n`)
 				}
 			},
 		)

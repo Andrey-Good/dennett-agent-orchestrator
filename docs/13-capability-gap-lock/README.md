@@ -36,6 +36,11 @@ Documents:
 - [Phase 12 Capability Gap Lock](./phase-12-capability-gap-lock.md)
 - [Phase 13 Mem0-First Native Memory Integration](../14-native-memory-integration/phase-13-mem0-first-native-memory-integration.md)
 
+Current reconciliation note:
+
+- [2026-04-29 App Facade And Architecture Gate Reconciliation](./phase-12-capability-gap-lock.md#2026-04-29-app-facade-and-architecture-gate-reconciliation)
+- [2026-04-29 Stage 14 Runtime Surface Certification](./phase-12-capability-gap-lock.md#2026-04-29-stage-14-runtime-surface-certification)
+
 <a id="russian"></a>
 # Capability Gap Lock
 

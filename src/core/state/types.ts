@@ -1,5 +1,6 @@
 import type {
 	ManagedSubagentBudgetLimits as ManagedSubagentBudgetLimitsPort,
+	ManagedSubagentCancelResponse as ManagedSubagentCancelResponsePort,
 	ManagedSubagentCloseDisposition as ManagedSubagentCloseDispositionPort,
 	ManagedSubagentCloseResponse as ManagedSubagentCloseResponsePort,
 	ManagedSubagentControlMessage as ManagedSubagentControlMessagePort,
@@ -8,9 +9,11 @@ import type {
 	ManagedSubagentId as ManagedSubagentIdPort,
 	ManagedSubagentLineage as ManagedSubagentLineagePort,
 	ManagedSubagentReasonCode as ManagedSubagentReasonCodePort,
+	ManagedSubagentReviewWorkflowState as ManagedSubagentReviewWorkflowStatePort,
 	ManagedSubagentRole as ManagedSubagentRolePort,
 	ManagedSubagentSendResponse as ManagedSubagentSendResponsePort,
 	ManagedSubagentState as ManagedSubagentStatePort,
+	ManagedSubagentStatusResponse as ManagedSubagentStatusResponsePort,
 	ManagedSubagentTaskPackage as ManagedSubagentTaskPackagePort,
 	ManagedSubagentTerminalResult as ManagedSubagentTerminalResultPort,
 	ManagedSubagentUpdate as ManagedSubagentUpdatePort,
@@ -40,6 +43,7 @@ export type ManagedSubagentRole = ManagedSubagentRolePort
 export type ManagedSubagentState = ManagedSubagentStatePort
 export type ManagedSubagentCloseDisposition = ManagedSubagentCloseDispositionPort
 export type ManagedSubagentReasonCode = ManagedSubagentReasonCodePort
+export type ManagedSubagentReviewWorkflowState = ManagedSubagentReviewWorkflowStatePort
 export type ManagedSubagentLineage = ManagedSubagentLineagePort
 export type ManagedSubagentBudgetLimits = ManagedSubagentBudgetLimitsPort
 export type ManagedSubagentControlMessage = ManagedSubagentControlMessagePort
@@ -48,6 +52,8 @@ export type ManagedSubagentFinalPayload = ManagedSubagentFinalPayloadPort
 export type ManagedSubagentUpdate = ManagedSubagentUpdatePort
 export type ManagedSubagentWaitResponse = ManagedSubagentWaitResponsePort
 export type ManagedSubagentSendResponse = ManagedSubagentSendResponsePort
+export type ManagedSubagentStatusResponse = ManagedSubagentStatusResponsePort
+export type ManagedSubagentCancelResponse = ManagedSubagentCancelResponsePort
 export type ManagedSubagentCloseResponse = ManagedSubagentCloseResponsePort
 export type ManagedSubagentTaskPackage = ManagedSubagentTaskPackagePort
 export type ManagedSubagentTerminalResult = ManagedSubagentTerminalResultPort
@@ -280,6 +286,7 @@ export interface ManagedSubagentRecord {
 	task_package: ManagedSubagentTaskPackage
 	state: ManagedSubagentState
 	terminal_result: ManagedSubagentTerminalResult | null
+	workflow_state: ManagedSubagentReviewWorkflowState | null
 	close_disposition: ManagedSubagentCloseDisposition | null
 	created_at: string
 	updated_at: string
@@ -405,6 +412,17 @@ export interface CloseManagedSubagentInput {
 	subagent_id: ManagedSubagentId
 	close_disposition: ManagedSubagentCloseDisposition
 	closed_at?: string
+}
+
+export interface UpdateManagedSubagentWorkflowStateInput {
+	subagent_id: ManagedSubagentId
+	workflow_state: ManagedSubagentReviewWorkflowState | null
+	updated_at?: string
+}
+
+export interface UpdateManagedSubagentWorkflowStatesInput {
+	updates: [UpdateManagedSubagentWorkflowStateInput, ...UpdateManagedSubagentWorkflowStateInput[]]
+	updated_at?: string
 }
 
 export interface UpsertAgentRevisionInput {

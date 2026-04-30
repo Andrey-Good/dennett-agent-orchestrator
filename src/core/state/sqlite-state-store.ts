@@ -51,6 +51,8 @@ import type {
 	StartNodeAttemptInput,
 	TriggerRecord,
 	UpdateMemoryProviderStatusInput,
+	UpdateManagedSubagentWorkflowStateInput,
+	UpdateManagedSubagentWorkflowStatesInput,
 	UpsertAgentRecordInput,
 	UpsertAgentRevisionInput,
 	UpsertMemoryProviderInput,
@@ -220,6 +222,7 @@ interface ManagedSubagentRow {
 	task_package_json: string
 	state: ManagedSubagentState
 	terminal_result_json: string | null
+	workflow_state_json: string | null
 	close_disposition: string | null
 	created_at: string
 	updated_at: string
@@ -1152,6 +1155,7 @@ export class SQLiteLocalStateStore {
             task_package_json,
             state,
             terminal_result_json,
+            workflow_state_json,
             close_disposition,
             created_at,
             updated_at,
@@ -1201,6 +1205,7 @@ export class SQLiteLocalStateStore {
             task_package_json,
             state,
             terminal_result_json,
+            workflow_state_json,
             close_disposition,
             created_at,
             updated_at,
@@ -1405,12 +1410,13 @@ export class SQLiteLocalStateStore {
               task_package_json,
               state,
               terminal_result_json,
+              workflow_state_json,
               close_disposition,
               created_at,
               updated_at,
               terminal_at,
               closed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, ?, ?, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, NULL, ?, ?, NULL, NULL)
           `,
 				)
 				.run(
@@ -1450,6 +1456,62 @@ export class SQLiteLocalStateStore {
 			.run(stringifyJson(input.task_package as unknown as JsonValue), updatedAt, input.subagent_id)
 
 		return this.getManagedSubagentRecordOrThrow(input.subagent_id)
+	}
+
+	updateManagedSubagentWorkflowState(
+		input: UpdateManagedSubagentWorkflowStateInput,
+	): ManagedSubagentRecord {
+		const updatedAt = input.updated_at ?? nowIso()
+		this.getManagedSubagentRecordOrThrow(input.subagent_id)
+
+		this.database
+			.prepare(
+				`
+          UPDATE managed_subagents
+          SET
+            workflow_state_json = ?,
+            updated_at = ?
+          WHERE subagent_id = ?
+        `,
+			)
+			.run(
+				stringifyOptionalJson(input.workflow_state as unknown as JsonValue | null),
+				updatedAt,
+				input.subagent_id,
+			)
+
+		return this.getManagedSubagentRecordOrThrow(input.subagent_id)
+	}
+
+	updateManagedSubagentWorkflowStates(
+		input: UpdateManagedSubagentWorkflowStatesInput,
+	): ManagedSubagentRecord[] {
+		const updatedAt = input.updated_at ?? nowIso()
+
+		return this.withTransaction(() => {
+			for (const update of input.updates) {
+				this.getManagedSubagentRecordOrThrow(update.subagent_id)
+				this.database
+					.prepare(
+						`
+              UPDATE managed_subagents
+              SET
+                workflow_state_json = ?,
+                updated_at = ?
+              WHERE subagent_id = ?
+            `,
+					)
+					.run(
+						stringifyOptionalJson(update.workflow_state as unknown as JsonValue | null),
+						update.updated_at ?? updatedAt,
+						update.subagent_id,
+					)
+			}
+
+			return input.updates.map((update) =>
+				this.getManagedSubagentRecordOrThrow(update.subagent_id),
+			)
+		})
 	}
 
 	markManagedSubagentTerminal(input: MarkManagedSubagentTerminalInput): ManagedSubagentRecord {
@@ -2668,6 +2730,7 @@ export class SQLiteLocalStateStore {
         task_package_json TEXT NOT NULL,
         state TEXT NOT NULL,
         terminal_result_json TEXT,
+        workflow_state_json TEXT,
         close_disposition TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -2705,6 +2768,16 @@ export class SQLiteLocalStateStore {
       CREATE INDEX IF NOT EXISTS managed_subagents_parent_run_idx
       ON managed_subagents (state, created_at ASC);
     `)
+		this.ensureManagedSubagentWorkflowStateColumn()
+	}
+
+	private ensureManagedSubagentWorkflowStateColumn(): void {
+		const columns = this.database.prepare('PRAGMA table_info(managed_subagents)').all() as Array<{
+			name: string
+		}>
+		if (!columns.some((column) => column.name === 'workflow_state_json')) {
+			this.database.exec('ALTER TABLE managed_subagents ADD COLUMN workflow_state_json TEXT;')
+		}
 	}
 
 	private withTransaction<T>(operation: () => T): T {
@@ -3202,6 +3275,9 @@ export class SQLiteLocalStateStore {
 			terminal_result: parseOptionalJson<JsonObject>(
 				row.terminal_result_json,
 			) as unknown as ManagedSubagentRecord['terminal_result'],
+			workflow_state: parseOptionalJson<JsonObject>(
+				row.workflow_state_json,
+			) as unknown as ManagedSubagentRecord['workflow_state'],
 			close_disposition:
 				(row.close_disposition as ManagedSubagentRecord['close_disposition']) ?? null,
 			created_at: row.created_at,

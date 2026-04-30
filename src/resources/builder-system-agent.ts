@@ -43,6 +43,7 @@ export const BUILDER_SYSTEM_AGENT_RESOURCE: AgentFile = {
 				'Use runtime_sources only as portable source identity references and node selection policies, not as embedded local auth or account configuration.',
 				'Interaction must use interaction.comments and interaction.user_mcp with server_name "orchestrator.user_chat" when user chat is needed.',
 				'Managed subagent patterns must be represented with public orchestrator_agent nodes and clear prompts, not hidden create/send/wait/status/close task packages inside the portable file.',
+				'If the input contains repair_attempt, use its structured previous_failure diagnostics to correct the candidate; do not repeat fields, ids, or contract shapes reported as invalid.',
 				'Prefer the simplest graph that satisfies the request; a single runtime_agent node is acceptable when enough.',
 				'Use runtime_adapter "codex" for runtime_agent nodes.',
 				'Do not emit explanations, markdown, or any keys outside the required JSON wrapper.',

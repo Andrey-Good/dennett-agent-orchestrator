@@ -140,6 +140,25 @@ describe('package distribution metadata', () => {
 		expect(packageJson.files).toEqual(['dist/src/**', 'contracts/json-schema/*.schema.json'])
 	})
 
+	it('keeps public-readiness baseline docs aligned with the private release candidate version', async () => {
+		const packageJson = await readPackageJson()
+		const baselineGapDoc = await readFile(
+			'docs/21-public-launch-readiness/baseline-gap-and-forbidden-claims.md',
+			'utf8',
+		)
+		const finalGateDoc = await readFile(
+			'docs/21-public-launch-readiness/final-public-launch-gate-decision.md',
+			'utf8',
+		)
+
+		expect(packageJson.private).toBe(true)
+		expect(baselineGapDoc).toContain(
+			'version is the prepared private release candidate `0.1.0-rc.1`',
+		)
+		expect(baselineGapDoc).not.toContain('version is `0.0.0`')
+		expect(finalGateDoc).toContain(`Package version: \`${packageJson.version}\``)
+	})
+
 	it('exports only package metadata and public schema files', async () => {
 		const packageJson = await readPackageJson()
 
@@ -557,8 +576,12 @@ describe('CLI contract freeze', () => {
 			{ name: 'subagent-launch', stability: 'experimental' },
 			{ name: 'subagent-list', stability: 'experimental' },
 			{ name: 'subagent-show', stability: 'experimental' },
+			{ name: 'subagent-status', stability: 'experimental' },
 			{ name: 'subagent-wait', stability: 'experimental' },
 			{ name: 'subagent-record-control', stability: 'experimental' },
+			{ name: 'subagent-cancel', stability: 'experimental' },
+			{ name: 'subagent-record-review', stability: 'experimental' },
+			{ name: 'subagent-link-repair', stability: 'experimental' },
 			{ name: 'subagent-close', stability: 'experimental' },
 			{ name: 'register', stability: 'stable' },
 			{ name: 'status', stability: 'stable' },

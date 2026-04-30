@@ -34,7 +34,7 @@ The current blocker categories are:
 
 | Category | Current state | Required before the category can clear |
 | --- | --- | --- |
-| Package/public registry evidence | `package.json` remains `private: true`, version is `0.0.0`, registry ownership is not proven, and public registry install/upgrade/uninstall/rollback proof is absent. | Final version approval, approved privacy change, registry ownership proof, public artifact proof, and lifecycle proof for the selected public package. |
+| Package/public registry evidence | `package.json` remains `private: true`, version is the prepared private release candidate `0.1.0-rc.1`, registry ownership is not proven, and public registry install/upgrade/uninstall/rollback proof is absent. | Final public version approval, approved privacy change, registry ownership proof, public artifact proof, and lifecycle proof for the selected public package. |
 | External beta evidence | Stage 16 is `external-beta-not-run`; no accepted external participant evidence or beta-exit review exists. | Real external participant sessions, accepted workflow evidence, bug-bar triage, privacy-safe artifacts, and beta-exit decision. |
 | Supply-chain evidence | Local SBOM validation exists, but retained SBOM, provenance, signing, and artifact hash manifest evidence are absent. | Retained SBOM and hashes, provenance/signing implementation or explicit release decision, and publication attachment policy. |
 | Documentation and metadata | Public docs are bounded, but public install docs, release notes, changelog/versioning policy, and final package metadata are not yet launch-ready. | Public docs and package metadata that match the proven artifact and claim boundaries. |

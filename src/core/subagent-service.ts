@@ -3,17 +3,29 @@ import { isDeepStrictEqual } from 'node:util'
 import type { RuntimeAdapter } from '../ports/runtime.js'
 import type {
 	ManagedSubagentBudgetLimits,
+	ManagedSubagentCancelRequest,
+	ManagedSubagentCancelResponse,
 	ManagedSubagentCloseRequest,
 	ManagedSubagentCloseResponse,
 	ManagedSubagentControlMessage,
 	ManagedSubagentFinalPayload,
 	ManagedSubagentFinding,
+	ManagedSubagentInteractionPolicy,
 	ManagedSubagentLaunchRequest,
 	ManagedSubagentPort,
+	ManagedSubagentReadContext,
 	ManagedSubagentReasonCode,
 	ManagedSubagentRecord,
+	ManagedSubagentRecordReviewRequest,
+	ManagedSubagentRequiredValidation,
+	ManagedSubagentReviewWorkflowResponse,
+	ManagedSubagentReviewWorkflowState,
+	ManagedSubagentLinkRepairRequest,
+	ManagedSubagentLinkRepairResponse,
 	ManagedSubagentSendRequest,
 	ManagedSubagentSendResponse,
+	ManagedSubagentStatusRequest,
+	ManagedSubagentStatusResponse,
 	ManagedSubagentTaskPackage,
 	ManagedSubagentTerminalOutcome,
 	ManagedSubagentTerminalResult,
@@ -49,6 +61,18 @@ const managedSubagentBudgetKeys = [
 
 const managedSubagentWriteSetKeys = ['mode', 'items'] as const
 const managedSubagentWriteTargetKeys = ['resource_kind', 'resource_ref', 'scope', 'access'] as const
+const managedSubagentReadContextKeys = ['mode', 'items'] as const
+const managedSubagentReadContextItemKeys = [
+	'context_kind',
+	'context_ref',
+	'inclusion',
+	'required',
+] as const
+const managedSubagentRequiredValidationKeys = [
+	'validation_id',
+	'description',
+	'required',
+] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -184,6 +208,210 @@ export function normalizeManagedSubagentWriteSet(writeSet: unknown): ManagedSuba
 	}
 }
 
+export function normalizeManagedSubagentReadContext(
+	readContext: unknown,
+): ManagedSubagentReadContext {
+	if (readContext === undefined) {
+		return {
+			mode: 'explicit_only',
+			items: [],
+		}
+	}
+	if (!isRecord(readContext)) {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent read_context must be a JSON object.',
+		)
+	}
+	assertClosedObjectKeys(
+		readContext,
+		managedSubagentReadContextKeys,
+		'INVALID_SUBAGENT_REQUEST',
+		'Managed subagent read_context',
+	)
+	if (
+		readContext.mode !== 'explicit_only' &&
+		readContext.mode !== 'explicit_plus_dependencies'
+	) {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent read_context mode must be one of: explicit_only, explicit_plus_dependencies.',
+		)
+	}
+	if (!Array.isArray(readContext.items)) {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent read_context items must be an array.',
+		)
+	}
+
+	const seenItems = new Set<string>()
+	const items: ManagedSubagentReadContext['items'] = readContext.items.map((entry, index) => {
+		if (!isRecord(entry)) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent read_context item ${index + 1} must be a JSON object.`,
+			)
+		}
+		assertClosedObjectKeys(
+			entry,
+			managedSubagentReadContextItemKeys,
+			'INVALID_SUBAGENT_REQUEST',
+			`Managed subagent read_context item ${index + 1}`,
+		)
+		if (
+			entry.context_kind !== 'file' &&
+			entry.context_kind !== 'directory_snapshot' &&
+			entry.context_kind !== 'document' &&
+			entry.context_kind !== 'prior_result' &&
+			entry.context_kind !== 'policy' &&
+			entry.context_kind !== 'summary' &&
+			entry.context_kind !== 'structured_state'
+		) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent read_context item ${index + 1} context_kind must be one of: file, directory_snapshot, document, prior_result, policy, summary, structured_state.`,
+			)
+		}
+		if (typeof entry.context_ref !== 'string' || entry.context_ref.trim().length === 0) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent read_context item ${index + 1} context_ref must be a non-empty string.`,
+			)
+		}
+		if (
+			entry.inclusion !== 'full' &&
+			entry.inclusion !== 'excerpt' &&
+			entry.inclusion !== 'summary' &&
+			entry.inclusion !== 'reference_only'
+		) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent read_context item ${index + 1} inclusion must be one of: full, excerpt, summary, reference_only.`,
+			)
+		}
+		if (typeof entry.required !== 'boolean') {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent read_context item ${index + 1} required must be a boolean.`,
+			)
+		}
+
+		const normalizedItem: ManagedSubagentReadContext['items'][number] = {
+			context_kind: entry.context_kind,
+			context_ref: entry.context_ref.trim(),
+			inclusion: entry.inclusion,
+			required: entry.required,
+		}
+		const duplicateKey = `${normalizedItem.context_kind}\0${normalizedItem.context_ref}\0${normalizedItem.inclusion}`
+		if (seenItems.has(duplicateKey)) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent read_context item ${index + 1} duplicates an earlier context item.`,
+			)
+		}
+		seenItems.add(duplicateKey)
+		return normalizedItem
+	})
+
+	return {
+		mode: readContext.mode,
+		items,
+	}
+}
+
+export function normalizeManagedSubagentRequiredValidations(
+	requiredValidations: unknown,
+): ManagedSubagentRequiredValidation[] {
+	if (requiredValidations === undefined) {
+		return []
+	}
+	if (!Array.isArray(requiredValidations) || requiredValidations.length === 0) {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent required_validations must be a non-empty array when present.',
+		)
+	}
+
+	const seenValidationIds = new Set<string>()
+	return requiredValidations.map((entry, index) => {
+		if (!isRecord(entry)) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent required_validations item ${index + 1} must be a JSON object.`,
+			)
+		}
+		assertClosedObjectKeys(
+			entry,
+			managedSubagentRequiredValidationKeys,
+			'INVALID_SUBAGENT_REQUEST',
+			`Managed subagent required_validations item ${index + 1}`,
+		)
+		if (typeof entry.validation_id !== 'string' || entry.validation_id.trim().length === 0) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent required_validations item ${index + 1} validation_id must be a non-empty string.`,
+			)
+		}
+		if (typeof entry.description !== 'string' || entry.description.trim().length === 0) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent required_validations item ${index + 1} description must be a non-empty string.`,
+			)
+		}
+		if (typeof entry.required !== 'boolean') {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent required_validations item ${index + 1} required must be a boolean.`,
+			)
+		}
+
+		const validationId = entry.validation_id.trim()
+		if (seenValidationIds.has(validationId)) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent required_validations item ${index + 1} duplicates validation_id "${validationId}".`,
+			)
+		}
+		seenValidationIds.add(validationId)
+		return {
+			validation_id: validationId,
+			description: entry.description.trim(),
+			required: entry.required,
+		}
+	})
+}
+
+function assertManagedSubagentAcceptanceCriteria(acceptanceCriteria: unknown): void {
+	if (!Array.isArray(acceptanceCriteria) || acceptanceCriteria.length === 0) {
+		throw new AppError(
+			'INVALID_SUBAGENT_REQUEST',
+			'Managed subagent acceptance_criteria must be a non-empty array.',
+		)
+	}
+
+	for (const [index, criterion] of acceptanceCriteria.entries()) {
+		if (typeof criterion !== 'string' || criterion.trim().length === 0) {
+			throw new AppError(
+				'INVALID_SUBAGENT_REQUEST',
+				`Managed subagent acceptance_criteria item ${index + 1} must be a non-empty string.`,
+			)
+		}
+	}
+}
+
+export function normalizeManagedSubagentInteractionPolicy(
+	interactionPolicy: unknown,
+): ManagedSubagentInteractionPolicy {
+	if (interactionPolicy === undefined || interactionPolicy === 'silent') {
+		return 'silent'
+	}
+	throw new AppError(
+		'INVALID_SUBAGENT_REQUEST',
+		'Managed subagent interaction_policy must be "silent" in the current Stage 16 slice.',
+	)
+}
+
 function isManagedSubagentBudgetTighterOrEqual(
 	current: ManagedSubagentBudgetLimits | undefined,
 	next: ManagedSubagentBudgetLimits,
@@ -211,6 +439,8 @@ function assertManagedSubagentLaunchRequest(request: ManagedSubagentLaunchReques
 	if (
 		request.child_role !== 'worker' &&
 		request.child_role !== 'reviewer' &&
+		request.child_role !== 'explorer' &&
+		request.child_role !== 'integrator' &&
 		request.child_role !== 'final_review'
 	) {
 		throw new AppError(
@@ -242,7 +472,11 @@ function assertManagedSubagentLaunchRequest(request: ManagedSubagentLaunchReques
 			'Managed subagent input_message must be a non-empty string.',
 		)
 	}
+	assertManagedSubagentAcceptanceCriteria(request.acceptance_criteria)
 	normalizeManagedSubagentWriteSet(request.write_set)
+	normalizeManagedSubagentReadContext(request.read_context)
+	normalizeManagedSubagentRequiredValidations(request.required_validations)
+	normalizeManagedSubagentInteractionPolicy(request.interaction_policy)
 	for (const prohibition of request.prohibitions ?? []) {
 		if (prohibition.trim().length === 0) {
 			throw new AppError(
@@ -510,6 +744,21 @@ function buildManagedSubagentCloseResponse(
 	}
 }
 
+function buildManagedSubagentCancelResponse(
+	record: ManagedSubagentRecord,
+	cancelStatus: ManagedSubagentCancelResponse['cancel_status'],
+	reasonCode: ManagedSubagentReasonCode | null = record.terminal_result?.reason_code ?? null,
+): ManagedSubagentCancelResponse {
+	return {
+		subagent_id: record.subagent_id,
+		cancel_status: cancelStatus,
+		state: record.state,
+		outcome: record.terminal_result?.outcome ?? null,
+		reason_code: reasonCode,
+		runtime_cancellation_delivered: false,
+	}
+}
+
 function isSameManagedControlMessageIntent(
 	message: ManagedSubagentControlMessage,
 	request: ManagedSubagentSendRequest,
@@ -539,6 +788,13 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 		assertChildLaunchCompatibility(resolvedChild.agent_file)
 		this.assertLaunchBudgetCaps(request)
 		const writeSet = normalizeManagedSubagentWriteSet(request.write_set)
+		const readContext = normalizeManagedSubagentReadContext(request.read_context)
+		const requiredValidations = normalizeManagedSubagentRequiredValidations(
+			request.required_validations,
+		)
+		const interactionPolicy = normalizeManagedSubagentInteractionPolicy(
+			request.interaction_policy,
+		)
 
 		const timestamp = nowIso()
 		const taskPackage: ManagedSubagentTaskPackage = {
@@ -548,6 +804,9 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 			acceptance_criteria: request.acceptance_criteria,
 			prohibitions: request.prohibitions ?? [],
 			write_set: writeSet,
+			read_context: readContext,
+			required_validations: requiredValidations,
+			interaction_policy: interactionPolicy,
 			budgets: normalizeManagedSubagentBudgets(request.budgets),
 			control_messages: [],
 		}
@@ -575,6 +834,19 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 		})
 
 		return subagent
+	}
+
+	async status(
+		request: ManagedSubagentStatusRequest,
+	): Promise<ManagedSubagentStatusResponse> {
+		const current = this.stateStore.getManagedSubagentRecord(request.subagent_id)
+		if (!current) {
+			throw new AppError(
+				'SUBAGENT_NOT_FOUND',
+				`Managed subagent "${request.subagent_id}" does not exist.`,
+			)
+		}
+		return current
 	}
 
 	async wait(request: ManagedSubagentWaitRequest): Promise<ManagedSubagentWaitResponse> {
@@ -821,6 +1093,44 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 		}
 	}
 
+	async cancel(request: ManagedSubagentCancelRequest): Promise<ManagedSubagentCancelResponse> {
+		const current = this.stateStore.getManagedSubagentRecord(request.subagent_id)
+		if (!current) {
+			throw new AppError(
+				'SUBAGENT_NOT_FOUND',
+				`Managed subagent "${request.subagent_id}" does not exist.`,
+			)
+		}
+		if (current.state === 'closed') {
+			return buildManagedSubagentCancelResponse(current, 'already_closed')
+		}
+		if (current.state === 'terminal') {
+			return buildManagedSubagentCancelResponse(current, 'already_terminal')
+		}
+
+		const cancelStatus =
+			current.state === 'cancelling' ? 'already_cancelling' : 'cancelling'
+		const messageId = request.message_id ?? randomUUID()
+		const payload: Record<string, JsonValue> =
+			request.reason === undefined
+				? {}
+				: {
+						reason: request.reason,
+					}
+		const response = await this.send({
+			subagent_id: current.subagent_id,
+			message_id: messageId,
+			message_kind: 'cancel',
+			payload,
+		})
+		if (response.delivery_state === 'rejected') {
+			return buildManagedSubagentCancelResponse(current, 'rejected', response.reason_code)
+		}
+
+		const next = this.stateStore.getManagedSubagentRecord(current.subagent_id) ?? current
+		return buildManagedSubagentCancelResponse(next, cancelStatus)
+	}
+
 	async close(request: ManagedSubagentCloseRequest): Promise<ManagedSubagentCloseResponse> {
 		const current = this.stateStore.getManagedSubagentRecord(request.subagent_id)
 		if (!current) {
@@ -857,6 +1167,194 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 		return buildManagedSubagentCloseResponse(closed, 'closed')
 	}
 
+	async recordReviewDecision(
+		request: ManagedSubagentRecordReviewRequest,
+	): Promise<ManagedSubagentReviewWorkflowResponse> {
+		const current = this.stateStore.getManagedSubagentRecord(request.subagent_id)
+		if (!current) {
+			throw new AppError(
+				'SUBAGENT_NOT_FOUND',
+				`Managed subagent "${request.subagent_id}" does not exist.`,
+			)
+		}
+		if (!isManagedSubagentRoleReviewerLike(current.child_role)) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				`Managed subagent "${request.subagent_id}" is role "${current.child_role}" and cannot record a review decision.`,
+			)
+		}
+		if (current.terminal_result === null) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				`Managed subagent "${request.subagent_id}" must have terminal review output before a review decision can be recorded.`,
+			)
+		}
+
+		const findingIds = this.resolveReviewFindingIds(current, request)
+		if (request.decision === 'changes_requested' && findingIds.length === 0) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				'changes_requested review decisions must reference at least one finding.',
+			)
+		}
+		if (
+			current.workflow_state?.decision !== null &&
+			current.workflow_state !== null &&
+			(current.workflow_state.decision !== request.decision ||
+				!isDeepStrictEqual(current.workflow_state.finding_ids, findingIds))
+		) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_CONFLICT',
+				`Managed subagent "${request.subagent_id}" already has a different review workflow decision.`,
+			)
+		}
+		if (
+			current.workflow_state?.decision === request.decision &&
+			isDeepStrictEqual(current.workflow_state.finding_ids, findingIds)
+		) {
+			return {
+				subagent_id: current.subagent_id,
+				workflow_state: current.workflow_state,
+			}
+		}
+
+		const timestamp = nowIso()
+		const maxReviewLoops = current.task_package.budgets?.max_review_loops ?? null
+		const loopIndex = this.getReviewLoopIndex(current)
+		const budgetExhausted =
+			request.decision === 'changes_requested' &&
+			maxReviewLoops !== null &&
+			loopIndex >= maxReviewLoops
+		const workflowState: ManagedSubagentReviewWorkflowState = {
+			workflow_kind: 'review_fix',
+			parent_task_id: current.lineage.parent_task_id,
+			reviewer_subagent_id: current.subagent_id,
+			repair_subagent_id: null,
+			loop_index: loopIndex,
+			max_review_loops: maxReviewLoops,
+			decision: request.decision,
+			finding_ids: findingIds,
+			outcome:
+				request.decision === 'accepted'
+					? 'accepted'
+					: budgetExhausted
+						? 'budget_exhausted'
+						: 'changes_requested',
+			budget_exhausted: budgetExhausted,
+			recorded_at: current.workflow_state?.recorded_at ?? timestamp,
+			updated_at: timestamp,
+		}
+		const updated = this.stateStore.updateManagedSubagentWorkflowState({
+			subagent_id: current.subagent_id,
+			workflow_state: workflowState,
+			updated_at: timestamp,
+		})
+
+		return {
+			subagent_id: updated.subagent_id,
+			workflow_state: updated.workflow_state ?? workflowState,
+		}
+	}
+
+	async linkReviewRepair(
+		request: ManagedSubagentLinkRepairRequest,
+	): Promise<ManagedSubagentLinkRepairResponse> {
+		const review = this.stateStore.getManagedSubagentRecord(request.review_subagent_id)
+		if (!review) {
+			throw new AppError(
+				'SUBAGENT_NOT_FOUND',
+				`Managed subagent "${request.review_subagent_id}" does not exist.`,
+			)
+		}
+		const repair = this.stateStore.getManagedSubagentRecord(request.repair_subagent_id)
+		if (!repair) {
+			throw new AppError(
+				'SUBAGENT_NOT_FOUND',
+				`Managed subagent "${request.repair_subagent_id}" does not exist.`,
+			)
+		}
+		if (review.workflow_state === null || review.workflow_state.decision === null) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				`Managed subagent "${review.subagent_id}" must have a recorded review decision before a repair worker can be linked.`,
+			)
+		}
+		if (repair.child_role !== 'worker') {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				`Managed subagent "${repair.subagent_id}" is role "${repair.child_role}" and cannot be used as a repair worker.`,
+			)
+		}
+		if (
+			review.lineage.parent_run_id !== repair.lineage.parent_run_id ||
+			review.lineage.parent_task_id !== repair.lineage.parent_task_id
+		) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				'Review and repair subagents must share the same parent run and parent task.',
+			)
+		}
+		if (
+			review.workflow_state.repair_subagent_id !== null &&
+			review.workflow_state.repair_subagent_id !== repair.subagent_id
+		) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_CONFLICT',
+				`Managed subagent "${review.subagent_id}" is already linked to repair worker "${review.workflow_state.repair_subagent_id}".`,
+			)
+		}
+		if (
+			repair.workflow_state !== null &&
+			(repair.workflow_state.reviewer_subagent_id !== review.subagent_id ||
+				repair.workflow_state.repair_subagent_id !== repair.subagent_id)
+		) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_CONFLICT',
+				`Managed subagent "${repair.subagent_id}" is already linked to review "${repair.workflow_state.reviewer_subagent_id}".`,
+			)
+		}
+		if (review.workflow_state.repair_subagent_id === repair.subagent_id) {
+			return {
+				review_subagent_id: review.subagent_id,
+				repair_subagent_id: repair.subagent_id,
+				workflow_state: review.workflow_state,
+			}
+		}
+		if (review.workflow_state.outcome !== 'changes_requested') {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				`Managed subagent "${review.subagent_id}" review workflow outcome "${review.workflow_state.outcome}" cannot be linked to a repair worker.`,
+			)
+		}
+
+		const timestamp = nowIso()
+		const linkedWorkflowState: ManagedSubagentReviewWorkflowState = {
+			...review.workflow_state,
+			repair_subagent_id: repair.subagent_id,
+			outcome: 'repair_linked',
+			updated_at: timestamp,
+		}
+		const [updatedReview] = this.stateStore.updateManagedSubagentWorkflowStates({
+			updated_at: timestamp,
+			updates: [
+				{
+					subagent_id: review.subagent_id,
+					workflow_state: linkedWorkflowState,
+				},
+				{
+					subagent_id: repair.subagent_id,
+					workflow_state: linkedWorkflowState,
+				},
+			],
+		})
+
+		return {
+			review_subagent_id: review.subagent_id,
+			repair_subagent_id: repair.subagent_id,
+			workflow_state: updatedReview.workflow_state ?? linkedWorkflowState,
+		}
+	}
+
 	private assertLaunchBudgetCaps(request: ManagedSubagentLaunchRequest): void {
 		const budgets = normalizeManagedSubagentBudgets(request.budgets)
 		if (budgets.max_spawn_depth !== undefined && budgets.max_spawn_depth < 1) {
@@ -880,11 +1378,14 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 			isManagedSubagentRoleReviewerLike(request.child_role) &&
 			budgets.max_review_loops !== undefined
 		) {
-			const launchedReviews = this.countReviewLoopLaunches(request.parent_task_id)
+			const launchedReviews = this.countReviewLoopLaunches(
+				request.parent_run_id,
+				request.parent_task_id,
+			)
 			if (launchedReviews >= budgets.max_review_loops) {
 				throw new AppError(
 					'SUBAGENT_BUDGET_EXHAUSTED',
-					`Managed subagent launch would exceed the max_review_loops budget for parent task "${request.parent_task_id}".`,
+					`Managed subagent launch would exceed the max_review_loops budget for parent run "${request.parent_run_id}" and parent task "${request.parent_task_id}".`,
 				)
 			}
 		}
@@ -910,7 +1411,10 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 			nextBudgets.max_review_loops !== undefined &&
 			isManagedSubagentRoleReviewerLike(record.child_role)
 		) {
-			const launchedReviews = this.countReviewLoopLaunches(record.lineage.parent_task_id)
+			const launchedReviews = this.countReviewLoopLaunches(
+				record.lineage.parent_run_id,
+				record.lineage.parent_task_id,
+			)
 			if (launchedReviews > nextBudgets.max_review_loops) {
 				return false
 			}
@@ -962,20 +1466,79 @@ export class ManagedSubagentService implements ManagedSubagentPort {
 		return value as string[]
 	}
 
+	private resolveReviewFindingIds(
+		record: ManagedSubagentRecord,
+		request: ManagedSubagentRecordReviewRequest,
+	): string[] {
+		const explicitFindingIds = request.finding_ids?.map((findingId) => findingId.trim()) ?? null
+		if (
+			explicitFindingIds !== null &&
+			(explicitFindingIds.length === 0 || explicitFindingIds.some((findingId) => findingId === ''))
+		) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				'Review finding_ids must be non-empty strings when present.',
+			)
+		}
+
+		const terminalFindingIds =
+			record.terminal_result?.findings?.map((finding) => finding.finding_id) ?? []
+		const findingIds =
+			explicitFindingIds === null
+				? request.decision === 'changes_requested'
+					? terminalFindingIds
+					: []
+				: explicitFindingIds
+		const uniqueFindingIds = [...new Set(findingIds)]
+		if (uniqueFindingIds.length !== findingIds.length) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				'Review finding_ids must not contain duplicates.',
+			)
+		}
+		const knownFindingIds = new Set(terminalFindingIds)
+		const unknownFindingIds = uniqueFindingIds.filter((findingId) => !knownFindingIds.has(findingId))
+		if (unknownFindingIds.length > 0) {
+			throw new AppError(
+				'SUBAGENT_WORKFLOW_INVALID',
+				`Review finding_ids are not present in terminal findings: ${unknownFindingIds.join(', ')}.`,
+			)
+		}
+		return uniqueFindingIds
+	}
+
 	private countOutstandingSiblingChildren(parentRunId: string): number {
 		return this.stateStore
 			.listManagedSubagentRecords({ parent_run_id: parentRunId })
 			.filter((record) => record.state !== 'closed').length
 	}
 
-	private countReviewLoopLaunches(parentTaskId: string): number {
+	private countReviewLoopLaunches(parentRunId: string, parentTaskId: string): number {
 		return this.stateStore
-			.listManagedSubagentRecords({ parent_task_id: parentTaskId })
+			.listManagedSubagentRecords({
+				parent_run_id: parentRunId,
+				parent_task_id: parentTaskId,
+			})
 			.filter((record) =>
 				isManagedSubagentRoleReviewerLike(
 					record.child_role as ManagedSubagentLaunchRequest['child_role'],
 				),
 			).length
+	}
+
+	private getReviewLoopIndex(record: ManagedSubagentRecord): number {
+		const reviewRecords = this.stateStore
+			.listManagedSubagentRecords({
+				parent_run_id: record.lineage.parent_run_id,
+				parent_task_id: record.lineage.parent_task_id,
+			})
+			.filter((entry) =>
+				isManagedSubagentRoleReviewerLike(
+					entry.child_role as ManagedSubagentLaunchRequest['child_role'],
+				),
+			)
+		const index = reviewRecords.findIndex((entry) => entry.subagent_id === record.subagent_id)
+		return index === -1 ? reviewRecords.length + 1 : index + 1
 	}
 
 	private async executeManagedChild(

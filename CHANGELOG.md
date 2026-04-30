@@ -10,6 +10,11 @@ This project has not approved a public launch, public npm publication, hosted se
 - Kept public onboarding bounded to source checkout, local CLI build, and controlled local tarball proof.
 - Documented that public npm installation, hosted operation, production readiness, completed external beta, retained SBOM publication, signing, provenance, and GA claims remain blocked.
 
+## 0.1.0-rc.1
+
+- Prepared private release-candidate package metadata while keeping public launch and npm publication blocked.
+- Documented local package-readiness evidence as private/local proof only, not public registry availability or final version approval.
+
 ## 0.0.0
 
 - Initial private package metadata and local repository readiness baseline.
