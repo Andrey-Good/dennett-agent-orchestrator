@@ -1,12 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { buildRunInteractionStatus } from '../../src/app/run-interaction-use-cases.js'
 import type { PersistedRunSnapshot } from '../../src/core/state/types.js'
-import {
-	buildCliProgram,
-	buildRunInteractionStatus,
-	getCliCommandContracts,
-} from '../../src/interfaces/cli.js'
+import { buildCliProgram, getCliCommandContracts } from '../../src/interfaces/cli.js'
 
 type PackageJson = {
 	description?: string
