@@ -3,7 +3,7 @@
 <a id="english"></a>
 # Release Engineering And Supply Chain
 
-Status: canonical Stage 4 release-engineering and supply-chain foundation for the `cli-package-first-public-launch` target, extended with a safe OSS release-candidate workflow for later public publication. This document records the private package foundation, deterministic guards, release CI shape, and publication blockers. Stage 11 owns local tarball distribution proof. This document is not publication proof, a completed npm provenance attestation, or a public distribution claim.
+Status: canonical Stage 4 release-engineering and supply-chain foundation for the `cli-package-first-public-launch` target, extended with a safe OSS release-candidate workflow for later public publication. This document records the release-prep package foundation, deterministic guards, release CI shape, and publication blockers. Stage 11 owns local tarball distribution proof. This document is not publication proof, a completed npm provenance attestation, or a public distribution claim.
 
 Related documents:
 
@@ -19,15 +19,15 @@ Related documents:
 
 ## Stage 4 Decision
 
-The selected launch shape remains CLI/package-first. `repository-public-preview` is achieved, but the npm package must stay private until a later explicit release-approval task changes that state.
+The selected launch shape remains CLI/package-first. `repository-public-preview` is achieved, and the package metadata is prepared for a later preview publication path, but the npm package is not published until a later explicit release-approval task changes that state.
 
-Stage 4 establishes deterministic local checks and unambiguous private package metadata. It must not publish to npm, set `private` to `false`, create tags, push commits, claim public package installation proof, or imply public distribution readiness. Local `.tgz` install/uninstall proof, upgrade/rollback harness boundaries, and local SBOM validation are owned by [Stage 11 Distribution Proof](./distribution-proof.md).
+Stage 4 establishes deterministic local checks and unambiguous release-prep package metadata. It must not publish to npm, create tags, push commits, claim public package installation proof, or imply public distribution readiness. Local `.tgz` install/uninstall proof, upgrade/rollback harness boundaries, and local SBOM validation are owned by [Stage 11 Distribution Proof](./distribution-proof.md).
 
 ## Current Package Foundation
 
 The current foundation is:
 
-- `package.json` keeps `"private": true`;
+- `package.json` omits `"private": true` as a release-prep step, but no npm publication has occurred;
 - `package.json` declares `license: "Apache-2.0"`, matching the root Apache-2.0 `LICENSE`;
 - the CLI entry point is declared through `bin.dennett-agent-orchestrator`;
 - package contents are constrained by the `files` allowlist;
@@ -39,9 +39,9 @@ The current foundation is:
 - CI runs typecheck, lint, tests, build, generated distribution checks, package inventory checks, and release-candidate hygiene checks.
 - `.github/workflows/release.yml` runs release-candidate validation from `v*` tags or manual dispatch, retains a candidate npm tarball, retained SPDX SBOM JSON, npm pack metadata, and a SHA-256 manifest, and only attempts npm publication from an explicitly confirmed manual dispatch.
 
-These controls are private package foundation checks plus local artifact proof hooks. They do not prove that the package is published, installable from a public registry, signed, reproducible across platforms, or safe for general availability.
+These controls are release-prep package foundation checks plus local artifact proof hooks. They do not prove that the package is published, installable from a public registry, signed, reproducible across platforms, or safe for general availability.
 
-`package.json` `"private": true` is an npm publication guard, not GitHub repository visibility. The GitHub repository can be public while package publication remains intentionally blocked.
+The removed `package.json` `"private": true` field was an npm publication guard, not GitHub repository visibility. The GitHub repository can be public while package publication remains intentionally blocked by approval, ownership, and evidence gates.
 
 ## Release Candidate Workflow
 
@@ -52,7 +52,7 @@ The release workflow is intentionally split into validation and publication gate
 - manual `workflow_dispatch` with `release_mode: publish` is the only path that can reach `npm publish`;
 - publish mode must run from a selected Git tag whose name equals `v${package.json.version}`;
 - publish mode requires exact typed confirmations for `package.json` name and version;
-- publish mode fails while `package.json` has `"private": true`;
+- publish mode still requires exact manual confirmations, the matching version tag, trusted publishing, and approval gates before `npm publish` can run;
 - publish mode uses `npm publish <validated-tarball> --access public` with GitHub OIDC/trusted publishing instead of a long-lived npm token;
 - publication is attached to the `npm-production` GitHub environment so repository maintainers can add deployment approvals before enabling release.
 
@@ -69,7 +69,7 @@ Reference documentation:
 
 Before the publish gate may be used, maintainers must complete and record evidence for all of the following:
 
-- transfer the package from private package foundation to an approved public package state, including coordinated `package.json` changes such as removing `"private": true`;
+- transfer the package from release-prep metadata to an approved public package state;
 - create or verify the npm package namespace and package ownership;
 - configure npm Trusted Publisher for owner `Andrey-Good`, repository `dennett-agent-orchestrator`, workflow filename `release.yml`, and the chosen GitHub environment if one is required by npm settings;
 - configure the GitHub `npm-production` environment with required reviewers and any branch/tag deployment restrictions;
@@ -85,14 +85,14 @@ The exact user/admin actions and close-out evidence for these external settings 
 `pnpm public-release-foundation:check` validates Stage 4 invariants without requiring publication:
 
 - package license is `Apache-2.0`;
-- package remains private;
+- package publication remains unapproved and unproven;
 - package `files` allowlist is present and non-empty;
 - packlist and release-candidate guard scripts exist;
 - required release-foundation package scripts exist;
 - `SECURITY.md` exists;
 - Stage 1 through Stage 4 public-launch documents exist and the section README links the Stage 4 document.
 
-The guard may report future publication blockers as non-failing output when they are not yet required for the private Stage 4 foundation.
+The guard may report future publication blockers as non-failing output when they are not yet required for the release-prep Stage 4 foundation.
 
 ## Future Publication Blockers
 
@@ -109,7 +109,7 @@ The CLI/package-first public launch remains blocked until later stages produce e
 - CI parity with the exact public package gates;
 - user-facing install documentation that matches the proven artifact and support boundary.
 
-Before removing `"private": true`, the release-preparation task must record npm ownership, final version/tag/release notes, approved publish path, package metadata/packlist review, retained SBOM plus `SHA256SUMS` posture, npm provenance preference, signing defer-or-implement decision, and a post-publish public install/CLI smoke/uninstall proof plan.
+Before publication, the release-preparation task must record npm ownership or approved rename, final version/tag/release notes, approved publish path, package metadata/packlist review, retained SBOM plus `SHA256SUMS` posture, npm provenance preference, signing defer-or-implement decision, and a post-publish public install/CLI smoke/uninstall proof plan.
 
 ## Forbidden Claims
 

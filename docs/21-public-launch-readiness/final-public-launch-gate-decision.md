@@ -9,7 +9,7 @@ Previous local evidence baseline state: tracked docs/evidence baseline with `pnp
 Accepted local RC artifact source baseline: `c52ad7f97f56a2dd155562af303b176db6ee6db5`
 Previous reviewed final public-launch baseline commit: `c03c9ceb3141d4354026190bab79e68262508b75`
 Package version: `0.1.0-rc.1`
-Package privacy: `private: true`
+Package npm publication state: `not published`; `private: true` removed for release preparation
 Decision date: `2026-04-29`; local evidence rerun date: `2026-04-30`; repository public-preview verification date: `2026-04-30`
 Decision owner: `TASK-OSS-LAUNCH-06 final gate worker`; local evidence rerun owner: `2026-04-30-stage19-local-release-evidence-worker`; public-preview docs owner: `2026-04-30-public-preview-status-docs-worker`
 Public repository accessibility evidence: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67` on 2026-04-29.
@@ -23,9 +23,9 @@ Current remote state evidence: GitHub API returned `private: false` and `visibil
 
 The repository may continue bounded local checkout and local package-readiness work. The selected launch shape remains CLI/package-first, but public npm publication, public package-install claims, and full OSS v0.1 release claims require the blockers below to be replaced by durable evidence and a later explicit approval decision.
 
-This decision does not approve public npm publication, public registry installation, package namespace ownership, hosted or managed deployment, SaaS operation, general availability, production readiness, completed external beta, public provenance, retained SBOM publication, signed artifacts, release tags, pushed commits, GitHub releases, or any change from `private: true`.
+This decision does not approve public npm publication, public registry installation, package namespace ownership, hosted or managed deployment, SaaS operation, general availability, production readiness, completed external beta, public provenance, retained SBOM publication, signed artifacts, release tags, pushed commits, or GitHub releases.
 
-`package.json` `"private": true` is an npm/package-publication guard. It does not mean the GitHub repository is private. It must remain in place until the explicit removal gate below is closed.
+The `package.json` `"private": true` guard has been removed only as release preparation for `0.1.0-rc.1`. It does not mean the package is published, owned in npm, installable from the public registry, or approved for OSS v0.1 release.
 
 The remote HEAD check proves the recorded public GitHub main/HEAD state at the time it was run. It does not approve npm/package launch, include untracked local `release-artifacts/`, or replace package, beta, supply-chain, registry, and publication evidence.
 
@@ -36,7 +36,7 @@ The remote HEAD check proves the recorded public GitHub main/HEAD state at the t
 | Repository and local CLI readiness | Historical local-scope release evidence exists for commit `c3ad3eafca28f4a602a6e44d1861054aabc96a03`. The accepted 2026-04-30 local evidence baseline is commit `4085d647d03098ade18a3d1412333a08e55c8156`; `pnpm release-candidate:check` passes locally. Current public repository baseline is `3ddcb5e70a25969b492108c0cb33e695b87137ed`. | Supports `repository-public-preview` and bounded local checkout/package-readiness work only; does not approve registry publication or public install claims. |
 | Local RC artifact evidence | [Local RC Artifact Evidence - 2026-04-30](./local-rc-artifact-evidence-2026-04-30.md) records local-only tarball, SPDX SBOM, and SHA256SUMS evidence for source baseline `c52ad7f97f56a2dd155562af303b176db6ee6db5`, with artifact hashes retained under local `release-artifacts/`. | Supports local artifact inspection only; does not prove public registry publication, public artifact attachment, provenance, signing, or public install. |
 | Public GitHub repository accessibility | GitHub API reported `private: false`, `visibility: public`; `git ls-remote origin HEAD refs/heads/main` returned `3ddcb5e70a25969b492108c0cb33e695b87137ed` for both remote `HEAD` and `refs/heads/main` on 2026-04-30. | Proves `repository-public-preview`; untracked local `release-artifacts/` are still not public release evidence. |
-| Package metadata and publication state | `package.json` has repository, issue-routing, homepage, and discovery metadata, but remains `private: true` with version `0.1.0-rc.1`. | `private: true` blocks public npm publication and public registry install claims; it is not a GitHub repository visibility flag. |
+| Package metadata and publication state | `package.json` has repository, issue-routing, homepage, discovery metadata, and version `0.1.0-rc.1`; `private: true` is removed for release preparation. | The package is not published, npm ownership is not proven locally, and public registry install claims remain blocked. |
 | Package identity and registry | [Package Identity And Registry](./package-identity-and-registry.md) records no public namespace ownership proof, no approved `npm publish`, and no public registry install path. | Blocks package/public registry launch approval. |
 | Local tarball distribution proof | [Stage 11 Distribution Proof](./distribution-proof.md) records controlled local `.tgz` install/uninstall proof, optional explicit two-tarball upgrade/rollback proof, and local SBOM validation. | Allows local proof claims only; does not prove public registry or retained release artifacts. |
 | Supply chain | [Supply Chain Attestation](./supply-chain-attestation.md) records local SBOM validation but no retained canonical SBOM, no npm provenance, no signing, and no artifact hash manifest. | Blocks public provenance, signing, retained SBOM, and public artifact integrity claims. |
@@ -49,28 +49,30 @@ The remote HEAD check proves the recorded public GitHub main/HEAD state at the t
 
 ### Package/Public Registry Evidence
 
-- `package.json` still has `private: true`.
-- `package.json` version is the private release-candidate version `0.1.0-rc.1`; no final public version approval is recorded.
-- Public package routing and discovery metadata is present, but publication remains blocked by `private: true`, lack of final public version approval, and missing registry proof.
+- `package.json` no longer has `private: true`; this is release preparation only.
+- `package.json` version is the release-candidate version `0.1.0-rc.1`; intended eventual tag is `v0.1.0-rc.1`, but no tag has been created or approved.
+- Public package routing and discovery metadata is present, but publication remains blocked by lack of npm ownership proof, lack of final tag/release approval, and missing registry proof.
 - No npm namespace or package ownership proof is recorded.
 - No approved `npm publish`, public package page, or equivalent public registry proof is recorded.
 - No public registry install, upgrade, uninstall, or rollback proof is recorded.
 
-### `private: true` Removal Gate
+### Publication Approval Gate
 
-Do not remove `"private": true` until a later explicit release-preparation decision records:
+The `"private": true` removal gate is recorded for release preparation only:
 
-- npm package name and ownership proof for `dennett-agent-orchestrator`, or an approved package rename;
-- final prerelease or release version approval;
-- exact source commit, tag, and release notes approval;
-- configured or explicitly approved publication path, preferably npm Trusted Publisher/OIDC rather than a long-lived `NPM_TOKEN`;
-- package metadata, `bin`, `files`, `exports`, README, and packlist review;
-- minimal supply-chain posture: retained SBOM plus `SHA256SUMS`, npm provenance preferred, and signing either explicitly deferred or implemented;
-- post-publish public install, CLI smoke, uninstall, and later upgrade/rollback proof plan.
+- version `0.1.0-rc.1`;
+- intended eventual tag `v0.1.0-rc.1`, not created;
+- npm registry lookup `E404`, meaning no visible public package was found but ownership is not proven;
+- local npm auth `ENEEDAUTH`, meaning this machine is not logged in for npm publication;
+- metadata/packlist review handled by package checks;
+- retained SBOM plus `SHA256SUMS` posture for the future release path, npm provenance preferred through Trusted Publisher/OIDC, and package signing deferred unless a later release decision implements it;
+- post-publish public install, CLI smoke, uninstall, and later upgrade/rollback proof plan remains required.
+
+Actual publication still requires npm ownership or approved rename, final commit/tag/release notes approval, configured or approved publish path, GitHub `npm-production` environment if the workflow path is used, tag creation approval, publish approval, public install proof, and public artifact evidence.
 
 ### Current Local Candidate Gate
 
-- The accepted 2026-04-30 local evidence baseline records current commit `4085d647d03098ade18a3d1412333a08e55c8156`, package `0.1.0-rc.1`, and `private: true`.
+- The accepted 2026-04-30 local evidence baseline records commit `4085d647d03098ade18a3d1412333a08e55c8156` before this release-prep patch; the current package remains version `0.1.0-rc.1` and is still unpublished.
 - `pnpm public-release-foundation:check` passed while still reporting OSS v0.1 public launch `BLOCKED`.
 - `pnpm packlist:check` passed and validated 94 package files.
 - `pnpm release-candidate:check` passed locally.

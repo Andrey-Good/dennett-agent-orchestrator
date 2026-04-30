@@ -1,6 +1,6 @@
 # Release Settings User Checklist
 
-Status: user/admin intervention checklist for the later OSS CLI/package publication gate. This document records external settings that cannot be completed by repository code alone. It is not release approval, publication proof, tag creation approval, or permission to change `package.json` from `private: true`.
+Status: user/admin intervention checklist for the later OSS CLI/package publication gate. This document records external settings that cannot be completed by repository code alone. It is not release approval, publication proof, tag creation approval, or permission to publish to npm.
 
 Related documents:
 
@@ -19,7 +19,7 @@ The repository currently prepares the following local and CI-side controls:
 - The publish job requests `id-token: write` and uses `npm publish <validated-tarball> --access public`.
 - Publish mode requires exact typed confirmations for package name and version.
 - Publish mode requires the selected Git ref to be tag `v${package.json.version}`.
-- Publish mode fails while `package.json` has `private: true`.
+- Publish mode still requires the package to be prepared without `private: true`, a matching version tag, exact typed confirmations, trusted publishing, and any required environment approval.
 - Release-candidate CI retains the candidate tarball, SPDX SBOM JSON, `npm-pack.json`, and `SHA256SUMS`.
 
 These controls do not prove npm package ownership, npm Trusted Publisher configuration, GitHub environment approval rules, tag protection, public publication, npm provenance, or launch approval.
@@ -152,7 +152,7 @@ User/admin action:
 
 - Approve the package version, release notes, changelog entry, support boundary, and rollback owner.
 - Approve the exact commit that may be released.
-- Approve the change from `private: true` only in the same release-preparation scope that records package ownership, final version/tag/release notes, publish path, package metadata/packlist review, minimal supply-chain posture, beta status, and public install documentation/proof plan.
+- Approve any actual npm publication only in the same release-preparation scope that records package ownership, final version/tag/release notes, publish path, package metadata/packlist review, minimal supply-chain posture, beta status, and public install documentation/proof plan.
 - Approve creation of the matching release tag `v<version>`.
 - Approve manual `workflow_dispatch` publish mode only after the release candidate and external settings evidence are attached to the release decision.
 - Do not approve hosted, managed, SaaS, production, installer, container, or signed-binary claims unless separate evidence exists.

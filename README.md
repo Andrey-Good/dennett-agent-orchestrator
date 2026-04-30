@@ -6,7 +6,7 @@
 
 This project is pre-release. Use it from a source checkout.
 
-- The package is currently marked `private: true` and is not published to the npm registry.
+- The package is not published to the npm registry yet; use the source-checkout workflow below.
 - The CLI is the main supported entrypoint.
 - JavaScript internals are not a stable public API.
 - Some CLI commands are marked experimental in `--help`; treat those surfaces as subject to change.
@@ -128,7 +128,7 @@ The project is licensed under [Apache-2.0](./LICENSE).
 
 Проект находится в pre-release состоянии. Используйте его из исходного checkout.
 
-- Пакет сейчас имеет `private: true` и не опубликован в npm registry.
+- Пакет пока не опубликован в npm registry; используйте source-checkout workflow ниже.
 - Основная поддерживаемая точка входа - CLI.
 - Внутренние JavaScript-модули не являются стабильным публичным API.
 - Команды, помеченные в `--help` как experimental, могут меняться.

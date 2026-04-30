@@ -48,7 +48,7 @@ Artifacts are retained under `release-artifacts/`.
 
 - Local-only evidence; no public release was created.
 - Unsigned artifacts; no package signing was performed.
-- No npm provenance exists because no npm publish command was run and `package.json` remains `private: true`.
+- No npm provenance exists because no npm publish command was run and the retained artifacts are local-only.
 - No public registry install proof exists.
 - No tag, push, GitHub release, external registry upload, or publication operation was performed.
 - This evidence does not prove reproducible builds, cross-platform installation, public package availability, or general availability readiness.

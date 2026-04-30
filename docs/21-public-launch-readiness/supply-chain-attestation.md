@@ -61,7 +61,7 @@ Current status:
 
 | Control | Status | Reason |
 | --- | --- | --- |
-| npm provenance | Deferred. | Package publication is blocked by `private: true`, and Stage 11 must not run `npm publish`. |
+| npm provenance | Deferred. | Package publication has not been approved or run, and Stage 11 must not run `npm publish`. |
 | Package signing | Deferred. | No local signing identity or publication signing infrastructure is configured. |
 | GitHub artifact attestation | Conditional release-candidate control. | `.github/workflows/release.yml` requests tarball and SBOM attestations only when the repository is public and the release-candidate workflow runs. |
 | Signed SBOM | Deferred. | Release-candidate CI can retain and attest an SBOM, but no canonical signed SBOM is attached to an approved public release yet. |

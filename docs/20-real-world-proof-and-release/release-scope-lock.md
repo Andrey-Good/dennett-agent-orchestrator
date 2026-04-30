@@ -29,7 +29,7 @@ On 2026-04-29, `git ls-remote https://github.com/Andrey-Good/dennett-agent-orche
 
 On 2026-04-30, a later repository public-preview check confirmed that GitHub API reported `private: false` and `visibility: public`, and `git ls-remote origin HEAD refs/heads/main` returned `3ddcb5e70a25969b492108c0cb33e695b87137ed` for both remote `HEAD` and `refs/heads/main`, matching local `HEAD` at that time. This supports `repository-public-preview` only. It does not prove npm/public package publication, public registry install, retained public artifact evidence, or final OSS v0.1 release approval.
 
-`package.json` `"private": true` is an npm publication guard and does not describe GitHub repository visibility. It remains required until the package-publication removal gate is closed.
+The removed `package.json` `"private": true` field was an npm publication guard and does not describe GitHub repository visibility. Its removal is release preparation only; package-publication claims remain blocked until publication approval and evidence gates close.
 
 ## Included Capabilities
 

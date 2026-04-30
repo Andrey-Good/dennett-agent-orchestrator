@@ -35,14 +35,14 @@ This section governs the OSS v0.1 public-launch readiness path after the bounded
 - Stage 1 locks baseline gaps and forbidden claims.
 - Stage 2 selects the non-hosted OSS v0.1 CLI/package-first public-launch target and keeps hosted/managed launch deferred.
 - Stage 3 records security, privacy, legal, and trust boundaries for CLI/package-first launch.
-- Stage 4 records the private package and supply-chain foundation.
+- Stage 4 records the release-prep package and supply-chain foundation.
 - Stage 5 records the limited Runtime/App Server certification subset.
 - Stage 6 records the limited local Mem0-first memory productization subset.
 - Stage 7 records the bounded CLI/package interaction productization subset.
 - Stage 8 records the bounded local CLI managed-subagent operator subset.
 - Stage 9 records the bounded audited draft-first Builder 2.0 authoring subset.
 - Stage 10 records the bounded stable CLI/API contract freeze.
-- Stage 11 records local tarball distribution proof, controlled install/uninstall proof, upgrade/rollback harness boundaries, private package identity, and local SBOM validation.
+- Stage 11 records local tarball distribution proof, controlled install/uninstall proof, upgrade/rollback harness boundaries, release-prep package identity, and local SBOM validation.
 - Stage 12 records the canonical hosted/managed deployment deferral lock and gap matrix.
 - Stage 13 records the local-only support bundle, redacted runtime diagnostics, support/security routing, support matrix, telemetry boundary, and local incident runbooks.
 - Stage 14 records public docs, onboarding, examples, and claim-review rules in [Public Docs, Onboarding, And Claims](./public-docs-onboarding-and-claims.md).

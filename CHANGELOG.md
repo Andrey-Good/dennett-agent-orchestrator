@@ -12,8 +12,8 @@ This project has not approved a public launch, public npm publication, hosted se
 
 ## 0.1.0-rc.1
 
-- Prepared private release-candidate package metadata while keeping public launch and npm publication blocked.
-- Documented local package-readiness evidence as private/local proof only, not public registry availability or final version approval.
+- Prepared release-candidate package metadata for later npm publication while keeping public launch and npm publication blocked by evidence and approval gates.
+- Documented local package-readiness evidence as local-only proof, not public registry availability or final version approval.
 
 ## 0.0.0
 

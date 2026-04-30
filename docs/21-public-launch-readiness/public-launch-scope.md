@@ -35,11 +35,11 @@ This target now has two explicitly separated statuses:
 
 This means the first public shape is an open-source local product path: a public repository preview now, plus an optional public CLI/package distribution later once package gates pass. Repository checkout support remains available for contributors and early technical users.
 
-The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted, managed, commercial, SLA-backed, or cloud service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Stage 12 owns the canonical hosted/managed deployment deferral lock in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md). Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
+The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted, managed, commercial, SLA-backed, or cloud service. Stage 4 owns the release-prep package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Stage 12 owns the canonical hosted/managed deployment deferral lock in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md). Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
 
 As of 2026-04-29, the GitHub repository URL was publicly reachable: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. As of the current 2026-04-30 public-preview verification, GitHub API reported `private: false` and `visibility: public`, and `git ls-remote origin HEAD refs/heads/main` returned `3ddcb5e70a25969b492108c0cb33e695b87137ed` for both remote `HEAD` and `refs/heads/main`, matching local `HEAD` at that time. Earlier 2026-04-30 local evidence records documentation/evidence baseline `4085d647d03098ade18a3d1412333a08e55c8156`, passing local `pnpm release-candidate:check`, and local-only untracked `release-artifacts/`. That evidence supports repository preview and local readiness only; it does not approve npm/package release or prove public artifact publication.
 
-`package.json` `"private": true` is an npm publication guard, not GitHub repository visibility. It must stay `true` until [Package Identity And Registry](./package-identity-and-registry.md) and [Release Settings User Checklist](./release-settings-user-checklist.md) close the explicit removal gate.
+The removed `package.json` `"private": true` field was an npm publication guard, not GitHub repository visibility. Removing it prepares the package for a later approved publication path, but [Package Identity And Registry](./package-identity-and-registry.md) and [Release Settings User Checklist](./release-settings-user-checklist.md) still block publication until registry, ownership, approval, and proof gates close.
 
 The OSS v0.1 scope is intentionally non-hosted. Hosted/managed gaps are launch blockers only for hosted or commercial claims; they are not implementation prerequisites for an OSS local CLI/package launch when the public docs explicitly preserve the non-hosted boundary.
 
@@ -130,10 +130,10 @@ Do not claim:
 The OSS v0.1 CLI/package-first public launch remains blocked until all required OSS repository/package gates pass:
 
 - Stage 3 security, privacy, legal, secret-handling, license/package, disclosure, and data-retention decisions are complete.
-- Stage 4 records the private package and supply-chain foundation.
+- Stage 4 records the release-prep package and supply-chain foundation.
 - Stage 11 records controlled local `.tgz` install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration.
 - A later release-approval task records registry ownership, public publication controls, retained evidence, signing/provenance decisions, and public install proof.
-- A later release-preparation task explicitly approves removing `"private": true` only after npm ownership, final version/tag/release notes, publish path, package metadata/packlist, minimal supply-chain posture, and post-publish proof plan are ready.
+- The release-preparation task records removal of `"private": true` for `0.1.0-rc.1`, intended eventual tag `v0.1.0-rc.1`, npm registry lookup `E404`, local npm auth `ENEEDAUTH`, package metadata/packlist review, minimal supply-chain posture, and post-publish proof plan; actual publication still requires owner/admin approval and evidence.
 - The public repository/package decision is tied to the then-current commit, package metadata, artifact hashes, retained evidence, and explicit claim-review result.
 - README and user-facing docs use the same OSS v0.1 non-hosted scope language as this document.
 

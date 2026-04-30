@@ -20,7 +20,7 @@ node .\dist\src\interfaces\cli.js --help
 node .\dist\src\interfaces\cli.js support-bundle
 ```
 
-The package is currently private. Do not document or depend on public npm install, public registry install, `npx`, hosted deployment, or production service behavior unless a later gate document approves and proves that scope.
+The package is not published to npm yet. Do not document or depend on public npm install, public registry install, `npx`, hosted deployment, or production service behavior unless a later gate document approves and proves that scope.
 
 ## Validation Commands
 

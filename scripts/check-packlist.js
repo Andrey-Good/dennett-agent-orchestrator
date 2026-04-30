@@ -105,13 +105,13 @@ function isNodeFloorSupported(range) {
 export function validatePackageMetadata(packageJson) {
 	const errors = []
 
-	if (packageJson.private !== true) {
-		errors.push('package.json must remain private.')
+	if (packageJson.private === true) {
+		errors.push('package.json must not set private: true for the release-prep candidate.')
 	}
 
 	if (packageJson.version !== EXPECTED_PACKAGE_VERSION) {
 		errors.push(
-			`package.json version must be ${EXPECTED_PACKAGE_VERSION} for the prepared private release candidate.`,
+			`package.json version must be ${EXPECTED_PACKAGE_VERSION} for the prepared release candidate.`,
 		)
 	}
 

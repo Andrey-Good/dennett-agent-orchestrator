@@ -133,7 +133,7 @@ Compatibility rules for frozen JSON outputs:
 - sensitive payload redaction fields in `run-status` are part of the stable privacy contract;
 - schema artifacts exported from the package follow the schema policy below, not the CLI stdout policy.
 
-The current package version is `0.1.0-rc.1` and the package remains private. If publication or semver policy changes later, this document must be updated before public compatibility claims rely on a versioned artifact.
+The current package version is `0.1.0-rc.1` and the package is not published to npm. If publication or semver policy changes later, this document must be updated before public compatibility claims rely on a versioned artifact.
 
 ## Deprecation And Removal Policy
 

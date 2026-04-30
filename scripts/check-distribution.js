@@ -340,7 +340,7 @@ export function validateSbomDocument(sbomDocument) {
 
 export function getSupplyChainDeferrals() {
 	return [
-		'npm provenance is deferred because package publication is blocked by private: true and no npm publish command may run in this stage.',
+		'npm provenance is deferred because package publication is not approved and no npm publish command may run in this stage.',
 		'Package signing is deferred because no local signing identity or publication signing infrastructure is configured in this stage.',
 	]
 }

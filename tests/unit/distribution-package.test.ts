@@ -100,15 +100,15 @@ async function loadPublicReleaseFoundationValidator(): Promise<PublicReleaseFoun
 }
 
 describe('package distribution metadata', () => {
-	it('keeps the package private with an explicit prepared release-candidate version', async () => {
+	it('keeps an explicit prepared release-candidate version without the npm private guard', async () => {
 		const packageJson = await readPackageJson()
 
-		expect(packageJson.private).toBe(true)
+		expect(packageJson.private).not.toBe(true)
 		expect(packageJson.version).toBe('0.1.0-rc.1')
 		expect(packageJson.engines?.node).toBe('>=22.13.0')
 	})
 
-	it('sets public-ready package metadata while retaining private publication blocking', async () => {
+	it('sets public-ready package metadata while retaining publication evidence blocking', async () => {
 		const packageJson = await readPackageJson()
 
 		expect(packageJson.description).toBe('Codex-first orchestrator for portable agent runs.')
@@ -137,7 +137,7 @@ describe('package distribution metadata', () => {
 		expect(packageJson.files).toEqual(['dist/src/**', 'contracts/json-schema/*.schema.json'])
 	})
 
-	it('keeps public-readiness baseline docs aligned with the private release candidate version', async () => {
+	it('keeps public-readiness baseline docs aligned with the release candidate version', async () => {
 		const packageJson = await readPackageJson()
 		const baselineGapDoc = await readFile(
 			'docs/21-public-launch-readiness/baseline-gap-and-forbidden-claims.md',
@@ -148,9 +148,9 @@ describe('package distribution metadata', () => {
 			'utf8',
 		)
 
-		expect(packageJson.private).toBe(true)
+		expect(packageJson.private).not.toBe(true)
 		expect(baselineGapDoc).toContain(
-			'version is the prepared private release candidate `0.1.0-rc.1`',
+			'version is the prepared release candidate `0.1.0-rc.1`',
 		)
 		expect(baselineGapDoc).not.toContain('version is `0.0.0`')
 		expect(finalGateDoc).toContain(`Package version: \`${packageJson.version}\``)
@@ -221,6 +221,7 @@ describe('package distribution metadata', () => {
 		expect(
 			validatePackageMetadata({
 				...packageJson,
+				private: true,
 				version: '0.0.0',
 				bugs: { url: 'https://example.invalid/issues' },
 				homepage: 'https://example.invalid',
@@ -228,7 +229,8 @@ describe('package distribution metadata', () => {
 				scripts: { ...(packageJson.scripts ?? {}), dennett: 'node dist/src/interfaces/cli.js' },
 			}),
 		).toEqual([
-			'package.json version must be 0.1.0-rc.1 for the prepared private release candidate.',
+			'package.json must not set private: true for the release-prep candidate.',
+			'package.json version must be 0.1.0-rc.1 for the prepared release candidate.',
 			'package.json bugs must be {"url":"https://github.com/Andrey-Good/dennett-agent-orchestrator/issues"} for public issue routing metadata.',
 			'package.json homepage must be https://github.com/Andrey-Good/dennett-agent-orchestrator#readme.',
 			'package.json keywords must be ["agent-orchestration","agent-runtime","codex","cli","workflow"] for public package discovery metadata.',
@@ -369,12 +371,12 @@ describe('package distribution metadata', () => {
 			'SBOM output must include package entries.',
 		])
 		expect(getSupplyChainDeferrals()).toEqual([
-			'npm provenance is deferred because package publication is blocked by private: true and no npm publish command may run in this stage.',
+			'npm provenance is deferred because package publication is not approved and no npm publish command may run in this stage.',
 			'Package signing is deferred because no local signing identity or publication signing infrastructure is configured in this stage.',
 		])
 	})
 
-	it('rejects public launch claims while the package remains private', async () => {
+	it('rejects public launch claims while OSS v0.1 is not approved', async () => {
 		const { validatePublicClaims } = await loadPublicReleaseFoundationValidator()
 
 		expect(

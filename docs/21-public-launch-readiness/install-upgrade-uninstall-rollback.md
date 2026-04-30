@@ -19,7 +19,7 @@ Required tools:
 - `pnpm@10.33.0` for repository scripts;
 - npm for local package packing, temporary consumer install, uninstall, and SBOM commands.
 
-The package is still private even though `package.json` uses the prepared `0.1.0-rc.1` release-candidate version. There is no supported `npm install dennett-agent-orchestrator` public-registry command.
+The package uses the prepared `0.1.0-rc.1` release-candidate version, but it has not been published to npm yet. There is no supported `npm install dennett-agent-orchestrator` public-registry command.
 
 ## Public Registry Mode
 

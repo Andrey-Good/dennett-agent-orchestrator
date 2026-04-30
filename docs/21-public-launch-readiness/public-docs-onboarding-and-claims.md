@@ -26,7 +26,7 @@ Public-facing docs must treat [Final Public Launch Gate Decision](./final-public
 
 Public docs may say the GitHub repository is public when tied to the dated 2026-04-30 evidence: GitHub API reported `private: false`, `visibility: public`, and `git ls-remote origin HEAD refs/heads/main` returned `3ddcb5e70a25969b492108c0cb33e695b87137ed` for both remote `HEAD` and `refs/heads/main`, matching local `HEAD` at that time. Current local RC evidence may be described only as local evidence for documentation/evidence baseline `4085d647d03098ade18a3d1412333a08e55c8156`, source baseline `c52ad7f97f56a2dd155562af303b176db6ee6db5`, passing local `pnpm release-candidate:check`, and untracked local `release-artifacts/`; that wording must not claim public artifact publication or public registry install unless a later evidence row proves it.
 
-`package.json` `"private": true` must be described as an npm/package-publication guard, not as GitHub repository privacy.
+The removed `package.json` `"private": true` field may be described only as a completed release-prep step. It must not be described as npm publication, public registry availability, or public install support.
 
 Until that document is replaced by a later evidence-backed approval decision, public docs may describe only:
 
