@@ -19,7 +19,7 @@ Related documents:
 
 ## Stage 4 Decision
 
-The selected launch shape remains CLI/package-first, but the package must stay private until a later explicit release-approval task changes that state.
+The selected launch shape remains CLI/package-first. `repository-public-preview` is achieved, but the npm package must stay private until a later explicit release-approval task changes that state.
 
 Stage 4 establishes deterministic local checks and unambiguous private package metadata. It must not publish to npm, set `private` to `false`, create tags, push commits, claim public package installation proof, or imply public distribution readiness. Local `.tgz` install/uninstall proof, upgrade/rollback harness boundaries, and local SBOM validation are owned by [Stage 11 Distribution Proof](./distribution-proof.md).
 
@@ -40,6 +40,8 @@ The current foundation is:
 - `.github/workflows/release.yml` runs release-candidate validation from `v*` tags or manual dispatch, retains a candidate npm tarball, retained SPDX SBOM JSON, npm pack metadata, and a SHA-256 manifest, and only attempts npm publication from an explicitly confirmed manual dispatch.
 
 These controls are private package foundation checks plus local artifact proof hooks. They do not prove that the package is published, installable from a public registry, signed, reproducible across platforms, or safe for general availability.
+
+`package.json` `"private": true` is an npm publication guard, not GitHub repository visibility. The GitHub repository can be public while package publication remains intentionally blocked.
 
 ## Release Candidate Workflow
 
@@ -73,7 +75,7 @@ Before the publish gate may be used, maintainers must complete and record eviden
 - configure the GitHub `npm-production` environment with required reviewers and any branch/tag deployment restrictions;
 - protect release tags or otherwise restrict who can create `v*` tags;
 - ensure the selected GitHub-hosted runner provides Node `>=22.14.0` and npm CLI `>=11.5.1`;
-- make the repository public before relying on public npm provenance or public GitHub artifact attestations;
+- keep the repository public before relying on public npm provenance or public GitHub artifact attestations; this repository-visibility prerequisite is currently satisfied by the 2026-04-30 public-preview evidence;
 - define release-note, changelog, rollback, and post-publish verification ownership.
 
 The exact user/admin actions and close-out evidence for these external settings are tracked in [Release Settings User Checklist](./release-settings-user-checklist.md). Those actions are not satisfied by repository code changes alone.
@@ -106,6 +108,8 @@ The CLI/package-first public launch remains blocked until later stages produce e
 - OS-specific install and CLI smoke proof for every claimed supported OS;
 - CI parity with the exact public package gates;
 - user-facing install documentation that matches the proven artifact and support boundary.
+
+Before removing `"private": true`, the release-preparation task must record npm ownership, final version/tag/release notes, approved publish path, package metadata/packlist review, retained SBOM plus `SHA256SUMS` posture, npm provenance preference, signing defer-or-implement decision, and a post-publish public install/CLI smoke/uninstall proof plan.
 
 ## Forbidden Claims
 

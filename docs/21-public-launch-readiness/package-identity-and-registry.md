@@ -17,7 +17,7 @@ Current package metadata:
 | --- | --- | --- |
 | `name` | `dennett-agent-orchestrator` | Local package identity used by the proof scripts. |
 | `version` | `0.1.0-rc.1` | Prepared private release-candidate metadata; not a public prerelease artifact, public release version claim, or npm publication proof. |
-| `private` | `true` | Publication is blocked by metadata and policy. |
+| `private` | `true` | npm publication is blocked by metadata and policy; this does not mean the GitHub repository is private. |
 | `description` | `Codex-first orchestrator for portable agent runs.` | Present. |
 | `license` | `Apache-2.0` | Matches root `LICENSE`. |
 | `repository` | `https://github.com/Andrey-Good/dennett-agent-orchestrator` | Verified repository metadata only. |
@@ -42,6 +42,7 @@ Current truthful state:
 - the package name is used for local tarball proof only;
 - an npm `E404` or name-lookup miss means no visible public package was found at the time of checking; it does not prove name ownership, namespace reservation, publication rights, or maintainer access;
 - the package remains private;
+- `private: true` is an npm/package-publication guard, not repository visibility; the GitHub repository can be public while npm publication remains blocked;
 - no `npm publish` has been run or approved;
 - no npm package page is claimed;
 - no public registry install path is claimed;
@@ -50,19 +51,19 @@ Current truthful state:
 
 ## Conditions Before `private: false`
 
-Do not set `private` to `false` unless a later explicit release-approval task records at least:
+Do not set `private` to `false` unless a later explicit release-preparation or release-approval task records all of the following:
 
-- registry or namespace ownership proof for the chosen final package name;
-- final package metadata review approval, including confirmation that `bugs`, `homepage`, and `keywords` remain correct for the chosen public release identity;
-- versioning policy and changelog/release-note requirements;
-- publication account, token, 2FA, automation, and access-control policy;
-- clean public-registry install proof or an approved equivalent dry-run proof;
-- OS-specific install and CLI smoke evidence for every claimed supported OS;
-- upgrade, rollback, and uninstall boundaries for public artifacts;
-- SBOM retention and attachment policy;
-- provenance and signing policy, or an explicit recorded decision for unsigned/unattested artifacts;
+- npm package name and ownership proof for `dennett-agent-orchestrator`, or an approved rename before publication;
+- final prerelease or release version approval;
+- exact source commit, release tag, and release notes approval;
+- publication path configured or explicitly approved, preferably npm Trusted Publisher/OIDC rather than a long-lived `NPM_TOKEN`;
+- final package metadata review approval, including `name`, `version`, `bin`, `files`, `exports`, `repository`, `bugs`, `homepage`, `keywords`, README, and packlist;
+- minimal supply-chain posture: retained SBOM plus `SHA256SUMS`, npm provenance preferred, and signing either explicitly deferred or implemented;
+- post-publish public install, CLI smoke, uninstall, and later upgrade/rollback proof plan;
 - security disclosure and support policy alignment;
 - approval to create any tag, push, GitHub release, or public registry artifact.
+
+Public-registry install proof cannot fully close before the first approved publication. Before removing `private: true`, the project must at least have the proof plan, ownership, version, publish path, metadata/packlist review, and supply-chain posture ready. After publication, the proof must be executed before public install claims expand.
 
 ## Forbidden Claims
 

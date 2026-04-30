@@ -24,6 +24,8 @@ The repository currently prepares the following local and CI-side controls:
 
 These controls do not prove npm package ownership, npm Trusted Publisher configuration, GitHub environment approval rules, tag protection, public publication, npm provenance, or launch approval.
 
+The GitHub repository is public as of the 2026-04-30 verification recorded in [Final Public Launch Gate Decision](./final-public-launch-gate-decision.md). That closes the repository-visibility prerequisite for `repository-public-preview`, but it does not close any npm/package-publication prerequisite below.
+
 ## User/Admin Actions Required
 
 ### 1. npm Authentication And Package Ownership
@@ -150,7 +152,7 @@ User/admin action:
 
 - Approve the package version, release notes, changelog entry, support boundary, and rollback owner.
 - Approve the exact commit that may be released.
-- Approve the change from `private: true` only in the same release-preparation scope that records package ownership, supply-chain posture, beta status, and public install documentation.
+- Approve the change from `private: true` only in the same release-preparation scope that records package ownership, final version/tag/release notes, publish path, package metadata/packlist review, minimal supply-chain posture, beta status, and public install documentation/proof plan.
 - Approve creation of the matching release tag `v<version>`.
 - Approve manual `workflow_dispatch` publish mode only after the release candidate and external settings evidence are attached to the release decision.
 - Do not approve hosted, managed, SaaS, production, installer, container, or signed-binary claims unless separate evidence exists.
@@ -181,6 +183,18 @@ Expected close condition:
 | GitHub environment approval | GitHub repository admin | `npm-production` environment evidence with required reviewers and release tag restriction. |
 | Protected release tags | GitHub repository admin | Active tag ruleset evidence for the release tag pattern and restricted mutation. |
 | Release approval | release owner/admin | Later final gate document approving exact version, commit, tag, publish run, and public claims. |
+
+## Minimal Operator Path
+
+Use the existing `.github/workflows/release.yml` release workflow when publication becomes appropriate. Do not create a second release process unless a later release decision explicitly replaces this workflow.
+
+The intended low-maintenance posture for the first package release is:
+
+- keep npm Trusted Publisher/OIDC as the preferred publish path;
+- retain release tarball, SPDX SBOM, and `SHA256SUMS`;
+- prefer npm provenance through trusted publishing;
+- either defer signing explicitly or implement it in a separate approved release-hardening task;
+- avoid long-lived `NPM_TOKEN`, custom signing infrastructure, and duplicate publication scripts for preview.
 
 ## Non-Goals
 

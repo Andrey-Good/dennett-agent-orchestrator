@@ -27,7 +27,9 @@ This `release` is bounded and does not prove hosted/managed deployment, npm/publ
 
 On 2026-04-29, `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`, which proves the GitHub repository URL was publicly reachable from the local environment at that time. This is repository visibility evidence only.
 
-On 2026-04-30, `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main`, matching `git rev-parse HEAD` at that time. Later local evidence records current documentation/evidence baseline `4085d647d03098ade18a3d1412333a08e55c8156` with `pnpm release-candidate:check` passing locally and local-only artifacts retained under untracked `release-artifacts/`. The remote-state evidence does not prove that later local commits or local artifacts are public release artifacts.
+On 2026-04-30, a later repository public-preview check confirmed that GitHub API reported `private: false` and `visibility: public`, and `git ls-remote origin HEAD refs/heads/main` returned `3ddcb5e70a25969b492108c0cb33e695b87137ed` for both remote `HEAD` and `refs/heads/main`, matching local `HEAD` at that time. This supports `repository-public-preview` only. It does not prove npm/public package publication, public registry install, retained public artifact evidence, or final OSS v0.1 release approval.
+
+`package.json` `"private": true` is an npm publication guard and does not describe GitHub repository visibility. It remains required until the package-publication removal gate is closed.
 
 ## Included Capabilities
 

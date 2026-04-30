@@ -28,11 +28,18 @@ The selected Part 1 public-launch target is:
 
 `cli-package-first-public-launch`
 
-This means the first public launch is an open-source v0.1 local product launch: a public repository plus an optional public CLI/package distribution once package gates pass. Repository checkout support remains available for contributors and early technical users.
+This target now has two explicitly separated statuses:
+
+- `repository-public-preview`: achieved as of 2026-04-30. The GitHub repository is public, and source-checkout onboarding may be shown to early technical users within the documented local checkout boundaries.
+- `oss-v0.1-release`: blocked. This stronger status requires package/npm publication gates, public install proof, retained public artifact evidence, supply-chain decisions, and final release approval.
+
+This means the first public shape is an open-source local product path: a public repository preview now, plus an optional public CLI/package distribution later once package gates pass. Repository checkout support remains available for contributors and early technical users.
 
 The launch target is selected because current evidence supports a local CLI/repository product shape and controlled local package proof better than it supports any hosted, managed, commercial, SLA-backed, or cloud service. Stage 4 owns the private package and supply-chain foundation. Stage 11 owns local `.tgz` distribution proof. Stage 12 owns the canonical hosted/managed deployment deferral lock in [Hosted And Managed Deployment Scope](./hosted-managed-deployment-scope.md). Public registry publication remains blocked until a later release-approval task records registry ownership, publication controls, retained evidence, and public install proof.
 
-As of 2026-04-29, the GitHub repository URL was publicly reachable: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. As of the recorded 2026-04-30 remote-state check, `git ls-remote origin HEAD refs/heads/main` returned `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main`, matching `git rev-parse HEAD` at that time. Later local evidence records current documentation/evidence baseline `4085d647d03098ade18a3d1412333a08e55c8156`, passing local `pnpm release-candidate:check`, and local-only untracked `release-artifacts/`. That evidence does not expand the launch target, approve public launch, or prove public artifact publication.
+As of 2026-04-29, the GitHub repository URL was publicly reachable: `git ls-remote https://github.com/Andrey-Good/dennett-agent-orchestrator HEAD` returned remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`. As of the current 2026-04-30 public-preview verification, GitHub API reported `private: false` and `visibility: public`, and `git ls-remote origin HEAD refs/heads/main` returned `3ddcb5e70a25969b492108c0cb33e695b87137ed` for both remote `HEAD` and `refs/heads/main`, matching local `HEAD` at that time. Earlier 2026-04-30 local evidence records documentation/evidence baseline `4085d647d03098ade18a3d1412333a08e55c8156`, passing local `pnpm release-candidate:check`, and local-only untracked `release-artifacts/`. That evidence supports repository preview and local readiness only; it does not approve npm/package release or prove public artifact publication.
+
+`package.json` `"private": true` is an npm publication guard, not GitHub repository visibility. It must stay `true` until [Package Identity And Registry](./package-identity-and-registry.md) and [Release Settings User Checklist](./release-settings-user-checklist.md) close the explicit removal gate.
 
 The OSS v0.1 scope is intentionally non-hosted. Hosted/managed gaps are launch blockers only for hosted or commercial claims; they are not implementation prerequisites for an OSS local CLI/package launch when the public docs explicitly preserve the non-hosted boundary.
 
@@ -56,8 +63,8 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 
 | Area | Stage 2 launch-scope status | Public-launch boundary |
 | --- | --- | --- |
-| Launch form | Selected target: OSS v0.1 CLI/package-first. | Not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen public repository/package artifact. |
-| Repository visibility | Public GitHub URL reachability locally verified on 2026-04-29 at remote HEAD `716f694819c1e84af8de2dd6de46d913001d1e67`; recorded 2026-04-30 remote-state check verified `1f27dce0005205b4ddb8621184cf1e0b441c0dd8` for both remote `HEAD` and `refs/heads/main`; current local RC evidence baseline is `4085d647d03098ade18a3d1412333a08e55c8156`. | Visibility, remote HEAD matching, and local-only RC artifacts are not launch approval. Local-only commits/artifacts require separate publication evidence before public release claims. |
+| Launch form | Selected target: OSS v0.1 CLI/package-first, split into `repository-public-preview` now and `oss-v0.1-release` later. | Repository public preview is achieved; npm/package release is not ready or published until security/legal, release-engineering, Stage 11 distribution proof, and later release-approval gates pass for the chosen package artifact. |
+| Repository visibility | GitHub API reported `private: false`, `visibility: public`; `git ls-remote origin HEAD refs/heads/main` returned `3ddcb5e70a25969b492108c0cb33e695b87137ed` for both remote `HEAD` and `refs/heads/main` on 2026-04-30. | Supports `repository-public-preview`; local-only `release-artifacts/` and package publication claims still require separate evidence. |
 | Repository checkout | Supported as contributor and local-user path by the bounded `local-cli-repository-readiness` evidence. | Users build from checkout with `pnpm build`; generated `dist` is not promised in a clean checkout. |
 | Package distribution | Local tarball proof exists; public registry publication is not proven. | Stage 11 proves controlled local `.tgz` install/uninstall, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration. It does not prove public npm publication, signing, provenance, retained SBOMs, or public registry install. |
 | Hosted/managed service | Deferred by Stage 12 and outside OSS v0.1 scope. | No hosted, managed, SaaS, uptime, multi-tenant, cloud deployment, hosted telemetry/audit, production load, hosted support operations, status page, SLA, or hosted rollback claim. These gaps block hosted/commercial claims, not the non-hosted OSS scope. |
@@ -87,14 +94,14 @@ Hosted or managed launch may enter scope only through a later scope decision tha
 | Managed subagent primitives | Limited/beta for the bounded local CLI operator surface. | Stage 8 supports `subagent-launch`, `subagent-list`, `subagent-show`, `subagent-wait`, `subagent-record-control`, and `subagent-close` only within the limits in [Managed Subagent Productization](./managed-subagent-productization.md). Launch is launch-and-wait only; control and cancellation are state-recorded, not live-delivered. |
 | Builder 2.0 authoring | Limited/beta for audited draft-first authoring only. | Stage 9 supports formal builder output wrapper validation, deterministic candidate audit, diagnostics outside Agent JSON, and draft-only persistence as documented in [Builder 2.0 Productization](./builder-2-0-productization.md). It does not prove full public authoring readiness, deploy, provider registration, live managed orchestration, or execution of every draft. |
 | Stable CLI/API compatibility | Frozen only for the bounded Stage 10 surface. | Only commands labeled `[stable]`, the `[stable/safety-protocol]` cleanup flow, exported JSON schema artifacts, and the no-stable-JS-API package boundary are stable under [Stable CLI/API Contract Freeze](./stable-cli-api-contract-freeze.md). Experimental commands remain unstable. |
-| External beta program | Not run. | Stage 16 is governed by [External Beta Readiness](./external-beta-readiness.md). Feature-level `Limited/beta` classifications above do not prove external beta completion, participant validation, or public-readiness approval. |
+| External beta program | Not run; deferred for repository public preview. | Stage 16 is governed by [External Beta Readiness](./external-beta-readiness.md). Feature-level `Limited/beta` classifications above do not prove external beta completion, participant validation, or full `oss-v0.1-release` approval. |
 | Containers, installers, signed binaries, hosted deployments | Deferred. | Each requires a separate artifact, proof, rollback/uninstall path, and security/release decision. |
 
 ## Public Claims Allowed After Required OSS Gates
 
 These claims are allowed only after the later Part 1 stages produce the required evidence for the selected non-hosted OSS CLI/package-first target:
 
-- Dennett provides an OSS v0.1 public repository plus documented local CLI/package-first launch path for the supported environment.
+- Dennett provides an OSS v0.1 public repository preview plus documented local CLI/package-first checkout path for the supported environment.
 - The documented CLI package or install path has passed clean-environment install and smoke validation.
 - The documented command set is supported within the Stage 10 compatibility policy.
 - Codex App Server integration is supported only for the certified subset named by Stage 5.
@@ -126,6 +133,7 @@ The OSS v0.1 CLI/package-first public launch remains blocked until all required 
 - Stage 4 records the private package and supply-chain foundation.
 - Stage 11 records controlled local `.tgz` install/uninstall proof, explicit two-tarball upgrade/rollback smoke, local SBOM validation, and CI package-proof job configuration.
 - A later release-approval task records registry ownership, public publication controls, retained evidence, signing/provenance decisions, and public install proof.
+- A later release-preparation task explicitly approves removing `"private": true` only after npm ownership, final version/tag/release notes, publish path, package metadata/packlist, minimal supply-chain posture, and post-publish proof plan are ready.
 - The public repository/package decision is tied to the then-current commit, package metadata, artifact hashes, retained evidence, and explicit claim-review result.
 - README and user-facing docs use the same OSS v0.1 non-hosted scope language as this document.
 
