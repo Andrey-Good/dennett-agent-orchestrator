@@ -1,0 +1,10 @@
+[package]
+name = "denet-memoryd"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio.workspace = true
+denet-observability = { path = "../../crates/denet-observability" }

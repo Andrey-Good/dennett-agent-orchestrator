@@ -1,25 +1,37 @@
-node_modules
-dist
-coverage
-.pnpm-store
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+coverage/
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# IDE / OS
 .DS_Store
-.local/
-subagent_tasks/
+Thumbs.db
+.idea/
+.vscode/settings.json
 
-# Generated package and contract artifacts.
-*.tgz
-contracts/typescript/*.js
-
-# Local state, logs, and temporary files.
-*.db
-*.sqlite
-*.sqlite3
-*.log
-*.tmp
-*.temp
-*.pid
+# Local Denet state and secrets
 .env
 .env.*
 !.env.example
-tmp/
-temp/
+.denet/local/
+.denet/runtime/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.log
+
+# Generated protocol clients
+generated/

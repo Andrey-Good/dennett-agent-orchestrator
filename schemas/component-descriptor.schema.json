@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://denet.local/schemas/component-descriptor.schema.json",
+  "title": "Denet Component Descriptor",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "version",
+    "provides",
+    "runtime"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "provider",
+        "runtime",
+        "skill",
+        "mcp",
+        "plugin",
+        "connector",
+        "computer_use",
+        "speech",
+        "sensor",
+        "storage",
+        "transport"
+      ]
+    },
+    "version": {
+      "type": "string"
+    },
+    "provides": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "in_process",
+            "out_of_process",
+            "remote"
+          ]
+        }
+      }
+    },
+    "effects": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "native_extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

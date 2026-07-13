@@ -1,0 +1,19 @@
+
+version: 1
+id: ambient-screen-storage-pressure
+seed: 1003
+topology:
+  head: true
+  nodes: [desktop]
+steps:
+  - source:
+      name: screen
+      mode: event_driven
+  - fault:
+      target: desktop-storage
+      kind: pressure
+      level: critical
+  - expect:
+      raw_capture_paused: true
+      canonical_events_preserved: true
+      user_warning_created: true

@@ -1,0 +1,38 @@
+version: 1
+id: WP-MXX-XXX
+title: Clear observable outcome
+status: DRAFT
+milestone: MXX
+vertical_slice: VS-MXX-XX
+risk: R1
+outcome: >-
+  Describe one verifiable result.
+non_goals: []
+requirement_refs: []
+architecture_refs: []
+depends_on: []
+allowed_roots: []
+forbidden_roots: []
+state_ownership:
+  reads: []
+  writes: []
+contract_changes:
+  public_api: false
+  protocol: false
+  persistent_schema: false
+  migration: false
+security_effects:
+  permission_change: false
+  external_effect: false
+  secret_access: false
+acceptance: []
+required_commands: []
+observability: []
+rollback: []
+owner_decision:
+  required_before_start: false
+  required_before_merge: false
+estimate:
+  target_agent_hours: 0
+  max_diff_lines: 0
+notes: []

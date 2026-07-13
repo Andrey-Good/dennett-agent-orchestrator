@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://denet.local/schemas/autonomous-batch.schema.json",
+  "title": "Denet Autonomous Batch",
+  "type": "object",
+  "required": ["version", "id", "title", "status", "packages", "execution", "limits", "stop_conditions"],
+  "properties": {
+    "version": {"const": 1},
+    "id": {"type": "string", "pattern": "^AB-M[0-9]{2}-[0-9]{3}$"},
+    "title": {"type": "string", "minLength": 5},
+    "status": {"enum": ["DRAFT", "READY", "RUNNING", "PAUSED", "COMPLETED", "BLOCKED", "CANCELLED"]},
+    "packages": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^WP-M[0-9]{2}-[0-9]{3}$"}},
+    "execution": {"type": "object"},
+    "limits": {"type": "object"},
+    "stop_conditions": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

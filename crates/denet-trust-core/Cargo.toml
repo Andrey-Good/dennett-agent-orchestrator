@@ -1,0 +1,9 @@
+[package]
+name = "denet-trust-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+denet-contracts = { path = "../denet-contracts" }

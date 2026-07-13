@@ -1,0 +1,29 @@
+
+version: 1
+id: head-promotion-opt-in
+seed: 1002
+topology:
+  head: true
+  nodes: [desktop, laptop]
+steps:
+  - configure:
+      device: laptop
+      head_eligibility: none
+  - command:
+      name: head.promote
+      device: laptop
+  - expect:
+      outcome: denied
+      reason: not_explicitly_authorized
+  - configure:
+      device: laptop
+      head_eligibility: full
+      authentication: strong
+      canonical_replica_ready: true
+      fencing_ready: true
+  - command:
+      name: head.promote
+      device: laptop
+  - expect:
+      outcome: accepted
+      authority_epoch_incremented: true

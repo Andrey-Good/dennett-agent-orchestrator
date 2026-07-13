@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://denet.local/schemas/portable-package-manifest.schema.json",
+  "title": "Denet Portable Package Manifest",
+  "type": "object",
+  "required": [
+    "package_type",
+    "format_version",
+    "inventory",
+    "checksums"
+  ],
+  "properties": {
+    "package_type": {
+      "enum": [
+        "project",
+        "artifact",
+        "capability",
+        "settings",
+        "automation",
+        "research",
+        "installation_transfer",
+        "backup_snapshot"
+      ]
+    },
+    "format_version": {
+      "type": "string"
+    },
+    "inventory": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "sensitivity": {
+      "type": "string"
+    },
+    "encrypted": {
+      "type": "boolean"
+    },
+    "signature": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

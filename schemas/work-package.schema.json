@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://denet.local/schemas/work-package.schema.json",
+  "title": "Denet Work Package",
+  "type": "object",
+  "required": ["version", "id", "title", "status", "risk", "outcome"],
+  "properties": {
+    "version": {"const": 1},
+    "id": {"type": "string", "pattern": "^WP-M[0-9]{2}-[0-9]{3}$"},
+    "title": {"type": "string", "minLength": 5},
+    "status": {
+      "enum": ["DRAFT", "REFINED", "READY", "IN_PROGRESS", "VERIFYING", "REVIEW", "MERGE_READY", "MERGED", "BLOCKED", "STOPPED", "SUPERSEDED", "CANCELLED", "PARTIAL"]
+    },
+    "milestone": {"type": "string", "pattern": "^M[0-9]{2}$"},
+    "vertical_slice": {"type": "string"},
+    "risk": {"enum": ["R0", "R1", "R2", "R3", "R4"]},
+    "outcome": {"type": "string", "minLength": 10},
+    "non_goals": {"type": "array", "items": {"type": "string"}},
+    "requirement_refs": {"type": "array", "items": {"type": "string"}},
+    "architecture_refs": {"type": "array", "items": {"type": "string"}},
+    "depends_on": {"type": "array", "items": {"type": "string"}},
+    "allowed_roots": {"type": "array", "items": {"type": "string"}},
+    "forbidden_roots": {"type": "array", "items": {"type": "string"}},
+    "acceptance": {"type": "array", "items": {"type": "string", "pattern": "^TEST-"}},
+    "required_commands": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

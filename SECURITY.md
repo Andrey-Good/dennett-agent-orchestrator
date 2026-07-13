@@ -1,56 +1,20 @@
-# Security Policy
+# Политика безопасности
 
-## Scope
+## Сообщение об уязвимости
 
-This policy covers vulnerabilities in this repository and in the documented CLI/package-first launch path.
+Передавайте информацию владельцу репозитория приватно. Не помещайте реальные secrets, личную память, переписки или рабочие exploit payloads в публичные issues.
 
-Current public-launch readiness does not include a hosted service, managed deployment, cloud deployment, installer, container, public npm publication, SLA, hosted telemetry/audit readiness, hosted incident response, hosted rollback, or long-term support promise. Reports about those deferred surfaces are useful as design input, but they are not supported deployed surfaces in this stage. The canonical hosted/managed deferral lock is [`docs/21-public-launch-readiness/hosted-managed-deployment-scope.md`](./docs/21-public-launch-readiness/hosted-managed-deployment-scope.md).
+## Неподвижные инварианты
 
-## Supported Versions
+- Модель не выдаёт себе права.
+- Память не является permission token.
+- Provider tools, MCP, skills и plugins считаются недоверенными до регистрации, ограничения scope и авторизации.
+- Secrets по возможности используются через Secret Broker и не попадают в model context.
+- Сходство голоса недостаточно для high-risk authorization.
+- `UNKNOWN` external effect сначала reconciled и только потом может повторяться.
+- Импортированный project или memory package открывается в ограниченном trust domain.
+- Устройство имеет `head_eligibility = none`, пока владелец явно не выдаст другую роль с step-up authentication.
 
-After the bounded Stage 10 CLI/API freeze, security reports are triaged for:
+## Поддерживаемые версии
 
-- the current public repository state;
-- the latest documented bounded local CLI/repository release candidate;
-- the commands labeled `[stable]` by CLI help;
-- the `[stable/safety-protocol]` memory cleanup flow;
-- exported JSON schema artifacts under `contracts/json-schema/*.schema.json`;
-- the controlled local `.tgz` package proof path documented for Stage 11.
-
-Commands labeled `[experimental]`, deep imports from `dist` or `src`, older commits, forks, private modifications, generated local artifacts outside the documented Stage 11 proof path, public npm publication, and third-party provider deployments are outside this project's direct support boundary.
-
-## Reporting A Vulnerability
-
-Do not include exploit details, secrets, tokens, private prompts, private memory records, or provider account data in a public issue.
-
-Preferred reporting path:
-
-1. Use GitHub private vulnerability reporting if it is enabled for this repository.
-2. If private reporting is not available, open a minimal public issue that says a security report exists and request a private contact path. Do not include reproduction details publicly.
-
-Do not use the public security redirect issue template for full vulnerability details. It exists only to steer reporters away from posting sensitive material publicly.
-
-Please include, when safe:
-
-- affected commit, branch, package artifact, or documentation path;
-- whether the issue affects CLI execution, package installation, runtime adapter behavior, memory provider integration, Builder output, MCP/plugin/skill handling, or local state;
-- minimal reproduction steps using synthetic data;
-- expected impact and any known workaround.
-
-## Product Support Is Separate
-
-Use public bug, documentation, or support issue templates for ordinary local setup problems, CLI defects, docs gaps, support-bundle questions, runtime auth/rate-limit failures, memory provider setup issues, stuck prompt/resume state, or managed-subagent state that does not expose a vulnerability.
-
-Do not use a public support issue when explaining the report requires exploit details, credentials, private prompts, private memory records, provider config, account data, unredacted logs, or a redaction-bypass example containing real sensitive data. Use the vulnerability reporting path instead.
-
-For non-sensitive support triage, prefer reviewed output from `support-bundle` and `runtime-env-inspect --redacted`. These commands generate local diagnostics only; they do not upload data. Review all output before sharing.
-
-## Third-Party Providers And Dependencies
-
-Dennett integrates with runtimes, memory providers, MCP servers, plugins, skills, package registries, and language ecosystems. If the vulnerability is in a third-party service or dependency, report it to the upstream owner as well. Also report it here when Dennett's integration, documentation, configuration, or packaging makes the issue exploitable for Dennett users.
-
-## Handling Expectations
-
-Maintainers should acknowledge security reports when practical, avoid requesting unnecessary sensitive data, and keep public discussion limited until a fix or documented mitigation is available.
-
-This policy is a disclosure and triage boundary. It is not a hosted incident-response promise, external audit result, or certification.
+Проект находится до первого релиза. Исправления безопасности применяются к `main` и, после появления релизов, к последней подписанной preview/stable версии.

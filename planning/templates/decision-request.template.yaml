@@ -1,0 +1,13 @@
+version: 1
+id: DEC-XXXX
+work_package: WP-MXX-XXX
+severity: yellow
+question: Clear decision question
+context: Why the decision exists
+options: []
+recommendation: null
+reason: null
+default_if_deferred: stop
+needed_by: null
+status: open
+resolution: null

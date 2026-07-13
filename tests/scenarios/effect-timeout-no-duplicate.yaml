@@ -1,0 +1,25 @@
+
+version: 1
+id: effect-timeout-no-duplicate
+seed: 1001
+topology:
+  head: true
+  nodes: [desktop]
+  providers: [fake-telegram]
+steps:
+  - command:
+      name: communication.send
+      idempotency_key: msg-001
+  - fault:
+      target: fake-telegram
+      kind: response_lost_after_commit
+  - expect:
+      effect_state: unknown
+      provider_send_count: 1
+  - restart:
+      component: head
+  - command:
+      name: effects.reconcile
+  - expect:
+      effect_state: confirmed
+      provider_send_count: 1

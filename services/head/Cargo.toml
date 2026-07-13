@@ -1,0 +1,17 @@
+
+[package]
+name = "denet-head"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+denet-agent-core = { path = "../../crates/denet-agent-core" }
+denet-contracts = { path = "../../crates/denet-contracts" }
+denet-kernel = { path = "../../crates/denet-kernel" }
+denet-memory-core = { path = "../../crates/denet-memory-core" }
+denet-observability = { path = "../../crates/denet-observability" }

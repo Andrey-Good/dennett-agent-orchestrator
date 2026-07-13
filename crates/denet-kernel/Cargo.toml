@@ -1,0 +1,11 @@
+[package]
+name = "denet-kernel"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+denet-contracts = { path = "../denet-contracts" }

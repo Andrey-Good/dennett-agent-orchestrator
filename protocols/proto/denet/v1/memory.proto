@@ -1,0 +1,14 @@
+
+syntax = "proto3";
+package denet.v1;
+import "denet/v1/common.proto";
+
+message AppendMemoryEventRequest {
+  string event_id = 1;
+  string project_id = 2;
+  string session_id = 3;
+  string kind = 4;
+  string summary = 5;
+}
+message AppendMemoryEventResponse { StableRef event = 1; }
+service DenetMemory { rpc Append(AppendMemoryEventRequest) returns (AppendMemoryEventResponse); }

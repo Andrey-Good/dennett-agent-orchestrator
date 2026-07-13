@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "TEST-REPO-STRUCTURE-001",
+      "title": "Required repository boundaries and AGENTS files exist",
+      "status": "automated",
+      "priority": "critical",
+      "risk": "R1",
+      "domains": ["repository", "architecture"],
+      "levels": ["static"],
+      "requirement_refs": ["ARCH-83:RepositoryLayout"],
+      "expected": ["Repository verification passes"],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "automated",
+        "test_paths": ["tools/verify_repo.py"]
+      },
+      "owner": "repository"
+    },
+    {
+      "id": "TEST-MEMORY-ONE-LOGICAL-001",
+      "title": "Client cache cannot become a second canonical memory",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["memory", "sync", "devices"],
+      "levels": ["scenario"],
+      "requirement_refs": ["ADR-002", "ARCH-81:MemoryAuthority"],
+      "expected": [
+        "Offline client operations remain provisional until accepted by the canonical Memory Fabric",
+        "Head role changes physical placement but not memory semantics"
+      ],
+      "implementation": {
+        "target_suite": "tests/scenarios",
+        "status": "planned",
+        "test_paths": ["tests/scenarios/client-memory-not-second-canonical.yaml"]
+      },
+      "owner": "memory"
+    },
+    {
+      "id": "TEST-HEAD-OPTIN-001",
+      "title": "Unapproved device cannot promote itself to Head",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["head", "trust", "devices"],
+      "levels": ["domain", "scenario"],
+      "requirement_refs": ["ADR-003", "SPEC-50:HeadEligibility"],
+      "expected": [
+        "Device with head_eligibility none is rejected",
+        "No new Authority Epoch is issued"
+      ],
+      "implementation": {
+        "target_suite": "tests/scenarios",
+        "status": "planned",
+        "test_paths": ["tests/scenarios/head-promotion-opt-in.yaml"]
+      },
+      "owner": "trust"
+    },
+    {
+      "id": "TEST-EFFECT-UNKNOWN-001",
+      "title": "Unknown external effect is reconciled instead of blindly retried",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["effects", "connectors"],
+      "levels": ["integration", "scenario"],
+      "requirement_refs": ["ARCH-81:EffectClaim", "SPEC-B:UnknownEffect"],
+      "expected": [
+        "Effect enters UNKNOWN after response loss",
+        "Provider dispatch count stays one",
+        "Reconciliation resolves final state"
+      ],
+      "implementation": {
+        "target_suite": "tests/scenarios",
+        "status": "planned",
+        "test_paths": ["tests/scenarios/effect-unknown-no-duplicate.yaml"]
+      },
+      "owner": "effects"
+    }
+  ]
+}

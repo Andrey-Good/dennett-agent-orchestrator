@@ -1,241 +1,81 @@
-# dennett-agent-orchestrator
+# Denet
 
-`dennett-agent-orchestrator` is a local-first orchestrator for portable agent runs. Agents are described as JSON files, executed as graphs through runtime adapters, and backed by local operational state for runs, replies, resume, and diagnostics.
+[Русская версия](README.ru.md)
 
-## Status
+**Denet — персональная агентная операционная среда:** постоянный главный оркестратор, прямые проектные агенты в реальных папках и репозиториях, доказательная долговременная память, голосовое и фоновое восприятие, заменяемые модели и инструменты, работа с нескольких устройств и регулируемая пользователем автономность.
 
-This project is pre-release. Use it from a source checkout.
+> **Статус репозитория:** архитектурно завершённая заготовка реализации. Сам продукт ещё не реализован. Репозиторий содержит канонические продуктовые спецификации, четыре архитектурных тома, исполняемые формы ключевых контрактов, границы модулей, тестовые сценарии и намеренно тонкий кодовый каркас для дальнейшей реализации людьми и coding-agent-ами.
 
-- The package is not published to the npm registry yet; use the source-checkout workflow below.
-- The CLI is the main supported entrypoint.
-- JavaScript internals are not a stable public API.
-- Some CLI commands are marked experimental in `--help`; treat those surfaces as subject to change.
+## С чего начать
 
-## Quick Start
+| Цель | Что читать |
+|---|---|
+| Понять продукт за 15 минут | [`docs/README.md`](docs/README.md) → [`00_Denet_Functional_Concept.md`](docs/specifications/00_Denet_Functional_Concept.md) |
+| Понять архитектуру | [`docs/architecture/README.md`](docs/architecture/README.md) → тома 80–83 |
+| Реализовать конкретную часть | [`docs/implementation/README.md`](docs/implementation/README.md) → корневой [`AGENTS.md`](AGENTS.md) → ближайший вложенный `AGENTS.md` |
+| Понять порядок реализации всего проекта | [`04_MILESTONE_DEPENDENCY_MAP.md`](docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md) → [`ROADMAP.md`](ROADMAP.md) |
+| Добавить провайдера, MCP, skill, connector, voice- или computer-use-backend | [Том 82](docs/architecture/82_Denet_Agent_Voice_Capability_and_Integration_Architecture.md) и [`adapters/AGENTS.md`](adapters/AGENTS.md) |
+| Работать с памятью или синхронизацией | [Спецификация 10](docs/specifications/10_Denet_Memory_Fabric.md), [том 81](docs/architecture/81_Denet_Data_Memory_Storage_Sync_and_Protocol_Architecture.md), затем `crates/denet-memory-core/AGENTS.md` |
+| Посмотреть принятые решения и компромиссы | [`docs/decisions/README.md`](docs/decisions/README.md) |
 
-Requirements:
+## Ключевые принципы
 
-- Node.js `>=22.13.0`
-- pnpm `10.33.0` or compatible
+- **Прямая проектная работа остаётся простой.** Проект — реальная папка или репозиторий с прямым чатом агента, в основе похожим на Codex App и Claude Code.
+- **Один сильный агент — baseline.** Команды, ревьюеры и долговечные workflow появляются только тогда, когда их польза выше расходов на контекст, задержку и координацию.
+- **Одна логическая память при разных ролях устройств.** ПК, назначенный Head, использует ту же каноническую Memory Fabric, что и выделенный сервер. SQLite обычного клиента — кэш и offline-журнал, а не вторая конкурирующая память.
+- **Переход устройства в Head — только по предварительному разрешению.** Новое устройство всегда получает `head_eligibility = none`; только владелец может выдать `emergency` или `full`.
+- **Стабильное ядро, заменяемые края.** Провайдеры, agent runtimes, speech, computer-use, screen capture, MCP и connectors подключаются адаптерами через типизированные порты.
+- **Каноническое состояние живёт вне model context.** Задачи, разрешения, эффекты, память, artifacts и sync имеют явных владельцев и пути восстановления.
+- **Закрытие окна не останавливает Denet.** Tauri — оболочка desktop; `denet-node` — постоянный локальный демон.
+- **Тестируемость является частью архитектуры.** Для границ предусмотрены fake-реализации, conformance suites, детерминированные сценарии отказов и наблюдаемое состояние.
 
-```powershell
-git clone https://github.com/Andrey-Good/dennett-agent-orchestrator.git
-cd dennett-agent-orchestrator
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
-pnpm dennett --help
+## Карта репозитория
+
+```text
+docs/          Спецификации, shared contracts, архитектура, ADR и runbooks
+apps/          Desktop- и mobile-клиенты
+services/      Head, Node, memory service, adapter hosts и sensor worker
+crates/        Стабильные Rust-модули домена и application layer
+adapters/      Заменяемые интеграции провайдеров, инструментов, транспорта и storage
+protocols/     Protobuf-контракты и описание протоколов
+schemas/       JSON Schema переносимых пакетов и component descriptors
+tests/         Structured test catalogue, contract, integration, E2E и deterministic scenarios
+planning/      Milestones, Work Packages, autonomous batches, decisions and debt
+tools/         Проверки репозитория, документации и инструменты разработчика
 ```
 
-The default local state database is `.dennett/local-state.sqlite` inside the checkout. Stateful commands can use `--state-db <path>` when you want an isolated database.
+## Команды разработки
 
-## Main Commands
+Каркас намеренно реализует только тонкий vertical slice и стабильные интерфейсы. В нём нет фиктивной «полной реализации», спрятанной за сотнями `TODO`.
 
-Run commands from a built source checkout:
+```bash
+# Один раз: зависимости инструментов репозитория
+python -m pip install -r requirements-dev.txt
 
-```powershell
-pnpm dennett <command> ...
+# Проверка репозитория и документации
+python tools/verify_repo.py
+python tools/verify_docs.py
+python tools/verify_planning.py
+
+# Тесты Python adapter host
+python -m unittest discover -s services/adapter-host-python/tests
+
+# После установки зависимостей TypeScript
+pnpm install
+pnpm typecheck
+
+# После установки stable Rust toolchain
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-Core workflow commands:
+Перед изменениями прочитайте [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-- `run <agent-file>` runs a portable Agent JSON file directly.
-- `register <agent-file>` registers an agent file as a draft revision.
-- `deploy <agent-file>` publishes an agent file as the live revision.
-- `status <agent-id>` shows registered agent lifecycle state.
-- `run-live <agent-id>` runs the current live revision of a registered agent.
-- `run-status` inspects durable run and interaction state.
-- `reply <agent-file>` records or delivers a reply to a waiting user prompt.
-- `resume <agent-file>` resumes a durable local run.
-- `support-bundle` emits a local redacted diagnostics bundle.
+## Безопасность
 
-Examples:
+Не публикуйте уязвимости в открытых issues. Следуйте [`SECURITY.md`](SECURITY.md). Ни prompt модели, ни запись памяти, ни файл проекта, ни plugin не могут самостоятельно выдать себе права; реальные эффекты всегда проходят через Trust и Effect boundaries.
 
-```powershell
-pnpm dennett run <agent-file>
-pnpm dennett register <agent-file>
-pnpm dennett status <agent-id>
-pnpm dennett deploy <agent-file>
-pnpm dennett run-live <agent-id>
-pnpm dennett run-status
-pnpm dennett support-bundle
-```
+## Лицензия
 
-CLI help labels commands inline as `[stable]`, `[stable/safety-protocol]`, or `[experimental]`. Experimental surfaces currently include runtime inspection and model listing, memory provider commands, the builder command, triggers and events, and managed subagent commands.
-
-## Smoke Checks
-
-Run the focused public example suite:
-
-```powershell
-pnpm test -- tests/unit/public-examples.test.ts
-```
-
-Build and inspect the CLI:
-
-```powershell
-pnpm build
-pnpm dennett --help
-pnpm dennett support-bundle
-```
-
-Live example agents are listed in [examples/agents](./examples/agents/README.md). Live runs require local Codex/App Server authentication and access to the model named in the selected example agent file. Offline schema and fixture tests can pass even when a local live runtime is not available.
-
-## What Works Now
-
-- Build the TypeScript project from source.
-- Run the local CLI through the `pnpm dennett` source-checkout alias.
-- Validate and run portable Agent JSON examples.
-- Use local SQLite-backed operational state for runs and interaction records.
-- Register, inspect, deploy, and run local agent revisions through CLI commands.
-- Generate a redacted local support bundle.
-- Run contract, unit, and focused public-example tests.
-- Experiment with runtime inspection, memory provider bindings, builder output, triggers, and managed subagent commands where the CLI marks them experimental.
-
-## Not Supported Yet
-
-- Registry installation from npm.
-- Managed cloud service, uptime guarantees, or managed deployment.
-- Production certification claims.
-- Stable public JavaScript SDK/API beyond documented contracts and CLI behavior.
-- Broad runtime-provider or memory-provider compatibility guarantees.
-- Cloud-managed memory, fully managed user interaction, or fully governed multi-agent orchestration as stable product surfaces.
-
-## Documentation
-
-- [Documentation map](./docs/README.md)
-- [Agent JSON contract docs](./docs/03-contracts/agent-json/README.md)
-- [JSON schemas](./contracts/json-schema/)
-- [Example agents](./examples/agents/README.md)
-- [Contributing guide](./CONTRIBUTING.md)
-- [Security policy](./SECURITY.md)
-- [Changelog](./CHANGELOG.md)
-- [License](./LICENSE)
-
-## Contributing
-
-Before opening a change, read [CONTRIBUTING.md](./CONTRIBUTING.md). For security reports, use [SECURITY.md](./SECURITY.md) instead of public issues.
-
-The project is licensed under [Apache-2.0](./LICENSE).
-
----
-
-# dennett-agent-orchestrator на русском
-
-`dennett-agent-orchestrator` - локальный оркестратор переносимых агентных запусков. Агент описывается JSON-файлом, выполняется как граф через runtime-адаптеры, а состояние запусков, ответов, возобновления и диагностики хранится локально.
-
-## Текущий статус
-
-Проект находится в pre-release состоянии. Используйте его из исходного checkout.
-
-- Пакет пока не опубликован в npm registry; используйте source-checkout workflow ниже.
-- Основная поддерживаемая точка входа - CLI.
-- Внутренние JavaScript-модули не являются стабильным публичным API.
-- Команды, помеченные в `--help` как experimental, могут меняться.
-
-## Быстрый старт
-
-Требования:
-
-- Node.js `>=22.13.0`
-- pnpm `10.33.0` или совместимая версия
-
-```powershell
-git clone https://github.com/Andrey-Good/dennett-agent-orchestrator.git
-cd dennett-agent-orchestrator
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
-pnpm dennett --help
-```
-
-По умолчанию локальная база состояния создается в `.dennett/local-state.sqlite` внутри checkout. Для изолированной базы используйте `--state-db <path>` в командах, которые работают с состоянием.
-
-## Основные команды
-
-Запускайте команды из собранного исходного checkout:
-
-```powershell
-pnpm dennett <command> ...
-```
-
-Основной рабочий процесс:
-
-- `run <agent-file>` запускает portable Agent JSON файл напрямую.
-- `register <agent-file>` регистрирует файл агента как draft-ревизию.
-- `deploy <agent-file>` публикует файл агента как live-ревизию.
-- `status <agent-id>` показывает состояние зарегистрированного агента.
-- `run-live <agent-id>` запускает текущую live-ревизию зарегистрированного агента.
-- `run-status` показывает durable run и interaction state.
-- `reply <agent-file>` записывает или доставляет ответ на ожидающий user prompt.
-- `resume <agent-file>` возобновляет durable local run.
-- `support-bundle` создает локальный redacted diagnostics bundle.
-
-Примеры:
-
-```powershell
-pnpm dennett run <agent-file>
-pnpm dennett register <agent-file>
-pnpm dennett status <agent-id>
-pnpm dennett deploy <agent-file>
-pnpm dennett run-live <agent-id>
-pnpm dennett run-status
-pnpm dennett support-bundle
-```
-
-CLI help помечает команды встроенными метками `[stable]`, `[stable/safety-protocol]` или `[experimental]`. Сейчас к экспериментальным поверхностям относятся runtime inspection и model list, команды memory provider, builder, triggers и events, а также managed subagent commands.
-
-## Проверка
-
-Запустите тесты публичных примеров:
-
-```powershell
-pnpm test -- tests/unit/public-examples.test.ts
-```
-
-Проверьте сборку и CLI:
-
-```powershell
-pnpm build
-pnpm dennett --help
-pnpm dennett support-bundle
-```
-
-Live-примеры перечислены в [examples/agents](./examples/agents/README.md). Live-запуск требует локальную аутентификацию Codex/App Server и доступ к модели, указанной в выбранном файле примера. Offline-тесты схем и примеров могут проходить даже без доступного live runtime.
-
-## Что уже работает
-
-- Сборка TypeScript-проекта из исходников.
-- Запуск локального CLI через source-checkout alias `pnpm dennett`.
-- Валидация и запуск примеров Agent JSON.
-- Локальное SQLite-состояние для запусков и interaction records.
-- Регистрация, просмотр, deploy и запуск локальных ревизий агента через CLI.
-- Создание локального redacted support bundle.
-- Запуск contract, unit и focused public-example тестов.
-- Эксперименты с runtime inspection, memory provider bindings, builder output, triggers и managed subagent commands там, где CLI помечает их как experimental.
-
-## Что пока не поддерживается
-
-- Установка из npm registry.
-- Managed cloud service, uptime guarantees или managed deployment.
-- Заявления о production certification.
-- Стабильный публичный JavaScript SDK/API за пределами документированных контрактов и CLI.
-- Гарантии широкой совместимости runtime-provider или memory-provider.
-- Стабильные product surfaces для cloud-managed memory, fully managed user interaction или fully governed multi-agent orchestration.
-
-## Документация
-
-- [Карта документации](./docs/README.md)
-- [Agent JSON contract docs](./docs/03-contracts/agent-json/README.md)
-- [JSON schemas](./contracts/json-schema/)
-- [Примеры агентов](./examples/agents/README.md)
-- [Contributing guide](./CONTRIBUTING.md)
-- [Security policy](./SECURITY.md)
-- [Changelog](./CHANGELOG.md)
-- [License](./LICENSE)
-
-## Участие
-
-Перед изменениями прочитайте [CONTRIBUTING.md](./CONTRIBUTING.md). Для сообщений об уязвимостях используйте [SECURITY.md](./SECURITY.md), а не публичные issues.
-
-Лицензия проекта: [Apache-2.0](./LICENSE).
+Лицензия проекта пока не выбрана. До появления `LICENSE` репозиторий следует считать **all rights reserved** в отношении распространения и производных работ.

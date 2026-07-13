@@ -1,0 +1,58 @@
+{
+  "repository_edition": "2026-07-13",
+  "canonical_specifications": [
+    "00_Denet_Functional_Concept.md",
+    "01_Denet_Specification_Index_and_Shared_Contracts.md",
+    "10_Denet_Memory_Fabric.md",
+    "20_Denet_Agentic_Control_Fabric.md",
+    "30_Denet_Trust_Identity_Autonomy_and_Permissions.md",
+    "40_Denet_Voice_and_Ambient_Interaction_Fabric.md",
+    "41_Denet_Capabilities_Providers_and_Integrations.md",
+    "50_Denet_Server_Runtime_Events_Sync_and_Portability.md",
+    "60_Denet_Desktop_Application_Business_Logic.md",
+    "61_Denet_Mobile_Application_Business_Logic.md",
+    "70_Denet_End_to_End_Validation_and_Architecture_Handoff.md"
+  ],
+  "architecture_volumes": [
+    "80_Denet_System_Architecture_and_Runtime_Topology.md",
+    "81_Denet_Data_Memory_Storage_Sync_and_Protocol_Architecture.md",
+    "82_Denet_Agent_Voice_Capability_and_Integration_Architecture.md",
+    "83_Denet_Client_Operations_Testing_and_Implementation_Blueprint.md"
+  ],
+  "contracts": [
+    "00_Shared_Cross_Domain_Rules.md",
+    "90_Integrated_End_to_End_Scenarios.md",
+    "A_Ambient_Sensory_Capture_Contract.md",
+    "B_External_Communication_Operation.md",
+    "C_Project_Lifecycle_Contract.md",
+    "D_Artifact_Lifecycle_Contract.md",
+    "E_Update_Compatibility_and_Migration_Contract.md",
+    "F_Identity_Key_and_Ownership_Recovery_Contract.md",
+    "G_Resource_Pressure_and_Usage_Accounting_Contract.md",
+    "H_Federated_Global_Search_Contract.md",
+    "I_Locale_Timezone_Language_and_Travel_Contract.md",
+    "J_Import_Export_and_Portable_Package_Compatibility_Contract.md",
+    "K_Composite_Experience_Recipes.md"
+  ],
+  "head_policy": {
+    "default": "none",
+    "allowed": [
+      "none",
+      "emergency",
+      "full"
+    ],
+    "user_opt_in_required": true
+  },
+  "memory_policy": "one logical Memory Fabric; physical role varies by deployment",
+  "implementation_documents": [
+    "00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md",
+    "01_AGENT_EXECUTION_PROTOCOL.md",
+    "02_OWNER_PLAYBOOK.md",
+    "03_WORK_PACKAGE_SYSTEM.md",
+    "04_MILESTONE_DEPENDENCY_MAP.md"
+  ],
+  "testing_documents": [
+    "TEST_CATALOGUE_AND_QUALITY_GATES.md"
+  ],
+  "planning_policy": "semantic code changes require a bounded Work Package; autonomous work requires a batch envelope"
+}

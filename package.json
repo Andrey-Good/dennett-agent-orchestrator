@@ -1,69 +1,13 @@
 {
-	"name": "dennett-agent-orchestrator",
-	"version": "0.1.0-rc.1",
-	"description": "Codex-first orchestrator for portable agent runs.",
-	"license": "Apache-2.0",
-	"type": "module",
-	"keywords": [
-		"agent-orchestration",
-		"agent-runtime",
-		"codex",
-		"cli",
-		"workflow"
-	],
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/Andrey-Good/dennett-agent-orchestrator"
-	},
-	"bugs": {
-		"url": "https://github.com/Andrey-Good/dennett-agent-orchestrator/issues"
-	},
-	"homepage": "https://github.com/Andrey-Good/dennett-agent-orchestrator#readme",
-	"bin": {
-		"dennett-agent-orchestrator": "./dist/src/interfaces/cli.js"
-	},
-	"exports": {
-		"./package.json": "./package.json",
-		"./contracts/json-schema/*.schema.json": "./contracts/json-schema/*.schema.json"
-	},
-	"files": [
-		"dist/src/**",
-		"contracts/json-schema/*.schema.json"
-	],
-	"packageManager": "pnpm@10.33.0",
-	"engines": {
-		"node": ">=22.13.0"
-	},
-	"scripts": {
-		"build": "node scripts/clean-dist.js && tsc -p tsconfig.build.json",
-		"dennett": "node ./dist/src/interfaces/cli.js",
-		"dist:clean": "node scripts/clean-dist.js",
-		"dist:check": "node scripts/check-distribution.js",
-		"architecture:check": "node scripts/check-architecture-boundaries.js",
-		"packlist:check": "node scripts/check-packlist.js",
-		"public-release-foundation:check": "node scripts/check-public-release-foundation.js",
-		"release-candidate:check": "node scripts/check-release-candidate.js",
-		"package:local-install:proof": "node scripts/check-distribution.js local-install-proof",
-		"package:upgrade-rollback:proof": "node scripts/check-distribution.js upgrade-rollback-proof",
-		"supply-chain:local:proof": "node scripts/check-distribution.js local-sbom-proof",
-		"stage15:integrated-flow:proof": "node scripts/check-stage15-integrated-flow.js",
-		"package:check": "pnpm build && pnpm dist:check && pnpm packlist:check && pnpm public-release-foundation:check",
-		"test": "vitest run --config vitest.config.ts",
-		"test:mem0": "node scripts/run-mem0-tests.js",
-		"test:watch": "vitest --config vitest.config.ts",
-		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"lint": "biome check package.json tsconfig.json tsconfig.build.json vitest.config.ts biome.json src tests/unit tests/integration",
-		"format": "biome format --write package.json tsconfig.json tsconfig.build.json vitest.config.ts biome.json src tests/unit tests/integration",
-		"format:check": "biome check package.json tsconfig.json tsconfig.build.json vitest.config.ts biome.json src tests/unit tests/integration --formatter-enabled=true --linter-enabled=false --assist-enabled=false"
-	},
-	"dependencies": {
-		"ajv": "^8.18.0",
-		"commander": "^14.0.3"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "^2.4.12",
-		"@types/node": "^25.6.0",
-		"typescript": "^6.0.3",
-		"vitest": "^4.1.5"
-	}
+  "name": "denet-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "lint": "pnpm -r --if-present lint",
+    "docs:check": "python tools/verify_docs.py",
+    "repo:check": "python tools/verify_repo.py && python tools/verify_planning.py",
+    "planning:check": "python tools/verify_planning.py"
+  }
 }

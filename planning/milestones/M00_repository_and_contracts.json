@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "id": "M00",
+  "title": "Repository and Contracts Foundation",
+  "status": "REFINED",
+  "outcome": "The repository builds from a documented environment, generated contracts are reproducible, required checks run automatically, and coding agents can execute bounded work packages.",
+  "non_goals": [
+    "real cloud agent provider",
+    "production UI feature set",
+    "production memory retrieval"
+  ],
+  "vertical_slices": [
+    {
+      "id": "VS-M00-01",
+      "title": "Reproducible repository verification",
+      "work_packages": [
+        "WP-M00-001",
+        "WP-M00-002",
+        "WP-M00-003"
+      ]
+    },
+    {
+      "id": "VS-M00-02",
+      "title": "Planning and quality gates",
+      "work_packages": [
+        "WP-M00-004",
+        "WP-M00-005"
+      ]
+    }
+  ],
+  "work_packages": [
+    {
+      "id": "WP-M00-001",
+      "title": "Run and repair the Rust workspace baseline",
+      "status": "DRAFT",
+      "risk": "R1",
+      "outcome": "cargo fmt, clippy and workspace tests run in the pinned toolchain and all scaffold failures are either fixed or converted into explicit work packages.",
+      "acceptance": [
+        "TEST-REPO-STRUCTURE-001"
+      ],
+      "version": 1,
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-01"
+    },
+    {
+      "id": "WP-M00-002",
+      "title": "Generate and validate protocol clients",
+      "status": "DRAFT",
+      "risk": "R2",
+      "outcome": "Buf lint, generation and breaking-change checks run reproducibly and generated files are verified.",
+      "acceptance": [],
+      "version": 1,
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-01"
+    },
+    {
+      "id": "WP-M00-003",
+      "title": "Establish fast required PR checks",
+      "status": "DRAFT",
+      "risk": "R2",
+      "outcome": "A pull request receives repository, Rust, TypeScript, protocol and documentation checks with a target duration under ten minutes.",
+      "acceptance": [],
+      "version": 1,
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-01"
+    },
+    {
+      "id": "WP-M00-004",
+      "title": "Add planning schema validation",
+      "status": "DRAFT",
+      "risk": "R1",
+      "outcome": "Work Packages, batches and decisions are schema-validated and checked for duplicate IDs and missing references.",
+      "acceptance": [],
+      "version": 1,
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-02"
+    },
+    {
+      "id": "WP-M00-005",
+      "title": "Generate the first test catalogue views",
+      "status": "DRAFT",
+      "risk": "R1",
+      "outcome": "Seed catalogue entries generate a readable catalogue and coverage report without manual duplication.",
+      "acceptance": [],
+      "version": 1,
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-02"
+    }
+  ],
+  "owner_acceptance": [
+    "One documented command runs all fast verification",
+    "A failing required check blocks merge",
+    "A coding agent can load one Work Package and identify exact required tests"
+  ]
+}

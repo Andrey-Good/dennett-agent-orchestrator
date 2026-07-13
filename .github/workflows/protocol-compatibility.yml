@@ -1,0 +1,16 @@
+
+name: Protocol Compatibility
+on:
+  pull_request:
+    paths: ["protocols/**", ".github/workflows/protocol-compatibility.yml"]
+permissions:
+  contents: read
+jobs:
+  buf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: bufbuild/buf-setup-action@v1
+      - run: buf lint protocols
+      - run: buf format protocols --diff --exit-code

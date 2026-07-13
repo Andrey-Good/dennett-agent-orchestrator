@@ -1,0 +1,9 @@
+
+{
+  "name": "@denet/mobile",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {"typecheck":"tsc --noEmit","test":"vitest run"},
+  "dependencies": {"react":"^19.0.0","react-native":"^0.86.0","@tanstack/react-query":"^5.0.0"},
+  "devDependencies": {"@types/react":"^19.0.0","typescript":"^5.8.0","vitest":"^3.0.0"}
+}

@@ -1,0 +1,8 @@
+
+[project]
+name = "denet-adapter-host"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[project.scripts]
+denet-adapter-host = "denet_adapter_host.main:main"

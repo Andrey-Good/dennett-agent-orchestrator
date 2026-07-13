@@ -1,0 +1,24 @@
+
+syntax = "proto3";
+package denet.v1;
+import "denet/v1/common.proto";
+
+message ProjectChatCommand {
+  string command_id = 1;
+  string project_id = 2;
+  string session_id = 3;
+  string text = 4;
+  uint64 base_revision = 5;
+}
+
+message ResultEnvelope {
+  string command_id = 1;
+  string summary = 2;
+  bool partial = 3;
+  repeated StableRef artifacts = 4;
+  repeated StableRef evidence = 5;
+}
+
+service DenetControl {
+  rpc ProjectChat(ProjectChatCommand) returns (stream ResultEnvelope);
+}

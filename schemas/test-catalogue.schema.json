@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://denet.local/schemas/test-catalogue.schema.json",
+  "title": "Denet Test Catalogue File",
+  "type": "object",
+  "required": ["version", "cases"],
+  "properties": {
+    "version": {"const": 1},
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "status", "priority", "risk", "domains", "levels", "requirement_refs", "expected", "implementation", "owner"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^TEST-[A-Z0-9-]+$"},
+          "title": {"type": "string", "minLength": 5},
+          "status": {"enum": ["specified", "automated", "manual", "quarantined", "retired"]},
+          "priority": {"enum": ["critical", "high", "normal", "low"]},
+          "risk": {"enum": ["R0", "R1", "R2", "R3", "R4"]},
+          "domains": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "levels": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "requirement_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "expected": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "implementation": {
+            "type": "object",
+            "required": ["target_suite", "status", "test_paths"],
+            "properties": {
+              "target_suite": {"type": "string"},
+              "status": {"enum": ["planned", "automated", "manual", "quarantined", "retired"]},
+              "test_paths": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "owner": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

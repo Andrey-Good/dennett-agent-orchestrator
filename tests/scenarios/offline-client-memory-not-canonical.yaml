@@ -1,0 +1,19 @@
+
+version: 1
+id: offline-client-memory-not-canonical
+seed: 1004
+topology:
+  head: false
+  nodes: [desktop]
+steps:
+  - configure:
+      device: desktop
+      head_eligibility: emergency
+      memory_mode: client_cache
+  - command:
+      name: head.promote
+      device: desktop
+  - expect:
+      outcome: restricted_emergency_only
+      canonical_memory_claimed: false
+      high_risk_effects_enabled: false
