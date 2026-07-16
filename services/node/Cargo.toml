@@ -1,5 +1,5 @@
 [package]
-name = "denet-node"
+name = "dennett-node"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -7,4 +7,4 @@ rust-version.workspace = true
 
 [dependencies]
 tokio.workspace = true
-denet-observability = { path = "../../crates/denet-observability" }
+dennett-observability = { path = "../../crates/dennett-observability" }

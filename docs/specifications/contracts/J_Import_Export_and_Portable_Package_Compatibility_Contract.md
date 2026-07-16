@@ -8,14 +8,14 @@
 
 ## J.1. Назначение
 
-Denet должен переносить данные и функциональные пакеты между:
+Dennett должен переносить данные и функциональные пакеты между:
 
 - устройствами одного пользователя;
-- разными установками Denet;
+- разными установками Dennett;
 - пользователями;
 - проектами;
 - версиями приложения;
-- Denet и внешними инструментами.
+- Dennett и внешними инструментами.
 
 Но «экспорт» означает разные вещи для project memory, whole-installation backup, skill, artifact, settings и capability profile. Один универсальный ZIP без типизированного manifest быстро станет неразбираемым и небезопасным.
 
@@ -95,7 +95,7 @@ Import проходит отдельные Trust и privacy gates.
 
 ## J.5. Packaging strategy
 
-Denet-native package может быть обычной директорией/архивом с:
+Dennett-native package может быть обычной директорией/архивом с:
 
 - manifest;
 - payload;
@@ -172,7 +172,7 @@ User chooses export classes:
 - exclude private overlays;
 - include encrypted recipient-specific subset.
 
-Before export Denet generates a privacy inventory:
+Before export Dennett generates a privacy inventory:
 
 - personal memory;
 - contacts/messages;
@@ -189,7 +189,7 @@ Before export Denet generates a privacy inventory:
 Recommended components:
 
 ```text
-.denet/memory/
+.dennett/memory/
   manifest.yaml
   index.md
   events/
@@ -279,7 +279,7 @@ Options:
 
 - import read-only metadata;
 - preserve package unopened;
-- update Denet;
+- update Dennett;
 - use compatibility translator;
 - reject with precise missing feature list.
 
@@ -298,7 +298,7 @@ For each format:
 
 ## J.17. Multi-platform variants
 
-A package may contain several optional artifacts/backends. OCI image index is a useful precedent for selecting platform-specific manifests from a higher-level index; Denet can use the principle for local model/runtime assets without adopting OCI for all packages. [[S50]]
+A package may contain several optional artifacts/backends. OCI image index is a useful precedent for selecting platform-specific manifests from a higher-level index; Dennett can use the principle for local model/runtime assets without adopting OCI for all packages. [[S50]]
 
 Example:
 
@@ -333,7 +333,7 @@ Package can declare:
 - model/data license;
 - unknown status.
 
-Denet warns but does not pretend to provide legal judgment.
+Dennett warns but does not pretend to provide legal judgment.
 
 ## J.20. Failure and recovery
 
@@ -378,7 +378,7 @@ Block or require explicit per-item decision; produce sanitized version.
 
 Не создавать:
 
-- one universal package containing every Denet concept;
+- one universal package containing every Dennett concept;
 - custom cryptographic format when standard primitives suffice;
 - automatic execution on import;
 - mandatory RO-Crate/OCI/BagIt for internal hot path;

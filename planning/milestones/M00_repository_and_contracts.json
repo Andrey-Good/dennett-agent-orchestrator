@@ -45,7 +45,7 @@
       "version": 1,
       "id": "WP-M00-006",
       "title": "Normalize canonical product identity and license state",
-      "status": "READY",
+      "status": "REVIEW",
       "milestone": "M00",
       "vertical_slice": "VS-M00-00",
       "risk": "R2",
@@ -80,7 +80,10 @@
         "Cargo.toml",
         "package.json",
         "pyproject.toml",
+        ".gitignore",
         ".env.example",
+        "CONTRIBUTING.md",
+        "ROADMAP.md",
         "REPOSITORY_MANIFEST.json",
         "REPOSITORY_CHECKSUMS.sha256"
       ],
@@ -128,7 +131,7 @@
       },
       "estimate": {
         "target_agent_hours": 2,
-        "max_diff_lines": 10000
+        "max_diff_lines": 20000
       },
       "notes": [
         "This is intentionally broad mechanical work performed before implementation packages."

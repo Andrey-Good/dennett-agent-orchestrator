@@ -1,5 +1,5 @@
 
-# Denet Head Runtime
+# Dennett Head Runtime
 
 ## Purpose
 

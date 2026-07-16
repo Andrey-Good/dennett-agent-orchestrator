@@ -9,7 +9,7 @@
 
 ## Решение
 
-`denet-memory-core` определяет одну каноническую семантику памяти. Физический adapter зависит от deployment role:
+`dennett-memory-core` определяет одну каноническую семантику памяти. Физический adapter зависит от deployment role:
 
 - обычный клиент — SQLite cache, drafts и offline operation log;
 - single-device local-only profile — явный embedded canonical store;

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
-from denet_adapter_host.main import handle
+from dennett_adapter_host.main import handle
 
 
 class HostTests(unittest.TestCase):

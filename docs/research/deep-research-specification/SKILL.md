@@ -743,7 +743,7 @@ The chat response should:
 
 When web research was used, cite the most load-bearing claims in the response.
 
-Do not claim that the result is proven globally. State where Denet-specific evaluation is still required.
+Do not claim that the result is proven globally. State where Dennett-specific evaluation is still required.
 
 ---
 

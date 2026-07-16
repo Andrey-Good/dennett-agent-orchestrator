@@ -1,5 +1,5 @@
 
-# Denet Sensor Worker
+# Dennett Sensor Worker
 
 Isolated audio/screen/camera/clipboard capture runtime.
 

@@ -1,7 +1,7 @@
 
-# Denet Memory Service
+# Dennett Memory Service
 
-Wraps the same `denet-memory-core` semantics used by embedded mode.
+Wraps the same `dennett-memory-core` semantics used by embedded mode.
 
 - Never become a second Head.
 - Canonical ingest must continue even if derived indexers fail.

@@ -18,7 +18,7 @@ These are intentional architecture choices that remain to be resolved by ADRs or
 | Exact provider set for first public build | fake + 1–2 high-value runtimes | maintenance value and user demand |
 | RPO/RTO defaults | conservative personal-server proposal | measured backup/restore drill |
 | Default sensory retention | profile-based, local-first | storage, privacy and user-study results |
-| Public license | all rights reserved currently | owner decision before public release/contributions |
+| Public license | no license selected; no license file present | owner decision before public release/contributions |
 | JavaScript lockfile | generate in first dependency-resolution commit | successful clean install and CI pass |
 
 Architecture volumes contain the full alternatives and replacement triggers. Add an ADR when a decision becomes binding.

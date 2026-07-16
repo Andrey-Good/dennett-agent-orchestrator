@@ -1,4 +1,4 @@
-# Denet Planning
+# Dennett Planning
 
 This directory stores the machine-readable implementation plan.
 

@@ -1,1 +1,1 @@
-{"name":"@denet/adapter-host-node","private":true,"version":"0.1.0","type":"module","scripts":{"typecheck":"tsc --noEmit","test":"node --test dist/*.test.js","build":"tsc"},"devDependencies":{"typescript":"^5.8.0"}}
+{"name":"@dennett/adapter-host-node","private":true,"version":"0.1.0","type":"module","scripts":{"typecheck":"tsc --noEmit","test":"node --test dist/*.test.js","build":"tsc"},"devDependencies":{"typescript":"^5.8.0"}}
