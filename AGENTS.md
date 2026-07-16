@@ -44,6 +44,48 @@ The repository is architecture-first. Do not invent product semantics inside cod
 
 Do not begin a semantic code change without a Work Package. A broad user request must first be converted into a bounded package or autonomous batch.
 
+## Engineering priorities
+
+Use this priority order when trade-offs are unavoidable:
+
+1. correctness;
+2. reliability and recoverability;
+3. architectural clarity;
+4. testability;
+5. extensibility and replaceability;
+6. maintainability;
+7. implementation speed.
+
+Code, tests and project artifacts must remain understandable without access to the model transcript or hidden reasoning.
+
+If required product or architecture semantics are missing, ambiguous or contradictory, do not silently invent a permanent rule in code. Capture the assumption or decision in the Work Package, a decision request, specification, ADR or acceptance test. Stop for owner input when the choice changes product behavior, privacy, authority, external cost, recoverability or another difficult-to-reverse boundary.
+
+Prefer mature capabilities already provided by the selected runtime, SDK, framework or platform. Add translation, normalization, safety enforcement and stable project-level ports around them; implement custom lifecycle, session, tool, approval or discovery machinery only when the existing capability cannot satisfy the documented contract, reliability, portability or replacement requirements.
+
+## Current runtime constraint
+
+Until the owner explicitly changes this constraint:
+
+- Codex SDK is the only permitted real agent runtime integration;
+- deterministic fake/in-memory runtimes remain required for tests and credential-free development;
+- Codex SDK and provider-specific types stay inside adapter or adapter-host roots; domain and application code depend on `AgentRuntimePort` and other provider-neutral ports;
+- implement Codex-first, not Codex-only: preserve descriptors, capability probes, session mapping, typed `native_extensions` and conformance boundaries so later providers and local models can be added without rewriting core behavior;
+- do not rebuild Codex-native sessions, workspace handling, tools, approvals, checkpoints or event streams unless a documented Denet contract requires behavior the SDK does not provide.
+
+## Repository stewardship
+
+Within this repository and its local development environment, routine engineering operations do not require per-step owner approval:
+
+- install required development tools and dependencies;
+- create short-lived branches/worktrees;
+- commit coherent changes;
+- push branches or verified `main` updates;
+- maintain CI, repository metadata and contributor-facing documentation.
+
+Keep `main` buildable, testable, public-safe and suitable as the current usable state of the project. Incomplete behavior must stay on a branch or behind a disabled feature/capability gate. Never commit secrets, private user content, local credentials or machine-specific state.
+
+Ask before actions that materially extend beyond the repository scope, introduce paid or hosted commitments, change external accounts/security settings, publish private data, or perform destructive operations outside documented development workflows.
+
 ## Repository architecture rules
 
 1. One mutable state has one authoritative owner.
