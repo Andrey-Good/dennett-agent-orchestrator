@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "DEC-0002",
+  "work_package": "WP-M00-006",
+  "severity": "red",
+  "question": "What license should the repository use during M00?",
+  "context": "A placeholder LICENSE.md and all-rights-reserved wording existed, but the owner has not selected a license.",
+  "options": [
+    {
+      "id": "A",
+      "description": "Keep a placeholder license-status file",
+      "benefits": [
+        "makes the current legal status explicit"
+      ],
+      "costs": [
+        "looks like a selected license artifact"
+      ],
+      "risks": [
+        "may confuse contributors and automated license scanners"
+      ]
+    },
+    {
+      "id": "B",
+      "description": "Keep no license file until a license is selected",
+      "benefits": [
+        "matches the owner's explicit instruction"
+      ],
+      "costs": [
+        "contributors must read repository documentation for status"
+      ],
+      "risks": [
+        "publication remains unsuitable for third-party contribution until revisited"
+      ]
+    }
+  ],
+  "recommendation": "B",
+  "reason": "The owner explicitly requested no license for now on 2026-07-16.",
+  "default_if_deferred": "stop",
+  "needed_by": "M00",
+  "status": "resolved",
+  "resolution": {
+    "selected_option": "B",
+    "decided_by": "owner",
+    "decided_at": "2026-07-16",
+    "note": "Remove LICENSE.md and state only that no license has been selected."
+  }
+}

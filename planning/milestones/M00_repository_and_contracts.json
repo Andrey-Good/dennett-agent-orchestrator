@@ -2,21 +2,33 @@
   "version": 1,
   "id": "M00",
   "title": "Repository and Contracts Foundation",
-  "status": "REFINED",
+  "status": "ACTIVE",
   "outcome": "The repository builds from a documented environment, generated contracts are reproducible, required checks run automatically, and coding agents can execute bounded work packages.",
   "non_goals": [
     "real cloud agent provider",
     "production UI feature set",
     "production memory retrieval"
   ],
+  "owner_decisions": [
+    "DEC-0001",
+    "DEC-0002"
+  ],
   "vertical_slices": [
+    {
+      "id": "VS-M00-00",
+      "title": "Canonical repository identity",
+      "work_packages": [
+        "WP-M00-006"
+      ]
+    },
     {
       "id": "VS-M00-01",
       "title": "Reproducible repository verification",
       "work_packages": [
         "WP-M00-001",
         "WP-M00-002",
-        "WP-M00-003"
+        "WP-M00-003",
+        "WP-M00-007"
       ]
     },
     {
@@ -30,66 +42,612 @@
   ],
   "work_packages": [
     {
-      "id": "WP-M00-001",
-      "title": "Run and repair the Rust workspace baseline",
-      "status": "DRAFT",
-      "risk": "R1",
-      "outcome": "cargo fmt, clippy and workspace tests run in the pinned toolchain and all scaffold failures are either fixed or converted into explicit work packages.",
-      "acceptance": [
-        "TEST-REPO-STRUCTURE-001"
-      ],
       "version": 1,
+      "id": "WP-M00-006",
+      "title": "Normalize canonical product identity and license state",
+      "status": "READY",
       "milestone": "M00",
-      "vertical_slice": "VS-M00-01"
+      "vertical_slice": "VS-M00-00",
+      "risk": "R2",
+      "outcome": "All public names, code identifiers, protocol namespaces and repository metadata consistently use Dennett, and the repository contains no license file while the owner has not selected a license.",
+      "non_goals": [
+        "behavioral product changes",
+        "repository rename on GitHub",
+        "selecting an open-source or source-available license"
+      ],
+      "requirement_refs": [
+        "OWNER:CanonicalNameDennett",
+        "OWNER:NoLicenseSelected",
+        "M00:OwnerGate"
+      ],
+      "architecture_refs": [
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#3-m00--repository-and-contracts"
+      ],
+      "depends_on": [],
+      "allowed_roots": [
+        "AGENTS.md",
+        "README.md",
+        "README.ru.md",
+        "docs",
+        "apps",
+        "crates",
+        "services",
+        "protocols",
+        "tools",
+        "planning",
+        "schemas",
+        "tests",
+        "Cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        ".env.example",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        ".git"
+      ],
+      "state_ownership": {
+        "reads": [
+          "owner product identity decision"
+        ],
+        "writes": [
+          "repository naming and public metadata"
+        ]
+      },
+      "contract_changes": {
+        "public_api": true,
+        "protocol": true,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-PRODUCT-IDENTITY-001"
+      ],
+      "required_commands": [
+        "uv run python tools/verify_repo.py",
+        "uv run python tools/verify_docs.py",
+        "uv run python tools/generate_doc_index.py --check"
+      ],
+      "observability": [],
+      "rollback": [
+        "revert the identity-normalization commit before later public contracts depend on it"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false,
+        "resolved_by": [
+          "DEC-0001",
+          "DEC-0002"
+        ]
+      },
+      "estimate": {
+        "target_agent_hours": 2,
+        "max_diff_lines": 10000
+      },
+      "notes": [
+        "This is intentionally broad mechanical work performed before implementation packages."
+      ]
     },
     {
+      "version": 1,
+      "id": "WP-M00-001",
+      "title": "Establish reproducible bootstrap and Rust workspace baseline",
+      "status": "READY",
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-01",
+      "risk": "R1",
+      "outcome": "A clean checkout can install pinned development tools, synchronize Python dependencies with uv, install the frozen pnpm workspace, and pass Rust format, lint and workspace tests.",
+      "non_goals": [
+        "production packaging",
+        "mobile native toolchains",
+        "cloud credentials"
+      ],
+      "requirement_refs": [
+        "ARCH-83:Bootstrap",
+        "ARCH-83:Milestone0",
+        "M00:CleanMachineBootstrap"
+      ],
+      "architecture_refs": [
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#77-bootstrap",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#90-milestone-0--repository-and-contracts"
+      ],
+      "depends_on": [
+        "WP-M00-006"
+      ],
+      "allowed_roots": [
+        "tools",
+        "pyproject.toml",
+        "uv.lock",
+        "mise.toml",
+        "rust-toolchain.toml",
+        "Cargo.toml",
+        "Cargo.lock",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "Justfile",
+        ".gitignore",
+        ".github",
+        "README.md",
+        "README.ru.md",
+        "CONTRIBUTING.md",
+        "VALIDATION.md",
+        "crates",
+        "services",
+        "apps"
+      ],
+      "forbidden_roots": [
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "repository manifests and workspace declarations"
+        ],
+        "writes": [
+          "development toolchain and dependency locks"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-BOOTSTRAP-CLEAN-001",
+        "TEST-RUST-WORKSPACE-001"
+      ],
+      "required_commands": [
+        "just bootstrap",
+        "just rust"
+      ],
+      "observability": [
+        "doctor prints exact resolved tool versions"
+      ],
+      "rollback": [
+        "revert lockfiles and toolchain pins together"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 4,
+        "max_diff_lines": 1500
+      },
+      "notes": [
+        "Python dependency installation must use uv, never pip."
+      ]
+    },
+    {
+      "version": 1,
       "id": "WP-M00-002",
       "title": "Generate and validate protocol clients",
-      "status": "DRAFT",
-      "risk": "R2",
-      "outcome": "Buf lint, generation and breaking-change checks run reproducibly and generated files are verified.",
-      "acceptance": [],
-      "version": 1,
+      "status": "READY",
       "milestone": "M00",
-      "vertical_slice": "VS-M00-01"
+      "vertical_slice": "VS-M00-01",
+      "risk": "R2",
+      "outcome": "Buf lint, formatting, pinned generation and breaking-change checks run reproducibly, and committed generated Rust and TypeScript clients are verified against canonical Protobuf sources.",
+      "non_goals": [
+        "production transport implementation",
+        "new protocol semantics",
+        "mobile bindings"
+      ],
+      "requirement_refs": [
+        "ARCH-81:ProtocolPackages",
+        "ARCH-83:GeneratedClients",
+        "M00:ProtocolBreakingGate"
+      ],
+      "architecture_refs": [
+        "docs/architecture/81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.md#часть-ix-protocol-architecture",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#90-milestone-0--repository-and-contracts"
+      ],
+      "depends_on": [
+        "WP-M00-001"
+      ],
+      "allowed_roots": [
+        "protocols",
+        "generated",
+        "tools",
+        ".github",
+        ".gitignore",
+        ".gitattributes",
+        "Justfile",
+        "README.md",
+        "CONTRIBUTING.md"
+      ],
+      "forbidden_roots": [
+        "docs/specifications"
+      ],
+      "state_ownership": {
+        "reads": [
+          "canonical Protobuf schemas"
+        ],
+        "writes": [
+          "generated protocol client artifacts"
+        ]
+      },
+      "contract_changes": {
+        "public_api": true,
+        "protocol": true,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-PROTOCOL-GENERATION-001",
+        "TEST-PROTOCOL-BREAKING-001"
+      ],
+      "required_commands": [
+        "just generate",
+        "just test-contracts"
+      ],
+      "observability": [
+        "generation check reports the exact stale artifact paths"
+      ],
+      "rollback": [
+        "revert schema and generated outputs in the same commit"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 4,
+        "max_diff_lines": 4000
+      },
+      "notes": []
     },
     {
+      "version": 1,
       "id": "WP-M00-003",
-      "title": "Establish fast required PR checks",
-      "status": "DRAFT",
+      "title": "Establish fast required pull-request checks",
+      "status": "READY",
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-01",
       "risk": "R2",
-      "outcome": "A pull request receives repository, Rust, TypeScript, protocol and documentation checks with a target duration under ten minutes.",
-      "acceptance": [],
-      "version": 1,
-      "milestone": "M00",
-      "vertical_slice": "VS-M00-01"
+      "outcome": "Every pull request runs the documented fast repository, Python, Rust, TypeScript, protocol, generated-artifact and documentation gates, and failing required checks block merge to main.",
+      "non_goals": [
+        "nightly matrix",
+        "release signing",
+        "native application packaging"
+      ],
+      "requirement_refs": [
+        "IMPL-00:PRGate",
+        "TEST-STRATEGY:PRFastGate",
+        "M00:RequiredChecks"
+      ],
+      "architecture_refs": [
+        "docs/implementation/00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md#63-pr-gate",
+        "docs/testing/TEST_CATALOGUE_AND_QUALITY_GATES.md#pr-fast-gate"
+      ],
+      "depends_on": [
+        "WP-M00-002",
+        "WP-M00-004",
+        "WP-M00-005",
+        "WP-M00-007"
+      ],
+      "allowed_roots": [
+        ".github",
+        "Justfile",
+        "package.json",
+        "README.md",
+        "CONTRIBUTING.md",
+        "VALIDATION.md",
+        "tools"
+      ],
+      "forbidden_roots": [
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "all fast verification commands"
+        ],
+        "writes": [
+          "pull-request and main-branch quality gates"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-PR-FAST-GATE-001"
+      ],
+      "required_commands": [
+        "just check"
+      ],
+      "observability": [
+        "CI exposes one named required fast-gate result"
+      ],
+      "rollback": [
+        "revert workflow and branch-protection configuration together"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 3,
+        "max_diff_lines": 1000
+      },
+      "notes": [
+        "The target duration is under ten minutes on GitHub-hosted runners."
+      ]
     },
     {
+      "version": 1,
       "id": "WP-M00-004",
-      "title": "Add planning schema validation",
-      "status": "DRAFT",
-      "risk": "R1",
-      "outcome": "Work Packages, batches and decisions are schema-validated and checked for duplicate IDs and missing references.",
-      "acceptance": [],
-      "version": 1,
+      "title": "Add complete planning schema and graph validation",
+      "status": "READY",
       "milestone": "M00",
-      "vertical_slice": "VS-M00-02"
+      "vertical_slice": "VS-M00-02",
+      "risk": "R1",
+      "outcome": "Milestones, standalone Work Packages, batches and decisions are schema-validated and checked for duplicate IDs, missing references, dependency cycles, invalid READY states and unsafe batch composition.",
+      "non_goals": [
+        "external task tracker integration",
+        "automated product decisions",
+        "runtime workflow engine"
+      ],
+      "requirement_refs": [
+        "IMPL-03:PlanningValidation",
+        "M00:BoundedWorkPackages"
+      ],
+      "architecture_refs": [
+        "docs/implementation/03_WORK_PACKAGE_SYSTEM.md#15-валидация-planning"
+      ],
+      "depends_on": [
+        "WP-M00-001"
+      ],
+      "allowed_roots": [
+        "planning",
+        "schemas",
+        "tools",
+        "tests",
+        "pyproject.toml",
+        "uv.lock",
+        "Justfile"
+      ],
+      "forbidden_roots": [
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "machine-readable planning files and test catalogue"
+        ],
+        "writes": [
+          "planning validation rules and diagnostics"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": true,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-PLANNING-VALIDATION-001"
+      ],
+      "required_commands": [
+        "uv run python -m unittest discover -s tools/tests",
+        "uv run python tools/verify_planning.py"
+      ],
+      "observability": [
+        "validator diagnostics include file and field context"
+      ],
+      "rollback": [
+        "revert schema and validator changes together"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 4,
+        "max_diff_lines": 1800
+      },
+      "notes": []
     },
     {
-      "id": "WP-M00-005",
-      "title": "Generate the first test catalogue views",
-      "status": "DRAFT",
-      "risk": "R1",
-      "outcome": "Seed catalogue entries generate a readable catalogue and coverage report without manual duplication.",
-      "acceptance": [],
       "version": 1,
+      "id": "WP-M00-005",
+      "title": "Generate initial test catalogue views",
+      "status": "READY",
       "milestone": "M00",
-      "vertical_slice": "VS-M00-02"
+      "vertical_slice": "VS-M00-02",
+      "risk": "R1",
+      "outcome": "Structured test catalogue sources generate deterministic human-readable catalogue, coverage, release-gate, debt and current-milestone views without manual duplication.",
+      "non_goals": [
+        "full beta catalogue",
+        "test execution scheduler",
+        "coverage percentage targets"
+      ],
+      "requirement_refs": [
+        "TEST-STRATEGY:GeneratedViews",
+        "M00:TestCatalogue"
+      ],
+      "architecture_refs": [
+        "docs/testing/TEST_CATALOGUE_AND_QUALITY_GATES.md#14-генерируемые-документы"
+      ],
+      "depends_on": [
+        "WP-M00-004"
+      ],
+      "allowed_roots": [
+        "tests/catalog",
+        "docs/testing/generated",
+        "tools",
+        "Justfile"
+      ],
+      "forbidden_roots": [
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "structured test catalogue and planning state"
+        ],
+        "writes": [
+          "rebuildable test catalogue projections"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-CATALOGUE-VIEWS-001"
+      ],
+      "required_commands": [
+        "uv run python tools/generate_test_catalogue.py --check"
+      ],
+      "observability": [
+        "check mode lists stale or missing generated views"
+      ],
+      "rollback": [
+        "remove generated projections and revert the generator"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 3,
+        "max_diff_lines": 1200
+      },
+      "notes": []
+    },
+    {
+      "version": 1,
+      "id": "WP-M00-007",
+      "title": "Prove the credential-free fake conversation path",
+      "status": "READY",
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-01",
+      "risk": "R2",
+      "outcome": "One documented command executes a real public application path through the Head use case, deterministic fake agent runtime and in-memory canonical memory, returns a Result Envelope, and records the corresponding Memory Event without cloud credentials.",
+      "non_goals": [
+        "desktop IPC",
+        "session persistence across restart",
+        "real Codex SDK integration"
+      ],
+      "requirement_refs": [
+        "ARCH-83:FirstVerticalSlice",
+        "M00:FakeVerticalPath",
+        "ROOT:LocalOnlyWithoutCloudCredentials"
+      ],
+      "architecture_refs": [
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#86-first-vertical-slice",
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#3-m00--repository-and-contracts"
+      ],
+      "depends_on": [
+        "WP-M00-001"
+      ],
+      "allowed_roots": [
+        "crates/dennett-agent-core",
+        "crates/dennett-memory-core",
+        "services/head",
+        "tests/integration",
+        "Justfile",
+        "README.md",
+        "VALIDATION.md"
+      ],
+      "forbidden_roots": [
+        "adapters",
+        "services/adapter-host-node"
+      ],
+      "state_ownership": {
+        "reads": [
+          "fake agent request and in-memory event log"
+        ],
+        "writes": [
+          "in-memory canonical memory through MemoryPort"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-FAKE-CHAT-001"
+      ],
+      "required_commands": [
+        "just demo-fake",
+        "cargo test -p dennett-head"
+      ],
+      "observability": [
+        "demo emits command, result and memory event correlation identifiers"
+      ],
+      "rollback": [
+        "revert demo and integration-test composition without changing public contracts"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 3,
+        "max_diff_lines": 1000
+      },
+      "notes": [
+        "Codex SDK remains intentionally out of scope until M01."
+      ]
     }
   ],
+  "batches": [
+    "AB-M00-001",
+    "AB-M00-002",
+    "AB-M00-003"
+  ],
   "owner_acceptance": [
+    "The canonical product name is Dennett everywhere in the active repository",
+    "No license file exists until the owner selects a license",
     "One documented command runs all fast verification",
     "A failing required check blocks merge",
-    "A coding agent can load one Work Package and identify exact required tests"
+    "A coding agent can load one Work Package and identify exact required tests",
+    "A credential-free fake conversation path runs end to end"
   ]
 }

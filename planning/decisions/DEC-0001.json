@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "DEC-0001",
+  "work_package": "WP-M00-006",
+  "severity": "red",
+  "question": "What is the canonical product name?",
+  "context": "The repository and canonical documents used the shorter Denet spelling while the repository name and owner intent use Dennett.",
+  "options": [
+    {
+      "id": "A",
+      "description": "Keep Denet as the canonical product name",
+      "benefits": [
+        "avoids repository-wide rename"
+      ],
+      "costs": [
+        "contradicts owner intent and repository identity"
+      ],
+      "risks": [
+        "permanent naming inconsistency"
+      ]
+    },
+    {
+      "id": "B",
+      "description": "Use Dennett as the canonical product name",
+      "benefits": [
+        "matches owner intent and repository identity"
+      ],
+      "costs": [
+        "requires a repository-wide mechanical rename before implementation expands"
+      ],
+      "risks": [
+        "broken links or identifiers if the rename is incomplete"
+      ]
+    }
+  ],
+  "recommendation": "B",
+  "reason": "The owner explicitly confirmed Dennett on 2026-07-16.",
+  "default_if_deferred": "stop",
+  "needed_by": "M00",
+  "status": "resolved",
+  "resolution": {
+    "selected_option": "B",
+    "decided_by": "owner",
+    "decided_at": "2026-07-16",
+    "note": "Normalize active documentation, public identifiers and repository metadata before implementation grows."
+  }
+}

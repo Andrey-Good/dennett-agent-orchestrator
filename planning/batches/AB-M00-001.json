@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "AB-M00-001",
+  "title": "Prepare canonical identity and development bootstrap",
+  "status": "READY",
+  "packages": [
+    "WP-M00-006",
+    "WP-M00-001"
+  ],
+  "execution": {
+    "order": "dependency",
+    "max_parallel": 1,
+    "stop_after_packages": 2,
+    "merge_after_each": true,
+    "require_green_main": true
+  },
+  "limits": {
+    "max_risk": "R2",
+    "new_production_dependencies": "forbidden",
+    "architecture_changes": "forbidden",
+    "external_effects": "forbidden",
+    "public_breaking_changes": "owner_resolved_identity_only"
+  },
+  "stop_conditions": [
+    "decision_required",
+    "test_failure_after_two_repair_attempts",
+    "scope_expansion",
+    "main_red",
+    "merge_conflict",
+    "budget_exhausted"
+  ],
+  "reporting": {
+    "on_package_start": true,
+    "on_package_end": true,
+    "on_decision": true,
+    "periodic_noise": false
+  }
+}

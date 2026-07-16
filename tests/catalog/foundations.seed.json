@@ -19,6 +19,204 @@
       "owner": "repository"
     },
     {
+      "id": "TEST-PRODUCT-IDENTITY-001",
+      "title": "Canonical repository identity uses Dennett and no license file",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["repository", "contracts", "documentation"],
+      "levels": ["static"],
+      "requirement_refs": ["OWNER:CanonicalNameDennett", "OWNER:NoLicenseSelected"],
+      "work_package_refs": ["WP-M00-006"],
+      "expected": [
+        "Active public documentation and code identifiers use Dennett consistently",
+        "No LICENSE or LICENSE.md file exists",
+        "Repository verification rejects legacy active product identifiers"
+      ],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "repository"
+    },
+    {
+      "id": "TEST-BOOTSTRAP-CLEAN-001",
+      "title": "Clean checkout bootstrap installs pinned development dependencies",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R1",
+      "domains": ["repository", "tooling"],
+      "levels": ["integration"],
+      "requirement_refs": ["ARCH-83:Bootstrap", "M00:CleanMachineBootstrap"],
+      "work_package_refs": ["WP-M00-001"],
+      "expected": [
+        "Bootstrap uses uv for Python dependencies and never invokes pip",
+        "Pinned Rust, Node, pnpm, Buf, protoc and just versions are available",
+        "Bootstrap requires no provider credentials"
+      ],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "repository"
+    },
+    {
+      "id": "TEST-RUST-WORKSPACE-001",
+      "title": "Pinned Rust workspace format lint and tests pass",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R1",
+      "domains": ["repository", "rust"],
+      "levels": ["static", "unit"],
+      "requirement_refs": ["ARCH-83:Milestone0", "M00:RustBaseline"],
+      "work_package_refs": ["WP-M00-001"],
+      "expected": [
+        "cargo fmt --check passes",
+        "cargo clippy --workspace --all-targets -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "implementation": {
+        "target_suite": "cargo workspace",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "repository"
+    },
+    {
+      "id": "TEST-PROTOCOL-GENERATION-001",
+      "title": "Protocol clients regenerate deterministically from canonical schemas",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["protocol", "repository"],
+      "levels": ["contract", "static"],
+      "requirement_refs": ["ARCH-81:ProtocolPackages", "ARCH-83:GeneratedClients"],
+      "work_package_refs": ["WP-M00-002"],
+      "expected": [
+        "Buf lint and format checks pass",
+        "Pinned plugins generate Rust and TypeScript clients",
+        "A second generation produces no tracked diff"
+      ],
+      "implementation": {
+        "target_suite": "protocols",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "protocol"
+    },
+    {
+      "id": "TEST-PROTOCOL-BREAKING-001",
+      "title": "Protocol compatibility gate rejects breaking changes",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["protocol", "compatibility"],
+      "levels": ["contract"],
+      "requirement_refs": ["ARCH-83:ProtocolCompatibility", "M00:ProtocolBreakingGate"],
+      "work_package_refs": ["WP-M00-002"],
+      "expected": [
+        "Buf breaking check compares the protocol module with main",
+        "An incompatible field removal or reuse fails the gate"
+      ],
+      "implementation": {
+        "target_suite": "protocols",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "protocol"
+    },
+    {
+      "id": "TEST-PR-FAST-GATE-001",
+      "title": "Pull request fast gate covers every M00 required check",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["repository", "ci"],
+      "levels": ["integration"],
+      "requirement_refs": ["IMPL-00:PRGate", "TEST-STRATEGY:PRFastGate"],
+      "work_package_refs": ["WP-M00-003"],
+      "expected": [
+        "Repository, docs, planning, generated views, Python, Rust, TypeScript and protocol checks run",
+        "The gate uses frozen dependency locks",
+        "A failing gate blocks merge to main"
+      ],
+      "implementation": {
+        "target_suite": "github actions",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "repository"
+    },
+    {
+      "id": "TEST-PLANNING-VALIDATION-001",
+      "title": "Planning validator rejects invalid graph and unsafe ready work",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R1",
+      "domains": ["planning", "repository"],
+      "levels": ["unit", "static"],
+      "requirement_refs": ["IMPL-03:PlanningValidation"],
+      "work_package_refs": ["WP-M00-004"],
+      "expected": [
+        "Schemas validate milestones, Work Packages, batches and decisions",
+        "Duplicate IDs, missing references and dependency cycles fail",
+        "READY packages without acceptance evidence and unsafe batches fail"
+      ],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "planning"
+    },
+    {
+      "id": "TEST-CATALOGUE-VIEWS-001",
+      "title": "Structured catalogue generates deterministic human views",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R1",
+      "domains": ["testing", "documentation"],
+      "levels": ["static"],
+      "requirement_refs": ["TEST-STRATEGY:GeneratedViews"],
+      "work_package_refs": ["WP-M00-005"],
+      "expected": [
+        "Catalogue, coverage, release gate, debt and milestone views are generated",
+        "Check mode reports stale generated views",
+        "Generated output is deterministic"
+      ],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "quality"
+    },
+    {
+      "id": "TEST-FAKE-CHAT-001",
+      "title": "Credential-free fake conversation reaches result and memory",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["agents", "memory", "head", "repository"],
+      "levels": ["integration"],
+      "requirement_refs": ["ARCH-83:FirstVerticalSlice", "M00:FakeVerticalPath"],
+      "work_package_refs": ["WP-M00-007"],
+      "expected": [
+        "A public Head application path invokes the deterministic fake runtime",
+        "The returned Result Envelope correlates to the submitted command",
+        "A matching Memory Event is appended",
+        "No cloud credential is read or required"
+      ],
+      "implementation": {
+        "target_suite": "services/head",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "agents"
+    },
+    {
       "id": "TEST-MEMORY-ONE-LOGICAL-001",
       "title": "Client cache cannot become a second canonical memory",
       "status": "specified",
