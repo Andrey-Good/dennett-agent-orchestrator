@@ -5,8 +5,13 @@
     "status": "completed",
     "summary": "Pinned the cross-language development toolchain, added Cargo, pnpm and uv locks, implemented a credential-free cross-platform bootstrap and exact-version doctor, and made the existing Rust, Python and TypeScript baselines pass from a clean checkout.",
     "commits": [
-      "5545773"
+      "5545773",
+      "173b04b",
+      "28119e7",
+      "3f3fba2",
+      "6db4264"
     ],
+    "merged_at": "2026-07-17",
     "changed_files": [
       "mise.toml",
       "rust-toolchain.toml",
@@ -40,6 +45,8 @@
       "passed": [
         "clean detached checkout: just bootstrap",
         "clean detached checkout: just rust",
+        "main integration: repeated just bootstrap without interactive prompt",
+        "main integration: just check",
         "just check",
         "just verify",
         "just python (2 adapter tests and 6 tooling tests)",

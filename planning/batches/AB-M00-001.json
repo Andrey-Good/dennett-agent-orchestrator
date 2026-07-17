@@ -2,7 +2,7 @@
   "version": 1,
   "id": "AB-M00-001",
   "title": "Prepare canonical identity and development bootstrap",
-  "status": "READY",
+  "status": "COMPLETED",
   "packages": [
     "WP-M00-006",
     "WP-M00-001"
