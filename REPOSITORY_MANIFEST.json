@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 265,
+  "file_count": 266,
   "files": [
     {
       "path": ".editorconfig",
@@ -936,7 +936,12 @@
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 19484,
-      "sha256": "bdcadf5a2452a2e2f8d7455233de22b5d0a4667d8cc02c479b6b848d31f48731"
+      "sha256": "6ff370ea93b893ebb51b3386ac3e453d38ec273e4641a540d4b6d85edb276fed"
+    },
+    {
+      "path": "planning/results/WP-M00-001.json",
+      "bytes": 3076,
+      "sha256": "486fe10b2145f273cec1c4d40666e59e25e0641e94e851e6dcd11939b5d7edd8"
     },
     {
       "path": "planning/results/WP-M00-006.json",

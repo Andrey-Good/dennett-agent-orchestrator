@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-001",
+    "status": "completed",
+    "summary": "Pinned the cross-language development toolchain, added Cargo, pnpm and uv locks, implemented a credential-free cross-platform bootstrap and exact-version doctor, and made the existing Rust, Python and TypeScript baselines pass from a clean checkout.",
+    "commits": [
+      "5545773"
+    ],
+    "changed_files": [
+      "mise.toml",
+      "rust-toolchain.toml",
+      "Cargo.toml",
+      "Cargo.lock",
+      "pyproject.toml",
+      "uv.lock",
+      "package.json",
+      "pnpm-lock.yaml",
+      "Justfile",
+      "tools/bootstrap.py",
+      "tools/doctor.py",
+      "tools/run_in_toolchain.py",
+      "tools/tests/test_bootstrap.py",
+      "tools/tests/test_doctor.py",
+      ".github/workflows/ci.yml",
+      "README.md",
+      "README.ru.md",
+      "CONTRIBUTING.md",
+      "VALIDATION.md",
+      "tests/catalog/foundations.seed.json"
+    ],
+    "requirements_satisfied": [
+      "ARCH-83:Bootstrap",
+      "ARCH-83:Milestone0",
+      "M00:CleanMachineBootstrap",
+      "TEST-BOOTSTRAP-CLEAN-001",
+      "TEST-RUST-WORKSPACE-001"
+    ],
+    "tests": {
+      "passed": [
+        "clean detached checkout: just bootstrap",
+        "clean detached checkout: just rust",
+        "just check",
+        "just verify",
+        "just python (2 adapter tests and 5 tooling tests)",
+        "just ts (desktop, mobile and Node adapter host)",
+        "doctor exact-version probes for Rust 1.97.0, Node 22.23.1, pnpm 10.0.0, Python 3.13.5, uv 0.9.26, Buf 1.71.0, protoc 35.1 and just 1.56.0",
+        "pnpm install --frozen-lockfile",
+        "git diff --check"
+      ],
+      "not_run": [
+        "GitHub-hosted clean runner; final CI composition and observed Actions evidence belong to WP-M00-003",
+        "native Tauri/mobile packaging is outside this package"
+      ],
+      "failed": []
+    },
+    "review": {
+      "findings_closed": [
+        "Resolved Windows corepack.cmd discovery for Python subprocesses",
+        "Activated the MSVC Build Tools environment automatically for Windows Rust commands",
+        "Forced nested workspace scripts through Corepack so global Node and pnpm cannot leak into the pinned run",
+        "Adjusted the diff budget to account for mandatory generated lockfiles without expanding semantic scope"
+      ],
+      "findings_open": [],
+      "method": "R1 self-review"
+    },
+    "migrations": [],
+    "observability_changes": [
+      "just doctor prints expected and actual versions with an explicit status for every pinned tool"
+    ],
+    "known_limitations": [
+      "The clean-checkout test used an empty detached worktree on the prepared Windows host and could reuse global download caches; WP-M00-003 supplies clean GitHub runner evidence",
+      "mise requires its normal explicit trust step for a newly cloned repository",
+      "Protocol generation and Buf compatibility gates remain WP-M00-002"
+    ],
+    "follow_up_candidates": [
+      "WP-M00-002",
+      "WP-M00-003"
+    ],
+    "owner_decision_required": false
+  }
+}
