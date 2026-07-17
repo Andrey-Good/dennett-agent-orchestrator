@@ -42,7 +42,7 @@
         "clean detached checkout: just rust",
         "just check",
         "just verify",
-        "just python (2 adapter tests and 5 tooling tests)",
+        "just python (2 adapter tests and 6 tooling tests)",
         "just ts (desktop, mobile and Node adapter host)",
         "doctor exact-version probes for Rust 1.97.0, Node 22.23.1, pnpm 10.0.0, Python 3.13.5, uv 0.9.26, Buf 1.71.0, protoc 35.1 and just 1.56.0",
         "pnpm install --frozen-lockfile",
@@ -59,6 +59,7 @@
         "Resolved Windows corepack.cmd discovery for Python subprocesses",
         "Activated the MSVC Build Tools environment automatically for Windows Rust commands",
         "Forced nested workspace scripts through Corepack so global Node and pnpm cannot leak into the pinned run",
+        "Made bootstrap subprocesses non-interactive so an existing incompatible node_modules tree cannot block unattended execution",
         "Adjusted the diff budget to account for mandatory generated lockfiles without expanding semantic scope"
       ],
       "findings_open": [],

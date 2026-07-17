@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,7 +22,10 @@ def run(command: list[str]) -> None:
     executable = shutil.which(command[0])
     if executable is None:
         raise FileNotFoundError(command[0])
-    subprocess.run([executable, *command[1:]], cwd=ROOT, check=True)
+    environment = {**os.environ, "CI": "true"}
+    subprocess.run(
+        [executable, *command[1:]], cwd=ROOT, check=True, env=environment
+    )
 
 
 def create_local_config(root: Path = ROOT) -> None:

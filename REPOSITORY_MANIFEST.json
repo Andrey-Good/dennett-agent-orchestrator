@@ -940,8 +940,8 @@
     },
     {
       "path": "planning/results/WP-M00-001.json",
-      "bytes": 3076,
-      "sha256": "486fe10b2145f273cec1c4d40666e59e25e0641e94e851e6dcd11939b5d7edd8"
+      "bytes": 3211,
+      "sha256": "49b17768de3d4863d754c10bc1d21915186c673ba1ad3b697b427a0db69ee14a"
     },
     {
       "path": "planning/results/WP-M00-006.json",
@@ -1265,8 +1265,8 @@
     },
     {
       "path": "tools/bootstrap.py",
-      "bytes": 1402,
-      "sha256": "65bd7d44fa494b228d5c83cd07251bdb4326e6d7197b7ea6895f805d66999cc0"
+      "bytes": 1490,
+      "sha256": "a7a45798862b915ba982d7600a7cadd70e40780e077d26d3effe5e32b5c728d1"
     },
     {
       "path": "tools/dennettctl/Cargo.toml",
@@ -1305,8 +1305,8 @@
     },
     {
       "path": "tools/tests/test_bootstrap.py",
-      "bytes": 1711,
-      "sha256": "0853c4c3e0d5e072d727b8f9da87e79867860aaba16e6fec1c1ec1ba333c8c5a"
+      "bytes": 1910,
+      "sha256": "74f4e3f0c0a711ca9fa79372545d2e56df5e9f5c32dabe0a411df3c831dadd1c"
     },
     {
       "path": "tools/tests/test_doctor.py",
