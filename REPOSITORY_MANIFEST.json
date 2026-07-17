@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "8dd907e27bcd624c92df498e45588ee704c552747ded4a167ee28c5de55fb40e"
+      "sha256": "ddc8e99eeb21c5db398303c69e62d09edd2594436da80acf1bfa7430c583d028"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -885,28 +885,28 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 4938,
-      "sha256": "4bb243de1b733ce6ff0b951834463b832f444ceedd4e287edf59894db08d132e"
+      "bytes": 5160,
+      "sha256": "9fd57a066c5e4b2cdcc999966778d63129f3fc02607e16967ef241de41b13c5c"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1351,
-      "sha256": "7c8f7303c60f16e49a68a05894cde134586c55cff7370f8aa82ab7b1bfa7a002"
+      "bytes": 1347,
+      "sha256": "e19c1be3637435a3ed5f10c45f77eea414a98944d89f2522a1e9be2f20b9f6cc"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 1786,
-      "sha256": "ee368ab76738f49754222e4cb2ccca3817eea113c870fcbc8c73851c489607f4"
+      "bytes": 1790,
+      "sha256": "b004e6170e238514a2800fbfa3b74bbda1eedc871bf098ab9c502bd18fbed8b7"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 3260,
-      "sha256": "8e45f66f9939b767d44c62356c8b2ee2bca5702f5533e48bbe349a4c9c624ad3"
+      "bytes": 3262,
+      "sha256": "8b5f708da62f61357f62d72c0cb402c3612f18486396dc5ea83ae3f63dfac80d"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 794,
-      "sha256": "a18957454d6a9d4dbdf4de4c9f2b0f34683f1d555dc424794f60d4c8292a84c5"
+      "bytes": 712,
+      "sha256": "a84b6196c149d5cef882dec17d421d3d2d06d7697e41992e384b9a09484ffa9b"
     },
     {
       "path": "generated/README.md",
@@ -1015,8 +1015,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 24116,
-      "sha256": "d12a5aced62ddcf0878567065e987ce0d4010d92ad161fc1dc00824f3579e899"
+      "bytes": 24114,
+      "sha256": "ea392088ba7377df958bc90fe440d48a55e21cda07bbcffa0bcba42dac92a2c1"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1155,8 +1155,8 @@
     },
     {
       "path": "schemas/milestone.schema.json",
-      "bytes": 1968,
-      "sha256": "77e6c4efe62614aa2a8f4ce6d4f0a45e3183d5f717025407d53a06688aad1413"
+      "bytes": 2079,
+      "sha256": "0dd9ff6a05e147f5f060c098f61046e6e2e918ff23fb8f2a770c28fefb804398"
     },
     {
       "path": "schemas/portable-package-manifest.schema.json",
@@ -1340,8 +1340,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 12411,
-      "sha256": "ad9c913a95878cb9fef713a61a2fff3651db3854e335837540339fa88040a07a"
+      "bytes": 12567,
+      "sha256": "7573c1f48dd58a69c4ef00d256c480a9df52389d05fef5a36398ab655a8cd1df"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1430,8 +1430,8 @@
     },
     {
       "path": "tools/generate_test_catalogue.py",
-      "bytes": 16349,
-      "sha256": "6114fc949ea7dafec0720312c46bc4f6eee42535c2743ae83e31f0ad5ca02cd3"
+      "bytes": 16472,
+      "sha256": "f51b14e0e88fedf7cf1ee81f689c8afcd1afc755469d5b76b525a280074d993b"
     },
     {
       "path": "tools/protocol_codegen.py",
@@ -1455,8 +1455,8 @@
     },
     {
       "path": "tools/tests/test_generate_test_catalogue.py",
-      "bytes": 7276,
-      "sha256": "69f3689c07842a5834a2fd015a73680c5e358eb873a704a290266c925f498e58"
+      "bytes": 9355,
+      "sha256": "fcda598fb2bf8724b62d14603b6cf16d80936252e0afaffe84186a312755ba82"
     },
     {
       "path": "tools/tests/test_protocol_codegen.py",
