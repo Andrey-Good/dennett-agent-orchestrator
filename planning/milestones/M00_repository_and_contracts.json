@@ -2,7 +2,7 @@
   "version": 1,
   "id": "M00",
   "title": "Repository and Contracts Foundation",
-  "status": "QUALIFYING",
+  "status": "ACCEPTED",
   "outcome": "The repository builds from a documented environment, generated contracts are reproducible, required checks run automatically, and coding agents can execute bounded work packages.",
   "non_goals": [
     "real cloud agent provider",
