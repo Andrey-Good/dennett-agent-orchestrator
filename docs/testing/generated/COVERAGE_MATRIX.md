@@ -21,10 +21,10 @@ Each row links one requirement to its catalogue evidence.
 | `ARCH-83:RepositoryLayout` | `TEST-REPO-STRUCTURE-001` | — | `repository` | `tools/verify_repo.py` | `release` |
 | `IMPL-00:PRGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | `.github/branch-protection.main.json`, `.github/workflows/ci.yml`, `Justfile`, `tools/tests/test_verify_ci.py`, `tools/verify_ci.py`, `tools/verify_worktree_clean.py` | `release` |
 | `IMPL-03:PlanningValidation` | `TEST-PLANNING-VALIDATION-001` | `WP-M00-004` | `planning` | `schemas/autonomous-batch.schema.json`, `schemas/decision-request.schema.json`, `schemas/milestone.schema.json`, `schemas/technical-debt.schema.json`, `schemas/work-package-result.schema.json`, `schemas/work-package.schema.json`, `tools/tests/test_verify_planning.py`, `tools/verify_planning.py` | `release` |
-| `IMPL-04:MilestoneLifecycle` | `TEST-MILESTONE-CURRENT-LABEL-001` | `WP-M00-009` | `quality` | — | — |
+| `IMPL-04:MilestoneLifecycle` | `TEST-MILESTONE-CURRENT-LABEL-001` | `WP-M00-009` | `quality` | `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | — |
 | `IMPL-04:MilestoneLifecycle` | `TEST-MILESTONE-QUALIFYING-001` | `WP-M00-008` | `quality` | `schemas/milestone.schema.json`, `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | `release` |
 | `M00:CleanMachineBootstrap` | `TEST-BOOTSTRAP-CLEAN-001` | `WP-M00-001` | `repository` | `Justfile`, `tools/bootstrap.py`, `tools/doctor.py`, `tools/tests/test_bootstrap.py`, `tools/tests/test_doctor.py` | `release` |
-| `M00:ExitGate` | `TEST-MILESTONE-CURRENT-LABEL-001` | `WP-M00-009` | `quality` | — | — |
+| `M00:ExitGate` | `TEST-MILESTONE-CURRENT-LABEL-001` | `WP-M00-009` | `quality` | `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | — |
 | `M00:ExitGate` | `TEST-MILESTONE-QUALIFYING-001` | `WP-M00-008` | `quality` | `schemas/milestone.schema.json`, `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | `release` |
 | `M00:FakeVerticalPath` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
 | `M00:ProtocolBreakingGate` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |

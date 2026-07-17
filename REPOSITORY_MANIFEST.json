@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "525d1891bcbb996e1dd3cd5726f0f1641445ebeb9c09d1dba6084b8ba64def61"
+      "sha256": "4171f1642be5275139dfe46920ffea983352f03f7a57d061e66385096593a375"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -885,13 +885,13 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 5364,
-      "sha256": "b5b64becad48aa9f7bc3706b0658bc6e6a95f415ad2f052735d1d5e1b7b41332"
+      "bytes": 5520,
+      "sha256": "815c7f371d2267427fce1cf07e4dbdc0468b4619cc2f041d81517ab3681730de"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1449,
-      "sha256": "7f7cfea938f6840e61e304914a4cbd4e7a13f8fbac765cfffd450478fd0d34f9"
+      "bytes": 1465,
+      "sha256": "c5fee0a75f1b3505b8edb7a4afc075d79281f05bb6b38a35384094a72029fb05"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -900,13 +900,13 @@
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 3449,
-      "sha256": "54649edaa3b8cb20f7cdbd524be3e76d9a4d8a3cc86bf05c955eb69a82458a88"
+      "bytes": 3451,
+      "sha256": "606b45b9759da1cd0a3d0aac9faa8f3d685fbe599afbb149da28dc292d77f0e0"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 797,
-      "sha256": "a52b153638b66d83f087d0b867f1ea90aa251d35db1f0742d5ece38a1e348fef"
+      "bytes": 712,
+      "sha256": "a84b6196c149d5cef882dec17d421d3d2d06d7697e41992e384b9a09484ffa9b"
     },
     {
       "path": "generated/README.md",
@@ -1015,8 +1015,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 26887,
-      "sha256": "9bcd4c712575ea1d1f72812d4f264881dc360e547a459f0aedde5d82b7b92d20"
+      "bytes": 26885,
+      "sha256": "1c419172dcbb479206ddb18c16e7980c086d413d7ee70f117296facbc09b613e"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1345,8 +1345,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 13406,
-      "sha256": "28e89547b341c2a714cc6fb1459e405449d4fece79ccc38622b2f231a4974cd2"
+      "bytes": 13519,
+      "sha256": "d78f2feebede477ac97099cd97452fb3e95973b2fcca085a2c1faaf4624f682c"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1435,8 +1435,8 @@
     },
     {
       "path": "tools/generate_test_catalogue.py",
-      "bytes": 16472,
-      "sha256": "f51b14e0e88fedf7cf1ee81f689c8afcd1afc755469d5b76b525a280074d993b"
+      "bytes": 16548,
+      "sha256": "e148da49391033b3d62ea3d8f62184cd025598a4ad264a8a7c180e661639e629"
     },
     {
       "path": "tools/protocol_codegen.py",
@@ -1460,8 +1460,8 @@
     },
     {
       "path": "tools/tests/test_generate_test_catalogue.py",
-      "bytes": 9355,
-      "sha256": "fcda598fb2bf8724b62d14603b6cf16d80936252e0afaffe84186a312755ba82"
+      "bytes": 9926,
+      "sha256": "45af5505856a41bedba1f88f0aee482e70d65a0d4757bac413b19149969ff19b"
     },
     {
       "path": "tools/tests/test_protocol_codegen.py",

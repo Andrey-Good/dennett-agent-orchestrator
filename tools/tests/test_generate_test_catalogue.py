@@ -125,6 +125,12 @@ class TestCatalogueGeneratorTests(unittest.TestCase):
         self.assertIn(b"missing evidence", first["RELEASE_GATES.md"])
         self.assertIn(b"missing automation", first["TEST_DEBT.md"])
         self.assertIn(b"WP-M00-001", first["MILESTONE_TEST_PLAN.md"])
+        milestone_plan = first["MILESTONE_TEST_PLAN.md"].decode("utf-8")
+        self.assertIn(
+            "Current milestone: `M00` — Fixture milestone (status: `ACTIVE`).",
+            milestone_plan,
+        )
+        self.assertNotIn("Active milestone:", milestone_plan)
 
         context = generate_test_catalogue.load_context(
             self.root,
@@ -151,6 +157,11 @@ class TestCatalogueGeneratorTests(unittest.TestCase):
             schema_root=ROOT / "schemas",
         )
         self.assertEqual(context.current_milestone["status"], "QUALIFYING")
+        plan = (
+            self.root / "docs" / "testing" / "generated" / "MILESTONE_TEST_PLAN.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Current milestone: `M00` — Fixture milestone (status: `QUALIFYING`).", plan)
+        self.assertNotIn("Active milestone:", plan)
 
     def test_zero_current_milestones_is_rejected(self) -> None:
         self.set_milestone_status("ACCEPTED")

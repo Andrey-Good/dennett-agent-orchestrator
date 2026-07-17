@@ -358,8 +358,9 @@ def render_milestone_plan(context: CatalogueContext) -> str:
     lines = generated_header("Milestone Test Plan")
     lines.extend(
         [
-            f"Active milestone: `{markdown(milestone.get('id', 'unknown'))}` — "
-            f"{markdown(milestone.get('title', 'untitled'))}.",
+            f"Current milestone: `{markdown(milestone.get('id', 'unknown'))}` — "
+            f"{markdown(milestone.get('title', 'untitled'))} "
+            f"(status: `{markdown(milestone.get('status', 'unknown'))}`).",
             "",
             counter_line("Package status", (str(package["status"]) for package in packages)),
             "",

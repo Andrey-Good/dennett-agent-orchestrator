@@ -4,9 +4,9 @@
 
 > Source: `tests/catalog/*.json`. Regenerate with `uv run python tools/generate_test_catalogue.py`.
 
-Active milestone: `M00` — Repository and Contracts Foundation.
+Current milestone: `M00` — Repository and Contracts Foundation (status: `ACTIVE`).
 
-- Package status: `IN_PROGRESS` 1, `MERGED` 8
+- Package status: `MERGED` 8, `VERIFYING` 1
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -20,4 +20,4 @@ Active milestone: `M00` — Repository and Contracts Foundation.
 | `WP-M00-006` | `MERGED` | `TEST-PRODUCT-IDENTITY-001` | `R2` | `automated` | `repository` |
 | `WP-M00-007` | `MERGED` | `TEST-FAKE-CHAT-001` | `R2` | `automated` | `agents` |
 | `WP-M00-008` | `MERGED` | `TEST-MILESTONE-QUALIFYING-001` | `R1` | `automated` | `quality` |
-| `WP-M00-009` | `IN_PROGRESS` | `TEST-MILESTONE-CURRENT-LABEL-001` | `R1` | `specified` | `quality` |
+| `WP-M00-009` | `VERIFYING` | `TEST-MILESTONE-CURRENT-LABEL-001` | `R1` | `automated` | `quality` |

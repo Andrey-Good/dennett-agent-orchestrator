@@ -775,7 +775,7 @@
       "version": 1,
       "id": "WP-M00-009",
       "title": "Report the current milestone lifecycle state accurately",
-      "status": "IN_PROGRESS",
+      "status": "VERIFYING",
       "milestone": "M00",
       "vertical_slice": "VS-M00-02",
       "risk": "R1",

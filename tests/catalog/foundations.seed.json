@@ -235,7 +235,7 @@
     {
       "id": "TEST-MILESTONE-CURRENT-LABEL-001",
       "title": "Generated milestone plan reports the actual current lifecycle state",
-      "status": "specified",
+      "status": "automated",
       "priority": "high",
       "risk": "R1",
       "domains": ["planning", "testing"],
@@ -249,8 +249,11 @@
       ],
       "implementation": {
         "target_suite": "tools",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "tools/generate_test_catalogue.py",
+          "tools/tests/test_generate_test_catalogue.py"
+        ]
       },
       "owner": "quality"
     },
