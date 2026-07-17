@@ -6,9 +6,12 @@
     "summary": "Made the generated milestone test plan support the canonical accepted-milestone handoff: zero ACTIVE or QUALIFYING milestones render an explicit deterministic no-current plan, while multiple current milestones remain invalid.",
     "commits": [
       "05240df",
-      "73bf01e"
+      "73bf01e",
+      "b8c962d",
+      "e54a16a"
     ],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       "tools/generate_test_catalogue.py",
       "tools/tests/test_generate_test_catalogue.py",
@@ -34,6 +37,8 @@
         "clean-worktree probe, just check, clean-worktree probe on implementation commit 73bf01e",
         "49 developer-tool tests, 2 Python adapter-host tests, Rust and TypeScript workspace checks",
         "protocol generation and compatibility checks against origin/main",
+        "pull request Fast Gate run 29579284822",
+        "main Fast Gate run 29579395509 and Protocol Compatibility run 29579395557",
         "git diff --check"
       ],
       "not_run": [

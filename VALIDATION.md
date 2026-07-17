@@ -11,7 +11,7 @@
 - Repository, documentation, planning, generated-index and metadata checks: run by `just verify`.
 - `just check`: passed the complete repository, docs, planning, Rust, Python, TypeScript,
   protocol and generated-artifact gate on M00 qualification commit `ed8f0f8`.
-- M00 qualification has 9 `MERGED` Work Packages, 15 catalogued tests and one
+- M00 qualification has 10 `MERGED` Work Packages, 16 catalogued tests and one
   current milestone in `QUALIFYING`; generated views reproduce that exact state.
 - The milestone schema now exposes the canonical `PROPOSED` → `REFINED` → `ACTIVE` →
   `QUALIFYING` → `ACCEPTED` lifecycle, and generated test views keep at most one
@@ -31,6 +31,8 @@
   passed main `Fast Gate` run `29576110530` and `Protocol Compatibility` run `29576110535`.
 - WP-M00-009 passed PR `Fast Gate` run `29577110547`; merge commit `a5a1482`
   passed main `Fast Gate` run `29577197354` and `Protocol Compatibility` run `29577197296`.
+- WP-M00-010 passed PR `Fast Gate` run `29579284822`; merge commit `e54a16a`
+  passed main `Fast Gate` run `29579395509` and `Protocol Compatibility` run `29579395557`.
 - GitHub branch protection rule `80381387` applies to `main`, requires the up-to-date
   `Fast Gate` context from GitHub Actions, applies to administrators, and disallows
   force-pushes and branch deletion.
