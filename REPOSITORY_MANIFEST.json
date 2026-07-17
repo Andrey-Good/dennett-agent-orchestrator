@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 285,
+  "file_count": 293,
   "files": [
     {
       "path": ".editorconfig",
@@ -75,8 +75,8 @@
     },
     {
       "path": "Justfile",
-      "bytes": 1657,
-      "sha256": "c446155f6a726806dd785015883ffba5d59b75e5fddd4e9994efd10ac03c5980"
+      "bytes": 1861,
+      "sha256": "3db268419dfa79ebceac74cc7fcfcd6e976e0bc54e8165096e15ddb118ced60c"
     },
     {
       "path": "README.md",
@@ -435,8 +435,8 @@
     },
     {
       "path": "docs/CHECKSUMS.sha256",
-      "bytes": 10913,
-      "sha256": "d831ef2b52b0c86d770573ebc96edf20eb096e78628ac4a4d0dccfc64f69ffdd"
+      "bytes": 11448,
+      "sha256": "b914e7426c8618050e113e20c438de62a8ed455a3d5607c6d9d7c99d80bc0110"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -879,6 +879,31 @@
       "sha256": "c21c88be53c0685d93cc8810f8b968daa92e76aa0fe3aa47339dea57aab44539"
     },
     {
+      "path": "docs/testing/generated/COVERAGE_MATRIX.md",
+      "bytes": 4258,
+      "sha256": "53b781b1f050a60a389b41bc4405b82f51fc6d022bfc54736c4017661af61a9e"
+    },
+    {
+      "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
+      "bytes": 1280,
+      "sha256": "afce30be389a28f4c7d3a5f3f2655ee60a5463003f4729da219e14ce05fe605f"
+    },
+    {
+      "path": "docs/testing/generated/RELEASE_GATES.md",
+      "bytes": 1678,
+      "sha256": "6e5c34b4dd440fa0fd9e8199e26a703bfc9ea09fe2a58fe27ff3d2ee2b07b6c8"
+    },
+    {
+      "path": "docs/testing/generated/TEST_CATALOGUE.md",
+      "bytes": 3070,
+      "sha256": "57f1b98f2cd64612ad71d597f4ce741397808e7ffd44126ab0c967099815a339"
+    },
+    {
+      "path": "docs/testing/generated/TEST_DEBT.md",
+      "bytes": 859,
+      "sha256": "a66dfcc7843bf78d32c6effe20b282296341bb8767d5a3abea4325807e0b763d"
+    },
+    {
       "path": "generated/README.md",
       "bytes": 937,
       "sha256": "ebbd5de83e7ee8888fc1e75d90f3bde016cb4762ff257577a6bf93a6d41437ea"
@@ -950,8 +975,8 @@
     },
     {
       "path": "planning/batches/AB-M00-002.json",
-      "bytes": 887,
-      "sha256": "7d342462c1a7cdd54488b7667472d84b983036e4a8b75f632f7fdf256cb4b4c2"
+      "bytes": 889,
+      "sha256": "7aad452f7ff606fac1f559ed21f7d55f19e6071934ed40fba69195bb3d5cc821"
     },
     {
       "path": "planning/batches/AB-M00-003.json",
@@ -985,8 +1010,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 20153,
-      "sha256": "8d1ebcf947ba94f55105380650218a0444983d65b284aa5b873ffa9bbf25f394"
+      "bytes": 20399,
+      "sha256": "eb44335335ad7cda14cc02bfe74a7eb4a4edde190da6558f1b6ee216a786bf87"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1002,6 +1027,11 @@
       "path": "planning/results/WP-M00-004.json",
       "bytes": 2458,
       "sha256": "82d2b5994358f77f0b86a852f3476cce8922bda9e5c0268c6c1a604c77a479ef"
+    },
+    {
+      "path": "planning/results/WP-M00-005.json",
+      "bytes": 2072,
+      "sha256": "fea9a988a733ee16656d57c4b24e92f3b26b2ac1f059d21ae1fd85dbd5160b18"
     },
     {
       "path": "planning/results/WP-M00-006.json",
@@ -1290,8 +1320,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 11068,
-      "sha256": "45691c6cce2423d993e8a5ca303a1ed0d8c1b3745d5efb8119fa528cbfe24c6f"
+      "bytes": 11182,
+      "sha256": "f1bdd0aa5fd9607c41c14413a2962464df2165cf92817cfa25373da6fa18bb18"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1379,6 +1409,11 @@
       "sha256": "f57ed8e266fd5c0484a20a1340ffce1702ef2135b81df31873ba22455b4b56f3"
     },
     {
+      "path": "tools/generate_test_catalogue.py",
+      "bytes": 16349,
+      "sha256": "6114fc949ea7dafec0720312c46bc4f6eee42535c2743ae83e31f0ad5ca02cd3"
+    },
+    {
       "path": "tools/protocol_codegen.py",
       "bytes": 18159,
       "sha256": "a8bdc8e54eef2fe810a8f095ced5ab4ebcd7b4e68498e0f8f00c584beae9d604"
@@ -1397,6 +1432,11 @@
       "path": "tools/tests/test_doctor.py",
       "bytes": 1666,
       "sha256": "f2396dbdaece4bf33ee540e55338584bccd710d99d015d571d37a7c0ce204e49"
+    },
+    {
+      "path": "tools/tests/test_generate_test_catalogue.py",
+      "bytes": 7276,
+      "sha256": "69f3689c07842a5834a2fd015a73680c5e358eb873a704a290266c925f498e58"
     },
     {
       "path": "tools/tests/test_protocol_codegen.py",

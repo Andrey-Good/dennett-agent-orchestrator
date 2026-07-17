@@ -203,7 +203,7 @@
     {
       "id": "TEST-CATALOGUE-VIEWS-001",
       "title": "Structured catalogue generates deterministic human views",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R1",
       "domains": ["testing", "documentation"],
@@ -217,8 +217,11 @@
       ],
       "implementation": {
         "target_suite": "tools",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "tools/generate_test_catalogue.py",
+          "tools/tests/test_generate_test_catalogue.py"
+        ]
       },
       "owner": "quality"
     },
@@ -261,7 +264,7 @@
       "implementation": {
         "target_suite": "tests/scenarios",
         "status": "planned",
-        "test_paths": ["tests/scenarios/client-memory-not-second-canonical.yaml"]
+        "test_paths": ["tests/scenarios/offline-client-memory-not-canonical.yaml"]
       },
       "owner": "memory"
     },
@@ -302,7 +305,7 @@
       "implementation": {
         "target_suite": "tests/scenarios",
         "status": "planned",
-        "test_paths": ["tests/scenarios/effect-unknown-no-duplicate.yaml"]
+        "test_paths": ["tests/scenarios/effect-timeout-no-duplicate.yaml"]
       },
       "owner": "effects"
     }

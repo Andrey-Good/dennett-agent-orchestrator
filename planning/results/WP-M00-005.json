@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-005",
+    "status": "completed",
+    "summary": "Added deterministic generation and stale checks for catalogue, coverage, release-gate, test-debt and active-milestone Markdown projections.",
+    "commits": ["042c4cb"],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      "Justfile",
+      "docs/testing/generated/*.md",
+      "tests/catalog/foundations.seed.json",
+      "tools/generate_test_catalogue.py",
+      "tools/tests/test_generate_test_catalogue.py",
+      "planning/batches/AB-M00-002.json",
+      "planning/milestones/M00_repository_and_contracts.json",
+      "docs/CHECKSUMS.sha256",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "TEST-STRATEGY:GeneratedViews",
+      "M00:TestCatalogue",
+      "TEST-CATALOGUE-VIEWS-001"
+    ],
+    "tests": {
+      "passed": [
+        "uv run python tools/generate_test_catalogue.py --check",
+        "uv run python -m unittest discover -s tools/tests: 33 tests",
+        "just verify",
+        "just check",
+        "git diff --check"
+      ],
+      "not_run": [],
+      "failed": []
+    },
+    "review": {
+      "method": "R1 self-review against WP-M00-005 and testing strategy section 14",
+      "findings_closed": [
+        "Views contain no timestamps or nondeterministic source ordering",
+        "Missing, stale and unexpected generated files are reported by exact path",
+        "Catalogue implementation paths must exist and remain inside the repository",
+        "Two stale scenario paths in the seed catalogue now reference existing fixtures"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "Check mode distinguishes missing, stale and unexpected generated projections"
+    ],
+    "known_limitations": [
+      "The initial seed contains 13 M00 cases; full beta catalogue expansion is intentionally deferred"
+    ],
+    "follow_up_candidates": ["WP-M00-007", "WP-M00-003"],
+    "owner_decision_required": false
+  }
+}
