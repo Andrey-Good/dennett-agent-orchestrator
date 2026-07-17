@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-008",
+    "status": "completed",
+    "summary": "Aligned the milestone schema with the canonical lifecycle and made generated current-milestone test views deterministic for both ACTIVE and QUALIFYING while rejecting zero or multiple current milestones.",
+    "commits": [
+      "122f556",
+      "ac99f50"
+    ],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      "schemas/milestone.schema.json",
+      "tools/generate_test_catalogue.py",
+      "tools/tests/test_generate_test_catalogue.py",
+      "tests/catalog/foundations.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M00_repository_and_contracts.json",
+      "planning/results/WP-M00-003.json",
+      "planning/results/WP-M00-008.json",
+      "planning/batches/AB-M00-003.json",
+      "VALIDATION.md",
+      "docs/CHECKSUMS.sha256",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "IMPL-04:MilestoneLifecycle",
+      "M00:ExitGate",
+      "TEST-MILESTONE-QUALIFYING-001"
+    ],
+    "tests": {
+      "passed": [
+        "9 focused test-catalogue generator tests",
+        "49 developer-tool unit tests",
+        "just check on implementation commit ac99f50",
+        "repository, documentation, planning, generated-view and metadata checks",
+        "Rust format, clippy, workspace and documentation tests",
+        "2 Python adapter-host tests",
+        "desktop, mobile and Node adapter-host TypeScript checks",
+        "protocol generation and compatibility checks against origin/main",
+        "git diff --check"
+      ],
+      "not_run": [
+        "owner acceptance is a milestone lifecycle decision after the live demo, not a package test",
+        "future milestone planning belongs to M01 refinement"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "R1 self-review of the exact implementation diff against the canonical milestone lifecycle, package roots and deterministic generator contract",
+      "findings_closed": [],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "current-milestone selection failures report whether zero or multiple ACTIVE or QUALIFYING milestones were found"
+    ],
+    "known_limitations": [
+      "Once M00 is accepted, a later lifecycle change must establish the next ACTIVE or QUALIFYING milestone in the same repository state so generated current-milestone views retain exactly one owner",
+      "This package changes planning schema and generated-view semantics only; it does not accept M00 on behalf of the owner"
+    ],
+    "follow_up_candidates": [
+      "M00 milestone qualification",
+      "M01 refinement"
+    ],
+    "owner_decision_required": false
+  }
+}

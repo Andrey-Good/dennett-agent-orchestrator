@@ -688,7 +688,7 @@
       "version": 1,
       "id": "WP-M00-008",
       "title": "Support milestone qualification in generated test views",
-      "status": "VERIFYING",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-02",
       "risk": "R1",
