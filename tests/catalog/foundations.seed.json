@@ -233,6 +233,31 @@
       "owner": "quality"
     },
     {
+      "id": "TEST-MILESTONE-CURRENT-LABEL-001",
+      "title": "Generated milestone plan reports the actual current lifecycle state",
+      "status": "automated",
+      "priority": "high",
+      "risk": "R1",
+      "domains": ["planning", "testing"],
+      "levels": ["static"],
+      "requirement_refs": ["IMPL-04:MilestoneLifecycle", "M00:ExitGate"],
+      "work_package_refs": ["WP-M00-009"],
+      "expected": [
+        "The generated heading calls the selected milestone current rather than active",
+        "The generated heading displays the selected milestone actual lifecycle status",
+        "ACTIVE and QUALIFYING headings are covered by deterministic tests"
+      ],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "automated",
+        "test_paths": [
+          "tools/generate_test_catalogue.py",
+          "tools/tests/test_generate_test_catalogue.py"
+        ]
+      },
+      "owner": "quality"
+    },
+    {
       "id": "TEST-MILESTONE-QUALIFYING-001",
       "title": "Current milestone test views support the qualification lifecycle",
       "status": "automated",

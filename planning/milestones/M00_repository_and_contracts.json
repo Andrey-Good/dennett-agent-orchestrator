@@ -38,7 +38,8 @@
       "work_packages": [
         "WP-M00-004",
         "WP-M00-005",
-        "WP-M00-008"
+        "WP-M00-008",
+        "WP-M00-009"
       ]
     }
   ],
@@ -688,7 +689,7 @@
       "version": 1,
       "id": "WP-M00-008",
       "title": "Support milestone qualification in generated test views",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M00",
       "vertical_slice": "VS-M00-02",
       "risk": "R1",
@@ -768,6 +769,91 @@
       },
       "notes": [
         "This package was discovered by the final M00 lifecycle transition and is limited to generator/tooling semantics."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M00-009",
+      "title": "Report the current milestone lifecycle state accurately",
+      "status": "MERGE_READY",
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-02",
+      "risk": "R1",
+      "outcome": "The generated milestone test plan labels the selected milestone as current and displays its actual ACTIVE or QUALIFYING lifecycle state.",
+      "non_goals": [
+        "changing current-milestone selection semantics",
+        "accepting M00 on behalf of the owner",
+        "editing generated test views by hand"
+      ],
+      "requirement_refs": [
+        "IMPL-04:MilestoneLifecycle",
+        "M00:ExitGate"
+      ],
+      "architecture_refs": [
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#2-общие-правила-перехода",
+        "docs/testing/TEST_CATALOGUE_AND_QUALITY_GATES.md#14-генерируемые-документы"
+      ],
+      "depends_on": [
+        "WP-M00-008"
+      ],
+      "allowed_roots": [
+        "tools/generate_test_catalogue.py",
+        "tools/tests/test_generate_test_catalogue.py",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "VALIDATION.md",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "docs/specifications",
+        "docs/architecture",
+        "schemas"
+      ],
+      "state_ownership": {
+        "reads": [
+          "selected milestone identifier, title and lifecycle status"
+        ],
+        "writes": [
+          "rebuildable current-milestone test-plan heading"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-MILESTONE-CURRENT-LABEL-001"
+      ],
+      "required_commands": [
+        "uv run python -m unittest tools.tests.test_generate_test_catalogue",
+        "just check"
+      ],
+      "observability": [
+        "the generated heading exposes the selected milestone status"
+      ],
+      "rollback": [
+        "revert the heading and regression assertion without changing milestone selection"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 0.5,
+        "max_diff_lines": 300
+      },
+      "notes": [
+        "Final M00 qualification exposed the stale Active milestone label while the selected milestone was QUALIFYING."
       ]
     }
   ],

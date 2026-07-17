@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-009",
+    "status": "completed",
+    "summary": "Replaced the stale Active milestone heading with a current-milestone heading that displays the actual ACTIVE or QUALIFYING status, guarded by deterministic regression assertions.",
+    "commits": [
+      "288ec1c",
+      "9052db1"
+    ],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      "tools/generate_test_catalogue.py",
+      "tools/tests/test_generate_test_catalogue.py",
+      "tests/catalog/foundations.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M00_repository_and_contracts.json",
+      "planning/results/WP-M00-008.json",
+      "planning/results/WP-M00-009.json",
+      "VALIDATION.md",
+      "docs/CHECKSUMS.sha256",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "IMPL-04:MilestoneLifecycle",
+      "M00:ExitGate",
+      "TEST-MILESTONE-CURRENT-LABEL-001"
+    ],
+    "tests": {
+      "passed": [
+        "9 focused test-catalogue generator tests",
+        "clean-worktree probe, just check, clean-worktree probe on implementation commit 9052db1",
+        "49 developer-tool tests, 2 Python adapter-host tests, Rust and TypeScript workspace checks",
+        "protocol generation and compatibility checks against origin/main",
+        "git diff --check"
+      ],
+      "not_run": [
+        "owner acceptance remains a milestone gate after the live demo"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "R1 self-review of the exact implementation diff and generated ACTIVE/QUALIFYING headings",
+      "findings_closed": [
+        "The first focused invocation correctly rejected stale generated views; regeneration was moved before the suite and all 9 tests then passed"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "the generated milestone test plan exposes the selected milestone actual lifecycle status"
+    ],
+    "known_limitations": [
+      "This presentation correction does not change current-milestone selection or owner acceptance semantics"
+    ],
+    "follow_up_candidates": [
+      "M00 milestone qualification"
+    ],
+    "owner_decision_required": false
+  }
+}

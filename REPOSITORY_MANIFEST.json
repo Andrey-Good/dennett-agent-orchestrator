@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 301,
+  "file_count": 302,
   "files": [
     {
       "path": ".editorconfig",
@@ -105,8 +105,8 @@
     },
     {
       "path": "VALIDATION.md",
-      "bytes": 2388,
-      "sha256": "800093d31a73358dcefcdf5059008e04744aa9ef7cda8a535e41a3dd9c631a83"
+      "bytes": 2570,
+      "sha256": "89f74611533d92a21fd74851f7b8b0e5049cc9992f4b2029c32ba20138de9586"
     },
     {
       "path": "adapters/AGENTS.md",
@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "d813d9716e7ddb925f407128d914b1f2d39fdfad5c25c148bbbaf2c465ebb5be"
+      "sha256": "700676296b6d44dd8f98008818a7dbed8db647b0c4d7fd92f4bf8d18fb44016b"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -885,13 +885,13 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 5160,
-      "sha256": "9fd57a066c5e4b2cdcc999966778d63129f3fc02607e16967ef241de41b13c5c"
+      "bytes": 5520,
+      "sha256": "815c7f371d2267427fce1cf07e4dbdc0468b4619cc2f041d81517ab3681730de"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1351,
-      "sha256": "cc5c108213f210f67ab2aff7f33fe7854af97209481357ccdec6157037b4c406"
+      "bytes": 1469,
+      "sha256": "22580912990795fbb5dd3aca26c7289a4aeb487d7f0704ef1d5c7f50d2c14638"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -900,8 +900,8 @@
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 3262,
-      "sha256": "8b5f708da62f61357f62d72c0cb402c3612f18486396dc5ea83ae3f63dfac80d"
+      "bytes": 3451,
+      "sha256": "606b45b9759da1cd0a3d0aac9faa8f3d685fbe599afbb149da28dc292d77f0e0"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
@@ -1015,8 +1015,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 24116,
-      "sha256": "3539e6067bc3859b866f70a471551f862fbcd3e6b02a9d5b75a95e61f360129c"
+      "bytes": 26887,
+      "sha256": "cacb24701cf9437c282db1a20e43363b17da91b8b6e1b15002a1352b5e60f9c7"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1055,8 +1055,13 @@
     },
     {
       "path": "planning/results/WP-M00-008.json",
-      "bytes": 2791,
-      "sha256": "013694a465a4d81163f0f8aef60e5372010a0768d708bf76466c3927a5991ffe"
+      "bytes": 2991,
+      "sha256": "1b7317577d100cd3ab94eb18e54234ed6461a258d920f34392ff839725893464"
+    },
+    {
+      "path": "planning/results/WP-M00-009.json",
+      "bytes": 2286,
+      "sha256": "f8d4fe7c672258785e06b5865862c53351f7f7b41c8c899a3d0b6b75195e0bcb"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
@@ -1345,8 +1350,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 12567,
-      "sha256": "7573c1f48dd58a69c4ef00d256c480a9df52389d05fef5a36398ab655a8cd1df"
+      "bytes": 13519,
+      "sha256": "d78f2feebede477ac97099cd97452fb3e95973b2fcca085a2c1faaf4624f682c"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1435,8 +1440,8 @@
     },
     {
       "path": "tools/generate_test_catalogue.py",
-      "bytes": 16472,
-      "sha256": "f51b14e0e88fedf7cf1ee81f689c8afcd1afc755469d5b76b525a280074d993b"
+      "bytes": 16548,
+      "sha256": "e148da49391033b3d62ea3d8f62184cd025598a4ad264a8a7c180e661639e629"
     },
     {
       "path": "tools/protocol_codegen.py",
@@ -1460,8 +1465,8 @@
     },
     {
       "path": "tools/tests/test_generate_test_catalogue.py",
-      "bytes": 9355,
-      "sha256": "fcda598fb2bf8724b62d14603b6cf16d80936252e0afaffe84186a312755ba82"
+      "bytes": 9926,
+      "sha256": "45af5505856a41bedba1f88f0aee482e70d65a0d4757bac413b19149969ff19b"
     },
     {
       "path": "tools/tests/test_protocol_codegen.py",

@@ -16,6 +16,8 @@
   `ACTIVE` or `QUALIFYING` milestone as current.
 - `TEST-MILESTONE-QUALIFYING-001`: passed all 9 focused generator tests, including
   deterministic `QUALIFYING` output and rejection of zero or multiple current milestones.
+- `TEST-MILESTONE-CURRENT-LABEL-001`: passed deterministic assertions that generated
+  milestone plans say `Current milestone` and expose the actual `ACTIVE` or `QUALIFYING` status.
 - The exact CI sequence `just bootstrap` → clean-worktree probe → `just check` →
   clean-worktree probe passed without tracked or untracked drift.
 - GitHub Actions `Fast Gate` run `29572378188` and `Protocol Compatibility` run

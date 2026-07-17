@@ -6,9 +6,12 @@
     "summary": "Aligned the milestone schema with the canonical lifecycle and made generated current-milestone test views deterministic for both ACTIVE and QUALIFYING while rejecting zero or multiple current milestones.",
     "commits": [
       "122f556",
-      "ac99f50"
+      "ac99f50",
+      "3670aa0",
+      "a8c5024"
     ],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       "schemas/milestone.schema.json",
       "tools/generate_test_catalogue.py",
@@ -39,6 +42,8 @@
         "2 Python adapter-host tests",
         "desktop, mobile and Node adapter-host TypeScript checks",
         "protocol generation and compatibility checks against origin/main",
+        "pull request Fast Gate run 29576019629",
+        "main Fast Gate run 29576110530 and Protocol Compatibility run 29576110535",
         "git diff --check"
       ],
       "not_run": [
