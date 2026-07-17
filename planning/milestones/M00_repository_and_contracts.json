@@ -11,7 +11,8 @@
   ],
   "owner_decisions": [
     "DEC-0001",
-    "DEC-0002"
+    "DEC-0002",
+    "DEC-0003"
   ],
   "vertical_slices": [
     {
@@ -45,7 +46,7 @@
       "version": 1,
       "id": "WP-M00-006",
       "title": "Normalize canonical product identity and license state",
-      "status": "REVIEW",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-00",
       "risk": "R2",
@@ -134,7 +135,8 @@
         "max_diff_lines": 20000
       },
       "notes": [
-        "This is intentionally broad mechanical work performed before implementation packages."
+        "This is intentionally broad mechanical work performed before implementation packages.",
+        "The owner waived the detached R2 review in DEC-0003 after tenant policy blocked the approved external review; local automated checks and self-review passed."
       ]
     },
     {

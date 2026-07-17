@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 255,
+  "file_count": 257,
   "files": [
     {
       "path": ".editorconfig",
@@ -890,8 +890,8 @@
     },
     {
       "path": "planning/README.md",
-      "bytes": 1143,
-      "sha256": "a116902916e4d18b23f0d99acc9c4e25b66db6a7102a104d7a76f7be8e4fd770"
+      "bytes": 1221,
+      "sha256": "95b4592da2965c1e095f959e85e4835e308e579cd72543cff70371ff7ec65169"
     },
     {
       "path": "planning/batches/AB-M00-001.json",
@@ -919,9 +919,19 @@
       "sha256": "50ddaa651013248a4abfc17023a023fb60c4c0b7952459ca9fb183d1f50af7cd"
     },
     {
+      "path": "planning/decisions/DEC-0003.json",
+      "bytes": 1813,
+      "sha256": "1fc1908458ddefda1b51796b297fe21e7b8d03e619d32081738764eb51037865"
+    },
+    {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 18984,
-      "sha256": "b82b723a2224626d7f2c3fc0a4fa2da8943f6f29996f280572e44eb7ca49ee18"
+      "bytes": 19173,
+      "sha256": "b18e2bb03d6ae7549546751071940a7208366e89985f38f924bbfcd3608c9152"
+    },
+    {
+      "path": "planning/results/WP-M00-006.json",
+      "bytes": 2461,
+      "sha256": "4513ac92bf5a0ff603594ded55749804b00f39fee4a48a85f1c8ebbf31e557da"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",

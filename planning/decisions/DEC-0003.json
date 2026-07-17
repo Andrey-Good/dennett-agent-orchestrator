@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "DEC-0003",
+  "work_package": "WP-M00-006",
+  "severity": "red",
+  "question": "How should the R2 detached-review gate be resolved when tenant policy blocks the owner-approved external review?",
+  "context": "WP-M00-006 requires detached review. The owner approved sending commit 84718c4 to OpenAI Codex, but tenant data-export policy rejected the request before review execution. No local secondary model or human reviewer was available.",
+  "options": [
+    {
+      "id": "A",
+      "description": "Stop until a human detached reviewer is available",
+      "benefits": [
+        "preserves the normal R2 review path"
+      ],
+      "costs": [
+        "blocks every dependent M00 package"
+      ],
+      "risks": [
+        "indefinite milestone delay"
+      ]
+    },
+    {
+      "id": "B",
+      "description": "Grant a one-package owner waiver after local evidence review",
+      "benefits": [
+        "allows M00 to proceed without bypassing tenant policy",
+        "keeps the exception explicit and auditable"
+      ],
+      "costs": [
+        "WP-M00-006 has no independent semantic reviewer"
+      ],
+      "risks": [
+        "self-review may miss an issue that detached review would catch"
+      ]
+    }
+  ],
+  "recommendation": "B",
+  "reason": "The change is a bounded pre-implementation identity normalization, all required commands passed, Rust and Python tests passed, and the owner explicitly authorized the waiver on 2026-07-17.",
+  "default_if_deferred": "stop",
+  "needed_by": "WP-M00-006",
+  "status": "resolved",
+  "resolution": {
+    "selected_option": "B",
+    "decided_by": "owner",
+    "decided_at": "2026-07-17",
+    "note": "Owner authorized a detached-review waiver for WP-M00-006 and continuation of M00. This waiver does not apply to later R2 packages."
+  }
+}
