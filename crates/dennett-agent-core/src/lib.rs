@@ -1,4 +1,3 @@
-
 //! Provider-neutral agent runtime port and a deterministic fake.
 
 use async_trait::async_trait;
@@ -19,7 +18,9 @@ pub struct AgentResponse {
 #[async_trait]
 pub trait AgentRuntimePort: Send + Sync {
     async fn respond(&self, request: AgentRequest) -> DennettResult<AgentResponse>;
-    async fn cancel(&self) -> DennettResult<()> { Ok(()) }
+    async fn cancel(&self) -> DennettResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]

@@ -1,4 +1,3 @@
-
 //! Stable identifiers and cross-process contracts for the Dennett skeleton.
 
 use serde::{Deserialize, Serialize};
@@ -11,9 +10,15 @@ macro_rules! id_type {
         pub struct $name(pub Uuid);
         impl $name {
             #[must_use]
-            pub fn new() -> Self { Self(Uuid::now_v7()) }
+            pub fn new() -> Self {
+                Self(Uuid::now_v7())
+            }
         }
-        impl Default for $name { fn default() -> Self { Self::new() } }
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
     };
 }
 
@@ -26,16 +31,13 @@ id_type!(MemoryEventId);
 id_type!(DeviceId);
 id_type!(EffectId);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeadEligibility {
+    #[default]
     None,
     Emergency,
     Full,
-}
-
-impl Default for HeadEligibility {
-    fn default() -> Self { Self::None }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

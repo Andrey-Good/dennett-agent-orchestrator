@@ -46,7 +46,7 @@
     {
       "id": "TEST-BOOTSTRAP-CLEAN-001",
       "title": "Clean checkout bootstrap installs pinned development dependencies",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R1",
       "domains": ["repository", "tooling"],
@@ -60,15 +60,21 @@
       ],
       "implementation": {
         "target_suite": "tools",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "Justfile",
+          "tools/bootstrap.py",
+          "tools/doctor.py",
+          "tools/tests/test_bootstrap.py",
+          "tools/tests/test_doctor.py"
+        ]
       },
       "owner": "repository"
     },
     {
       "id": "TEST-RUST-WORKSPACE-001",
       "title": "Pinned Rust workspace format lint and tests pass",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R1",
       "domains": ["repository", "rust"],
@@ -82,8 +88,8 @@
       ],
       "implementation": {
         "target_suite": "cargo workspace",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": ["Justfile", "rust-toolchain.toml", ".github/workflows/ci.yml"]
       },
       "owner": "repository"
     },

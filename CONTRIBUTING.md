@@ -42,9 +42,7 @@ Dennett развивается от спецификации к реализац
 ## Документация
 
 ```bash
-python tools/verify_docs.py
-python tools/verify_planning.py
-python tools/generate_doc_index.py --check
+just verify
 ```
 
 Большие документы остаются каноническими; navigation indexes и contract supplements позволяют быстро перемещаться, не создавая конфликтующие копии норм.

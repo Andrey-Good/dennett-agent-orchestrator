@@ -143,7 +143,7 @@
       "version": 1,
       "id": "WP-M00-001",
       "title": "Establish reproducible bootstrap and Rust workspace baseline",
-      "status": "READY",
+      "status": "IN_PROGRESS",
       "milestone": "M00",
       "vertical_slice": "VS-M00-01",
       "risk": "R1",
@@ -183,6 +183,10 @@
         "README.ru.md",
         "CONTRIBUTING.md",
         "VALIDATION.md",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "REPOSITORY_MANIFEST.json",
+        "planning",
+        "tests",
         "crates",
         "services",
         "apps"
@@ -230,10 +234,12 @@
       },
       "estimate": {
         "target_agent_hours": 4,
-        "max_diff_lines": 1500
+        "max_diff_lines": 5000
       },
       "notes": [
-        "Python dependency installation must use uv, never pip."
+        "Python dependency installation must use uv, never pip.",
+        "Generated Cargo, pnpm and uv lockfiles account for most of the diff-line budget.",
+        "Planning lifecycle records and generated repository metadata are package-completion artifacts."
       ]
     },
     {

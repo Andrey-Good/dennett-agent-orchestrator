@@ -21,7 +21,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 publish = false
-rust-version = "1.85"
+rust-version = "1.97"
 
 [workspace.dependencies]
 async-trait = "0.1"

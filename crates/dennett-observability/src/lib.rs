@@ -1,4 +1,3 @@
-
 //! Minimal privacy-aware observability bootstrap.
 
 pub fn init(service_name: &str) {

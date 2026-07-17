@@ -1,4 +1,3 @@
-
 //! External effect claims prevent blind duplicate sends, payments or publications.
 
 use dennett_contracts::EffectId;
@@ -6,7 +5,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum EffectState { Prepared, Dispatching, Confirmed, Failed, Unknown, Compensating, Compensated }
+pub enum EffectState {
+    Prepared,
+    Dispatching,
+    Confirmed,
+    Failed,
+    Unknown,
+    Compensating,
+    Compensated,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EffectClaim {
@@ -18,7 +25,11 @@ pub struct EffectClaim {
 }
 
 impl EffectClaim {
-    pub fn mark_unknown(&mut self) { self.state = EffectState::Unknown; }
+    pub fn mark_unknown(&mut self) {
+        self.state = EffectState::Unknown;
+    }
     #[must_use]
-    pub fn may_retry(&self) -> bool { matches!(self.state, EffectState::Failed) }
+    pub fn may_retry(&self) -> bool {
+        matches!(self.state, EffectState::Failed)
+    }
 }

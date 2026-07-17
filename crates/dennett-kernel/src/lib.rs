@@ -1,4 +1,3 @@
-
 //! Composition-level interfaces shared by application services.
 
 use async_trait::async_trait;
