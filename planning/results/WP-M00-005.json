@@ -4,8 +4,9 @@
     "id": "WP-M00-005",
     "status": "completed",
     "summary": "Added deterministic generation and stale checks for catalogue, coverage, release-gate, test-debt and active-milestone Markdown projections.",
-    "commits": ["042c4cb"],
+    "commits": ["042c4cb", "a4c2c61", "2498d79"],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       "Justfile",
       "docs/testing/generated/*.md",
@@ -29,6 +30,9 @@
         "uv run python -m unittest discover -s tools/tests: 33 tests",
         "just verify",
         "just check",
+        "main integration: just check",
+        "GitHub Actions Protocol Compatibility run 29566632427",
+        "GitHub Actions CI run 29566632433",
         "git diff --check"
       ],
       "not_run": [],

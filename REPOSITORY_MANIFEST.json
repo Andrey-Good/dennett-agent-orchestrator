@@ -436,7 +436,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "b914e7426c8618050e113e20c438de62a8ed455a3d5607c6d9d7c99d80bc0110"
+      "sha256": "363d1e31d8eb812dae0a38b22fdcd9218b29e2ba9a796ca6d13a46bf0025ba8f"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -885,8 +885,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1280,
-      "sha256": "afce30be389a28f4c7d3a5f3f2655ee60a5463003f4729da219e14ce05fe605f"
+      "bytes": 1258,
+      "sha256": "72a7b0c90636555bb18a7e80b3d48c9d00dcb5db56617fa28ba30cb095014d75"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -975,8 +975,8 @@
     },
     {
       "path": "planning/batches/AB-M00-002.json",
-      "bytes": 889,
-      "sha256": "7aad452f7ff606fac1f559ed21f7d55f19e6071934ed40fba69195bb3d5cc821"
+      "bytes": 891,
+      "sha256": "d5aac943e34ec3fa64ba629203134e6a90e3243f625e86dabaa3f0625b5c18c7"
     },
     {
       "path": "planning/batches/AB-M00-003.json",
@@ -1010,8 +1010,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 20399,
-      "sha256": "eb44335335ad7cda14cc02bfe74a7eb4a4edde190da6558f1b6ee216a786bf87"
+      "bytes": 20394,
+      "sha256": "2c45b3fb53c79039ac0c054d3153ba74ee29a5b6b1444d3692b53089ffffa1f8"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1030,8 +1030,8 @@
     },
     {
       "path": "planning/results/WP-M00-005.json",
-      "bytes": 2072,
-      "sha256": "fea9a988a733ee16656d57c4b24e92f3b26b2ac1f059d21ae1fd85dbd5160b18"
+      "bytes": 2275,
+      "sha256": "b4a08fcc24fa6f0d5b9e090b9040e4f5ce199f8a0fcfc0fe4d640e2ee28a0ebe"
     },
     {
       "path": "planning/results/WP-M00-006.json",

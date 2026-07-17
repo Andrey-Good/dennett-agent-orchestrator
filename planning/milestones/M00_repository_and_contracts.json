@@ -505,7 +505,7 @@
       "version": 1,
       "id": "WP-M00-005",
       "title": "Generate initial test catalogue views",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M00",
       "vertical_slice": "VS-M00-02",
       "risk": "R1",
