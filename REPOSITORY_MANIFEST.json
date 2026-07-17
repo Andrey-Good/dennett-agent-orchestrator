@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 292,
+  "file_count": 293,
   "files": [
     {
       "path": ".editorconfig",
@@ -436,7 +436,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "f7a551a5f8df37bff4f95372125bc1095f046a8620894c410ef5bbe5ae2d2c26"
+      "sha256": "b914e7426c8618050e113e20c438de62a8ed455a3d5607c6d9d7c99d80bc0110"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -886,7 +886,7 @@
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
       "bytes": 1280,
-      "sha256": "52a411e9c9bbc50a45193e33a2938ae38b11ebb2f96485071e76d830154d917e"
+      "sha256": "afce30be389a28f4c7d3a5f3f2655ee60a5463003f4729da219e14ce05fe605f"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1011,7 +1011,7 @@
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 20399,
-      "sha256": "79134d1e5f8780d12ee8e829782f004b0f2f57051a0efa477a5e49ba60a3de7a"
+      "sha256": "eb44335335ad7cda14cc02bfe74a7eb4a4edde190da6558f1b6ee216a786bf87"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1027,6 +1027,11 @@
       "path": "planning/results/WP-M00-004.json",
       "bytes": 2458,
       "sha256": "82d2b5994358f77f0b86a852f3476cce8922bda9e5c0268c6c1a604c77a479ef"
+    },
+    {
+      "path": "planning/results/WP-M00-005.json",
+      "bytes": 2072,
+      "sha256": "fea9a988a733ee16656d57c4b24e92f3b26b2ac1f059d21ae1fd85dbd5160b18"
     },
     {
       "path": "planning/results/WP-M00-006.json",
