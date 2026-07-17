@@ -330,7 +330,7 @@
       },
       "notes": [
         "Planning lifecycle, test-catalogue evidence and generated repository metadata are package-completion artifacts.",
-        "The pre-M00 dennett.v1 package layout remains unchanged because AB-M00-002 forbids public breaking changes; DEBT-0001 tracks convergence before production consumers."
+        "The pre-M00 dennett.v1 package layout and legacy service/RPC names remain unchanged because AB-M00-002 forbids public breaking changes; DEBT-0001 and DEBT-0002 track convergence before production consumers."
       ]
     },
     {

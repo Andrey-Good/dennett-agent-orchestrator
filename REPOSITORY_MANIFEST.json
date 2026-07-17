@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 277,
+  "file_count": 278,
   "files": [
     {
       "path": ".editorconfig",
@@ -30,8 +30,8 @@
     },
     {
       "path": ".github/workflows/protocol-compatibility.yml",
-      "bytes": 867,
-      "sha256": "9d3145a62bd213c2f12fe7171cba2a7c6b385e7ea435dbf92227a18cb304a064"
+      "bytes": 1463,
+      "sha256": "692afebca0aa0ac7351bb0619ad54bad4afb7ea63f6761ccd19742f8365e5e93"
     },
     {
       "path": ".gitignore",
@@ -880,8 +880,8 @@
     },
     {
       "path": "generated/README.md",
-      "bytes": 784,
-      "sha256": "b827267c4fd935ab64cfa2e2d3d5bc6c8f84031383a44eda3c6ace0a809f901e"
+      "bytes": 937,
+      "sha256": "ebbd5de83e7ee8888fc1e75d90f3bde016cb4762ff257577a6bf93a6d41437ea"
     },
     {
       "path": "generated/rust/dennett/v1/dennett.v1.rs",
@@ -964,6 +964,11 @@
       "sha256": "5dde7218f4ae1828a510ec75e4021f67593f407bc1a5ca21f258d7fbee2e0e84"
     },
     {
+      "path": "planning/debt/DEBT-0002.json",
+      "bytes": 911,
+      "sha256": "0a61a207fb95ecda0c30db947f52dc429e9ab205b23171c42521071affca2e5d"
+    },
+    {
       "path": "planning/decisions/DEC-0001.json",
       "bytes": 1405,
       "sha256": "60644221a94a586ba74c2cb28d968b884ae057237590069b9ca61fafdc541cf7"
@@ -980,8 +985,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 19922,
-      "sha256": "cf2319dbf934ddcd2517252d73567678624373b5ee4b679dc9fe1ab4c676840b"
+      "bytes": 19963,
+      "sha256": "857825efbe04ba1f5ce69745abe367f76c1e42c8abae38e63136394c55232bef"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1030,8 +1035,8 @@
     },
     {
       "path": "protocols/buf.yaml",
-      "bytes": 296,
-      "sha256": "df87ea941436a9b2cc11390a66e7a5d7c127dad03c84d4d62970b68274e6c9af"
+      "bytes": 818,
+      "sha256": "fc3a78d852c0835a24b4e42c481dcd3423bd5bb4836bd9d70913aded4671ddfd"
     },
     {
       "path": "protocols/proto/dennett/v1/common.proto",
@@ -1255,8 +1260,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 10500,
-      "sha256": "11c55ad68bc8f20b1c9b0a363bc09f4275acecebd8756764add46e604a618693"
+      "bytes": 10681,
+      "sha256": "9ff40398074c58be59a664e26a2f7592da00990f70e1050838b7397db97c7515"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1345,8 +1350,8 @@
     },
     {
       "path": "tools/protocol_codegen.py",
-      "bytes": 10455,
-      "sha256": "673dfe7cd06d06160dd6cf0f3be3b80adea4fc37b462a8e11e91289a6ecafb21"
+      "bytes": 18159,
+      "sha256": "a8bdc8e54eef2fe810a8f095ced5ab4ebcd7b4e68498e0f8f00c584beae9d604"
     },
     {
       "path": "tools/run_in_toolchain.py",
@@ -1365,8 +1370,8 @@
     },
     {
       "path": "tools/tests/test_protocol_codegen.py",
-      "bytes": 3186,
-      "sha256": "864391fedfc0da1edc68a450ddf33d46050648f204e3044987f3425fcff2dca1"
+      "bytes": 6491,
+      "sha256": "238eb41e6469426c5e6ca2fb1022e2958eac169f6879b76ebfb4c14eb28f78a7"
     },
     {
       "path": "tools/verify_docs.py",

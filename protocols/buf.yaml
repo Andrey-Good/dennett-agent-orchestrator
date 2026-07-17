@@ -3,11 +3,23 @@ modules:
   - path: proto
 lint:
   use: [STANDARD]
-  except:
-    # Existing v1 wire names are already canonical inputs for this package.
-    - RPC_REQUEST_RESPONSE_UNIQUE
-    - RPC_REQUEST_STANDARD_NAME
-    - RPC_RESPONSE_STANDARD_NAME
-    - SERVICE_SUFFIX
+  # File-level ignores preserve only the pre-M00 wire surface. The protocol
+  # checker fingerprints every existing violation so additions in these files
+  # still fail even though Buf has no definition-level suppression.
+  ignore_only:
+    RPC_REQUEST_RESPONSE_UNIQUE:
+      - proto/dennett/v1/sync.proto
+    RPC_REQUEST_STANDARD_NAME:
+      - proto/dennett/v1/control.proto
+      - proto/dennett/v1/memory.proto
+      - proto/dennett/v1/sync.proto
+    RPC_RESPONSE_STANDARD_NAME:
+      - proto/dennett/v1/control.proto
+      - proto/dennett/v1/memory.proto
+      - proto/dennett/v1/sync.proto
+    SERVICE_SUFFIX:
+      - proto/dennett/v1/control.proto
+      - proto/dennett/v1/memory.proto
+      - proto/dennett/v1/sync.proto
 breaking:
   use: [WIRE_JSON]
