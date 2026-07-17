@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dennett.local/schemas/work-package-result.schema.json",
+  "title": "Dennett Work Package Completion Packet",
+  "type": "object",
+  "required": ["version", "work_package_result"],
+  "properties": {
+    "version": {"const": 1},
+    "work_package_result": {
+      "type": "object",
+      "required": ["id", "status", "summary", "commits", "changed_files", "requirements_satisfied", "tests", "review", "migrations", "observability_changes", "known_limitations", "follow_up_candidates", "owner_decision_required"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^WP-M[0-9]{2}-[0-9]{3}$"},
+        "status": {"enum": ["completed", "partial", "blocked", "superseded"]},
+        "summary": {"type": "string", "minLength": 10},
+        "commits": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}
+        },
+        "merge_ready_at": {"$ref": "#/$defs/date"},
+        "merged_at": {"$ref": "#/$defs/date"},
+        "changed_files": {"$ref": "#/$defs/string_list"},
+        "requirements_satisfied": {"$ref": "#/$defs/string_list"},
+        "tests": {
+          "type": "object",
+          "required": ["passed", "not_run", "failed"],
+          "properties": {
+            "passed": {"$ref": "#/$defs/string_list"},
+            "not_run": {"$ref": "#/$defs/string_list"},
+            "failed": {"$ref": "#/$defs/string_list"}
+          },
+          "additionalProperties": false
+        },
+        "review": {
+          "type": "object",
+          "required": ["findings_closed", "findings_open"],
+          "properties": {
+            "method": {"type": "string", "minLength": 1},
+            "waiver": {"type": "string", "minLength": 1},
+            "findings_closed": {"$ref": "#/$defs/string_list"},
+            "findings_open": {"$ref": "#/$defs/string_list"}
+          },
+          "additionalProperties": false
+        },
+        "migrations": {"$ref": "#/$defs/string_list"},
+        "observability_changes": {"$ref": "#/$defs/string_list"},
+        "known_limitations": {"$ref": "#/$defs/string_list"},
+        "follow_up_candidates": {"$ref": "#/$defs/string_list"},
+        "owner_decision_required": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "completed"}}},
+          "then": {
+            "properties": {
+              "commits": {"minItems": 1},
+              "changed_files": {"minItems": 1},
+              "requirements_satisfied": {"minItems": 1},
+              "tests": {
+                "properties": {"passed": {"minItems": 1}}
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "string_list": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "additionalProperties": false
+}

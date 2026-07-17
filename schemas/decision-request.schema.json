@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dennett.local/schemas/decision-request.schema.json",
+  "title": "Dennett Decision Request",
+  "type": "object",
+  "required": ["version", "id", "work_package", "severity", "question", "context", "options", "recommendation", "reason", "default_if_deferred", "needed_by", "status", "resolution"],
+  "properties": {
+    "version": {"const": 1},
+    "id": {"type": "string", "pattern": "^DEC-[0-9]{4}$"},
+    "work_package": {"type": "string", "pattern": "^WP-M[0-9]{2}-[0-9]{3}$"},
+    "severity": {"enum": ["yellow", "red"]},
+    "question": {"type": "string", "minLength": 5},
+    "context": {"type": "string", "minLength": 10},
+    "options": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["id", "description"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 3},
+          "benefits": {"$ref": "#/$defs/string_list"},
+          "costs": {"$ref": "#/$defs/string_list"},
+          "risks": {"$ref": "#/$defs/string_list"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "recommendation": {"type": ["string", "null"]},
+    "reason": {"type": ["string", "null"]},
+    "default_if_deferred": {"type": "string", "minLength": 1},
+    "needed_by": {"type": ["string", "null"]},
+    "status": {"enum": ["open", "resolved", "superseded", "cancelled"]},
+    "resolution": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["selected_option", "decided_by", "decided_at", "note"],
+          "properties": {
+            "selected_option": {"type": "string", "minLength": 1},
+            "decided_by": {"type": "string", "minLength": 1},
+            "decided_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+            "note": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "string_list": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "additionalProperties": false
+}
