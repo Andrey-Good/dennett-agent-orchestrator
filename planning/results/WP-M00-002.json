@@ -6,9 +6,12 @@
     "summary": "Pinned Buf generation for committed Rust and TypeScript clients, added deterministic stale-artifact and strict-lint-debt checks, and enforced checker-owned WIRE_JSON compatibility against the exact PR or push base commit.",
     "commits": [
       "c4ea4ac",
-      "50bfdba"
+      "50bfdba",
+      "424d875",
+      "b968aac"
     ],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       "protocols/buf.yaml",
       "protocols/buf.gen.yaml",
@@ -44,10 +47,12 @@
         "17 tooling unit tests and 2 Python adapter-host tests",
         "Rust format, clippy and workspace tests",
         "desktop, mobile and Node adapter-host TypeScript checks",
+        "main integration: just check",
+        "GitHub Actions Protocol Compatibility run 29562108201",
+        "GitHub Actions CI run 29562108238",
         "git diff --check"
       ],
       "not_run": [
-        "GitHub-hosted protocol workflow; observed push evidence is recorded after merge to main",
         "generated clients are not compiled by a production consumer in this package"
       ],
       "failed": []

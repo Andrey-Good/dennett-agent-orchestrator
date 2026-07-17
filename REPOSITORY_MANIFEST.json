@@ -985,8 +985,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 19968,
-      "sha256": "d76416d642725f06886e6ead4476208ce3c88b6608308ff8f58063ddc0a77c23"
+      "bytes": 19963,
+      "sha256": "584351940bbcc1347188b66352b08fbd3a2b82fb28776f06bac6dac0c97aa7a1"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -995,8 +995,8 @@
     },
     {
       "path": "planning/results/WP-M00-002.json",
-      "bytes": 3813,
-      "sha256": "5e1a96fe9f7e93b5b8fc47d50b672cc291d5a404d5cb20ac4fef03949370b87b"
+      "bytes": 3929,
+      "sha256": "0b4067dee4067921b5970364280f0c0da3b771a8e1365a27ba30c5ca0d5d67c6"
     },
     {
       "path": "planning/results/WP-M00-006.json",
