@@ -232,6 +232,9 @@ class PlanningValidatorTests(unittest.TestCase):
         packet["tests"]["passed"] = []
         packet.pop("merged_at")
         self.write("planning/results/WP-M00-002.json", result)
+        batch = self.read("planning/batches/AB-M00-002.json")
+        batch["status"] = "DRAFT"
+        self.write("planning/batches/AB-M00-002.json", batch)
 
         self.assertEqual(self.diagnostics(), [])
 

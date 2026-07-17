@@ -4,8 +4,9 @@
     "id": "WP-M00-004",
     "status": "completed",
     "summary": "Added strict planning schemas and graph validation for package lifecycle, references, dependencies, owner gates, batch envelopes, debt dates and completion evidence.",
-    "commits": ["0306263"],
+    "commits": ["0306263", "10d2988", "fb12c7e"],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       "planning/batches/AB-M00-002.json",
       "planning/batches/AB-M00-003.json",
@@ -32,6 +33,9 @@
         "uv run python -m unittest discover -s tools/tests: 28 tests",
         "uv run python tools/verify_planning.py",
         "just check",
+        "main integration: just check",
+        "GitHub Actions Protocol Compatibility run 29564487436",
+        "GitHub Actions CI run 29564487459",
         "git diff --check"
       ],
       "not_run": [],
