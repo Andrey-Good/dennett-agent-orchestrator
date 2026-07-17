@@ -5,8 +5,11 @@
     "status": "completed",
     "summary": "Canonicalized the active repository identity as Dennett, removed the placeholder license file, added deterministic repository metadata generation, and automated rejection of legacy active identifiers.",
     "commits": [
-      "84718c4"
+      "84718c4",
+      "501880f",
+      "f0c4963"
     ],
+    "merged_at": "2026-07-17",
     "changed_files": [
       "repository-wide active product identifiers and paths",
       "README.md",

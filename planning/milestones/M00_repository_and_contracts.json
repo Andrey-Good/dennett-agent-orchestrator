@@ -46,7 +46,7 @@
       "version": 1,
       "id": "WP-M00-006",
       "title": "Normalize canonical product identity and license state",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M00",
       "vertical_slice": "VS-M00-00",
       "risk": "R2",

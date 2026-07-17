@@ -431,7 +431,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 10913,
-      "sha256": "661d828a35d1530634e88e9ae0c3b5f0f61339c690e5cba87b88a0cec204a214"
+      "sha256": "d831ef2b52b0c86d770573ebc96edf20eb096e78628ac4a4d0dccfc64f69ffdd"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -675,8 +675,8 @@
     },
     {
       "path": "docs/navigation/CODE_MAP.toc.md",
-      "bytes": 513,
-      "sha256": "21388e7a95870d015879917a1b24590af7f2c46c0730828c7035018081667703"
+      "bytes": 505,
+      "sha256": "e999baace76be188d1d7c154a3e33eb229cf5f2cc960bee1026c142658b089c6"
     },
     {
       "path": "docs/navigation/README.md",
@@ -925,13 +925,13 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 19173,
-      "sha256": "b18e2bb03d6ae7549546751071940a7208366e89985f38f924bbfcd3608c9152"
+      "bytes": 19168,
+      "sha256": "e2109b955315423086f4d20a67adb075230e398c40c5e738986378970fa3d58b"
     },
     {
       "path": "planning/results/WP-M00-006.json",
-      "bytes": 2461,
-      "sha256": "4513ac92bf5a0ff603594ded55749804b00f39fee4a48a85f1c8ebbf31e557da"
+      "bytes": 2526,
+      "sha256": "c2c005dfe979b8452bd8c4318f7fe239191ddfe9ca1b5ce8f813bca59b2a2ecd"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
