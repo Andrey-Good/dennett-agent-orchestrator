@@ -233,6 +233,32 @@
       "owner": "quality"
     },
     {
+      "id": "TEST-MILESTONE-ACCEPTED-HANDOFF-001",
+      "title": "Generated milestone plan supports the accepted-milestone handoff",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R1",
+      "domains": ["planning", "testing"],
+      "levels": ["static"],
+      "requirement_refs": [
+        "IMPL-04:MilestoneLifecycle",
+        "IMPL-04:RollingWavePlanning",
+        "M00:ExitGate"
+      ],
+      "work_package_refs": ["WP-M00-010"],
+      "expected": [
+        "Zero ACTIVE or QUALIFYING milestones produce an explicit deterministic no-current-milestone plan",
+        "The no-current plan directs planning toward activation of a REFINED milestone",
+        "Multiple ACTIVE or QUALIFYING milestones remain invalid"
+      ],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "quality"
+    },
+    {
       "id": "TEST-MILESTONE-CURRENT-LABEL-001",
       "title": "Generated milestone plan reports the actual current lifecycle state",
       "status": "automated",
@@ -269,9 +295,9 @@
       "work_package_refs": ["WP-M00-008"],
       "expected": [
         "The milestone schema accepts the canonical QUALIFYING lifecycle state",
-        "Exactly one ACTIVE or QUALIFYING milestone is selected as current",
+        "At most one ACTIVE or QUALIFYING milestone is selected as current",
         "QUALIFYING keeps the current milestone test plan deterministic",
-        "Zero or multiple current milestones are rejected"
+        "Multiple current milestones are rejected"
       ],
       "implementation": {
         "target_suite": "tools",

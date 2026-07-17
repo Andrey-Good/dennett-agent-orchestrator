@@ -18,6 +18,7 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-BOOTSTRAP-CLEAN-001` | `R1` | `automated` | `automated` | evidence available |
 | `release` | `TEST-CATALOGUE-VIEWS-001` | `R1` | `automated` | `automated` | evidence available |
+| `release` | `TEST-MILESTONE-ACCEPTED-HANDOFF-001` | `R1` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-MILESTONE-QUALIFYING-001` | `R1` | `automated` | `automated` | evidence available |
 | `release` | `TEST-PLANNING-VALIDATION-001` | `R1` | `automated` | `automated` | evidence available |
 | `release` | `TEST-REPO-STRUCTURE-001` | `R1` | `automated` | `automated` | evidence available |

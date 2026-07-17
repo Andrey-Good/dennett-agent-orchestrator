@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "231acf09aa3dd307ee77138573b0be4ba1c59d69ae3d46280a5af6ee9d383558"
+      "sha256": "225688c5349f82ab6b71f1d3b9f42848a0e0f6b0dffdd271ce13fc7997be3bb8"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -885,28 +885,28 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 5520,
-      "sha256": "815c7f371d2267427fce1cf07e4dbdc0468b4619cc2f041d81517ab3681730de"
+      "bytes": 5861,
+      "sha256": "59eccd8d7476f5185442d8406e8cad694aac2812ce5f884825aa1ba8bd55fb77"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1451,
-      "sha256": "4c044c6625f2b4b8107778ca5786a655006c9bc7e0595640ed6b5616907f384e"
+      "bytes": 1574,
+      "sha256": "d7df1808b14556aa96732b4693c94c0409d4037baa218e3f3a4196bfa3d8f899"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 1790,
-      "sha256": "b004e6170e238514a2800fbfa3b74bbda1eedc871bf098ab9c502bd18fbed8b7"
+      "bytes": 1896,
+      "sha256": "c846748331fc55146850d51c35d7437f8894086be4d5d2d505c7d9575962f768"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 3451,
-      "sha256": "606b45b9759da1cd0a3d0aac9faa8f3d685fbe599afbb149da28dc292d77f0e0"
+      "bytes": 3642,
+      "sha256": "bb33c3b8fd891cd2f49d429fc6c66b00700621f0153353fff4acb99013bbd038"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 712,
-      "sha256": "a84b6196c149d5cef882dec17d421d3d2d06d7697e41992e384b9a09484ffa9b"
+      "bytes": 800,
+      "sha256": "99b1bc56e1f73d98d1eaffdbd0b6af0c89da4a4fb73859c6d996d5cce988f64a"
     },
     {
       "path": "generated/README.md",
@@ -1015,8 +1015,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 26886,
-      "sha256": "b0ffceafe7761830ac77d57c8d0112285e292b2d9d2a3e2e17ddaab1c85c7755"
+      "bytes": 29935,
+      "sha256": "fe92070988d8b1c38b7c233cfdb1d5aa6b0d1f73c16ca878e43bdaec5a1af6df"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1350,8 +1350,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 13519,
-      "sha256": "d78f2feebede477ac97099cd97452fb3e95973b2fcca085a2c1faaf4624f682c"
+      "bytes": 14426,
+      "sha256": "b7df64d7f1503c0f3af088b57abedcb19644329285ca5f70690c3c5fef5e50b9"
     },
     {
       "path": "tests/contracts/README.md",
