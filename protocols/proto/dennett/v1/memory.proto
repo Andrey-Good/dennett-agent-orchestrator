@@ -1,6 +1,6 @@
-
 syntax = "proto3";
 package dennett.v1;
+
 import "dennett/v1/common.proto";
 
 message AppendMemoryEventRequest {
@@ -10,5 +10,9 @@ message AppendMemoryEventRequest {
   string kind = 4;
   string summary = 5;
 }
-message AppendMemoryEventResponse { StableRef event = 1; }
-service DennettMemory { rpc Append(AppendMemoryEventRequest) returns (AppendMemoryEventResponse); }
+message AppendMemoryEventResponse {
+  StableRef event = 1;
+}
+service DennettMemory {
+  rpc Append(AppendMemoryEventRequest) returns (AppendMemoryEventResponse);
+}

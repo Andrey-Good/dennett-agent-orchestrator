@@ -20,6 +20,12 @@ verify:
     mise exec -- uv run --project . --frozen python tools/generate_doc_index.py --check
     mise exec -- uv run --project . --frozen python tools/generate_repository_metadata.py --check
 
+generate:
+    mise exec -- uv run --project . --frozen python tools/protocol_codegen.py generate
+
+test-contracts:
+    mise exec -- uv run --project . --frozen python tools/protocol_codegen.py check
+
 rust:
     mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo fmt --check
     mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo clippy --workspace --all-targets -- -D warnings
@@ -32,6 +38,6 @@ python:
 ts:
     mise exec -- corepack pnpm typecheck
 
-check: verify rust python ts
+check: verify rust python ts test-contracts
 
 all: check

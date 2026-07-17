@@ -62,12 +62,18 @@ just verify
 just rust
 just python
 just ts
+just generate
+just test-contracts
 ```
 
 `mise.toml`, `rust-toolchain.toml`, `uv.lock`, `pnpm-lock.yaml` и `Cargo.lock`
 фиксируют инструменты и зависимости. Python и его пакеты устанавливаются только через `uv`;
 cloud credentials для bootstrap и проверок не нужны. На Windows для Rust требуется Visual Studio
 Build Tools с workload **Desktop development with C++**; `just rust` сам активирует MSVC environment.
+
+`just generate` воспроизводит зафиксированные Rust- и TypeScript-клиенты из
+`protocols/proto`; `just test-contracts` проверяет формат, точное совпадение generated-кода
+и совместимость протокола с `main`.
 
 Перед изменениями прочитайте [`CONTRIBUTING.md`](CONTRIBUTING.md).
 

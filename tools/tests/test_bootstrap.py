@@ -27,6 +27,10 @@ class BootstrapContractTests(unittest.TestCase):
         content = (ROOT / "tools" / "bootstrap.py").read_text(encoding="utf-8")
         self.assertIn('"CI": "true"', content)
 
+    def test_bootstrap_generates_protocol_clients(self) -> None:
+        content = (ROOT / "tools" / "bootstrap.py").read_text(encoding="utf-8")
+        self.assertIn('"tools/protocol_codegen.py", "generate"', content)
+
     def test_bootstrap_does_not_require_provider_credentials(self) -> None:
         content = (ROOT / "tools" / "bootstrap.py").read_text(encoding="utf-8")
         for variable in (

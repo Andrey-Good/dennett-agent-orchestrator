@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "debt": {
+    "id": "DEBT-0001",
+    "introduced_by": "pre-M00 protocol scaffold; recorded by WP-M00-002",
+    "reason": "Existing canonical proto files all declare package dennett.v1, while ARCH-81 defines subsystem packages such as dennett.common.v1 and dennett.control.v1. Renaming now would be a public breaking change forbidden by AB-M00-002.",
+    "consequence": "M00 generated type paths and gRPC full method names reflect dennett.v1 and must not be treated as the final public package layout.",
+    "owner": "protocol",
+    "repayment_trigger": "Before the first production or external consumer compiles generated clients, execute a dedicated protocol-epoch package with migration and compatibility evidence.",
+    "deadline_or_review": "M01 protocol-consumer planning gate",
+    "tests_protecting_behavior": [
+      "TEST-PROTOCOL-GENERATION-001",
+      "TEST-PROTOCOL-BREAKING-001"
+    ]
+  }
+}

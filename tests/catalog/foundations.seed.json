@@ -96,7 +96,7 @@
     {
       "id": "TEST-PROTOCOL-GENERATION-001",
       "title": "Protocol clients regenerate deterministically from canonical schemas",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["protocol", "repository"],
@@ -110,15 +110,21 @@
       ],
       "implementation": {
         "target_suite": "protocols",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "protocols/buf.yaml",
+          "protocols/buf.gen.yaml",
+          "tools/protocol_codegen.py",
+          "tools/tests/test_protocol_codegen.py",
+          ".github/workflows/protocol-compatibility.yml"
+        ]
       },
       "owner": "protocol"
     },
     {
       "id": "TEST-PROTOCOL-BREAKING-001",
       "title": "Protocol compatibility gate rejects breaking changes",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["protocol", "compatibility"],
@@ -127,12 +133,17 @@
       "work_package_refs": ["WP-M00-002"],
       "expected": [
         "Buf breaking check compares the protocol module with main",
+        "PR checks use the pull-request base SHA and push checks use the pushed parent SHA",
+        "Candidate configuration cannot weaken the checker-owned WIRE_JSON comparison",
         "An incompatible field removal or reuse fails the gate"
       ],
       "implementation": {
         "target_suite": "protocols",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "tools/protocol_codegen.py",
+          ".github/workflows/protocol-compatibility.yml"
+        ]
       },
       "owner": "protocol"
     },

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-002",
+    "status": "completed",
+    "summary": "Pinned Buf generation for committed Rust and TypeScript clients, added deterministic stale-artifact and strict-lint-debt checks, and enforced checker-owned WIRE_JSON compatibility against the exact PR or push base commit.",
+    "commits": [
+      "c4ea4ac",
+      "50bfdba"
+    ],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      "protocols/buf.yaml",
+      "protocols/buf.gen.yaml",
+      "protocols/proto/dennett/v1/*.proto",
+      "generated/rust/dennett/v1/*",
+      "generated/ts/dennett/v1/*",
+      "tools/protocol_codegen.py",
+      "tools/tests/test_protocol_codegen.py",
+      "tools/bootstrap.py",
+      ".github/workflows/protocol-compatibility.yml",
+      "Justfile",
+      "planning/debt/DEBT-0001.json",
+      "planning/debt/DEBT-0002.json",
+      "tests/catalog/foundations.seed.json"
+    ],
+    "requirements_satisfied": [
+      "ARCH-81:ProtocolPackages",
+      "ARCH-83:GeneratedClients",
+      "M00:ProtocolBreakingGate",
+      "TEST-PROTOCOL-GENERATION-001",
+      "TEST-PROTOCOL-BREAKING-001"
+    ],
+    "tests": {
+      "passed": [
+        "just generate followed by SHA-256 comparison: all 7 generated artifacts unchanged",
+        "clean detached checkout at c4ea4ac: just bootstrap and just test-contracts with no tracked diff",
+        "just check after detached-review fixes",
+        "protocol_codegen.py check --base-ref b9fb0503ec2b1a6befd2695a735176bad224c63b",
+        "Buf lint plus exact fingerprint of 10 grandfathered findings",
+        "negative lint probe adds a violation inside an ignored legacy file and is rejected",
+        "checker-owned WIRE_JSON comparison against origin/main",
+        "negative breaking probe reuses a field number with an incompatible type and is rejected",
+        "17 tooling unit tests and 2 Python adapter-host tests",
+        "Rust format, clippy and workspace tests",
+        "desktop, mobile and Node adapter-host TypeScript checks",
+        "git diff --check"
+      ],
+      "not_run": [
+        "GitHub-hosted protocol workflow; observed push evidence is recorded after merge to main",
+        "generated clients are not compiled by a production consumer in this package"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "R2 detached review in a fresh Codex context with a focused closure pass by the original reviewer",
+      "findings_closed": [
+        "PR checks now compare with github.event.pull_request.base.sha and push checks with github.event.before",
+        "Candidate and baseline schemas are reconstructed with a checker-owned WIRE_JSON config; protocols/buf.yaml has an approval hash",
+        "Module-wide lint exceptions became file-scoped and exact legacy findings are protected by a negative strict-lint probe",
+        "Every third-party action in protocol-compatibility.yml is pinned to a reviewed full commit SHA"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "Stale generation failures list each missing, unexpected or changed generated artifact path",
+      "Compatibility success reports the resolved base ref and commit SHA",
+      "Legacy lint debt changes list the exact path, Buf rule and message"
+    ],
+    "known_limitations": [
+      "The pre-M00 dennett.v1 package layout remains until DEBT-0001 is repaid before production consumers",
+      "Legacy service and RPC names remain until DEBT-0002 is repaid in the same protocol-epoch package",
+      "Generated Rust and TypeScript runtime dependencies are intentionally deferred to the first consumer package"
+    ],
+    "follow_up_candidates": [
+      "DEBT-0001",
+      "DEBT-0002",
+      "WP-M00-003"
+    ],
+    "owner_decision_required": false
+  }
+}

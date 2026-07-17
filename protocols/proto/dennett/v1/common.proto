@@ -1,9 +1,15 @@
-
 syntax = "proto3";
 package dennett.v1;
 
-message StableRef { string kind = 1; string id = 2; }
-message ErrorEnvelope { string code = 1; string message = 2; bool retryable = 3; }
+message StableRef {
+  string kind = 1;
+  string id = 2;
+}
+message ErrorEnvelope {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
 
 enum HeadEligibility {
   HEAD_ELIGIBILITY_UNSPECIFIED = 0;

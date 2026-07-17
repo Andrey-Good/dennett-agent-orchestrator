@@ -1,6 +1,6 @@
-
 syntax = "proto3";
 package dennett.v1;
+
 import "dennett/v1/common.proto";
 
 message ProjectChatCommand {
