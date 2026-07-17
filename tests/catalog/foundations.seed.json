@@ -235,7 +235,7 @@
     {
       "id": "TEST-MILESTONE-ACCEPTED-HANDOFF-001",
       "title": "Generated milestone plan supports the accepted-milestone handoff",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R1",
       "domains": ["planning", "testing"],
@@ -253,8 +253,11 @@
       ],
       "implementation": {
         "target_suite": "tools",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "tools/generate_test_catalogue.py",
+          "tools/tests/test_generate_test_catalogue.py"
+        ]
       },
       "owner": "quality"
     },

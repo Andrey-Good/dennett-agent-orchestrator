@@ -163,16 +163,28 @@ class TestCatalogueGeneratorTests(unittest.TestCase):
         self.assertIn("Current milestone: `M00` — Fixture milestone (status: `QUALIFYING`).", plan)
         self.assertNotIn("Active milestone:", plan)
 
-    def test_zero_current_milestones_is_rejected(self) -> None:
+    def test_accepted_milestone_renders_explicit_handoff(self) -> None:
         self.set_milestone_status("ACCEPTED")
-
-        with self.assertRaises(generate_test_catalogue.CatalogueError) as raised:
-            self.synchronize()
-
-        self.assertIn(
-            "expected exactly one ACTIVE or QUALIFYING milestone, found 0",
-            str(raised.exception),
+        self.write_json(
+            "planning/milestones/M01.json",
+            {"id": "M01", "title": "Next fixture", "status": "REFINED", "work_packages": []},
         )
+
+        self.assertEqual(self.synchronize(), [])
+        context = generate_test_catalogue.load_context(
+            self.root,
+            schema_root=ROOT / "schemas",
+        )
+        self.assertIsNone(context.current_milestone)
+        plan_path = (
+            self.root / "docs" / "testing" / "generated" / "MILESTONE_TEST_PLAN.md"
+        )
+        plan = plan_path.read_text(encoding="utf-8")
+        self.assertIn("No current milestone.", plan)
+        self.assertIn("Promote one `REFINED` milestone to `ACTIVE`", plan)
+        self.assertNotIn("Current milestone: `unknown`", plan)
+        self.assertEqual(self.synchronize(), [])
+        self.assertEqual(plan_path.read_text(encoding="utf-8"), plan)
 
     def test_multiple_current_milestones_are_rejected(self) -> None:
         self.write_json(
@@ -184,7 +196,7 @@ class TestCatalogueGeneratorTests(unittest.TestCase):
             self.synchronize()
 
         self.assertIn(
-            "expected exactly one ACTIVE or QUALIFYING milestone, found 2",
+            "expected at most one ACTIVE or QUALIFYING milestone, found 2",
             str(raised.exception),
         )
 
