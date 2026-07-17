@@ -14,12 +14,15 @@
 - M00 qualification has 9 `MERGED` Work Packages, 15 catalogued tests and one
   current milestone in `QUALIFYING`; generated views reproduce that exact state.
 - The milestone schema now exposes the canonical `PROPOSED` → `REFINED` → `ACTIVE` →
-  `QUALIFYING` → `ACCEPTED` lifecycle, and generated test views keep exactly one
+  `QUALIFYING` → `ACCEPTED` lifecycle, and generated test views keep at most one
   `ACTIVE` or `QUALIFYING` milestone as current.
 - `TEST-MILESTONE-QUALIFYING-001`: passed all 9 focused generator tests, including
-  deterministic `QUALIFYING` output and rejection of zero or multiple current milestones.
+  deterministic `QUALIFYING` output and rejection of multiple current milestones.
 - `TEST-MILESTONE-CURRENT-LABEL-001`: passed deterministic assertions that generated
   milestone plans say `Current milestone` and expose the actual `ACTIVE` or `QUALIFYING` status.
+- `TEST-MILESTONE-ACCEPTED-HANDOFF-001`: passed deterministic `M00=ACCEPTED` and
+  `M01=REFINED` handoff assertions; the generated plan explicitly reports no current
+  milestone until one `REFINED` milestone is promoted to `ACTIVE`.
 - The exact CI sequence `just bootstrap` → clean-worktree probe → `just check` →
   clean-worktree probe passed without tracked or untracked drift.
 - GitHub Actions `Fast Gate` run `29572378188` and `Protocol Compatibility` run

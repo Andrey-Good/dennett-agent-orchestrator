@@ -32,7 +32,7 @@ class CatalogueError(RuntimeError):
 class CatalogueContext:
     root: Path
     cases: tuple[dict[str, Any], ...]
-    current_milestone: dict[str, Any]
+    current_milestone: dict[str, Any] | None
     packages: dict[str, dict[str, Any]]
     source_count: int
 
@@ -109,12 +109,12 @@ def load_context(
         for milestone in milestones
         if milestone.get("status") in CURRENT_MILESTONE_STATES
     ]
-    if len(current) != 1:
+    if len(current) > 1:
         diagnostics.append(
-            "planning/milestones: expected exactly one ACTIVE or QUALIFYING milestone, "
+            "planning/milestones: expected at most one ACTIVE or QUALIFYING milestone, "
             f"found {len(current)}"
         )
-    current_milestone = current[0] if current else {}
+    current_milestone = current[0] if current else None
     packages: dict[str, dict[str, Any]] = {}
     for milestone in milestones:
         for package in milestone.get("work_packages", []):
@@ -151,7 +151,7 @@ def load_context(
                 )
 
     case_ids = {str(case.get("id")) for case in cases}
-    for package in current_milestone.get("work_packages", []):
+    for package in (current_milestone or {}).get("work_packages", []):
         if not isinstance(package, dict):
             continue
         for test_id in package.get("acceptance", []):
@@ -351,6 +351,18 @@ def render_test_debt(context: CatalogueContext) -> str:
 
 def render_milestone_plan(context: CatalogueContext) -> str:
     milestone = context.current_milestone
+    if milestone is None:
+        lines = generated_header("Milestone Test Plan")
+        lines.extend(
+            [
+                "No current milestone.",
+                "",
+                "Promote one `REFINED` milestone to `ACTIVE` to generate its package "
+                "acceptance plan.",
+            ]
+        )
+        return "\n".join(lines) + "\n"
+
     case_by_id = {case["id"]: case for case in context.cases}
     packages = [
         package for package in milestone.get("work_packages", []) if isinstance(package, dict)

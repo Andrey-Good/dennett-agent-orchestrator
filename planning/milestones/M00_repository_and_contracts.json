@@ -39,7 +39,8 @@
         "WP-M00-004",
         "WP-M00-005",
         "WP-M00-008",
-        "WP-M00-009"
+        "WP-M00-009",
+        "WP-M00-010"
       ]
     }
   ],
@@ -854,6 +855,94 @@
       },
       "notes": [
         "Final M00 qualification exposed the stale Active milestone label while the selected milestone was QUALIFYING."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M00-010",
+      "title": "Support the accepted milestone handoff in generated test views",
+      "status": "MERGE_READY",
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-02",
+      "risk": "R1",
+      "outcome": "Generated milestone test views remain deterministic and explicit when no milestone is ACTIVE or QUALIFYING after an accepted-milestone handoff, while multiple current milestones remain invalid.",
+      "non_goals": [
+        "accepting M00 on behalf of the owner",
+        "creating or activating M01",
+        "changing milestone lifecycle states or package acceptance cases"
+      ],
+      "requirement_refs": [
+        "IMPL-04:MilestoneLifecycle",
+        "IMPL-04:RollingWavePlanning",
+        "M00:ExitGate"
+      ],
+      "architecture_refs": [
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#2-общие-правила-перехода",
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#14-rolling-wave-planning",
+        "docs/testing/TEST_CATALOGUE_AND_QUALITY_GATES.md#14-генерируемые-документы"
+      ],
+      "depends_on": [
+        "WP-M00-008",
+        "WP-M00-009"
+      ],
+      "allowed_roots": [
+        "tools/generate_test_catalogue.py",
+        "tools/tests/test_generate_test_catalogue.py",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "VALIDATION.md",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "docs/specifications",
+        "docs/architecture",
+        "schemas"
+      ],
+      "state_ownership": {
+        "reads": [
+          "milestone lifecycle status and structured test catalogue"
+        ],
+        "writes": [
+          "rebuildable current-milestone or no-current-milestone test projection"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-MILESTONE-ACCEPTED-HANDOFF-001"
+      ],
+      "required_commands": [
+        "uv run python -m unittest tools.tests.test_generate_test_catalogue",
+        "just check"
+      ],
+      "observability": [
+        "the generated plan explicitly reports that no current milestone exists"
+      ],
+      "rollback": [
+        "revert optional current-milestone rendering and restore exact-one validation"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 1,
+        "max_diff_lines": 500
+      },
+      "notes": [
+        "The M00 completion audit found that exact-one validation prevented the canonical QUALIFYING to ACCEPTED handoff before M01 activation."
       ]
     }
   ],
