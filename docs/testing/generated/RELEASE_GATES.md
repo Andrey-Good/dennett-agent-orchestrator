@@ -11,7 +11,7 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-EFFECT-UNKNOWN-001` | `R3` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-HEAD-OPTIN-001` | `R3` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-FAKE-CHAT-001` | `R2` | `specified` | `planned` | missing evidence |
+| `release` | `TEST-FAKE-CHAT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-PR-FAST-GATE-001` | `R2` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-PRODUCT-IDENTITY-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `automated` | evidence available |

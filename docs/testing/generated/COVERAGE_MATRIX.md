@@ -14,7 +14,7 @@ Each row links one requirement to its catalogue evidence.
 | `ARCH-81:MemoryAuthority` | `TEST-MEMORY-ONE-LOGICAL-001` | — | `memory` | `tests/scenarios/offline-client-memory-not-canonical.yaml` | `release` |
 | `ARCH-81:ProtocolPackages` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-83:Bootstrap` | `TEST-BOOTSTRAP-CLEAN-001` | `WP-M00-001` | `repository` | `Justfile`, `tools/bootstrap.py`, `tools/doctor.py`, `tools/tests/test_bootstrap.py`, `tools/tests/test_doctor.py` | `release` |
-| `ARCH-83:FirstVerticalSlice` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | — | `release` |
+| `ARCH-83:FirstVerticalSlice` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
 | `ARCH-83:GeneratedClients` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-83:Milestone0` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
 | `ARCH-83:ProtocolCompatibility` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
@@ -22,7 +22,7 @@ Each row links one requirement to its catalogue evidence.
 | `IMPL-00:PRGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | — | `release` |
 | `IMPL-03:PlanningValidation` | `TEST-PLANNING-VALIDATION-001` | `WP-M00-004` | `planning` | `schemas/autonomous-batch.schema.json`, `schemas/decision-request.schema.json`, `schemas/milestone.schema.json`, `schemas/technical-debt.schema.json`, `schemas/work-package-result.schema.json`, `schemas/work-package.schema.json`, `tools/tests/test_verify_planning.py`, `tools/verify_planning.py` | `release` |
 | `M00:CleanMachineBootstrap` | `TEST-BOOTSTRAP-CLEAN-001` | `WP-M00-001` | `repository` | `Justfile`, `tools/bootstrap.py`, `tools/doctor.py`, `tools/tests/test_bootstrap.py`, `tools/tests/test_doctor.py` | `release` |
-| `M00:FakeVerticalPath` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | — | `release` |
+| `M00:FakeVerticalPath` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
 | `M00:ProtocolBreakingGate` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `M00:RustBaseline` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
 | `OWNER:CanonicalNameDennett` | `TEST-PRODUCT-IDENTITY-001` | `WP-M00-006` | `repository` | `tools/generate_repository_metadata.py`, `tools/verify_repo.py` | `release` |

@@ -30,6 +30,9 @@ generate-test-catalogue:
 test-contracts:
     mise exec -- uv run --project . --frozen python tools/protocol_codegen.py check
 
+demo-fake:
+    mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo run --quiet -p dennett-head
+
 rust:
     mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo fmt --check
     mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo clippy --workspace --all-targets -- -D warnings

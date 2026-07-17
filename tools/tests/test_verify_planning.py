@@ -232,9 +232,11 @@ class PlanningValidatorTests(unittest.TestCase):
         packet["tests"]["passed"] = []
         packet.pop("merged_at")
         self.write("planning/results/WP-M00-002.json", result)
-        batch = self.read("planning/batches/AB-M00-002.json")
-        batch["status"] = "DRAFT"
-        self.write("planning/batches/AB-M00-002.json", batch)
+        for path in sorted((self.root / "planning" / "batches").glob("*.json")):
+            relative = path.relative_to(self.root).as_posix()
+            batch = self.read(relative)
+            batch["status"] = "DRAFT"
+            self.write(relative, batch)
 
         self.assertEqual(self.diagnostics(), [])
 

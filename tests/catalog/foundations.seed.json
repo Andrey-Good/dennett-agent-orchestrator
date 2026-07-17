@@ -228,7 +228,7 @@
     {
       "id": "TEST-FAKE-CHAT-001",
       "title": "Credential-free fake conversation reaches result and memory",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["agents", "memory", "head", "repository"],
@@ -243,8 +243,12 @@
       ],
       "implementation": {
         "target_suite": "services/head",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "Justfile",
+          "services/head/src/main.rs",
+          "services/head/tests/fake_chat.rs"
+        ]
       },
       "owner": "agents"
     },
