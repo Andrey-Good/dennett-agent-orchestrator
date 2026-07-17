@@ -8,7 +8,7 @@
 
 ## Summary
 
-- Status: `automated` 9, `specified` 4
+- Status: `automated` 10, `specified` 3
 - Risk: `R1` 5, `R2` 5, `R3` 3
 - Domain: `agents` 1, `architecture` 1, `ci` 1, `compatibility` 1, `connectors` 1, `contracts` 1, `devices` 2, `documentation` 2, `effects` 1, `head` 2, `memory` 2, `planning` 1, `protocol` 2, `repository` 8, `rust` 1, `sync` 1, `testing` 1, `tooling` 1, `trust` 1
 
@@ -23,8 +23,8 @@
 | `TEST-PLANNING-VALIDATION-001` | Planning validator rejects invalid graph and unsafe ready work | `planning`, `repository` | `R1` | `automated` | `critical` | `planning` | `automated` |
 | `TEST-PROTOCOL-BREAKING-001` | Protocol compatibility gate rejects breaking changes | `compatibility`, `protocol` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-GENERATION-001` | Protocol clients regenerate deterministically from canonical schemas | `protocol`, `repository` | `R2` | `automated` | `critical` | `protocol` | `automated` |
+| `TEST-PR-FAST-GATE-001` | Pull request fast gate covers every M00 required check | `ci`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-PRODUCT-IDENTITY-001` | Canonical repository identity uses Dennett and no license file | `contracts`, `documentation`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
-| `TEST-PR-FAST-GATE-001` | Pull request fast gate covers every M00 required check | `ci`, `repository` | `R2` | `specified` | `critical` | `repository` | `planned` |
 | `TEST-BOOTSTRAP-CLEAN-001` | Clean checkout bootstrap installs pinned development dependencies | `repository`, `tooling` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-REPO-STRUCTURE-001` | Required repository boundaries and AGENTS files exist | `architecture`, `repository` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-RUST-WORKSPACE-001` | Pinned Rust workspace format lint and tests pass | `repository`, `rust` | `R1` | `automated` | `critical` | `repository` | `automated` |

@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 295,
+  "file_count": 298,
   "files": [
     {
       "path": ".editorconfig",
@@ -24,9 +24,14 @@
       "sha256": "3b961090abae7722d4a525b1e03192b1c26b536bd68cb4e1a049513921a160b0"
     },
     {
+      "path": ".github/branch-protection.main.json",
+      "bytes": 435,
+      "sha256": "f0000c3c17cd51dea4af8c158eea0ad2db98b11aa116d23b41b95ca06fc7578b"
+    },
+    {
       "path": ".github/workflows/ci.yml",
-      "bytes": 1613,
-      "sha256": "5f204817b27b3b66b745727e03c8d4aaa0a376a9d4f4df1e2e77239d58fe83d0"
+      "bytes": 864,
+      "sha256": "c1ab170a0bee57306f68b36d326d4bd93fc72270203990695d58fdc178b78a19"
     },
     {
       "path": ".github/workflows/protocol-compatibility.yml",
@@ -55,8 +60,8 @@
     },
     {
       "path": "CONTRIBUTING.md",
-      "bytes": 3863,
-      "sha256": "98158b63e6770920dcbe3b5ef902fe0f2ca46e11a6e90175884486b81c654a22"
+      "bytes": 4437,
+      "sha256": "39dfda0d7a85a7346421073a97b72802eb88663a59290bb0bbc543c7731bf337"
     },
     {
       "path": "Cargo.lock",
@@ -75,13 +80,13 @@
     },
     {
       "path": "Justfile",
-      "bytes": 1985,
-      "sha256": "0000efa51dc7fffa9e9c9f5bf1a2ea28b834b3f463f114059d30c575f9a16cea"
+      "bytes": 2056,
+      "sha256": "451cc1886ac03aa793bce5649cdd6a0589209b8cbd3c9175c5cd2e79a0342dd5"
     },
     {
       "path": "README.md",
-      "bytes": 8760,
-      "sha256": "0d0c398a48e7d67cc2fecde701dcdc9c636cd933b50fd2d1a206a6d6b94ddd45"
+      "bytes": 9353,
+      "sha256": "7b7e99b9c27bc5d9b4fc8f597daa2f4b515541c5e3bde06ed7c443828d77a783"
     },
     {
       "path": "README.ru.md",
@@ -436,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "216f9b0c077ad041e8f513641dd5276626745792948f2766a5faefbbd842eed7"
+      "sha256": "1b27444c292b804855fe9c52291a2ed468140d0ba6d1eb01e43ea3b5fa9c33e7"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -880,28 +885,28 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 4402,
-      "sha256": "e300ec1e70e363dcc05ccb7e38bbe7367fa5d11d887a3b59850da2e2fd552e66"
+      "bytes": 4660,
+      "sha256": "c0411369f5746c728fd71f1383ad02f7da4da310b949caba3639b4fa8644dfbd"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1244,
-      "sha256": "4b9fa00fcb1a29e258fbbcd5ec118fe87d51fd9bd7a53bad16aaad51a2e23719"
+      "bytes": 1256,
+      "sha256": "dce93cc6b47a3888c5901ee0c31f400f8b17227e584f4e9e036a113d1429b57c"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 1682,
-      "sha256": "6221ffb986bd316a332f6eb6665c23e6c6fdc743e10e9bcc91543632a8c4635d"
+      "bytes": 1686,
+      "sha256": "91aed9a4796943c9f481818617b8853027387f98cb89862577ad9cbaac717e29"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 3072,
-      "sha256": "44900e294d22ed6b4cbe3b2559bff632e4495c269861c53bdb0de1c20d3553ef"
+      "bytes": 3075,
+      "sha256": "3a079bd8513a216cf5b914d7bfb9d7a496e00f4c761bd64dd2b1f3cb281237c7"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 789,
-      "sha256": "cc29c0f49bbaed3b2440174e55c757fbec6b09969772d29a4fe8606107989a0b"
+      "bytes": 712,
+      "sha256": "a84b6196c149d5cef882dec17d421d3d2d06d7697e41992e384b9a09484ffa9b"
     },
     {
       "path": "generated/README.md",
@@ -980,8 +985,8 @@
     },
     {
       "path": "planning/batches/AB-M00-003.json",
-      "bytes": 867,
-      "sha256": "8e388038692c00fb75cd008c888ddb61a7d8893178ad5905ed40fbcde0be1398"
+      "bytes": 869,
+      "sha256": "7da8ec0bd8cc5f4954068a24d44a5864f3922fb4760df1cc83f6f4c515f72405"
     },
     {
       "path": "planning/debt/DEBT-0001.json",
@@ -1010,8 +1015,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 20880,
-      "sha256": "778dba6b68deacce1549b94b068371b88eaac9e55d201cfe19df9c4f742f81eb"
+      "bytes": 21201,
+      "sha256": "999aaae2ca6ae48cee2822f5fb8bd42dd7e31cee35353254686eebda74ca66d9"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1330,8 +1335,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 11299,
-      "sha256": "4ed466a1d1c962af85ffd4e3194ca38464919abe6e3788639b4ba8f2656c85b2"
+      "bytes": 11493,
+      "sha256": "4f06d177e7b51bc58fbe1bdcf5a2be33f7d006045fe852a2f0da782c1497add4"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1454,9 +1459,19 @@
       "sha256": "238eb41e6469426c5e6ca2fb1022e2958eac169f6879b76ebfb4c14eb28f78a7"
     },
     {
+      "path": "tools/tests/test_verify_ci.py",
+      "bytes": 3629,
+      "sha256": "55acd1bce3524e9c5eff23d8aa45bf91e70652e194d1187a5957e56e4547df19"
+    },
+    {
       "path": "tools/tests/test_verify_planning.py",
       "bytes": 10546,
       "sha256": "0bf7ce8b75dc02c297b83fff373630fbb84f088b6cc895b02f249e0740fbe408"
+    },
+    {
+      "path": "tools/verify_ci.py",
+      "bytes": 6745,
+      "sha256": "9482f1ce1d0b8b5747868434a36b8cec6c3f9e41e42f48d84bcb6b81cd0d89af"
     },
     {
       "path": "tools/verify_docs.py",

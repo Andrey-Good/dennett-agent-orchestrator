@@ -150,7 +150,7 @@
     {
       "id": "TEST-PR-FAST-GATE-001",
       "title": "Pull request fast gate covers every M00 required check",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["repository", "ci"],
@@ -164,8 +164,14 @@
       ],
       "implementation": {
         "target_suite": "github actions",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          ".github/branch-protection.main.json",
+          ".github/workflows/ci.yml",
+          "Justfile",
+          "tools/verify_ci.py",
+          "tools/tests/test_verify_ci.py"
+        ]
       },
       "owner": "repository"
     },
