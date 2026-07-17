@@ -8,7 +8,7 @@
 
 ## Summary
 
-- Status: `automated` 8, `specified` 5
+- Status: `automated` 9, `specified` 4
 - Risk: `R1` 5, `R2` 5, `R3` 3
 - Domain: `agents` 1, `architecture` 1, `ci` 1, `compatibility` 1, `connectors` 1, `contracts` 1, `devices` 2, `documentation` 2, `effects` 1, `head` 2, `memory` 2, `planning` 1, `protocol` 2, `repository` 8, `rust` 1, `sync` 1, `testing` 1, `tooling` 1, `trust` 1
 
@@ -16,7 +16,7 @@
 
 | ID | Title | Domains | Risk | Status | Priority | Owner | Implementation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `TEST-FAKE-CHAT-001` | Credential-free fake conversation reaches result and memory | `agents`, `head`, `memory`, `repository` | `R2` | `specified` | `critical` | `agents` | `planned` |
+| `TEST-FAKE-CHAT-001` | Credential-free fake conversation reaches result and memory | `agents`, `head`, `memory`, `repository` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-EFFECT-UNKNOWN-001` | Unknown external effect is reconciled instead of blindly retried | `connectors`, `effects` | `R3` | `specified` | `critical` | `effects` | `planned` |
 | `TEST-HEAD-OPTIN-001` | Unapproved device cannot promote itself to Head | `devices`, `head`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | Client cache cannot become a second canonical memory | `devices`, `memory`, `sync` | `R3` | `specified` | `critical` | `memory` | `planned` |

@@ -6,7 +6,7 @@
 
 Active milestone: `M00` — Repository and Contracts Foundation.
 
-- Package status: `MERGED` 5, `READY` 1, `REFINED` 1
+- Package status: `IN_PROGRESS` 1, `MERGED` 5, `REFINED` 1
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -18,4 +18,4 @@ Active milestone: `M00` — Repository and Contracts Foundation.
 | `WP-M00-004` | `MERGED` | `TEST-PLANNING-VALIDATION-001` | `R1` | `automated` | `planning` |
 | `WP-M00-005` | `MERGED` | `TEST-CATALOGUE-VIEWS-001` | `R1` | `automated` | `quality` |
 | `WP-M00-006` | `MERGED` | `TEST-PRODUCT-IDENTITY-001` | `R2` | `automated` | `repository` |
-| `WP-M00-007` | `READY` | `TEST-FAKE-CHAT-001` | `R2` | `specified` | `agents` |
+| `WP-M00-007` | `IN_PROGRESS` | `TEST-FAKE-CHAT-001` | `R2` | `automated` | `agents` |

@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 293,
+  "file_count": 294,
   "files": [
     {
       "path": ".editorconfig",
@@ -75,13 +75,13 @@
     },
     {
       "path": "Justfile",
-      "bytes": 1861,
-      "sha256": "3db268419dfa79ebceac74cc7fcfcd6e976e0bc54e8165096e15ddb118ced60c"
+      "bytes": 1985,
+      "sha256": "0000efa51dc7fffa9e9c9f5bf1a2ea28b834b3f463f114059d30c575f9a16cea"
     },
     {
       "path": "README.md",
-      "bytes": 8142,
-      "sha256": "1d47692d10ddf1f85780f70ee7d438f822341072edd589e0c2a1783f653ef13a"
+      "bytes": 8760,
+      "sha256": "0d0c398a48e7d67cc2fecde701dcdc9c636cd933b50fd2d1a206a6d6b94ddd45"
     },
     {
       "path": "README.ru.md",
@@ -100,8 +100,8 @@
     },
     {
       "path": "VALIDATION.md",
-      "bytes": 1186,
-      "sha256": "f9b13813cb223260c9124dc91161d12a3d2e10c0cbb2e7cf4778807484ccfa00"
+      "bytes": 1422,
+      "sha256": "6b288fd350b782949e5974b6836f1fabc813b6071f16d7fc90671987af618d97"
     },
     {
       "path": "adapters/AGENTS.md",
@@ -436,7 +436,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "363d1e31d8eb812dae0a38b22fdcd9218b29e2ba9a796ca6d13a46bf0025ba8f"
+      "sha256": "63964dce1e1f360432deb50886075315d1bca247a0db20420e1e83a05ac8b019"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -880,28 +880,28 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 4258,
-      "sha256": "53b781b1f050a60a389b41bc4405b82f51fc6d022bfc54736c4017661af61a9e"
+      "bytes": 4402,
+      "sha256": "e300ec1e70e363dcc05ccb7e38bbe7367fa5d11d887a3b59850da2e2fd552e66"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1258,
-      "sha256": "72a7b0c90636555bb18a7e80b3d48c9d00dcb5db56617fa28ba30cb095014d75"
+      "bytes": 1270,
+      "sha256": "dffdb122f0bd607fa7522bac12dfb2dd584c1736b009d7024e7acedcd0ffc67f"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 1678,
-      "sha256": "6e5c34b4dd440fa0fd9e8199e26a703bfc9ea09fe2a58fe27ff3d2ee2b07b6c8"
+      "bytes": 1682,
+      "sha256": "6221ffb986bd316a332f6eb6665c23e6c6fdc743e10e9bcc91543632a8c4635d"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 3070,
-      "sha256": "57f1b98f2cd64612ad71d597f4ce741397808e7ffd44126ab0c967099815a339"
+      "bytes": 3072,
+      "sha256": "44900e294d22ed6b4cbe3b2559bff632e4495c269861c53bdb0de1c20d3553ef"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 859,
-      "sha256": "a66dfcc7843bf78d32c6effe20b282296341bb8767d5a3abea4325807e0b763d"
+      "bytes": 789,
+      "sha256": "cc29c0f49bbaed3b2440174e55c757fbec6b09969772d29a4fe8606107989a0b"
     },
     {
       "path": "generated/README.md",
@@ -980,8 +980,8 @@
     },
     {
       "path": "planning/batches/AB-M00-003.json",
-      "bytes": 867,
-      "sha256": "c4c31b67ec5fd91f4d6c935734cd7efc4fcc67c2dcc7dfc5f53ea32899147400"
+      "bytes": 869,
+      "sha256": "7da8ec0bd8cc5f4954068a24d44a5864f3922fb4760df1cc83f6f4c515f72405"
     },
     {
       "path": "planning/debt/DEBT-0001.json",
@@ -1010,8 +1010,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 20394,
-      "sha256": "2c45b3fb53c79039ac0c054d3153ba74ee29a5b6b1444d3692b53089ffffa1f8"
+      "bytes": 20887,
+      "sha256": "41d0b993b484fe5475652708d8a2b3fd7457f2fe1d2dbb53e6225961789364e9"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1245,8 +1245,13 @@
     },
     {
       "path": "services/head/src/main.rs",
-      "bytes": 834,
-      "sha256": "aa0848d1874a93b18aa9eec8e2df97cab19165acbdfc53e5e94148767239d7db"
+      "bytes": 1641,
+      "sha256": "aa8bc721f7e9abcc29652dcdeaa4ff892710b86b7fca5a90d8409e1a4cb43287"
+    },
+    {
+      "path": "services/head/tests/fake_chat.rs",
+      "bytes": 1615,
+      "sha256": "92014b732636a5d8fa5f654fc3f7d10d989a3119c53f886741fcf9872f428526"
     },
     {
       "path": "services/memoryd/AGENTS.md",
@@ -1320,8 +1325,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 11182,
-      "sha256": "f1bdd0aa5fd9607c41c14413a2962464df2165cf92817cfa25373da6fa18bb18"
+      "bytes": 11299,
+      "sha256": "4ed466a1d1c962af85ffd4e3194ca38464919abe6e3788639b4ba8f2656c85b2"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1445,8 +1450,8 @@
     },
     {
       "path": "tools/tests/test_verify_planning.py",
-      "bytes": 10035,
-      "sha256": "2fe336008edc462f3e679cb5c9d361f78a63db1e5f45a4f4e1f6d7e54354cb3c"
+      "bytes": 10138,
+      "sha256": "d3ed376fafe146b1d0fbd8a523d958cbc4004dccf6c35674be58a727d2454b85"
     },
     {
       "path": "tools/verify_docs.py",
