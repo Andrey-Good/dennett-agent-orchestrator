@@ -2,7 +2,7 @@
   "version": 1,
   "id": "AB-M00-003",
   "title": "Prove the fake path and enforce the fast gate",
-  "status": "RUNNING",
+  "status": "COMPLETED",
   "packages": [
     "WP-M00-007",
     "WP-M00-003"

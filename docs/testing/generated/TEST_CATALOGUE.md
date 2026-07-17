@@ -4,13 +4,13 @@
 
 > Source: `tests/catalog/*.json`. Regenerate with `uv run python tools/generate_test_catalogue.py`.
 
-13 cases from 1 structured source file(s).
+14 cases from 1 structured source file(s).
 
 ## Summary
 
-- Status: `automated` 10, `specified` 3
-- Risk: `R1` 5, `R2` 5, `R3` 3
-- Domain: `agents` 1, `architecture` 1, `ci` 1, `compatibility` 1, `connectors` 1, `contracts` 1, `devices` 2, `documentation` 2, `effects` 1, `head` 2, `memory` 2, `planning` 1, `protocol` 2, `repository` 8, `rust` 1, `sync` 1, `testing` 1, `tooling` 1, `trust` 1
+- Status: `automated` 10, `specified` 4
+- Risk: `R1` 6, `R2` 5, `R3` 3
+- Domain: `agents` 1, `architecture` 1, `ci` 1, `compatibility` 1, `connectors` 1, `contracts` 1, `devices` 2, `documentation` 2, `effects` 1, `head` 2, `memory` 2, `planning` 2, `protocol` 2, `repository` 8, `rust` 1, `sync` 1, `testing` 2, `tooling` 1, `trust` 1
 
 ## Cases
 
@@ -21,6 +21,7 @@
 | `TEST-HEAD-OPTIN-001` | Unapproved device cannot promote itself to Head | `devices`, `head`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | Client cache cannot become a second canonical memory | `devices`, `memory`, `sync` | `R3` | `specified` | `critical` | `memory` | `planned` |
 | `TEST-PLANNING-VALIDATION-001` | Planning validator rejects invalid graph and unsafe ready work | `planning`, `repository` | `R1` | `automated` | `critical` | `planning` | `automated` |
+| `TEST-MILESTONE-QUALIFYING-001` | Current milestone test views support the qualification lifecycle | `planning`, `testing` | `R1` | `specified` | `critical` | `quality` | `planned` |
 | `TEST-PROTOCOL-BREAKING-001` | Protocol compatibility gate rejects breaking changes | `compatibility`, `protocol` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-GENERATION-001` | Protocol clients regenerate deterministically from canonical schemas | `protocol`, `repository` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PR-FAST-GATE-001` | Pull request fast gate covers every M00 required check | `ci`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
