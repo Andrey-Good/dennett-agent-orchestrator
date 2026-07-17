@@ -337,7 +337,7 @@
       "version": 1,
       "id": "WP-M00-003",
       "title": "Establish fast required pull-request checks",
-      "status": "READY",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-01",
       "risk": "R2",
@@ -366,10 +366,18 @@
         ".github",
         "Justfile",
         "package.json",
+        "pyproject.toml",
+        "uv.lock",
         "README.md",
         "CONTRIBUTING.md",
         "VALIDATION.md",
-        "tools"
+        "tools",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
       ],
       "forbidden_roots": [
         "docs/specifications",
@@ -415,7 +423,8 @@
         "max_diff_lines": 1000
       },
       "notes": [
-        "The target duration is under ten minutes on GitHub-hosted runners."
+        "The target duration is under ten minutes on GitHub-hosted runners.",
+        "Planning lifecycle records, test-catalogue views and generated repository metadata are package-completion artifacts."
       ]
     },
     {

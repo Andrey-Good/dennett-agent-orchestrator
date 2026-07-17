@@ -29,6 +29,13 @@ Dennett развивается от спецификации к реализац
 - влияние на observability и recovery;
 - обновлённые документы или ADR.
 
+## Обязательный Fast Gate
+
+GitHub branch protection для `main` требует один стабильный check `Fast Gate`. Он запускается
+на pull request, push в `main` и merge queue, использует frozen lockfiles и выполняет полный
+`just check`. Локально перед отправкой запустите ту же команду; ослаблять gate через
+`continue-on-error`, неприкреплённые action tags или отдельный сокращённый CI-путь нельзя.
+
 ## Принципы кода
 
 - Domain/application code не импортирует provider SDK, UI framework или physical database client.

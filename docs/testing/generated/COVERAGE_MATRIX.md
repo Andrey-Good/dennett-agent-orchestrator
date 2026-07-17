@@ -19,7 +19,7 @@ Each row links one requirement to its catalogue evidence.
 | `ARCH-83:Milestone0` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
 | `ARCH-83:ProtocolCompatibility` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `ARCH-83:RepositoryLayout` | `TEST-REPO-STRUCTURE-001` | — | `repository` | `tools/verify_repo.py` | `release` |
-| `IMPL-00:PRGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | — | `release` |
+| `IMPL-00:PRGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | `.github/branch-protection.main.json`, `.github/workflows/ci.yml`, `Justfile`, `tools/tests/test_verify_ci.py`, `tools/verify_ci.py`, `tools/verify_worktree_clean.py` | `release` |
 | `IMPL-03:PlanningValidation` | `TEST-PLANNING-VALIDATION-001` | `WP-M00-004` | `planning` | `schemas/autonomous-batch.schema.json`, `schemas/decision-request.schema.json`, `schemas/milestone.schema.json`, `schemas/technical-debt.schema.json`, `schemas/work-package-result.schema.json`, `schemas/work-package.schema.json`, `tools/tests/test_verify_planning.py`, `tools/verify_planning.py` | `release` |
 | `M00:CleanMachineBootstrap` | `TEST-BOOTSTRAP-CLEAN-001` | `WP-M00-001` | `repository` | `Justfile`, `tools/bootstrap.py`, `tools/doctor.py`, `tools/tests/test_bootstrap.py`, `tools/tests/test_doctor.py` | `release` |
 | `M00:FakeVerticalPath` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
@@ -30,4 +30,4 @@ Each row links one requirement to its catalogue evidence.
 | `SPEC-50:HeadEligibility` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
 | `SPEC-B:UnknownEffect` | `TEST-EFFECT-UNKNOWN-001` | — | `effects` | `tests/scenarios/effect-timeout-no-duplicate.yaml` | `release` |
 | `TEST-STRATEGY:GeneratedViews` | `TEST-CATALOGUE-VIEWS-001` | `WP-M00-005` | `quality` | `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | `release` |
-| `TEST-STRATEGY:PRFastGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | — | `release` |
+| `TEST-STRATEGY:PRFastGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | `.github/branch-protection.main.json`, `.github/workflows/ci.yml`, `Justfile`, `tools/tests/test_verify_ci.py`, `tools/verify_ci.py`, `tools/verify_worktree_clean.py` | `release` |

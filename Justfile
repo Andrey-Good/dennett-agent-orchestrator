@@ -17,6 +17,7 @@ verify:
     mise exec -- uv run --project . --frozen python tools/verify_repo.py
     mise exec -- uv run --project . --frozen python tools/verify_docs.py
     mise exec -- uv run --project . --frozen python tools/verify_planning.py
+    mise exec -- uv run --project . --frozen python tools/verify_ci.py
     mise exec -- uv run --project . --frozen python tools/generate_test_catalogue.py --check
     mise exec -- uv run --project . --frozen python tools/generate_doc_index.py --check
     mise exec -- uv run --project . --frozen python tools/generate_repository_metadata.py --check

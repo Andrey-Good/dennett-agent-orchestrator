@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-003",
+    "status": "completed",
+    "summary": "Established one pinned Fast Gate for every pull request and main push, added structural CI and clean-worktree verification, and enforced the up-to-date check on protected main without administrator bypass.",
+    "commits": [
+      "240c0aa",
+      "e72403f"
+    ],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/branch-protection.main.json",
+      "Justfile",
+      "tools/verify_ci.py",
+      "tools/verify_worktree_clean.py",
+      "tools/tests/test_verify_ci.py",
+      "pyproject.toml",
+      "uv.lock",
+      "tests/catalog/foundations.seed.json",
+      "docs/testing/generated/*.md",
+      "README.md",
+      "CONTRIBUTING.md",
+      "VALIDATION.md"
+    ],
+    "requirements_satisfied": [
+      "IMPL-00:PRGate",
+      "TEST-STRATEGY:PRFastGate",
+      "M00:RequiredChecks",
+      "TEST-PR-FAST-GATE-001"
+    ],
+    "tests": {
+      "passed": [
+        "exact local sequence: just bootstrap, clean-worktree probe, just check, clean-worktree probe",
+        "45 developer-tool unit tests including 12 focused CI contract tests",
+        "2 Python adapter-host tests",
+        "Rust format, clippy, workspace and documentation tests",
+        "desktop, mobile and Node adapter-host TypeScript checks",
+        "protocol generation and compatibility checks against origin/main",
+        "GitHub Actions Fast Gate run 29572378188",
+        "GitHub Actions Protocol Compatibility run 29572378080",
+        "saved GitHub branch protection rule 80381387 reopened and verified",
+        "git diff --check"
+      ],
+      "not_run": [
+        "nightly matrices, release signing and native packaging are package non-goals"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "R2 detached review of the exact implementation diff with focused closure passes and saved GitHub branch-protection evidence",
+      "findings_closed": [
+        "Applied and reopened the main branch-protection rule instead of relying on checked-in desired state alone",
+        "Removed administrator bypass by enforcing the rule for administrators",
+        "Confirmed generated catalogue and repository metadata are committed and clean under generation checks",
+        "Replaced the pre-check tracked-only diff with tracked-and-untracked clean probes before and after verification",
+        "Replaced string matching with structural YAML, Justfile and bootstrap validation plus adversarial tests",
+        "Fast Gate run 29573837713 exposed Windows CRLF navigation checksums; generation now pins LF and a regression test guards it"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "GitHub exposes one stable required Fast Gate result",
+      "clean-worktree failures list every tracked or untracked drift entry",
+      "CI contract failures identify the workflow, recipe, bootstrap or protection mismatch"
+    ],
+    "known_limitations": [
+      "Classic GitHub branch protection is external state and should be audited periodically against the checked-in contract",
+      "The fast gate intentionally excludes nightly matrices, release signing and native application packaging",
+      "No provider credentials or production provider adapters are exercised in M00"
+    ],
+    "follow_up_candidates": [
+      "M01"
+    ],
+    "owner_decision_required": false
+  }
+}
