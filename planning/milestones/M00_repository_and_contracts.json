@@ -2,7 +2,7 @@
   "version": 1,
   "id": "M00",
   "title": "Repository and Contracts Foundation",
-  "status": "ACTIVE",
+  "status": "QUALIFYING",
   "outcome": "The repository builds from a documented environment, generated contracts are reproducible, required checks run automatically, and coding agents can execute bounded work packages.",
   "non_goals": [
     "real cloud agent provider",
@@ -775,7 +775,7 @@
       "version": 1,
       "id": "WP-M00-009",
       "title": "Report the current milestone lifecycle state accurately",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M00",
       "vertical_slice": "VS-M00-02",
       "risk": "R1",

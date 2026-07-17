@@ -6,9 +6,12 @@
     "summary": "Replaced the stale Active milestone heading with a current-milestone heading that displays the actual ACTIVE or QUALIFYING status, guarded by deterministic regression assertions.",
     "commits": [
       "288ec1c",
-      "9052db1"
+      "9052db1",
+      "8b44a20",
+      "a5a1482"
     ],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       "tools/generate_test_catalogue.py",
       "tools/tests/test_generate_test_catalogue.py",
@@ -33,6 +36,8 @@
         "clean-worktree probe, just check, clean-worktree probe on implementation commit 9052db1",
         "49 developer-tool tests, 2 Python adapter-host tests, Rust and TypeScript workspace checks",
         "protocol generation and compatibility checks against origin/main",
+        "pull request Fast Gate run 29577110547",
+        "main Fast Gate run 29577197354 and Protocol Compatibility run 29577197296",
         "git diff --check"
       ],
       "not_run": [
