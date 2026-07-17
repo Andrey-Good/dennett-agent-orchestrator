@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dennett.local/schemas/milestone.schema.json",
+  "title": "Dennett Milestone",
+  "type": "object",
+  "required": ["version", "id", "title", "status", "outcome", "non_goals", "owner_decisions", "vertical_slices", "work_packages", "batches", "owner_acceptance"],
+  "properties": {
+    "version": {"const": 1},
+    "id": {"type": "string", "pattern": "^M[0-9]{2}$"},
+    "title": {"type": "string", "minLength": 5},
+    "status": {"enum": ["DRAFT", "ACTIVE", "PAUSED", "BLOCKED", "COMPLETED", "CANCELLED"]},
+    "outcome": {"type": "string", "minLength": 10},
+    "non_goals": {"$ref": "#/$defs/non_empty_string_list"},
+    "owner_decisions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^DEC-[0-9]{4}$"}
+    },
+    "vertical_slices": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "work_packages"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^VS-M[0-9]{2}-[0-9]{2}$"},
+          "title": {"type": "string", "minLength": 5},
+          "work_packages": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^WP-M[0-9]{2}-[0-9]{3}$"}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "work_packages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "object"}
+    },
+    "batches": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^AB-M[0-9]{2}-[0-9]{3}$"}
+    },
+    "owner_acceptance": {"$ref": "#/$defs/non_empty_string_list"}
+  },
+  "$defs": {
+    "non_empty_string_list": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "additionalProperties": false
+}

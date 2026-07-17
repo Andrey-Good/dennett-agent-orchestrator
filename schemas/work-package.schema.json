@@ -3,26 +3,143 @@
   "$id": "https://dennett.local/schemas/work-package.schema.json",
   "title": "Dennett Work Package",
   "type": "object",
-  "required": ["version", "id", "title", "status", "risk", "outcome"],
+  "required": [
+    "version",
+    "id",
+    "title",
+    "status",
+    "milestone",
+    "vertical_slice",
+    "risk",
+    "outcome",
+    "non_goals",
+    "requirement_refs",
+    "architecture_refs",
+    "depends_on",
+    "allowed_roots",
+    "forbidden_roots",
+    "state_ownership",
+    "contract_changes",
+    "security_effects",
+    "acceptance",
+    "required_commands",
+    "observability",
+    "rollback",
+    "owner_decision",
+    "estimate",
+    "notes"
+  ],
   "properties": {
     "version": {"const": 1},
     "id": {"type": "string", "pattern": "^WP-M[0-9]{2}-[0-9]{3}$"},
     "title": {"type": "string", "minLength": 5},
     "status": {
-      "enum": ["DRAFT", "REFINED", "READY", "IN_PROGRESS", "VERIFYING", "REVIEW", "MERGE_READY", "MERGED", "BLOCKED", "STOPPED", "SUPERSEDED", "CANCELLED", "PARTIAL"]
+      "enum": [
+        "DRAFT",
+        "REFINED",
+        "READY",
+        "IN_PROGRESS",
+        "VERIFYING",
+        "REVIEW",
+        "MERGE_READY",
+        "MERGED",
+        "BLOCKED",
+        "STOPPED",
+        "SUPERSEDED",
+        "CANCELLED",
+        "PARTIAL"
+      ]
     },
     "milestone": {"type": "string", "pattern": "^M[0-9]{2}$"},
-    "vertical_slice": {"type": "string"},
+    "vertical_slice": {"type": "string", "pattern": "^VS-M[0-9]{2}-[0-9]{2}$"},
     "risk": {"enum": ["R0", "R1", "R2", "R3", "R4"]},
     "outcome": {"type": "string", "minLength": 10},
-    "non_goals": {"type": "array", "items": {"type": "string"}},
-    "requirement_refs": {"type": "array", "items": {"type": "string"}},
-    "architecture_refs": {"type": "array", "items": {"type": "string"}},
-    "depends_on": {"type": "array", "items": {"type": "string"}},
-    "allowed_roots": {"type": "array", "items": {"type": "string"}},
-    "forbidden_roots": {"type": "array", "items": {"type": "string"}},
-    "acceptance": {"type": "array", "items": {"type": "string", "pattern": "^TEST-"}},
-    "required_commands": {"type": "array", "items": {"type": "string"}}
+    "non_goals": {"$ref": "#/$defs/non_empty_string_list"},
+    "requirement_refs": {"$ref": "#/$defs/non_empty_string_list"},
+    "architecture_refs": {"$ref": "#/$defs/non_empty_string_list"},
+    "depends_on": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^WP-M[0-9]{2}-[0-9]{3}$"}
+    },
+    "allowed_roots": {"$ref": "#/$defs/non_empty_string_list"},
+    "forbidden_roots": {"$ref": "#/$defs/string_list"},
+    "state_ownership": {
+      "type": "object",
+      "required": ["reads", "writes"],
+      "properties": {
+        "reads": {"$ref": "#/$defs/string_list"},
+        "writes": {"$ref": "#/$defs/string_list"}
+      },
+      "additionalProperties": false
+    },
+    "contract_changes": {
+      "type": "object",
+      "required": ["public_api", "protocol", "persistent_schema", "migration"],
+      "properties": {
+        "public_api": {"type": "boolean"},
+        "protocol": {"type": "boolean"},
+        "persistent_schema": {"type": "boolean"},
+        "migration": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "security_effects": {
+      "type": "object",
+      "required": ["permission_change", "external_effect", "secret_access"],
+      "properties": {
+        "permission_change": {"type": "boolean"},
+        "external_effect": {"type": "boolean"},
+        "secret_access": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^TEST-[A-Z0-9-]+$"}
+    },
+    "required_commands": {"$ref": "#/$defs/non_empty_string_list"},
+    "observability": {"$ref": "#/$defs/string_list"},
+    "rollback": {"$ref": "#/$defs/non_empty_string_list"},
+    "owner_decision": {
+      "type": "object",
+      "required": ["required_before_start", "required_before_merge"],
+      "properties": {
+        "required_before_start": {"type": "boolean"},
+        "required_before_merge": {"type": "boolean"},
+        "resolved_by": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^DEC-[0-9]{4}$"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "estimate": {
+      "type": "object",
+      "required": ["target_agent_hours", "max_diff_lines"],
+      "properties": {
+        "target_agent_hours": {"type": "number", "exclusiveMinimum": 0},
+        "max_diff_lines": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "notes": {"$ref": "#/$defs/string_list"}
   },
-  "additionalProperties": true
+  "$defs": {
+    "string_list": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "non_empty_string_list": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "additionalProperties": false
 }

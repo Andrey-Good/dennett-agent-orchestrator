@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dennett.local/schemas/technical-debt.schema.json",
+  "title": "Dennett Technical Debt",
+  "type": "object",
+  "required": ["version", "debt"],
+  "properties": {
+    "version": {"const": 1},
+    "debt": {
+      "type": "object",
+      "required": ["id", "introduced_by", "reason", "consequence", "owner", "repayment_trigger", "deadline_or_review", "tests_protecting_behavior"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^DEBT-[0-9]{4}$"},
+        "introduced_by": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 10},
+        "consequence": {"type": "string", "minLength": 10},
+        "owner": {"type": "string", "minLength": 1},
+        "repayment_trigger": {"type": "string", "minLength": 5},
+        "deadline_or_review": {"type": "string", "minLength": 1},
+        "tests_protecting_behavior": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^TEST-[A-Z0-9-]+$"}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

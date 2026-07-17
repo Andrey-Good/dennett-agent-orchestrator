@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 279,
+  "file_count": 284,
   "files": [
     {
       "path": ".editorconfig",
@@ -950,13 +950,13 @@
     },
     {
       "path": "planning/batches/AB-M00-002.json",
-      "bytes": 893,
-      "sha256": "99e4143007396715cf06c7be73fbaf4e67ad27c252ac19cdd1b396e0ee62cc84"
+      "bytes": 889,
+      "sha256": "7aad452f7ff606fac1f559ed21f7d55f19e6071934ed40fba69195bb3d5cc821"
     },
     {
       "path": "planning/batches/AB-M00-003.json",
       "bytes": 867,
-      "sha256": "8e388038692c00fb75cd008c888ddb61a7d8893178ad5905ed40fbcde0be1398"
+      "sha256": "c4c31b67ec5fd91f4d6c935734cd7efc4fcc67c2dcc7dfc5f53ea32899147400"
     },
     {
       "path": "planning/debt/DEBT-0001.json",
@@ -985,8 +985,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 19963,
-      "sha256": "584351940bbcc1347188b66352b08fbd3a2b82fb28776f06bac6dac0c97aa7a1"
+      "bytes": 20160,
+      "sha256": "902b320f88c916c55827b8936765c50965909d8db71ae43556dd31edcebf406d"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1090,8 +1090,8 @@
     },
     {
       "path": "schemas/autonomous-batch.schema.json",
-      "bytes": 876,
-      "sha256": "170e5bc87851c3ddea22158ede02e451d351d2586da8b45313370af443cacf1b"
+      "bytes": 2570,
+      "sha256": "14d0772a959108fc60f23b4f33e320b6a36792c05e0ad85f870900262ced8da2"
     },
     {
       "path": "schemas/component-descriptor.schema.json",
@@ -1099,9 +1099,24 @@
       "sha256": "06d55f64270b112799055cd6e3a12e2f86565070bbae177f9041675010c93432"
     },
     {
+      "path": "schemas/decision-request.schema.json",
+      "bytes": 2234,
+      "sha256": "32b5b3cc92f6857c7df052e69565c132f2a8af0c9f7ed3aaffab2e558634dc10"
+    },
+    {
+      "path": "schemas/milestone.schema.json",
+      "bytes": 1968,
+      "sha256": "77e6c4efe62614aa2a8f4ce6d4f0a45e3183d5f717025407d53a06688aad1413"
+    },
+    {
       "path": "schemas/portable-package-manifest.schema.json",
       "bytes": 1049,
       "sha256": "99abc4b86d38b501b7fdd04befeb93831c6f461cc43bdc1d45d1f5a034d140e5"
+    },
+    {
+      "path": "schemas/technical-debt.schema.json",
+      "bytes": 1171,
+      "sha256": "afc6cc9baada6efb6f69177f161f7eaaf1e510aecc8291df62e85586f3bad4b2"
     },
     {
       "path": "schemas/test-catalogue.schema.json",
@@ -1109,9 +1124,14 @@
       "sha256": "4d5c54154a41cc1ba261822802f427237a4c8ff4dc5cc6ba9f2546bc1d4c7325"
     },
     {
+      "path": "schemas/work-package-result.schema.json",
+      "bytes": 3064,
+      "sha256": "cb2da20ccd09956e809a50b2f107bb2e5a8fb65eb12ddf50bd5155bcbe2d6865"
+    },
+    {
       "path": "schemas/work-package.schema.json",
-      "bytes": 1434,
-      "sha256": "a57e9d1f6a2388041b941b11e2bff81c3d75278f29a4f6ebac5311b3d8c012c8"
+      "bytes": 4319,
+      "sha256": "a3eef6a1c784d6d44e54ac4f19f6305e9a80e49da3b6fadff11d451b0aa55abb"
     },
     {
       "path": "services/adapter-host-node/AGENTS.md",
@@ -1265,8 +1285,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 10681,
-      "sha256": "9ff40398074c58be59a664e26a2f7592da00990f70e1050838b7397db97c7515"
+      "bytes": 11068,
+      "sha256": "45691c6cce2423d993e8a5ca303a1ed0d8c1b3745d5efb8119fa528cbfe24c6f"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1379,14 +1399,19 @@
       "sha256": "238eb41e6469426c5e6ca2fb1022e2958eac169f6879b76ebfb4c14eb28f78a7"
     },
     {
+      "path": "tools/tests/test_verify_planning.py",
+      "bytes": 9700,
+      "sha256": "b53d6099c929c89bdab44155537e4c0a041ff9f75ddbe3352513db7ae64257d8"
+    },
+    {
       "path": "tools/verify_docs.py",
       "bytes": 1151,
       "sha256": "4bb53b96cb0b09483e39c11ddc43a31437c9f2c0257dd7638065f76ded179372"
     },
     {
       "path": "tools/verify_planning.py",
-      "bytes": 3505,
-      "sha256": "1eb2a87b4f029b221c89c774443ea4891341db04f5ade50e981790a81a74c363"
+      "bytes": 34742,
+      "sha256": "f197ad6c95b0cb3f1b20390e2e532245e914f272e1ad6289847773de0c75ff2a"
     },
     {
       "path": "tools/verify_repo.py",

@@ -172,7 +172,7 @@
     {
       "id": "TEST-PLANNING-VALIDATION-001",
       "title": "Planning validator rejects invalid graph and unsafe ready work",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R1",
       "domains": ["planning", "repository"],
@@ -186,8 +186,17 @@
       ],
       "implementation": {
         "target_suite": "tools",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "schemas/milestone.schema.json",
+          "schemas/work-package.schema.json",
+          "schemas/autonomous-batch.schema.json",
+          "schemas/decision-request.schema.json",
+          "schemas/technical-debt.schema.json",
+          "schemas/work-package-result.schema.json",
+          "tools/verify_planning.py",
+          "tools/tests/test_verify_planning.py"
+        ]
       },
       "owner": "planning"
     },
