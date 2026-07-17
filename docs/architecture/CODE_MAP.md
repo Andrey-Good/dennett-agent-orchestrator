@@ -16,14 +16,14 @@
 
 | Crate | Назначение | Запрещённые зависимости |
 |---|---|---|
-| `denet-contracts` | Stable cross-boundary identifiers/envelopes | UI, provider SDK, SQL |
-| `denet-kernel` | Минимальные use-case interfaces | Concrete adapters |
-| `denet-agent-core` | Provider-neutral agent runtime semantics | OpenAI/Claude types |
-| `denet-memory-core` | Memory semantic core | Provider SDK, UI, physical DB |
-| `denet-trust-core` | Identity/authorization decisions | Model calls as authority |
-| `denet-effect-core` | External effect lifecycle | Connector SDK direct ownership |
-| `denet-sync-core` | Operation-log and merge semantics | DB file replication |
-| `denet-observability` | Privacy-aware telemetry bootstrap | Canonical audit ownership |
+| `dennett-contracts` | Stable cross-boundary identifiers/envelopes | UI, provider SDK, SQL |
+| `dennett-kernel` | Минимальные use-case interfaces | Concrete adapters |
+| `dennett-agent-core` | Provider-neutral agent runtime semantics | OpenAI/Claude types |
+| `dennett-memory-core` | Memory semantic core | Provider SDK, UI, physical DB |
+| `dennett-trust-core` | Identity/authorization decisions | Model calls as authority |
+| `dennett-effect-core` | External effect lifecycle | Connector SDK direct ownership |
+| `dennett-sync-core` | Operation-log and merge semantics | DB file replication |
+| `dennett-observability` | Privacy-aware telemetry bootstrap | Canonical audit ownership |
 
 ## Поток первого vertical slice
 

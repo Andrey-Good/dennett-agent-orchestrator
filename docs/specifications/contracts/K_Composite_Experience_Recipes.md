@@ -8,7 +8,7 @@
 
 ## K.1. Назначение
 
-Некоторые важные пользовательские функции Denet не должны становиться отдельными подсистемами. Они являются **recipes** поверх существующих primitives:
+Некоторые важные пользовательские функции Dennett не должны становиться отдельными подсистемами. Они являются **recipes** поверх существующих primitives:
 
 ```text
 prompt/behavior profile
@@ -39,7 +39,7 @@ experience_recipe:
   user_customizable: boolean
 ```
 
-Home Assistant blueprints являются полезным precedent reusable automation templates with inputs, import and user customization; Denet recipes расширяют идею AI skills/context, но не превращают любую recipe в strict automation graph. [[S49]]
+Home Assistant blueprints являются полезным precedent reusable automation templates with inputs, import and user customization; Dennett recipes расширяют идею AI skills/context, но не превращают любую recipe в strict automation graph. [[S49]]
 
 ## K.3. Idea Incubator
 
@@ -213,7 +213,7 @@ Does not run after every trivial response. User/project policy determines when.
 
 ## K.13. Recipe discovery and creation
 
-Denet can notice repeated user sequence and propose recipe/skill:
+Dennett can notice repeated user sequence and propose recipe/skill:
 
 - evidence of repetition;
 - expected saved effort;

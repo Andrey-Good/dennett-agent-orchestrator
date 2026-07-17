@@ -1,7 +1,7 @@
 {
-  "name": "denet",
-  "edition": "2026-07-13.implementation-strategy",
-  "file_count": 243,
+  "name": "dennett",
+  "edition": "2026-07-16.m00",
+  "file_count": 257,
   "files": [
     {
       "path": ".editorconfig",
@@ -10,8 +10,8 @@
     },
     {
       "path": ".env.example",
-      "bytes": 185,
-      "sha256": "a2b4bb0dc5f8bbcbce9b59864db3236d270f59c27a11b6c525c097007a1dfe73"
+      "bytes": 195,
+      "sha256": "0d63307584df1a9ec267788d9b7ee25fca2632e30160cfff923d9a52560ab871"
     },
     {
       "path": ".gitattributes",
@@ -35,13 +35,13 @@
     },
     {
       "path": ".gitignore",
-      "bytes": 384,
-      "sha256": "4b226c5e1cf5e861e40e798764bb57a0ad77ab12a14c4c60201548246604e276"
+      "bytes": 426,
+      "sha256": "b7833804fd236259a4ee0834ae9d5312ffab387e5efe5b8047966e4d4527f722"
     },
     {
       "path": "AGENTS.md",
-      "bytes": 5954,
-      "sha256": "411531f80cc0c63d9cadda306aee042cd67da9fad75ade4c0a1e4367856d8a65"
+      "bytes": 8946,
+      "sha256": "4d8a50cd9424a46fdd9ccc506e82ea7f0a455da4019305a6af68467ce2c49392"
     },
     {
       "path": "CHANGELOG.md",
@@ -55,13 +55,13 @@
     },
     {
       "path": "CONTRIBUTING.md",
-      "bytes": 3515,
-      "sha256": "9ea55a00ec4b7b7450aca3de1a8f57a9c1243ef13d2ff3dca2e329f847363440"
+      "bytes": 3519,
+      "sha256": "1c7c4fd083a1ca5373de8a709842200806ab91b3cf5bb830c36a987e4cffa6d7"
     },
     {
       "path": "Cargo.toml",
-      "bytes": 849,
-      "sha256": "b6ffe28275ce7e76190745d77a31b17e2fc707423ba3c0ee82e82065f55d7ae3"
+      "bytes": 867,
+      "sha256": "36d24b19213e698b91f9dc629c31a30d0af06ded938899915c14b082ca1b0a08"
     },
     {
       "path": "GOVERNANCE.md",
@@ -74,24 +74,19 @@
       "sha256": "c8200e9869e9ada7d3a222f048bde4b5c054c350094ea59b566869e7e00fe47b"
     },
     {
-      "path": "LICENSE.md",
-      "bytes": 253,
-      "sha256": "fbbf9c7a7c61e448a82e012a2a2c2f503838327257e045a7d35d1da502ae7d69"
-    },
-    {
       "path": "README.md",
-      "bytes": 7778,
-      "sha256": "5eefdfda3ce66728ee198c660c8baabe7990e026130b4fbeec23b9ef6bc4c812"
+      "bytes": 7718,
+      "sha256": "441fe77cd6b5f4c8debf5d3c7bc854b409dc210bb23b8a2ee18786490d3d2e9b"
     },
     {
       "path": "README.ru.md",
-      "bytes": 2976,
-      "sha256": "fe1d7d0abd282ab6b8cfd7b3f0075151c8971d92a8acc56bfde3a7e2a16abbfb"
+      "bytes": 3009,
+      "sha256": "9bfd5e4653fd7398affdba1b5faea5c3b7a1378396fb3b9ff1fcccb14e46ea50"
     },
     {
       "path": "ROADMAP.md",
-      "bytes": 2193,
-      "sha256": "a0dcf75b3c27cf5f6a693c0fc173dc700bb76f257eb0a6c4c9288375cc0f1b52"
+      "bytes": 2197,
+      "sha256": "88a2ea15afc71702e53e8c2e96c14a7bac6c03448b8321e45343977aedc72975"
     },
     {
       "path": "SECURITY.md",
@@ -170,28 +165,28 @@
     },
     {
       "path": "apps/desktop/AGENTS.md",
-      "bytes": 666,
-      "sha256": "fd1ad07e78f6deb326d1d212a311e9c7ed32020000cb34a9f4ed89dad400cb91"
+      "bytes": 668,
+      "sha256": "8a6122f9bad4bb7fea42bf4f2bcb39c00cb485cbcbae9e39356ab8181ce2f4ea"
     },
     {
       "path": "apps/desktop/README.md",
-      "bytes": 120,
-      "sha256": "5ece33affd761627398b374a54e1a3933e6409b073e37ef981ca7660bd3bd70f"
+      "bytes": 124,
+      "sha256": "c5703fa53fc748181d514abaa519b679d444fc7c1a82b879fdc1fa635fdaa81b"
     },
     {
       "path": "apps/desktop/index.html",
-      "bytes": 236,
-      "sha256": "a5d1a705c6013c8fe987212cc98126aebe0547bd476c34058b56a418c27a0047"
+      "bytes": 238,
+      "sha256": "a0b987c7350daf2535993c81cf9f8b836eb79579a145f70f57ec5c9b1b995232"
     },
     {
       "path": "apps/desktop/package.json",
-      "bytes": 613,
-      "sha256": "1268afffe058a85985e58216faa68b901283f4213c8f1cb555e09e741f945c7c"
+      "bytes": 615,
+      "sha256": "06f63b33c0fee55d73a997a4a97903cb5fb67c3dd8314a35a49f1deb6fc4906d"
     },
     {
       "path": "apps/desktop/src-tauri/Cargo.toml",
-      "bytes": 266,
-      "sha256": "df798725aea7136da9f9721c870c80fc399022acea2b84bd004f4fbb519fb5cd"
+      "bytes": 268,
+      "sha256": "335a5bba1aaa7023864d76ff334c088794b27fcf90a51369d2014893bebcb90b"
     },
     {
       "path": "apps/desktop/src-tauri/build.rs",
@@ -200,18 +195,18 @@
     },
     {
       "path": "apps/desktop/src-tauri/src/main.rs",
-      "bytes": 436,
-      "sha256": "1fe477b479b63e48987a39796e4386dac0a2ecb41c44b26e8bafada9e09c8dd3"
+      "bytes": 442,
+      "sha256": "33c8c86e774384adf2dd4855838eb456ab5fc6b7b980bfdc7180aa43e0d70d3f"
     },
     {
       "path": "apps/desktop/src-tauri/tauri.conf.json",
-      "bytes": 366,
-      "sha256": "5f4bd2e17eb39f657276fac50245cec3430d12d47cb5bae6717d3d0d9dadc341"
+      "bytes": 372,
+      "sha256": "59a598a87f8bfb21ca6ffd70902d7af9fed6b24f7153e4a126ba3184cb4e0449"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 427,
-      "sha256": "cb0954c9b81d03dbf01dd4973ee1f282f0a9962a0c8ce530f84bd6337e3dfca4"
+      "bytes": 429,
+      "sha256": "2064169a3cb775c756891aea7b620438827617413a06451329706d8a96db7a2f"
     },
     {
       "path": "apps/desktop/src/lib/commands.ts",
@@ -235,8 +230,8 @@
     },
     {
       "path": "apps/mobile/README.md",
-      "bytes": 178,
-      "sha256": "075d26cccc0b6957d1c9e43c1a37a99ebd3e9cb974d13f042829be0e4683ef68"
+      "bytes": 180,
+      "sha256": "fa863c5d21086f38b64ab0717d21793a44c576816b8ae99410f4e2babe15c250"
     },
     {
       "path": "apps/mobile/native/README.md",
@@ -245,18 +240,18 @@
     },
     {
       "path": "apps/mobile/package.json",
-      "bytes": 321,
-      "sha256": "ea9ffeec1536afe3f7e1346a32e8b2dc3763cffaea7db0a042f3899266a31e0e"
+      "bytes": 323,
+      "sha256": "e9f6c3c319c06a9e2b4684a58c02b278f110a2fcf03c11740aaa036d5559022b"
     },
     {
-      "path": "apps/mobile/specs/NativeDenetNode.ts",
-      "bytes": 173,
-      "sha256": "74606e1e2a539776ee04b78ec6e1493ff7bf67fc582a2a1ef7a07d7addf4039d"
+      "path": "apps/mobile/specs/NativeDennettNode.ts",
+      "bytes": 175,
+      "sha256": "fc9cb241c33cd8fdf6a0679d00f9462acec6fe207a3ea4526de83b5a023fb09f"
     },
     {
       "path": "apps/mobile/src/App.tsx",
-      "bytes": 286,
-      "sha256": "cdad4d0a98cfaca8e3874253c3cccf64139c64165b7bde01ced984a76d1859fe"
+      "bytes": 288,
+      "sha256": "df6bdc8b3c29bedac35a3f75abf105693332b3e1eab231b25301bc7796a45005"
     },
     {
       "path": "apps/mobile/tsconfig.json",
@@ -265,168 +260,168 @@
     },
     {
       "path": "crates/AGENTS.md",
-      "bytes": 593,
-      "sha256": "093c927448e807c69645b52c965e0a70a25b928b0a61aff0a6293452960896bf"
+      "bytes": 595,
+      "sha256": "c35a696053d255179ddb16034ec7db79028138b8d5e00781b36abc918dd303bf"
     },
     {
-      "path": "crates/denet-agent-core/AGENTS.md",
-      "bytes": 528,
-      "sha256": "090c8b9bdf36c90c95869213268558401a561c3ec9fcc359c89a7cf7d7b00bfd"
+      "path": "crates/dennett-agent-core/AGENTS.md",
+      "bytes": 530,
+      "sha256": "fbd9d7f0d14a2c05967d7d8cfdd1d1a574f4ccfe37ac1f4a2b6ea9838e4800e9"
     },
     {
-      "path": "crates/denet-agent-core/Cargo.toml",
-      "bytes": 230,
-      "sha256": "f83fab1adc3a7444ed91c817d74d5db6a73add8b23f17aae3ccd637eb26b0cd7"
+      "path": "crates/dennett-agent-core/Cargo.toml",
+      "bytes": 236,
+      "sha256": "3d1fd54c0c487cff15e8bf61e7e0550690794581ebf54ee6386bb56b3c672710"
     },
     {
-      "path": "crates/denet-agent-core/README.md",
-      "bytes": 522,
-      "sha256": "f7c7423168ffbb0406ea7f60899d94d343b017a5589bc2bffb9df077f98ead49"
+      "path": "crates/dennett-agent-core/README.md",
+      "bytes": 524,
+      "sha256": "2527f9c27ebeb254173c71ef1b0723c2d17047df0d5bbe24191d1d1c5b43510f"
     },
     {
-      "path": "crates/denet-agent-core/src/lib.rs",
-      "bytes": 926,
-      "sha256": "5975e231830c47247f48ded334140ff96008c37556c02420a023b2775676b838"
+      "path": "crates/dennett-agent-core/src/lib.rs",
+      "bytes": 938,
+      "sha256": "0db68aef0b4cfac520933aef426936b785144013387290d40feeaa82ac4dcf1f"
     },
     {
-      "path": "crates/denet-contracts/AGENTS.md",
-      "bytes": 558,
-      "sha256": "db8b7d969604a4c6dcf9b4fa2509fbe62ebcf627b494b0b1a6f1ad6cb8d3837a"
+      "path": "crates/dennett-contracts/AGENTS.md",
+      "bytes": 562,
+      "sha256": "f4ef06544d8818d84f39f675d87a8de6fea3bb3ab7579f1dd858aee647fc1a7a"
     },
     {
-      "path": "crates/denet-contracts/Cargo.toml",
-      "bytes": 201,
-      "sha256": "aef75ca084b4945f05903eafb0ef437c4318ae30b087471353f277bc99137749"
+      "path": "crates/dennett-contracts/Cargo.toml",
+      "bytes": 203,
+      "sha256": "d411dc197ead51c3ae85252cf77ff269839e18edd261a2ccc1392d50302baa0c"
     },
     {
-      "path": "crates/denet-contracts/README.md",
-      "bytes": 715,
-      "sha256": "941230d51be1ab9cb67074f4b2f98af867dbac44110e0fec9a75c51a0c96869f"
+      "path": "crates/dennett-contracts/README.md",
+      "bytes": 717,
+      "sha256": "95c3dab40d4f83bee3653dfe81bb4e6663ee9ea31d2f2e67a57bbaac602291fd"
     },
     {
-      "path": "crates/denet-contracts/src/lib.rs",
-      "bytes": 1886,
-      "sha256": "fd3155c8c796f567e729c2eed5366202cdbeacdb0fb9b459c8c8217a50ae1446"
+      "path": "crates/dennett-contracts/src/lib.rs",
+      "bytes": 1888,
+      "sha256": "10e3b80a4ec8bf6eb609c5bc052ba7438a9df44264082e5c2be49a38bd437dfd"
     },
     {
-      "path": "crates/denet-effect-core/AGENTS.md",
-      "bytes": 460,
-      "sha256": "5720648787ee1b2dc384259ff472759e0bdfc31849f50f3574ebf1e5b731c6eb"
+      "path": "crates/dennett-effect-core/AGENTS.md",
+      "bytes": 462,
+      "sha256": "79238bd40744e2c1b71e1dd0cadfe3f0ee78b8d4df367c95cbda91d4a610b335"
     },
     {
-      "path": "crates/denet-effect-core/Cargo.toml",
-      "bytes": 231,
-      "sha256": "c68227a9ac0cc923dbbff1b4705a170130a2ec46f694ea6f964ba6d54deaa6a6"
+      "path": "crates/dennett-effect-core/Cargo.toml",
+      "bytes": 237,
+      "sha256": "20fd0111ba40bdccdf230dad30d7923645a8e48df1ce31476bc6d9dfa0be0ae8"
     },
     {
-      "path": "crates/denet-effect-core/README.md",
-      "bytes": 294,
-      "sha256": "6a163fcce27e5e2ac1fd6ced39c6692ba7f2917f66aa1b2f268c1a95d8301663"
+      "path": "crates/dennett-effect-core/README.md",
+      "bytes": 296,
+      "sha256": "27ca87863e8016f693224ec5f1a5c99e7a3acb0088b5fc17163e5ab2f4ef0790"
     },
     {
-      "path": "crates/denet-effect-core/src/lib.rs",
-      "bytes": 782,
-      "sha256": "3ac0a632cdb439582bf60ed1ee251af9ce17044685413158ec336635da6f2210"
+      "path": "crates/dennett-effect-core/src/lib.rs",
+      "bytes": 784,
+      "sha256": "afa6da609ccbb06125e82ad945425c8e20354622f24ebece5ac786e1fd697dec"
     },
     {
-      "path": "crates/denet-kernel/AGENTS.md",
-      "bytes": 460,
-      "sha256": "5720648787ee1b2dc384259ff472759e0bdfc31849f50f3574ebf1e5b731c6eb"
+      "path": "crates/dennett-kernel/AGENTS.md",
+      "bytes": 462,
+      "sha256": "79238bd40744e2c1b71e1dd0cadfe3f0ee78b8d4df367c95cbda91d4a610b335"
     },
     {
-      "path": "crates/denet-kernel/Cargo.toml",
-      "bytes": 259,
-      "sha256": "6d34af75aace97a30a398f474a92853b44a270df63cb614d9aa1f67e2ce258bc"
+      "path": "crates/dennett-kernel/Cargo.toml",
+      "bytes": 265,
+      "sha256": "bd5e0cdb04537f0762803ff97a9f15fc4a46f4730c86a557e831a126ab6181db"
     },
     {
-      "path": "crates/denet-kernel/README.md",
-      "bytes": 469,
-      "sha256": "bb521a22855565cfbc250ad06809d1c1a1f67e34f4a7df27e6118a53b2de3a99"
+      "path": "crates/dennett-kernel/README.md",
+      "bytes": 471,
+      "sha256": "653ae9c504074cd6d228a6f7df73e6ee96238654d7442c5f4a65a351f70719c7"
     },
     {
-      "path": "crates/denet-kernel/src/lib.rs",
-      "bytes": 656,
-      "sha256": "1b793cc91b2655592a6991955dcf553af58941aaeaea7ce8d5831058f1ed627a"
+      "path": "crates/dennett-kernel/src/lib.rs",
+      "bytes": 666,
+      "sha256": "1612bfb855fa364cb023885fe517cacac94646525a4dd2207a2666e73d66e9e8"
     },
     {
-      "path": "crates/denet-memory-core/AGENTS.md",
-      "bytes": 888,
-      "sha256": "aefc1fc634e1397aef800890a5546de9ac65a6b5c9d69652a9e59bc02538bd84"
+      "path": "crates/dennett-memory-core/AGENTS.md",
+      "bytes": 890,
+      "sha256": "7b743de603ebca2adccf8e578e77bffeab0161705f9872ffd32610a0bf38ab5e"
     },
     {
-      "path": "crates/denet-memory-core/Cargo.toml",
-      "bytes": 327,
-      "sha256": "1766151b8f72c80f6709bd5d1c36cdfbbbcd78a437ef9e72d9cf13255a19f9b3"
+      "path": "crates/dennett-memory-core/Cargo.toml",
+      "bytes": 337,
+      "sha256": "7750c9554cebf983497964a83d3ceac518fa81a95dcbbf2c4194a1b9199859dd"
     },
     {
-      "path": "crates/denet-memory-core/README.md",
-      "bytes": 539,
-      "sha256": "578f8fca2d081823b4c44ced94ec5e9e328ea10381b29b265904c2b70b864c4d"
+      "path": "crates/dennett-memory-core/README.md",
+      "bytes": 541,
+      "sha256": "e603a596fffcfb802702ee3b7c3f18f5e5c3ea6f58bfbbb5104db85a7c3757bb"
     },
     {
-      "path": "crates/denet-memory-core/src/lib.rs",
-      "bytes": 1298,
-      "sha256": "28d9cb8751ba1aedf45ccf07abeeb5e3f3040c4199e5f1f1bb88de156f5fb570"
+      "path": "crates/dennett-memory-core/src/lib.rs",
+      "bytes": 1312,
+      "sha256": "5f7514efba464312508c9f66e568218ad5bab6a040cb41e140af07e868bfe5b0"
     },
     {
-      "path": "crates/denet-observability/AGENTS.md",
-      "bytes": 460,
-      "sha256": "5720648787ee1b2dc384259ff472759e0bdfc31849f50f3574ebf1e5b731c6eb"
+      "path": "crates/dennett-observability/AGENTS.md",
+      "bytes": 462,
+      "sha256": "79238bd40744e2c1b71e1dd0cadfe3f0ee78b8d4df367c95cbda91d4a610b335"
     },
     {
-      "path": "crates/denet-observability/Cargo.toml",
-      "bytes": 221,
-      "sha256": "28224ff4690bfed52f6bbb24700f6781e7339a89793a5da157d6fbe2088c75be"
+      "path": "crates/dennett-observability/Cargo.toml",
+      "bytes": 223,
+      "sha256": "84bd7a4097862cc74ae13535eced61aafdf7c7472ac764b83d8bd1c4bf3e5c84"
     },
     {
-      "path": "crates/denet-observability/README.md",
-      "bytes": 306,
-      "sha256": "756291db3ec75a8ba87d1439075938c0a8b6357652d7c81adaa13c767c9a6744"
+      "path": "crates/dennett-observability/README.md",
+      "bytes": 308,
+      "sha256": "f92aba0af526542f886da9209c0d736e767f620baa168fc0ea6f9bac63b593c9"
     },
     {
-      "path": "crates/denet-observability/src/lib.rs",
+      "path": "crates/dennett-observability/src/lib.rs",
       "bytes": 425,
       "sha256": "c46b88999603f9c1f6e43a3f9de4f29b31b1392f8fa5223f99a9bae9f1e3d49a"
     },
     {
-      "path": "crates/denet-sync-core/AGENTS.md",
-      "bytes": 460,
-      "sha256": "5720648787ee1b2dc384259ff472759e0bdfc31849f50f3574ebf1e5b731c6eb"
+      "path": "crates/dennett-sync-core/AGENTS.md",
+      "bytes": 462,
+      "sha256": "79238bd40744e2c1b71e1dd0cadfe3f0ee78b8d4df367c95cbda91d4a610b335"
     },
     {
-      "path": "crates/denet-sync-core/Cargo.toml",
-      "bytes": 257,
-      "sha256": "fca2ea6e5c878bf66a7e98472e516d5d04804674fbbb84388ed49ad8a0f9c4b0"
+      "path": "crates/dennett-sync-core/Cargo.toml",
+      "bytes": 263,
+      "sha256": "d820666ea5fbd5bd695c2b088b9066517776cbede4feaa0a2db07c2014a3945c"
     },
     {
-      "path": "crates/denet-sync-core/README.md",
-      "bytes": 338,
-      "sha256": "f2752f04a5b5d8cf43e7d32a46e3468bbf7358d05c663da0ebdf9a6475ac6259"
+      "path": "crates/dennett-sync-core/README.md",
+      "bytes": 340,
+      "sha256": "34cee0a66463d798253a4c805511bda3916e6eb69099020508742e4d50c99a5c"
     },
     {
-      "path": "crates/denet-sync-core/src/lib.rs",
-      "bytes": 905,
-      "sha256": "62131b3647b9f7594754560eaf0b30524edd061dd01c78068ea92a9b7dbfefd3"
+      "path": "crates/dennett-sync-core/src/lib.rs",
+      "bytes": 907,
+      "sha256": "756316881eb6f3cbe7fc53f7e213b0453d70a1bbad959682d3c2d4076bcd1be4"
     },
     {
-      "path": "crates/denet-trust-core/AGENTS.md",
-      "bytes": 561,
-      "sha256": "73fe6a24b7fea0e927aa363dba3c3a4b4403dc01b1b4245bdfd6eb6eaf98392a"
+      "path": "crates/dennett-trust-core/AGENTS.md",
+      "bytes": 563,
+      "sha256": "5aa828553d633269e799c8554204ea0599586818c25de5f693a631334c8ac25e"
     },
     {
-      "path": "crates/denet-trust-core/Cargo.toml",
-      "bytes": 207,
-      "sha256": "c7e16914df256e3cf68835afe452d3d722f967f4781808bfb8b79b94377d2948"
+      "path": "crates/dennett-trust-core/Cargo.toml",
+      "bytes": 213,
+      "sha256": "265819d789755b5bffe90454f5765f77ef853d671fca4026ca0a6a7d51b5ac38"
     },
     {
-      "path": "crates/denet-trust-core/README.md",
-      "bytes": 386,
-      "sha256": "37ebddfa96ae960adbac989e64e689d711dcf06100e82802a30d64725a17b537"
+      "path": "crates/dennett-trust-core/README.md",
+      "bytes": 388,
+      "sha256": "1aeb6f701a3b0e7dd142556ab9f7317d7c3213141d7a9e6250ed13dfdb5c4f29"
     },
     {
-      "path": "crates/denet-trust-core/src/lib.rs",
-      "bytes": 1972,
-      "sha256": "7ffbc394d0ac6bcb64b679d55a5285786a85702691749d47a4eedb82d76f1820"
+      "path": "crates/dennett-trust-core/src/lib.rs",
+      "bytes": 1974,
+      "sha256": "6a4e319b2216ec10e96315002a6e27d5787fb0c759a2b04979d619fa5cd3ea16"
     },
     {
       "path": "deploy/README.md",
@@ -435,8 +430,8 @@
     },
     {
       "path": "docs/CHECKSUMS.sha256",
-      "bytes": 9831,
-      "sha256": "e5afc096a7b52636b7766f69cfc903c80ac1d832014ad074a67c37115bbd2f1d"
+      "bytes": 10913,
+      "sha256": "661d828a35d1530634e88e9ae0c3b5f0f61339c690e5cba87b88a0cec204a214"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -445,48 +440,53 @@
     },
     {
       "path": "docs/OPEN_QUESTIONS.md",
-      "bytes": 2123,
-      "sha256": "9ce4bf77f529d5ef3b43d2a2e82d68198ea5479cbba37e3652a8c48fda5856cc"
+      "bytes": 2138,
+      "sha256": "73b4174e6cf960a4077761b8644fdca64d925509b1aca47ed4fc771a137a7eef"
     },
     {
       "path": "docs/README.md",
-      "bytes": 3511,
-      "sha256": "c1d748dca273c0977f5f67792e8be781e8a672bd9680534dd2b79ce1f9306f5c"
+      "bytes": 3519,
+      "sha256": "49d26227a4afe56b9b9c49929cb0c92e3c1eaaf4b6794ba3110babb57183cea8"
     },
     {
       "path": "docs/TRACEABILITY.md",
-      "bytes": 1638,
-      "sha256": "157e7809a933e1c767cab66add00b70802e5dbe5255b13bd5bbcdd80cf4dde21"
+      "bytes": 1648,
+      "sha256": "a98fc3578eba6dda0692795ee89a1b8ac3ab445ae54fcb3bdcdc5fc3bf63d42d"
     },
     {
-      "path": "docs/architecture/80_Denet_System_Architecture_and_Runtime_Topology.md",
-      "bytes": 228330,
-      "sha256": "f71a02eab2543d517e1c2aadbf051171230731b4b57686e413150217a001b012"
+      "path": "docs/architecture/80_Dennett_System_Architecture_and_Runtime_Topology.md",
+      "bytes": 228702,
+      "sha256": "0a027df7141c4b3f8eabe40220719bba040d67c50c2860af003991906ccda528"
     },
     {
-      "path": "docs/architecture/81_Denet_Data_Memory_Storage_Sync_and_Protocol_Architecture.md",
-      "bytes": 182846,
-      "sha256": "6bd7dfb282f4b93d0cf3b18ba803fe73cba2466d21c4f74b3d25c79a064a2edb"
+      "path": "docs/architecture/81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.md",
+      "bytes": 183066,
+      "sha256": "f9f92debd198a9e9d46391f943347e33b9996a757cc241d07036dd273b07e34a"
     },
     {
-      "path": "docs/architecture/82_Denet_Agent_Voice_Capability_and_Integration_Architecture.md",
-      "bytes": 150752,
-      "sha256": "bfac81a9b6b0ecd2bd430b45f18c46b08227dd056dabc4a35a0abdad741b73c7"
+      "path": "docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md",
+      "bytes": 151006,
+      "sha256": "4c59ff5444302a65091a0b32ddb668e2418feaa42974d960cd9396f639663401"
     },
     {
-      "path": "docs/architecture/83_Denet_Client_Operations_Testing_and_Implementation_Blueprint.md",
-      "bytes": 151620,
-      "sha256": "e6a66b16c5b669a3cceff9d9dfe5cb6c048b3d67400201661e3109739def4e80"
+      "path": "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md",
+      "bytes": 151876,
+      "sha256": "501b26a129b8a7cf653e51f79cde58126036f6cbdccc892d4fbc630ea2cae15b"
     },
     {
       "path": "docs/architecture/CODE_MAP.md",
-      "bytes": 2020,
-      "sha256": "b23a8f75d825bf09496318d2550dc847829f712ab759e12dd8b85926d43051c7"
+      "bytes": 2036,
+      "sha256": "2daa60e0b2cf63bff2beb5156efc6d98a63f143337ca44c46d385407d69c2a95"
     },
     {
       "path": "docs/architecture/README.md",
-      "bytes": 2385,
-      "sha256": "7ed3562f5c429f35e21ca49ec5d10a20cec114c4e531c2921c798b07b4c3ef28"
+      "bytes": 2397,
+      "sha256": "84b75eb33ec5e88aa67d34887a14c71b779d69aa63957d54635b0fcf378b06ff"
+    },
+    {
+      "path": "docs/archive/Dennett комментарии к предложениям.txt",
+      "bytes": 210192,
+      "sha256": "69b4ab1c562d9cbc168757d933c5490b465622e597ac6efcc30bca9c6937e014"
     },
     {
       "path": "docs/archive/README.md",
@@ -494,9 +494,39 @@
       "sha256": "16adc8e71a097cebf8866771aeb6e30407edc31e344cb81b7306d0bfa0dc4bc3"
     },
     {
-      "path": "docs/archive/distributed/71_Denet_Pre_Architecture_Business_Logic_Completion.md",
-      "bytes": 196008,
-      "sha256": "29a31e2aa133d6e872e73281ebf38f058b25ee3278670b7d0944549327ebe344"
+      "path": "docs/archive/distributed/71_Dennett_Pre_Architecture_Business_Logic_Completion.md",
+      "bytes": 196266,
+      "sha256": "6c753493f0cbdebb95bffdc454f77ad471e2b56cb9f59938402807eb4a364404"
+    },
+    {
+      "path": "docs/archive/thoughts/1 агент, расположение, память.docx",
+      "bytes": 8447,
+      "sha256": "d8b41afa55d5eb1daa7f5f344afc1ab65912e0f0f6bb2fbd014e4894c2b2bd1a"
+    },
+    {
+      "path": "docs/archive/thoughts/2 Система и её отношения с агентами.docx",
+      "bytes": 8583,
+      "sha256": "cfb6d24c6c2bb36c358b7f0c0739a5418ff717e8ed8a6994468d37f98d90b69f"
+    },
+    {
+      "path": "docs/archive/thoughts/3 Система и её отношения с агентами.docx",
+      "bytes": 3777,
+      "sha256": "5d9f56dcc964d10bc115a8e78003d40327a22531059023dc3eb9e63403f5da25"
+    },
+    {
+      "path": "docs/archive/thoughts/4 Программа, приложение, флешка.docx",
+      "bytes": 13819,
+      "sha256": "41c1ac015b9efe07505c624a0d854ae2534ce75d33bf5610bdba4b889c78e972"
+    },
+    {
+      "path": "docs/archive/thoughts/5 Стандартная запись 6.docx",
+      "bytes": 9459,
+      "sha256": "7b8c1e979fb23909885551f788171c43bc6bdeb735f13b1fd53954be75ecf68e"
+    },
+    {
+      "path": "docs/archive/thoughts/6 Стандартная запись 7.docx",
+      "bytes": 13095,
+      "sha256": "41058c9a733b199062cb14b5da63255434f01c686ea27341ccbd0b5f11eee3b1"
     },
     {
       "path": "docs/decisions/ADR-000-template.md",
@@ -505,13 +535,13 @@
     },
     {
       "path": "docs/decisions/ADR-001-process-selective-modular-monolith.md",
-      "bytes": 743,
-      "sha256": "8411183ea20b054eb67e86f2b6a251ff7226ab1d2148508128b851d5b6934c6a"
+      "bytes": 745,
+      "sha256": "5a7a7880f998eefebdf7aa73d0d5569f6ff16d2e9250e0b06287b87729f158b4"
     },
     {
       "path": "docs/decisions/ADR-002-one-logical-memory-across-device-roles.md",
-      "bytes": 1933,
-      "sha256": "eb8f93febca604f42d965c563bafcafc8077cce1844a1004bc28e6317da7932f"
+      "bytes": 1935,
+      "sha256": "8af8667c524cff03429ff9ae8cabef904bdf05ceacdb94e35cd9a1c823cc07f6"
     },
     {
       "path": "docs/decisions/ADR-003-head-eligibility-opt-in.md",
@@ -520,8 +550,8 @@
     },
     {
       "path": "docs/decisions/ADR-004-tauri-shell-and-node-daemon.md",
-      "bytes": 441,
-      "sha256": "427d0dba5d66bb98e2f118fdcf5f9f42a3fad4acf798b54d3cb7db47ba4470a0"
+      "bytes": 443,
+      "sha256": "c27435d1c418dc959bf3f8f9d46a0a8f304a3bc28e42ec5612a7cebebcfaaf70"
     },
     {
       "path": "docs/decisions/ADR-005-storage-role-separation.md",
@@ -535,118 +565,118 @@
     },
     {
       "path": "docs/implementation/00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md",
-      "bytes": 50679,
-      "sha256": "f695b7424a34d259bb08a7ac1f2b6ebbb0ebedaa931a3a40cf81a0821dde3591"
+      "bytes": 50695,
+      "sha256": "a8579c879940c02448d242c6457ede38d60c04a43496dab8e655a36d29206bcd"
     },
     {
       "path": "docs/implementation/01_AGENT_EXECUTION_PROTOCOL.md",
-      "bytes": 23265,
-      "sha256": "19640d2a9b3925285bd71794b36c1218063c6c53acdacae9b7e98ea7040c7faf"
+      "bytes": 23271,
+      "sha256": "aea8cfe944be59acdb82799b00b58326d67ba0ecf2e08d6713c1feabea8e3477"
     },
     {
       "path": "docs/implementation/02_OWNER_PLAYBOOK.md",
-      "bytes": 16749,
-      "sha256": "997be49726cd8bbfa0b25ec75dc2a4b1aaca4480931030e0541b26c3480117cf"
+      "bytes": 16759,
+      "sha256": "61696ccbfff9e9fe89e8a058faebd698cff7e8541a247749ed904d6232c4c173"
     },
     {
       "path": "docs/implementation/03_WORK_PACKAGE_SYSTEM.md",
-      "bytes": 16702,
-      "sha256": "e8d4dc29a9cfd72721419b8fec4bdc31091e4d94f84c675fbcf44bbc989a9413"
+      "bytes": 16726,
+      "sha256": "0a480d1d080282f5cb13fdb00fab4b35dc391057e9b8f2136b92820731719f77"
     },
     {
       "path": "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md",
-      "bytes": 21805,
-      "sha256": "70eedda8a26c1575a9ad08fbbedf3112c36c07c2613526aa76943b72e53641e7"
+      "bytes": 21825,
+      "sha256": "517710f377a5e9945716a34d5890430289ebd3492316393d161f5567812b5249"
     },
     {
       "path": "docs/implementation/README.md",
-      "bytes": 1321,
-      "sha256": "2efb17f06a60d63a300dd5a558823795e8c44e8e6867ec276e3ba48ac57c24bf"
+      "bytes": 1323,
+      "sha256": "a7a7d6e2a62ab8fab637f45d58201174684862bbc22517d1f152e735cf2aa404"
     },
     {
       "path": "docs/manifest.json",
-      "bytes": 2276,
-      "sha256": "3bb7a395f55c7cd3e055adb091ca9743d714813f371d776b6aa94bb2deb6a586"
+      "bytes": 2310,
+      "sha256": "8b566872597b739667de6586f86669ef3ae20b892593a2035a8a5540d4571f3a"
     },
     {
-      "path": "docs/navigation/00_Denet_Functional_Concept.toc.md",
-      "bytes": 38916,
-      "sha256": "f130d39b4baa3d59b749f63cb7be60bddbf621feda59b8927cacc8bd5b511919"
+      "path": "docs/navigation/00_Dennett_Functional_Concept.toc.md",
+      "bytes": 39430,
+      "sha256": "1656093a26a780ac2ee71c9fb235735c8f6a01e795552e187a58f9e15425ee6f"
     },
     {
-      "path": "docs/navigation/01_Denet_Specification_Index_and_Shared_Contracts.toc.md",
-      "bytes": 24562,
-      "sha256": "255a82337a78ad641b37df55ae318e86de9ae27285f9fdcc5dc95a906146a7b4"
+      "path": "docs/navigation/01_Dennett_Specification_Index_and_Shared_Contracts.toc.md",
+      "bytes": 24946,
+      "sha256": "f86521431cdf06995c70e8852b3b6b919d7483f59daf57af28c6a11db6290df7"
     },
     {
-      "path": "docs/navigation/10_Denet_Memory_Fabric.toc.md",
-      "bytes": 123342,
-      "sha256": "f5642741857c10ff62fabb0ba85b639d8a5bc257bf48c705495ed8aa14951945"
+      "path": "docs/navigation/10_Dennett_Memory_Fabric.toc.md",
+      "bytes": 125288,
+      "sha256": "f3fcf05e01d5b962e3c6b2e4c9b24db038aa31b8ddebb1009389b0629d4c66b9"
     },
     {
-      "path": "docs/navigation/20_Denet_Agentic_Control_Fabric.toc.md",
-      "bytes": 29425,
-      "sha256": "233ccc1e5b7ee7045913adcfa205932ba80a3d9ee9d21cfa218f00826898e3f1"
+      "path": "docs/navigation/20_Dennett_Agentic_Control_Fabric.toc.md",
+      "bytes": 29853,
+      "sha256": "3e9215ccb3d858ad8c5515e0e8ced9f4c07746ab11459f58eb6a1b7c9d587a7a"
     },
     {
-      "path": "docs/navigation/30_Denet_Trust_Identity_Autonomy_and_Permissions.toc.md",
-      "bytes": 57006,
-      "sha256": "c5c65f7620cab0c1365a49ed08892c950f235296224b48e3a81ed99d841e55f5"
+      "path": "docs/navigation/30_Dennett_Trust_Identity_Autonomy_and_Permissions.toc.md",
+      "bytes": 57740,
+      "sha256": "7681bde71ccbb0f8640ea67893e5d2ac8b1c7222f4d7b3ab959957d52042b1c1"
     },
     {
-      "path": "docs/navigation/40_Denet_Voice_and_Ambient_Interaction_Fabric.toc.md",
-      "bytes": 10234,
-      "sha256": "0526d88cabe41524d1a4d34947759804f60430700ed9cecbc0c924558b5598f5"
+      "path": "docs/navigation/40_Dennett_Voice_and_Ambient_Interaction_Fabric.toc.md",
+      "bytes": 10370,
+      "sha256": "52b806d72fc1b35be7f45c410c58f4626e070e803e285610771471aabbc3b344"
     },
     {
-      "path": "docs/navigation/41_Denet_Capabilities_Providers_and_Integrations.toc.md",
-      "bytes": 67024,
-      "sha256": "d6e0c42cad6dce1bc00b2ee61ce89b76201bf3ad54b68a4a77b375ea2c1d3855"
+      "path": "docs/navigation/41_Dennett_Capabilities_Providers_and_Integrations.toc.md",
+      "bytes": 67952,
+      "sha256": "771f835d1c6f1c9181850ff60ecd33f69fced3c122ad31f8ffd6bb1de3c85703"
     },
     {
-      "path": "docs/navigation/50_Denet_Server_Runtime_Events_Sync_and_Portability.toc.md",
-      "bytes": 27447,
-      "sha256": "a0edc9f6650faf25f4b45cb9c5e7857af0941dc7f32360368838a0690c18eede"
+      "path": "docs/navigation/50_Dennett_Server_Runtime_Events_Sync_and_Portability.toc.md",
+      "bytes": 27775,
+      "sha256": "fe53982660c745f6d0bbea9ae7cea71cbaa9b908ad47825a66b46c171383607f"
     },
     {
-      "path": "docs/navigation/60_Denet_Desktop_Application_Business_Logic.toc.md",
-      "bytes": 53939,
-      "sha256": "368d09c225b5c6a1dc23ea52a289a4d816ad08e9475d9c17c575a5d58ce007f5"
+      "path": "docs/navigation/60_Dennett_Desktop_Application_Business_Logic.toc.md",
+      "bytes": 54831,
+      "sha256": "b70cfc7547e0c0cb6e98230bd529284d7096ca46f2039593fab9c52cb8b36f3f"
     },
     {
-      "path": "docs/navigation/61_Denet_Mobile_Application_Business_Logic.toc.md",
-      "bytes": 49501,
-      "sha256": "6e2d354f321c9a01f79f0635f7be8baa145a19741159b3145b1ba4f0a53a014a"
+      "path": "docs/navigation/61_Dennett_Mobile_Application_Business_Logic.toc.md",
+      "bytes": 50275,
+      "sha256": "a63b27acee5aa3457b9fad2373de844918404a532d99d433c05e5ae697f86a12"
     },
     {
-      "path": "docs/navigation/70_Denet_End_to_End_Validation_and_Architecture_Handoff.toc.md",
-      "bytes": 46459,
-      "sha256": "f7e3d8a46a4063f648af42fb35f51b6c82f1aafb3e5974affef43da83cd2b107"
+      "path": "docs/navigation/70_Dennett_End_to_End_Validation_and_Architecture_Handoff.toc.md",
+      "bytes": 47025,
+      "sha256": "bb24d6619514655763a813d4202023531058a6a4f8c7a327281ebab6af794c28"
     },
     {
-      "path": "docs/navigation/80_Denet_System_Architecture_and_Runtime_Topology.toc.md",
-      "bytes": 81656,
-      "sha256": "3ea8cfc963c927c2d031983c121da1c7d94ce06d955c3f21227d98b050d0226e"
+      "path": "docs/navigation/80_Dennett_System_Architecture_and_Runtime_Topology.toc.md",
+      "bytes": 82870,
+      "sha256": "f3ccd1efec71392e5476c9fe5b7f1f1a94f59dc2615b8c073a071068e9966a89"
     },
     {
-      "path": "docs/navigation/81_Denet_Data_Memory_Storage_Sync_and_Protocol_Architecture.toc.md",
-      "bytes": 79231,
-      "sha256": "9a459fb6cbdae72803cf2a328a4642ec1e3317a9ae802591479582e367333644"
+      "path": "docs/navigation/81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.toc.md",
+      "bytes": 80307,
+      "sha256": "9e6512350ff3cfe519424fbe1e711d42d336aec75fcd505dab7047513ff323bb"
     },
     {
-      "path": "docs/navigation/82_Denet_Agent_Voice_Capability_and_Integration_Architecture.toc.md",
-      "bytes": 66399,
-      "sha256": "b7e05424bbf369963c60196302d87261151552e0e402c6e802f227d2ff6b6cd3"
+      "path": "docs/navigation/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.toc.md",
+      "bytes": 67329,
+      "sha256": "72ede10e6e10bbe1956ade950e0b3edd2d6d3c7afbdc5bce4aaa951614c72945"
     },
     {
-      "path": "docs/navigation/83_Denet_Client_Operations_Testing_and_Implementation_Blueprint.toc.md",
-      "bytes": 53772,
-      "sha256": "b768d2bb873080dcb68e0d1f8ccfbb4914f2b2322c0c5a001fdc63ca32ff1ba6"
+      "path": "docs/navigation/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.toc.md",
+      "bytes": 54542,
+      "sha256": "08133006fa6caf0216e42de35ddd04937515efa9663b1d4ed0fc6b7e901f6002"
     },
     {
       "path": "docs/navigation/CODE_MAP.toc.md",
-      "bytes": 505,
-      "sha256": "e999baace76be188d1d7c154a3e33eb229cf5f2cc960bee1026c142658b089c6"
+      "bytes": 513,
+      "sha256": "21388e7a95870d015879917a1b24590af7f2c46c0730828c7035018081667703"
     },
     {
       "path": "docs/navigation/README.md",
@@ -665,8 +695,8 @@
     },
     {
       "path": "docs/research/deep-research-specification/SKILL.md",
-      "bytes": 19960,
-      "sha256": "eb3c02f7f4d35ec2bdf0f961c9781feb3efcee7192ea62ff4282409105bac582"
+      "bytes": 19962,
+      "sha256": "860d69055f0c14ab2c0d5cc0c4cdc9328562c35de4be9e808833d0f27cc2c3b1"
     },
     {
       "path": "docs/runbooks/README.md",
@@ -704,129 +734,129 @@
       "sha256": "518731d991ed4aff2b2ee2989ca6b279f509dc59b9965dcbb9c982823982fb43"
     },
     {
-      "path": "docs/specifications/00_Denet_Functional_Concept.md",
-      "bytes": 193310,
-      "sha256": "0ad8ef5a57e4e8e203263bfe0874b0ce62789b43a65e618398c32b4019fab144"
+      "path": "docs/specifications/00_Dennett_Functional_Concept.md",
+      "bytes": 193494,
+      "sha256": "c76953de38f9cfb74a12304802dea4324c8c96afbb53e2c558dbebdd29c2b085"
     },
     {
-      "path": "docs/specifications/01_Denet_Specification_Index_and_Shared_Contracts.md",
-      "bytes": 71331,
-      "sha256": "995e08ce246966350c8b6258bf945108d39604781187a833db49dfd084aba5db"
+      "path": "docs/specifications/01_Dennett_Specification_Index_and_Shared_Contracts.md",
+      "bytes": 71447,
+      "sha256": "092ea019fad6a25b5219252e33ba65f3c19c139fceb39817b92afc3d84c92528"
     },
     {
-      "path": "docs/specifications/10_Denet_Memory_Fabric.md",
-      "bytes": 431917,
-      "sha256": "4cda7173d1d0c3c902644ead7359bd7d41c42bc31dec5f4f2b05616063cb6192"
+      "path": "docs/specifications/10_Dennett_Memory_Fabric.md",
+      "bytes": 432187,
+      "sha256": "ccb0f2a651fcdf44fd8f47a89081da6a5097e5fc02e50a8a32275397255d333b"
     },
     {
-      "path": "docs/specifications/20_Denet_Agentic_Control_Fabric.md",
-      "bytes": 77299,
-      "sha256": "6eb21038bd4c9cc33f898dee45273cfac3fcc51e26ff4be60bd53b4e24c34d51"
+      "path": "docs/specifications/20_Dennett_Agentic_Control_Fabric.md",
+      "bytes": 77351,
+      "sha256": "d77924f6193ea9b921251797a9aadf95016961365e0afb75484b3d65c1990f4e"
     },
     {
-      "path": "docs/specifications/30_Denet_Trust_Identity_Autonomy_and_Permissions.md",
-      "bytes": 184615,
-      "sha256": "c5ef2bb8be6d11bf3d18d64761c824493aa74b5c3cfe5dddbe053344ba207108"
+      "path": "docs/specifications/30_Dennett_Trust_Identity_Autonomy_and_Permissions.md",
+      "bytes": 184799,
+      "sha256": "bb0a8f04b7fad3bb341ca81388c133e078b5de3f6707fbda97e41cc5cc3287b8"
     },
     {
-      "path": "docs/specifications/40_Denet_Voice_and_Ambient_Interaction_Fabric.md",
-      "bytes": 152454,
-      "sha256": "94db0538b85e3b68c612f6a7504e4ce3047ae1fc0db86d10adb7ab57c9642594"
+      "path": "docs/specifications/40_Dennett_Voice_and_Ambient_Interaction_Fabric.md",
+      "bytes": 152582,
+      "sha256": "27484be1591d1c9dadfd5cfb3969b09d21766da3a26673f996420cb8e3515d2a"
     },
     {
-      "path": "docs/specifications/41_Denet_Capabilities_Providers_and_Integrations.md",
-      "bytes": 180282,
-      "sha256": "15f327dea5658c7782b8388fc32022d23537ccf4302c9d91dfaa721a6cffc5dc"
+      "path": "docs/specifications/41_Dennett_Capabilities_Providers_and_Integrations.md",
+      "bytes": 180564,
+      "sha256": "8ecec7f2fda5c22cc3cf5c7c764e9f515e5606684eac41b9bb4052de25a7e861"
     },
     {
-      "path": "docs/specifications/50_Denet_Server_Runtime_Events_Sync_and_Portability.md",
-      "bytes": 116646,
-      "sha256": "cae84b1c8f993efa403c3dd4de6cf221c3ada6b54f2f455aa09d460260444462"
+      "path": "docs/specifications/50_Dennett_Server_Runtime_Events_Sync_and_Portability.md",
+      "bytes": 116774,
+      "sha256": "70960a82b773eb7f8f2901131fc5a3a099e5346c3d2a5c33d202ec1cfec93b90"
     },
     {
-      "path": "docs/specifications/60_Denet_Desktop_Application_Business_Logic.md",
-      "bytes": 142174,
-      "sha256": "ed2bf2ccde64cc8328fc3d0daac336a7d00523d0a77871ed7f888bb686a107c0"
+      "path": "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md",
+      "bytes": 142278,
+      "sha256": "62c27aaafc2c520254cd1c6100fea740f50d31f5681de78fbe9b05be2ffb9345"
     },
     {
-      "path": "docs/specifications/61_Denet_Mobile_Application_Business_Logic.md",
-      "bytes": 163476,
-      "sha256": "6d98da8a5828870bfb762368f93cf7e7d396256fb712f4600ea83a24c6067d2f"
+      "path": "docs/specifications/61_Dennett_Mobile_Application_Business_Logic.md",
+      "bytes": 163638,
+      "sha256": "a74325d174011912bd63d924c28c43e8895ddd8cee52d62bbd27f7cd853bcc33"
     },
     {
-      "path": "docs/specifications/70_Denet_End_to_End_Validation_and_Architecture_Handoff.md",
-      "bytes": 98921,
-      "sha256": "dce3ce65c4e90619616bedea5845d85a6da95a6d4c4351423eb90317775ab157"
+      "path": "docs/specifications/70_Dennett_End_to_End_Validation_and_Architecture_Handoff.md",
+      "bytes": 99001,
+      "sha256": "3429146787a87fa1f88f50be45a6462805f49f29ff49ce6d5c88fb7a0098e2cb"
     },
     {
       "path": "docs/specifications/README.md",
-      "bytes": 2062,
-      "sha256": "36b667daf956677b3efcc6fb8422803874444f4591eaf2fa3d3c18359f3d15ff"
+      "bytes": 2084,
+      "sha256": "7de7e22e9db5152ddf925cf3061edbe9759d083822eb96d16f0d7472567c381c"
     },
     {
       "path": "docs/specifications/contracts/00_Shared_Cross_Domain_Rules.md",
-      "bytes": 8767,
-      "sha256": "28971112603dbfa13c36d70a8ce8ebfab63eed9458d518ba08001f6aca8bc12a"
+      "bytes": 8777,
+      "sha256": "5998be1720bcd7df8a84bff8f34661d9ad48076a20c5c523de707b13317ae99f"
     },
     {
       "path": "docs/specifications/contracts/90_Integrated_End_to_End_Scenarios.md",
-      "bytes": 10791,
-      "sha256": "50ff6cf8cbcae9e92d44f16a58f9d3bb79919aa572008cf11f1eb77ba37e19b4"
+      "bytes": 10799,
+      "sha256": "de77397c1f123c728f885fcdfd5feb3504e1a198b8b5cf1232581243c9a5ec6c"
     },
     {
       "path": "docs/specifications/contracts/A_Ambient_Sensory_Capture_Contract.md",
-      "bytes": 20579,
-      "sha256": "fc35c11ab08a69a44de13840d956b13cc3d50b41045a900a8701f4a2c83e3a11"
+      "bytes": 20599,
+      "sha256": "552db932cf77432ffc1ed0cb310945afd8cb4a13ce56c166c5bdb0eec67d4ea7"
     },
     {
       "path": "docs/specifications/contracts/B_External_Communication_Operation.md",
-      "bytes": 24247,
-      "sha256": "99ae134804dccb4c828e723f68cdf2022b23f1f77447f2a28f4dd5c0a5e6c3bc"
+      "bytes": 24279,
+      "sha256": "cb785f1354954cc3ed7ab142574ed30cbe30164d740b97530941a6ea21527b24"
     },
     {
       "path": "docs/specifications/contracts/C_Project_Lifecycle_Contract.md",
-      "bytes": 16466,
-      "sha256": "f9b556023ceb280dd505e85a4efa1f63bbf56f24f947345e702956f4556a2f41"
+      "bytes": 16490,
+      "sha256": "7fe0f319da95ed5d9b93dba4ff7eae813c1c8bb835768271ab270c082c051796"
     },
     {
       "path": "docs/specifications/contracts/D_Artifact_Lifecycle_Contract.md",
-      "bytes": 14581,
-      "sha256": "dc2b1c2b9191230a8b11cbc42a7d99037ee2a1d99b616d77e08ad932bb6d0348"
+      "bytes": 14587,
+      "sha256": "92c7c1e1f7bf041c63450b77cab167c9eee4e79484bbd0a0d9f194b3cd4ad4b0"
     },
     {
       "path": "docs/specifications/contracts/E_Update_Compatibility_and_Migration_Contract.md",
-      "bytes": 11534,
-      "sha256": "2edfbcfc1c72c476f3d6eef8b11238c1b2a5e50d08fa5607c65eb8a03fa69cd3"
+      "bytes": 11546,
+      "sha256": "d4577926017b30058f05806069339a5e93c395bab4ca38fa8f947aec4bb0e613"
     },
     {
       "path": "docs/specifications/contracts/F_Identity_Key_and_Ownership_Recovery_Contract.md",
-      "bytes": 10949,
-      "sha256": "56de9b3c5880abc57137d577ff10ef3864ff041b02a15a1c012f06a9c9dce886"
+      "bytes": 10961,
+      "sha256": "a90af6cea4faa0d2b62bdf7b5b7dcbe6bdfb96823e6f658666724e49191d8370"
     },
     {
       "path": "docs/specifications/contracts/G_Resource_Pressure_and_Usage_Accounting_Contract.md",
-      "bytes": 10967,
-      "sha256": "9ead226807366f1003be53a0092d6f2896654c4f5a5a8e1771592eabc7d956c8"
+      "bytes": 10983,
+      "sha256": "c58add0e64eef00ef4dde139f1c1a3617c926be0e5a787f919870d7c5fd2f57d"
     },
     {
       "path": "docs/specifications/contracts/H_Federated_Global_Search_Contract.md",
-      "bytes": 8754,
-      "sha256": "a9de456e79c95663f90294e67702bfc903c76fdb31bfed1ae9df125ebf1788ff"
+      "bytes": 8764,
+      "sha256": "803add6854e1a02a8aebdc6dbbfda72f20e47680ed9e32f93f7453827b1f5ecc"
     },
     {
       "path": "docs/specifications/contracts/I_Locale_Timezone_Language_and_Travel_Contract.md",
-      "bytes": 7292,
-      "sha256": "48cfda5411155877180824576280b8ba6451c63a4ab654db236282a7a3d0a0e5"
+      "bytes": 7294,
+      "sha256": "f6b4708b690ed8e040db5a5c6445cdcef374641b3849b071dc752381e43f85cf"
     },
     {
       "path": "docs/specifications/contracts/J_Import_Export_and_Portable_Package_Compatibility_Contract.md",
-      "bytes": 11890,
-      "sha256": "be83f0025a1b5dc1a3478b82793d6b0db067f055aef7fa00243c5bd3a43e7051"
+      "bytes": 11910,
+      "sha256": "86e85a6aa2c95ff3e8e5ebac1f22539a3ba921efc25d95c2199a0c4459b5940c"
     },
     {
       "path": "docs/specifications/contracts/K_Composite_Experience_Recipes.md",
-      "bytes": 7086,
-      "sha256": "bfdefa7680d5fcfba816dd978f58cb54a7303e9c67bec6f9a150b7663471d352"
+      "bytes": 7092,
+      "sha256": "828bf9a141e9d2e4b12e478a2ff743f5dcc0b864f89ca5f5fb24bcd7966ca0af"
     },
     {
       "path": "docs/specifications/contracts/README.md",
@@ -835,18 +865,18 @@
     },
     {
       "path": "docs/specifications/contracts/REFERENCES.md",
-      "bytes": 9595,
-      "sha256": "8ff6aad7fff3cdb2987f267090cf1516a391ddaf0249949923fcf7feac60fadb"
+      "bytes": 9641,
+      "sha256": "963c7c3fb1bdee356c3560e7a004b2904b55f8a7d89353afb1c4c8e1bdb71388"
     },
     {
       "path": "docs/testing/TEST_CATALOGUE_AND_QUALITY_GATES.md",
-      "bytes": 11993,
-      "sha256": "e26c30956f2bfebe12fb559ec682ea010380b709c43b8e2965263b2836d06b20"
+      "bytes": 11999,
+      "sha256": "c21c88be53c0685d93cc8810f8b968daa92e76aa0fe3aa47339dea57aab44539"
     },
     {
       "path": "package.json",
-      "bytes": 428,
-      "sha256": "bd23de45b1880d04c3e86352f185d48e39fd1f9c6de51588bf891552698ee99f"
+      "bytes": 430,
+      "sha256": "da316be74062fb7dbcc21da3c408e334359ff8508515a4d568eb9f33630da294"
     },
     {
       "path": "packages/README.md",
@@ -860,13 +890,48 @@
     },
     {
       "path": "planning/README.md",
-      "bytes": 1141,
-      "sha256": "e5643337e24f4455716019718c9dee66ba75bc33c599aa02446d97dcead92505"
+      "bytes": 1221,
+      "sha256": "95b4592da2965c1e095f959e85e4835e308e579cd72543cff70371ff7ec65169"
+    },
+    {
+      "path": "planning/batches/AB-M00-001.json",
+      "bytes": 893,
+      "sha256": "21524d7a8694e87812b6f825af9420d75e1a5f84b5aa8c980cf264cdd48bf8b5"
+    },
+    {
+      "path": "planning/batches/AB-M00-002.json",
+      "bytes": 887,
+      "sha256": "7d342462c1a7cdd54488b7667472d84b983036e4a8b75f632f7fdf256cb4b4c2"
+    },
+    {
+      "path": "planning/batches/AB-M00-003.json",
+      "bytes": 867,
+      "sha256": "8e388038692c00fb75cd008c888ddb61a7d8893178ad5905ed40fbcde0be1398"
+    },
+    {
+      "path": "planning/decisions/DEC-0001.json",
+      "bytes": 1405,
+      "sha256": "60644221a94a586ba74c2cb28d968b884ae057237590069b9ca61fafdc541cf7"
+    },
+    {
+      "path": "planning/decisions/DEC-0002.json",
+      "bytes": 1406,
+      "sha256": "50ddaa651013248a4abfc17023a023fb60c4c0b7952459ca9fb183d1f50af7cd"
+    },
+    {
+      "path": "planning/decisions/DEC-0003.json",
+      "bytes": 1813,
+      "sha256": "1fc1908458ddefda1b51796b297fe21e7b8d03e619d32081738764eb51037865"
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 2999,
-      "sha256": "2391c3aa4e46a52ad51ae45f343e2e37dd74c28b7c03d16222b76a703997f775"
+      "bytes": 19173,
+      "sha256": "b18e2bb03d6ae7549546751071940a7208366e89985f38f924bbfcd3608c9152"
+    },
+    {
+      "path": "planning/results/WP-M00-006.json",
+      "bytes": 2461,
+      "sha256": "4513ac92bf5a0ff603594ded55749804b00f39fee4a48a85f1c8ebbf31e557da"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
@@ -904,29 +969,29 @@
       "sha256": "58f455ed617b5f5d91b2c64e89e4cb54493a9fe9dbac54000631ea5311a09757"
     },
     {
-      "path": "protocols/proto/denet/v1/common.proto",
-      "bytes": 330,
-      "sha256": "270b60355e73922b62273c64eb1cea2cdb1ff77f8438758d250f9b531413bc78"
+      "path": "protocols/proto/dennett/v1/common.proto",
+      "bytes": 332,
+      "sha256": "782ca362272d9fd770482d5ea4e5047956435b948de73e4c6802a39d0fa34468"
     },
     {
-      "path": "protocols/proto/denet/v1/control.proto",
-      "bytes": 487,
-      "sha256": "19dfc7d340eabfbf0361900efaa90d5a322f329aa71d94534346f6a9a24effdd"
+      "path": "protocols/proto/dennett/v1/control.proto",
+      "bytes": 493,
+      "sha256": "5047b9603f81c705445c823b7f4c0722ec06d747f7f269498420ca9cf41dbbf4"
     },
     {
-      "path": "protocols/proto/denet/v1/memory.proto",
-      "bytes": 379,
-      "sha256": "f53bd1ff0cd44dbd2e382b71856b7c2040238a43c48f49f11b6d5897de7e22aa"
+      "path": "protocols/proto/dennett/v1/memory.proto",
+      "bytes": 385,
+      "sha256": "f786e56c44c102b4e12d33ea32e051df874b13f7d4cb6b8efc1108e3abfbe97c"
     },
     {
-      "path": "protocols/proto/denet/v1/sync.proto",
-      "bytes": 577,
-      "sha256": "c816c2b7f0a86eb9ceb1590ad32c02cd38680023834467ef9b545a7fe413731b"
+      "path": "protocols/proto/dennett/v1/sync.proto",
+      "bytes": 583,
+      "sha256": "ba5fefa03a6bcd4632244487cf6dbbca161df926769eb1cc79f9c372b3e4d406"
     },
     {
-      "path": "protocols/proto/denet/v1/voice.proto",
-      "bytes": 291,
-      "sha256": "835ae06bfd39c6b5c383a8ff72083f0cd9f990cd3e43fe2c1c37349944d5a6b6"
+      "path": "protocols/proto/dennett/v1/voice.proto",
+      "bytes": 293,
+      "sha256": "cd3cf8427b76fe624b192c7dc5d741b05b2d053ca61994feb190ed36c40f4bba"
     },
     {
       "path": "pyproject.toml",
@@ -950,28 +1015,28 @@
     },
     {
       "path": "schemas/autonomous-batch.schema.json",
-      "bytes": 872,
-      "sha256": "3680b9f0092a38c29c4bae279264e28ae23985dd0ab9ae004906ff53cd7ac975"
+      "bytes": 876,
+      "sha256": "170e5bc87851c3ddea22158ede02e451d351d2586da8b45313370af443cacf1b"
     },
     {
       "path": "schemas/component-descriptor.schema.json",
-      "bytes": 1399,
-      "sha256": "e16de593ccde53172ae9cc09c164a2f16faf646996722cf4f6e2c68d54ca40b1"
+      "bytes": 1403,
+      "sha256": "06d55f64270b112799055cd6e3a12e2f86565070bbae177f9041675010c93432"
     },
     {
       "path": "schemas/portable-package-manifest.schema.json",
-      "bytes": 1045,
-      "sha256": "24e27c675153246ab69ca5263d2ac08f39bce81f4cdc18087e4ed870f5bcd92e"
+      "bytes": 1049,
+      "sha256": "99abc4b86d38b501b7fdd04befeb93831c6f461cc43bdc1d45d1f5a034d140e5"
     },
     {
       "path": "schemas/test-catalogue.schema.json",
-      "bytes": 1775,
-      "sha256": "30bd803887f1876cbecd121055372485fcc4dad4df346015efb245fe13bc300a"
+      "bytes": 1779,
+      "sha256": "4d5c54154a41cc1ba261822802f427237a4c8ff4dc5cc6ba9f2546bc1d4c7325"
     },
     {
       "path": "schemas/work-package.schema.json",
-      "bytes": 1430,
-      "sha256": "25f863845057472a8382df2a84e2f94c8f9c5f4e9d444e6a31fd81e78cbbd0f7"
+      "bytes": 1434,
+      "sha256": "a57e9d1f6a2388041b941b11e2bff81c3d75278f29a4f6ebac5311b3d8c012c8"
     },
     {
       "path": "services/adapter-host-node/AGENTS.md",
@@ -985,8 +1050,8 @@
     },
     {
       "path": "services/adapter-host-node/package.json",
-      "bytes": 216,
-      "sha256": "975d0b737939604b4e8e4f0f44e9e4134e52fbebe3e5e34fca1c1f1d055be0e9"
+      "bytes": 218,
+      "sha256": "6541d1544f9e4d56d035e33ba6265c2ffd1504d3de8bb32dbb1ce4ab7977640d"
     },
     {
       "path": "services/adapter-host-node/src/index.ts",
@@ -1010,108 +1075,108 @@
     },
     {
       "path": "services/adapter-host-python/pyproject.toml",
-      "bytes": 155,
-      "sha256": "11428f8fbd8270f77500faa0ead13fbee83f8ea341a0078671ce77b6afcb9541"
+      "bytes": 161,
+      "sha256": "fdf0441719d4e8d37c33f2b331752ad7aa1dcca9060bbb27efd5a8c569a48910"
     },
     {
-      "path": "services/adapter-host-python/src/denet_adapter_host/__init__.py",
+      "path": "services/adapter-host-python/src/dennett_adapter_host/__init__.py",
       "bytes": 19,
       "sha256": "7d747afc2b886329d5e309a87e59ee8f3eb222fac210351c79bb0742ee11c426"
     },
     {
-      "path": "services/adapter-host-python/src/denet_adapter_host/main.py",
+      "path": "services/adapter-host-python/src/dennett_adapter_host/main.py",
       "bytes": 1051,
       "sha256": "e1435f64d3297244eb9b071e53c4a1c6d0dfd82f103ad8cafda3d964de957dee"
     },
     {
       "path": "services/adapter-host-python/tests/test_host.py",
-      "bytes": 591,
-      "sha256": "48a094193bfb8d8fb6ed15c49ae61bc3ec84ff970eb899ce580b8e7dd6ee243d"
+      "bytes": 593,
+      "sha256": "00285438d78ed8b7e0d9ecda2adb4168c65ad4f1bdbab033b53d62393990fbf9"
     },
     {
       "path": "services/head/AGENTS.md",
-      "bytes": 758,
-      "sha256": "3116b0c640c039e941ed486ca199c143c9affc8bae0f437ad6663d1e9d67ae1b"
+      "bytes": 760,
+      "sha256": "21cf928c19917f3830702a3a0d6e3bf1d0376662682134d9819b65c9bf9c97a3"
     },
     {
       "path": "services/head/Cargo.toml",
-      "bytes": 537,
-      "sha256": "20fb0ae742f6dcbde8e89fc28c64c64e10189b7a71218426dc785c224da04ebd"
+      "bytes": 559,
+      "sha256": "da64af579c1e597cde219089ebc2a78f5f0ea7bdc58aa505a8930e3a5b76a77a"
     },
     {
       "path": "services/head/README.md",
-      "bytes": 499,
-      "sha256": "b8530842a811d3b5e9b9fcb14e0d0866d1920fb65dfa3bfda84538e5030d9dea"
+      "bytes": 501,
+      "sha256": "659317390ed82c7038a315df0367189319f2cd95fcf2679c58c05423d53c17e3"
     },
     {
       "path": "services/head/src/lib.rs",
-      "bytes": 1423,
-      "sha256": "6680b276f3154d9dfa5637a2e5847787188f6caa6d876e91f3c0ca988318709b"
+      "bytes": 1435,
+      "sha256": "57185b40c48e23480729d14d036d6e6ba8225a741f28aa2593f1c0480857bc51"
     },
     {
       "path": "services/head/src/main.rs",
-      "bytes": 760,
-      "sha256": "9a296ae7e9c5ff13f4c324832d6cb611c567117f8293b1a5bf93d18cc7fda84f"
+      "bytes": 774,
+      "sha256": "4f4ec8a0529e78862c19eea09746bc4ba8518e581231e337520242b7ff43d266"
     },
     {
       "path": "services/memoryd/AGENTS.md",
-      "bytes": 309,
-      "sha256": "199462e08cc474bfd274d0bb7af24304f42ec72ea7d639dd0410125b6a3816ad"
+      "bytes": 313,
+      "sha256": "64e596cab816c43245f9f9d72270b4aad1d5d52529c7900ad60e8941f5127ef2"
     },
     {
       "path": "services/memoryd/Cargo.toml",
-      "bytes": 245,
-      "sha256": "fc890ed0ccaa6550b56edf403eb51d0e14525c6399b11c3759755b85f60a9efe"
+      "bytes": 251,
+      "sha256": "2b1b5bb8756e72fbdbc522e0951a3a09da46f76de4365a9f8bb951060842bca0"
     },
     {
       "path": "services/memoryd/README.md",
-      "bytes": 314,
-      "sha256": "2b15ff4ea00599fd02b8fd0fab01df86c4d718c08b76c97f48e6dd850c1a1c31"
+      "bytes": 318,
+      "sha256": "1c3a28bbd97f62b06a06aac40931d62575d6848e7e79e86bc956def744e2157d"
     },
     {
       "path": "services/memoryd/src/main.rs",
-      "bytes": 172,
-      "sha256": "7f70800f83fdb0d14914fb167ba267db991e6a0014d51ce64e8c404082cbfd5c"
+      "bytes": 176,
+      "sha256": "e83d50955560ed2d376dad4f86f573ff1ab009902c11e10892ae24a44b3d04b4"
     },
     {
       "path": "services/node/AGENTS.md",
-      "bytes": 514,
-      "sha256": "f7a8fcef5a642936867facf7c558e68c601b9279ee1cb39fc1f96f79327f5808"
+      "bytes": 516,
+      "sha256": "b0615b48543ec7ecc9476bfe587cf07717cd4c4260fa20d1c6826f7b848d29d3"
     },
     {
       "path": "services/node/Cargo.toml",
-      "bytes": 242,
-      "sha256": "953fba380f6d3d0067567b5d5cb39f728a08f39727e4b1fa0be08824e7711538"
+      "bytes": 248,
+      "sha256": "e2a17ef25ce653d82187a6e7c452be8127830e26ae1015617c35e8ad0f6b4f10"
     },
     {
       "path": "services/node/README.md",
-      "bytes": 315,
-      "sha256": "5be2cbea441d9bcae2b747284748d3b2785c3f565e632785ee2d50a618e8c625"
+      "bytes": 317,
+      "sha256": "8d6e66c239f2471ce5d918fba4f1ad48427fcd95b97011f5c70d70194fbf9e04"
     },
     {
       "path": "services/node/src/main.rs",
-      "bytes": 169,
-      "sha256": "9a5709f0a0e790c2c0f33d4e767a040fef6e02011283fcf3d970ce5f056a261a"
+      "bytes": 173,
+      "sha256": "fc4e6bd94df3e10f6db167c0d2a1277c430b3ee33538a0239af156fbdba17a1b"
     },
     {
       "path": "services/sensor-worker/AGENTS.md",
-      "bytes": 385,
-      "sha256": "afedf104afb9c65e42905123b12746d2f2b2518d7823b159b08c322da489f5f1"
+      "bytes": 387,
+      "sha256": "81a06bdc274eda0fd9acf08417794129bcae3c4a817c3f3510189c64f53b7863"
     },
     {
       "path": "services/sensor-worker/Cargo.toml",
-      "bytes": 251,
-      "sha256": "70fb64fe9e92bec12c44dd4046d6f62a5f9d2b5bebd8bde750f680c42c0ca939"
+      "bytes": 257,
+      "sha256": "eb115c07a4b9ade450d2a0d781215d3560e3a2a76494560d0d62893adc2e103a"
     },
     {
       "path": "services/sensor-worker/README.md",
-      "bytes": 427,
-      "sha256": "18efb3e463ccf503cd865f9eab96d2e67ca10095e8fb7973121d479fe330f622"
+      "bytes": 429,
+      "sha256": "433754b96d2806743a858a7885029f20d427144d90e444d7f13f178c7eff2edc"
     },
     {
       "path": "services/sensor-worker/src/main.rs",
-      "bytes": 178,
-      "sha256": "a33ad3ebce33bc8e072349b7ff5b339f78a3bf9b04f3de4c2ae78a99d91330d6"
+      "bytes": 182,
+      "sha256": "1b7ccf9c6a543e90bf3de7e9ac9f22f50e5fd3e760a5100451260b86bafe49d1"
     },
     {
       "path": "tests/README.md",
@@ -1125,8 +1190,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 2798,
-      "sha256": "14577325687a721e27b58b3ac45c87c59ebf22298680e2fe7f3e557247727fed"
+      "bytes": 9929,
+      "sha256": "24c0d45f49345c41fb50d50fbc314b2edbe7368c4f631106008fc889356aba8c"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1179,19 +1244,19 @@
       "sha256": "918036deb66f15d5bd32e903ab523b96f801fab45871bbac414cfffd1c7c21f4"
     },
     {
-      "path": "tools/denetctl/Cargo.toml",
-      "bytes": 178,
-      "sha256": "7795978dd0c83b4c7bb9d6cc907a1b6d6fc725ce96cb3c08d7f830cb39e27ae7"
+      "path": "tools/dennettctl/Cargo.toml",
+      "bytes": 180,
+      "sha256": "e99781910dccc834214c877eca6c9ff4600983038b18070a8eaaef3390f2c4e9"
     },
     {
-      "path": "tools/denetctl/README.md",
-      "bytes": 236,
-      "sha256": "bf2bf7eefae90d82fb5e42f82e70eca137d3f2eba843afd7996c8de52cc6fe28"
+      "path": "tools/dennettctl/README.md",
+      "bytes": 238,
+      "sha256": "2aed945014fa5cce08d9f6fe405d4c7d36605d496fc83089062ebed707efbe15"
     },
     {
-      "path": "tools/denetctl/src/main.rs",
-      "bytes": 370,
-      "sha256": "54c62dd6b834137cef790639fff97084cbda9051b2f5902df7efd3d2f12cf70a"
+      "path": "tools/dennettctl/src/main.rs",
+      "bytes": 374,
+      "sha256": "aaba6c498a2370be684334eed3b5b7a70b821a4d257540647bab80a546ef80f4"
     },
     {
       "path": "tools/doctor.py",
@@ -1202,6 +1267,11 @@
       "path": "tools/generate_doc_index.py",
       "bytes": 1795,
       "sha256": "e0f7f2cbaff51a0dc6908c30511c683438a5e5ce172d2517e59fc14929b7149b"
+    },
+    {
+      "path": "tools/generate_repository_metadata.py",
+      "bytes": 4932,
+      "sha256": "f57ed8e266fd5c0484a20a1340ffce1702ef2135b81df31873ba22455b4b56f3"
     },
     {
       "path": "tools/verify_docs.py",
@@ -1215,8 +1285,8 @@
     },
     {
       "path": "tools/verify_repo.py",
-      "bytes": 1875,
-      "sha256": "435bf063b33cc05752145644d0be02d0decda079656f98b856fa733119b2d568"
+      "bytes": 3799,
+      "sha256": "08532cf4b8e76a419d722555e7cd0333cd745b67e9f75d1230da46ee5c69ea21"
     }
   ]
 }

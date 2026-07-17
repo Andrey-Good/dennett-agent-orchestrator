@@ -1,8 +1,8 @@
 
-use denet_agent_core::{AgentRequest, AgentRuntimePort};
-use denet_contracts::{MemoryEventId, ProjectChatCommand, ResultEnvelope};
-use denet_kernel::{DenetResult, ProjectChatUseCase};
-use denet_memory_core::{MemoryEvent, MemoryPort};
+use dennett_agent_core::{AgentRequest, AgentRuntimePort};
+use dennett_contracts::{MemoryEventId, ProjectChatCommand, ResultEnvelope};
+use dennett_kernel::{DennettResult, ProjectChatUseCase};
+use dennett_memory_core::{MemoryEvent, MemoryPort};
 use std::sync::Arc;
 
 pub struct HeadApplication<A: AgentRuntimePort, M: MemoryPort> {
@@ -16,7 +16,7 @@ impl<A: AgentRuntimePort, M: MemoryPort> HeadApplication<A, M> {
 
 #[async_trait::async_trait]
 impl<A: AgentRuntimePort, M: MemoryPort> ProjectChatUseCase for HeadApplication<A, M> {
-    async fn execute(&self, command: ProjectChatCommand) -> DenetResult<ResultEnvelope> {
+    async fn execute(&self, command: ProjectChatCommand) -> DennettResult<ResultEnvelope> {
         let response = self.agent.respond(AgentRequest {
             prompt: command.text.clone(),
             context_handles: Vec::new(),

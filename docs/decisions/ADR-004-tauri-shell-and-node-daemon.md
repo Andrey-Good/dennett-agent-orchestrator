@@ -6,7 +6,7 @@
 
 ## Decision
 
-The Tauri/React application owns desktop presentation and OS UI integration. `denet-node` owns local durable behavior and continues after windows close.
+The Tauri/React application owns desktop presentation and OS UI integration. `dennett-node` owns local durable behavior and continues after windows close.
 
 ## Consequences
 

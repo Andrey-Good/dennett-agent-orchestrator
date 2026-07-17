@@ -6,6 +6,6 @@ Crates contain stable domain/application logic and ports. Keep them independent 
 - Favor small public APIs and explicit constructors.
 - Put invariants in domain types or pure functions.
 - Keep effects in application shells/adapters.
-- Use `denet-contracts` only for genuinely cross-boundary types.
+- Use `dennett-contracts` only for genuinely cross-boundary types.
 - Do not create one crate per class; create a crate only for a stable ownership boundary.
 - Every port should have at least one fake and a conformance test plan.

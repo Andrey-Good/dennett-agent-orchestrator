@@ -1,39 +1,39 @@
 # Appendix A. Source Ledger
 
-## Internal Denet specifications
+## Internal Dennett specifications
 
-**[S01] Denet Functional Concept.** Product vision, ambient microphone/screen, projects, voice, messages, portability and adaptive principles.  
-`../00_Denet_Functional_Concept.md`
+**[S01] Dennett Functional Concept.** Product vision, ambient microphone/screen, projects, voice, messages, portability and adaptive principles.  
+`../00_Dennett_Functional_Concept.md`
 
-**[S02] Denet Specification Index and Shared Contracts.** Canonical ownership and boundary contracts.  
-`01_Denet_Specification_Index_and_Shared_Contracts.md`
+**[S02] Dennett Specification Index and Shared Contracts.** Canonical ownership and boundary contracts.  
+`01_Dennett_Specification_Index_and_Shared_Contracts.md`
 
-**[S03] Denet Memory Fabric 1.2.** Evidence, event ledger, project memory, sensory ingest, retention, deletion and retrieval.  
-`../10_Denet_Memory_Fabric.md`
+**[S03] Dennett Memory Fabric 1.2.** Evidence, event ledger, project memory, sensory ingest, retention, deletion and retrieval.  
+`../10_Dennett_Memory_Fabric.md`
 
-**[S04] Denet Agentic Control Fabric 1.1.** Project sessions, single-agent-first execution, Tasks/Runs, effects and completion.  
-`../20_Denet_Agentic_Control_Fabric.md`
+**[S04] Dennett Agentic Control Fabric 1.1.** Project sessions, single-agent-first execution, Tasks/Runs, effects and completion.  
+`../20_Dennett_Agentic_Control_Fabric.md`
 
-**[S05] Denet Trust, Identity, Autonomy and Permissions.** Identity, grants, effects, voice assurance, secrets, import trust and recovery foundations.  
-`30_Denet_Trust_Identity_Autonomy_and_Permissions.md`
+**[S05] Dennett Trust, Identity, Autonomy and Permissions.** Identity, grants, effects, voice assurance, secrets, import trust and recovery foundations.  
+`30_Dennett_Trust_Identity_Autonomy_and_Permissions.md`
 
-**[S06] Denet Voice and Ambient Interaction Fabric.** Voice sessions, ambient edge, turn-taking and source behavior.  
-`40_Denet_Voice_and_Ambient_Interaction_Fabric.md`
+**[S06] Dennett Voice and Ambient Interaction Fabric.** Voice sessions, ambient edge, turn-taking and source behavior.  
+`40_Dennett_Voice_and_Ambient_Interaction_Fabric.md`
 
-**[S07] Denet Capabilities, Providers and Integrations.** Connectors, skills, packages, providers, local backends and capability lifecycle.  
-`41_Denet_Capabilities_Providers_and_Integrations.md`
+**[S07] Dennett Capabilities, Providers and Integrations.** Connectors, skills, packages, providers, local backends and capability lifecycle.  
+`41_Dennett_Capabilities_Providers_and_Integrations.md`
 
-**[S08] Denet Server Runtime, Events, Sync and Portability.** Head, devices, events, effects, sync, backup and recovery runtime.  
-`50_Denet_Server_Runtime_Events_Sync_and_Portability.md`
+**[S08] Dennett Server Runtime, Events, Sync and Portability.** Head, devices, events, effects, sync, backup and recovery runtime.  
+`50_Dennett_Server_Runtime_Events_Sync_and_Portability.md`
 
-**[S09] Denet Desktop Application Business Logic.** Desktop workbench, projects, Inbox, Radar, memory, artifacts and system controls.  
-`60_Denet_Desktop_Application_Business_Logic.md`
+**[S09] Dennett Desktop Application Business Logic.** Desktop workbench, projects, Inbox, Radar, memory, artifacts and system controls.  
+`60_Dennett_Desktop_Application_Business_Logic.md`
 
-**[S10] Denet Mobile Application Business Logic.** Interruptible mobile remote, capture, approvals, offline and device controls.  
-`61_Denet_Mobile_Application_Business_Logic.md`
+**[S10] Dennett Mobile Application Business Logic.** Interruptible mobile remote, capture, approvals, offline and device controls.  
+`61_Dennett_Mobile_Application_Business_Logic.md`
 
-**[S11] Denet End-to-End Validation and Architecture Handoff.** Gap ledger, E2E requirements, quality scenarios and architecture readiness.  
-`70_Denet_End_to_End_Validation_and_Architecture_Handoff.md`
+**[S11] Dennett End-to-End Validation and Architecture Handoff.** Gap ledger, E2E requirements, quality scenarios and architecture readiness.  
+`70_Dennett_End_to_End_Validation_and_Architecture_Handoff.md`
 
 ## Ambient capture, privacy and consent
 

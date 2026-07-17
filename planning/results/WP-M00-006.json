@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-006",
+    "status": "completed",
+    "summary": "Canonicalized the active repository identity as Dennett, removed the placeholder license file, added deterministic repository metadata generation, and automated rejection of legacy active identifiers.",
+    "commits": [
+      "84718c4"
+    ],
+    "changed_files": [
+      "repository-wide active product identifiers and paths",
+      "README.md",
+      "README.ru.md",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/manifest.json",
+      "docs/CHECKSUMS.sha256",
+      "tools/generate_repository_metadata.py",
+      "tools/verify_repo.py",
+      "planning/milestones/M00_repository_and_contracts.json",
+      "tests/catalog/foundations.seed.json"
+    ],
+    "requirements_satisfied": [
+      "OWNER:CanonicalNameDennett",
+      "OWNER:NoLicenseSelected",
+      "M00:OwnerGate",
+      "TEST-PRODUCT-IDENTITY-001"
+    ],
+    "tests": {
+      "passed": [
+        "uv run python tools/verify_repo.py",
+        "uv run python tools/verify_docs.py",
+        "uv run python tools/generate_doc_index.py --check",
+        "uv run python tools/verify_planning.py",
+        "uv run python tools/generate_repository_metadata.py --check",
+        "uv run python -m unittest discover -s services/adapter-host-python/tests",
+        "cargo test --workspace"
+      ],
+      "not_run": [
+        "cargo fmt --check and cargo clippy are acceptance gates of WP-M00-001",
+        "Buf lint/generation is the acceptance gate of WP-M00-002"
+      ],
+      "failed": []
+    },
+    "review": {
+      "findings_closed": [
+        "Removed stale all-rights-reserved wording from active public documentation",
+        "Confirmed ambiguous Git rename display did not swap nested AGENTS content",
+        "Confirmed no legacy active product identifiers remain outside the historical DEC-0001 record"
+      ],
+      "findings_open": [],
+      "waiver": "DEC-0003"
+    },
+    "migrations": [],
+    "observability_changes": [],
+    "known_limitations": [
+      "Detached semantic review was waived only for this package because tenant policy blocked the owner-approved external review",
+      "Rust formatting/clippy baseline is resolved by WP-M00-001",
+      "Buf module/generation baseline is resolved by WP-M00-002"
+    ],
+    "follow_up_candidates": [
+      "WP-M00-001",
+      "WP-M00-002"
+    ],
+    "owner_decision_required": false
+  }
+}

@@ -22,12 +22,14 @@ Thumbs.db
 .idea/
 .vscode/settings.json
 
-# Local Denet state and secrets
+# Local Dennett state and secrets
 .env
 .env.*
 !.env.example
-.denet/local/
-.denet/runtime/
+.dennett/cache/
+.dennett/local/
+.dennett/runtime/
+.dennett/worktrees/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

@@ -21,7 +21,7 @@
     {
       "id": "TEST-PRODUCT-IDENTITY-001",
       "title": "Canonical repository identity uses Dennett and no license file",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["repository", "contracts", "documentation"],
@@ -35,8 +35,11 @@
       ],
       "implementation": {
         "target_suite": "tools",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "tools/verify_repo.py",
+          "tools/generate_repository_metadata.py"
+        ]
       },
       "owner": "repository"
     },

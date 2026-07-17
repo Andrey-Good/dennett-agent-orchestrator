@@ -8,7 +8,7 @@
 
 ## H.1. Назначение
 
-Пользователь должен иметь один быстрый поиск по Denet, но данные остаются распределены по разным authoritative domains:
+Пользователь должен иметь один быстрый поиск по Dennett, но данные остаются распределены по разным authoritative domains:
 
 - проекты и файлы;
 - project sessions/messages;
@@ -73,7 +73,7 @@ Query planner starts cheap:
 
 ### Navigation
 
-«Открой проект Denet», «найди run X».
+«Открой проект Dennett», «найди run X».
 
 ### Exact lookup
 
@@ -122,9 +122,9 @@ federated_search_result:
 
 ## H.7. Fusion and ranking
 
-Different indexes have incomparable scores. Hybrid-search systems обычно объединяют lexical и semantic retrieval как разные источники кандидатов; Denet принимает это как baseline, не как единственный engine. [[S41]] Reciprocal Rank Fusion combines ranked result sets without requiring calibrated scores and is a useful baseline. [[S40]]
+Different indexes have incomparable scores. Hybrid-search systems обычно объединяют lexical и semantic retrieval как разные источники кандидатов; Dennett принимает это как baseline, не как единственный engine. [[S41]] Reciprocal Rank Fusion combines ranked result sets without requiring calibrated scores and is a useful baseline. [[S40]]
 
-Denet ranking considers:
+Dennett ranking considers:
 
 - exactness;
 - intent/type match;
@@ -203,7 +203,7 @@ Partial failure is visible and does not invalidate available results.
 
 ## H.12. Search and answer
 
-Search itself returns objects. «Ask Denet» can build answer from selected results with evidence.
+Search itself returns objects. «Ask Dennett» can build answer from selected results with evidence.
 
 Separation prevents:
 

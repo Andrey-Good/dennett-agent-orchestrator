@@ -1,6 +1,6 @@
 # Implementation Roadmap
 
-Denet is implemented as tested vertical slices, not by completing every subsystem in isolation.
+Dennett is implemented as tested vertical slices, not by completing every subsystem in isolation.
 
 1. **Repository and contracts** — compile core contracts, generated protocol clients and checks.
 2. **Local desktop conversation** — Tauri → Node → embedded Head → fake/one real runtime → memory event.
@@ -14,7 +14,7 @@ Denet is implemented as tested vertical slices, not by completing every subsyste
 10. **External communication and computer-use** — connectors, effects, reconciliation and bounded GUI control.
 11. **Production hardening** — signed updates, restore drills, simulation, soak and packaging.
 
-Exit criteria are defined in `docs/architecture/83_Denet_Client_Operations_Testing_and_Implementation_Blueprint.md`.
+Exit criteria are defined in `docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md`.
 
 
 ## How the roadmap is executed

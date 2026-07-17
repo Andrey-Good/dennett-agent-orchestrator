@@ -1,14 +1,14 @@
 
-use denet_agent_core::FakeAgentRuntime;
-use denet_contracts::{CommandId, ProjectChatCommand, ProjectId, SessionId};
-use denet_head::HeadApplication;
-use denet_kernel::ProjectChatUseCase;
-use denet_memory_core::InMemoryMemory;
+use dennett_agent_core::FakeAgentRuntime;
+use dennett_contracts::{CommandId, ProjectChatCommand, ProjectId, SessionId};
+use dennett_head::HeadApplication;
+use dennett_kernel::ProjectChatUseCase;
+use dennett_memory_core::InMemoryMemory;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    denet_observability::init("denet-head");
+    dennett_observability::init("dennett-head");
     let app = HeadApplication::new(Arc::new(FakeAgentRuntime), Arc::new(InMemoryMemory::default()));
     let result = app.execute(ProjectChatCommand {
         command_id: CommandId::new(),

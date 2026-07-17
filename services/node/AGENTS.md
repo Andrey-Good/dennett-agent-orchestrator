@@ -1,5 +1,5 @@
 
-# Denet Device Node
+# Dennett Device Node
 
 Persistent local daemon. Owns local capabilities, offline queue, device IPC, project workspace access, local models and sensor coordination.
 

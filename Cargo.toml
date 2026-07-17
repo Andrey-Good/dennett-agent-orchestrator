@@ -2,19 +2,19 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/denet-contracts",
-  "crates/denet-kernel",
-  "crates/denet-agent-core",
-  "crates/denet-memory-core",
-  "crates/denet-trust-core",
-  "crates/denet-effect-core",
-  "crates/denet-sync-core",
-  "crates/denet-observability",
+  "crates/dennett-contracts",
+  "crates/dennett-kernel",
+  "crates/dennett-agent-core",
+  "crates/dennett-memory-core",
+  "crates/dennett-trust-core",
+  "crates/dennett-effect-core",
+  "crates/dennett-sync-core",
+  "crates/dennett-observability",
   "services/head",
   "services/node",
   "services/memoryd",
   "services/sensor-worker",
-  "tools/denetctl",
+  "tools/dennettctl",
 ]
 
 [workspace.package]

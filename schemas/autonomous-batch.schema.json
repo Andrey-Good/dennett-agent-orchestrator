@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://denet.local/schemas/autonomous-batch.schema.json",
-  "title": "Denet Autonomous Batch",
+  "$id": "https://dennett.local/schemas/autonomous-batch.schema.json",
+  "title": "Dennett Autonomous Batch",
   "type": "object",
   "required": ["version", "id", "title", "status", "packages", "execution", "limits", "stop_conditions"],
   "properties": {

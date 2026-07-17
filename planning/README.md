@@ -1,4 +1,4 @@
-# Denet Planning
+# Dennett Planning
 
 This directory stores the machine-readable implementation plan.
 
@@ -6,6 +6,7 @@ This directory stores the machine-readable implementation plan.
 - `work-packages/` — one file per executable Work Package once the catalogue is expanded.
 - `batches/` — bounded autonomous batches.
 - `decisions/` — pending and resolved product/architecture decisions.
+- `results/` — durable Work Package completion packets and review evidence.
 - `debt/` — explicit technical debt with owner and repayment trigger.
 - `templates/` — authoring templates.
 

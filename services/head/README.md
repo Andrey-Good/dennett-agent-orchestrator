@@ -1,4 +1,4 @@
-# denet-head
+# dennett-head
 
 Единственный логический control plane активной установки. Композирует Agentic, Trust, Memory, Events, Sync, Effects и Resource coordination через ports.
 

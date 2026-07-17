@@ -1,4 +1,4 @@
-# Карта документации Denet
+# Карта документации Dennett
 
 Документация разделена по назначению. Большие канонические документы объясняют *зачем* и *что*. Небольшие cross-domain contracts описывают жизненные циклы, пересекающие несколько областей. Архитектурные тома объясняют *где* и *как*. Локальные `AGENTS.md` дают coding-agent-у практические правила для конкретной части кода.
 
@@ -6,7 +6,7 @@
 
 ### Обзор продукта за 15 минут
 
-1. [`00_Denet_Functional_Concept.md`](specifications/00_Denet_Functional_Concept.md)
+1. [`00_Dennett_Functional_Concept.md`](specifications/00_Dennett_Functional_Concept.md)
 2. [`Карта архитектуры`](architecture/README.md)
 3. [`Трассируемость требований`](TRACEABILITY.md)
 
@@ -26,7 +26,7 @@
 
 ### Память
 
-`10` → contracts A/H/J → архитектура `81` → `crates/denet-memory-core/AGENTS.md`.
+`10` → contracts A/H/J → архитектура `81` → `crates/dennett-memory-core/AGENTS.md`.
 
 ### Provider/tool adapter
 

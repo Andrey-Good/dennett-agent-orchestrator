@@ -1,4 +1,4 @@
-# denet-sensor-worker
+# dennett-sensor-worker
 
 Изолированный runtime умного microphone/screen/camera/clipboard capture. Производит Ambient Candidates, а не готовую долговременную память.
 

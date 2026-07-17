@@ -6,7 +6,7 @@
 
 ## Context
 
-Denet needs persistent background behavior, local device capabilities, replaceable providers and crash isolation, but is initially a personal system and should remain installable and understandable by one developer.
+Dennett needs persistent background behavior, local device capabilities, replaceable providers and crash isolation, but is initially a personal system and should remain installable and understandable by one developer.
 
 ## Decision
 

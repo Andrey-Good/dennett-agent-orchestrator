@@ -1,4 +1,4 @@
-# Denet Work Package and Autonomous Batch System
+# Dennett Work Package and Autonomous Batch System
 
 **Статус:** каноническая модель планирования исполняемой работы.  
 **Цель:** превратить архитектурный roadmap в очередь ограниченных, проверяемых и переносимых заданий, которые coding-agents могут выполнять без повторного проектирования системы.
@@ -18,7 +18,7 @@ Roadmap отвечает, *куда* развивается продукт. Work
 - решать, можно ли менять архитектуру;
 - угадывать, когда остановиться.
 
-Это допустимо для небольшого проекта, но опасно для Denet.
+Это допустимо для небольшого проекта, но опасно для Dennett.
 
 Короткая формула:
 
@@ -160,7 +160,7 @@ vertical_slice: VS-M01-01
 risk: R2
 
 outcome: >
-  A desktop command reaches denet-node and embedded Head and returns a streamed
+  A desktop command reaches dennett-node and embedded Head and returns a streamed
   fake-agent response that survives UI restart.
 
 non_goals:
@@ -174,18 +174,18 @@ requirement_refs:
   - ARCH-83:Milestone1
 
 architecture_refs:
-  - docs/architecture/80_Denet_System_Architecture_and_Runtime_Topology.md
-  - docs/architecture/83_Denet_Client_Operations_Testing_and_Implementation_Blueprint.md
+  - docs/architecture/80_Dennett_System_Architecture_and_Runtime_Topology.md
+  - docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md
 
 allowed_roots:
   - apps/desktop
   - services/node
   - services/head
-  - crates/denet-contracts
+  - crates/dennett-contracts
 
 forbidden_roots:
-  - crates/denet-memory-core
-  - crates/denet-trust-core
+  - crates/dennett-memory-core
+  - crates/dennett-trust-core
 
 state_ownership:
   reads:
@@ -211,8 +211,8 @@ acceptance:
 
 required_commands:
   - python tools/verify_repo.py
-  - cargo test -p denet-contracts
-  - cargo test -p denet-node
+  - cargo test -p dennett-contracts
+  - cargo test -p dennett-node
 
 observability:
   - trace desktop command to head result
@@ -514,7 +514,7 @@ Requirement
 
 # 13. Планирование сотен пакетов
 
-Полный backlog Denet может содержать 300–600 Work Packages. Его не следует генерировать полностью один раз и заморозить.
+Полный backlog Dennett может содержать 300–600 Work Packages. Его не следует генерировать полностью один раз и заморозить.
 
 Правильный rolling horizon:
 
@@ -644,4 +644,4 @@ WP add test
 
 # Финальная формула
 
-> **Work Package System превращает Denet из большой идеи в исполняемую программу разработки. Агент получает цельный результат, границы, тесты и право локально думать; пользователь получает только важные решения; repository получает трассируемый прогресс вместо набора длинных сессий и огромных непроверяемых веток.**
+> **Work Package System превращает Dennett из большой идеи в исполняемую программу разработки. Агент получает цельный результат, границы, тесты и право локально думать; пользователь получает только важные решения; repository получает трассируемый прогресс вместо набора длинных сессий и огромных непроверяемых веток.**

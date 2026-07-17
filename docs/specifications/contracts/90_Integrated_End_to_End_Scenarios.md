@@ -1,6 +1,6 @@
 # Часть IV. Обязательные сквозные сценарии дополнений
 
-> **Канонический validation supplement.** Primary owner: `70_Denet_End_to_End_Validation_and_Architecture_Handoff.md`.  
+> **Канонический validation supplement.** Primary owner: `70_Dennett_End_to_End_Validation_and_Architecture_Handoff.md`.  
 > Файл закрывает предархитектурные сценарии и требования risk spikes. Источники раскрыты в [`REFERENCES.md`](REFERENCES.md).
 
 
@@ -20,7 +20,7 @@ local VAD/wake
 → rolling encrypted ring buffer
 → speaker/activity detection
 → cheap duplicate/relevance gate
-→ user says “запомни это для Denet”
+→ user says “запомни это для Dennett”
 → committed turn window selected
 → local ASR
 → Ambient Candidate
@@ -95,7 +95,7 @@ If send status unknown, no automatic duplicate.
 ## 30. Project archive with active Run
 
 ```text
-user chooses Archive in Denet
+user chooses Archive in Dennett
 → enumerate active Run/worktree/events/unsynced files
 → offer checkpoint-and-pause current Run
 → disable future automations
@@ -214,7 +214,7 @@ It does not fabricate file contents.
 
 User creates «напомни каждый день в девять» in Helsinki, then travels.
 
-Denet stores recurrence policy. Depending on configured semantics:
+Dennett stores recurrence policy. Depending on configured semantics:
 
 - follow local time;
 - stay at home time;

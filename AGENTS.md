@@ -1,9 +1,9 @@
 
-# Denet — Root Agent Instructions
+# Dennett — Root Agent Instructions
 
 ## Mission
 
-Implement Denet as specified: a personal agentic operating environment with direct project agents, one persistent orchestrator, evidence-grounded memory, user-controlled autonomy, replaceable providers, voice/ambient interaction and multi-device operation.
+Implement Dennett as specified: a personal agentic operating environment with direct project agents, one persistent orchestrator, evidence-grounded memory, user-controlled autonomy, replaceable providers, voice/ambient interaction and multi-device operation.
 
 The repository is architecture-first. Do not invent product semantics inside code when a canonical document owns them.
 
@@ -20,16 +20,16 @@ The repository is architecture-first. Do not invent product semantics inside cod
 
 ## Canonical documents
 
-- Product vision: `docs/specifications/00_Denet_Functional_Concept.md`
-- Ownership/contracts: `docs/specifications/01_Denet_Specification_Index_and_Shared_Contracts.md`
-- Memory: `docs/specifications/10_Denet_Memory_Fabric.md`
-- Agents/tasks/projects: `docs/specifications/20_Denet_Agentic_Control_Fabric.md`
-- Trust/identity/permissions: `docs/specifications/30_Denet_Trust_Identity_Autonomy_and_Permissions.md`
-- Voice/ambient: `docs/specifications/40_Denet_Voice_and_Ambient_Interaction_Fabric.md`
-- Capabilities/providers/integrations: `docs/specifications/41_Denet_Capabilities_Providers_and_Integrations.md`
-- Server/events/sync: `docs/specifications/50_Denet_Server_Runtime_Events_Sync_and_Portability.md`
+- Product vision: `docs/specifications/00_Dennett_Functional_Concept.md`
+- Ownership/contracts: `docs/specifications/01_Dennett_Specification_Index_and_Shared_Contracts.md`
+- Memory: `docs/specifications/10_Dennett_Memory_Fabric.md`
+- Agents/tasks/projects: `docs/specifications/20_Dennett_Agentic_Control_Fabric.md`
+- Trust/identity/permissions: `docs/specifications/30_Dennett_Trust_Identity_Autonomy_and_Permissions.md`
+- Voice/ambient: `docs/specifications/40_Dennett_Voice_and_Ambient_Interaction_Fabric.md`
+- Capabilities/providers/integrations: `docs/specifications/41_Dennett_Capabilities_Providers_and_Integrations.md`
+- Server/events/sync: `docs/specifications/50_Dennett_Server_Runtime_Events_Sync_and_Portability.md`
 - Desktop/mobile UX: `docs/specifications/60_*`, `61_*`
-- Validation: `docs/specifications/70_Denet_End_to_End_Validation_and_Architecture_Handoff.md`
+- Validation: `docs/specifications/70_Dennett_End_to_End_Validation_and_Architecture_Handoff.md`
 - Architecture: `docs/architecture/80_*` through `83_*`
 
 
@@ -70,7 +70,7 @@ Until the owner explicitly changes this constraint:
 - deterministic fake/in-memory runtimes remain required for tests and credential-free development;
 - Codex SDK and provider-specific types stay inside adapter or adapter-host roots; domain and application code depend on `AgentRuntimePort` and other provider-neutral ports;
 - implement Codex-first, not Codex-only: preserve descriptors, capability probes, session mapping, typed `native_extensions` and conformance boundaries so later providers and local models can be added without rewriting core behavior;
-- do not rebuild Codex-native sessions, workspace handling, tools, approvals, checkpoints or event streams unless a documented Denet contract requires behavior the SDK does not provide.
+- do not rebuild Codex-native sessions, workspace handling, tools, approvals, checkpoints or event streams unless a documented Dennett contract requires behavior the SDK does not provide.
 
 ## Repository stewardship
 
@@ -94,8 +94,8 @@ Ask before actions that materially extend beyond the repository scope, introduce
 4. Provider-specific types stay inside adapters or wire-conversion modules.
 5. External effects use Effect Claim/Receipt, idempotency and reconciliation.
 6. Permissions are enforced outside models.
-7. `denet-node` owns local durable behavior; Tauri/React is a client shell.
-8. `denet-memory-core` defines one logical memory. PostgreSQL/SQLite are deployment adapters, not different memories.
+7. `dennett-node` owns local durable behavior; Tauri/React is a client shell.
+8. `dennett-memory-core` defines one logical memory. PostgreSQL/SQLite are deployment adapters, not different memories.
 9. A normal client cache cannot become canonical memory merely because the device is online.
 10. Device Head promotion is allowed only when `head_eligibility` was explicitly granted and eligibility checks pass.
 11. Start with one strong agent. Add subagents/workflows only after a documented marginal-utility reason.

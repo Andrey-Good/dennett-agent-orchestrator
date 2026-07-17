@@ -23,16 +23,16 @@ Ambient Sensory Capture объединяет фоновое восприятие
 
 > **Каждый сенсорный источник работает локально по ступенчатому pipeline. По умолчанию сохраняется только короткий перезаписываемый buffer и дешёвые метаданные. Долговечный объект создаётся только после событийного, пользовательского или семантического commit decision.**
 
-Для audio и screen существуют два равноправных runtime flow. Они используют общий control contract, но не обязаны иметь одинаковый backend. Screenpipe демонстрирует практически полезный вариант event-driven локального screen/audio capture с OCR/accessibility и поиском; Denet использует этот опыт как reference, но не делает конкретный проект обязательной зависимостью. [[S15]]
+Для audio и screen существуют два равноправных runtime flow. Они используют общий control contract, но не обязаны иметь одинаковый backend. Screenpipe демонстрирует практически полезный вариант event-driven локального screen/audio capture с OCR/accessibility и поиском; Dennett использует этот опыт как reference, но не делает конкретный проект обязательной зависимостью. [[S15]]
 
 ## A.3. Ограничения платформ являются частью бизнес-логики
 
-Denet не должен показывать единый переключатель «записывать всё», если ОС не может выполнить обещание.
+Dennett не должен показывать единый переключатель «записывать всё», если ОС не может выполнить обещание.
 
 - На Android длительный microphone capture требует foreground service соответствующего типа и видимого пользователю состояния; while-in-use ограничения влияют на запуск из background. [[S12]]
 - Android MediaProjection требует пользовательского consent для projection session; на новых версиях projection token одноразовый, поэтому постоянный невидимый screen capture телефона нельзя считать базовой гарантией. [[S13]]
 - Windows Graphics Capture использует системный picker и визуальную рамку вокруг захватываемого объекта, что поддерживает явную осведомлённость пользователя. [[S14]]
-- На iOS background-аудио и запись экрана зависят от системных background modes, microphone permissions и ReplayKit-session; Denet не обещает скрытый бесконечный recorder там, где платформа разрешает только явно активную сессию. [[S51]] [[S52]]
+- На iOS background-аудио и запись экрана зависят от системных background modes, microphone permissions и ReplayKit-session; Dennett не обещает скрытый бесконечный recorder там, где платформа разрешает только явно активную сессию. [[S51]] [[S52]]
 - На macOS ScreenCaptureKit является предпочтительным native-кандидатом, но permission и пользовательская осведомлённость остаются обязательными. [[S53]]
 - На Linux и других системах capability определяется текущими desktop portal/OS permissions, API и deployment policy; отсутствие capability не маскируется.
 
@@ -163,7 +163,7 @@ OS microphone
 
 ### A.6.1. Что считается полезным сигналом
 
-- явное обращение к Denet;
+- явное обращение к Dennett;
 - «запомни» или другая configured command;
 - пользователь наговаривает идею;
 - разговор связан с активным проектом;
@@ -272,7 +272,7 @@ Audio, screen, clipboard и activity связываются общим `Observat
 
 ## A.9. Consent и privacy boundary
 
-Denet не является юридическим советником и не может иметь один мировой закон в коде. Он обязан поддержать policy dimensions, необходимые для разных условий. NIST Privacy Framework рассматривает privacy как управляемый риск, который должен сочетаться с инновацией, а EDPB отдельно анализирует требования к voice assistants. [[S16]] [[S17]]
+Dennett не является юридическим советником и не может иметь один мировой закон в коде. Он обязан поддержать policy dimensions, необходимые для разных условий. NIST Privacy Framework рассматривает privacy как управляемый риск, который должен сочетаться с инновацией, а EDPB отдельно анализирует требования к voice assistants. [[S16]] [[S17]]
 
 Раздельно управляются:
 
@@ -303,7 +303,7 @@ consent_record:
   revoked_at: optional
 ```
 
-Молчание другого человека не считается автоматически информированным согласием. Исследования verbal-consent UX также показывают, что смысл согласия зависит от ясности, контекста и понятного последствия, а не от формального наличия голосовой фразы. [[S18]] При неоднозначности Denet выбирает более ограниченный режим: local transient processing, private user notes без raw recording, либо явный запрос.
+Молчание другого человека не считается автоматически информированным согласием. Исследования verbal-consent UX также показывают, что смысл согласия зависит от ясности, контекста и понятного последствия, а не от формального наличия голосовой фразы. [[S18]] При неоднозначности Dennett выбирает более ограниченный режим: local transient processing, private user notes без raw recording, либо явный запрос.
 
 ### A.9.2. Видимые индикаторы
 
@@ -408,10 +408,10 @@ consent_record:
 
 ## A.15. Карта будущего переноса
 
-- `40_Denet_Voice_and_Ambient_Interaction_Fabric.md`: A.1–A.9 audio/ambient semantics и multi-device floor.
-- `50_Denet_Server_Runtime_Events_Sync_and_Portability.md`: Sensor Source lifecycle, resource state, sync и failure.
-- `10_Denet_Memory_Fabric.md`: committed evidence/retention details и cross-modal episode.
-- `30_Denet_Trust_Identity_Autonomy_and_Permissions.md`: consent/privacy policy and access.
+- `40_Dennett_Voice_and_Ambient_Interaction_Fabric.md`: A.1–A.9 audio/ambient semantics и multi-device floor.
+- `50_Dennett_Server_Runtime_Events_Sync_and_Portability.md`: Sensor Source lifecycle, resource state, sync и failure.
+- `10_Dennett_Memory_Fabric.md`: committed evidence/retention details и cross-modal episode.
+- `30_Dennett_Trust_Identity_Autonomy_and_Permissions.md`: consent/privacy policy and access.
 - `60/61 UI`: controls, indicators and settings.
 - `70 E2E`: acceptance scenarios.
 

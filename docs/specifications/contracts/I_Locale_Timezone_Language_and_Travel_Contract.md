@@ -8,7 +8,7 @@
 
 ## I.1. Назначение
 
-Denet работает с голосом, schedules, events, messages, projects, memories and multiple devices. Поэтому нельзя использовать:
+Dennett работает с голосом, schedules, events, messages, projects, memories and multiple devices. Поэтому нельзя использовать:
 
 - implicit server timezone;
 - UI language как язык пользователя во всех contexts;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://denet.local/schemas/work-package.schema.json",
-  "title": "Denet Work Package",
+  "$id": "https://dennett.local/schemas/work-package.schema.json",
+  "title": "Dennett Work Package",
   "type": "object",
   "required": ["version", "id", "title", "status", "risk", "outcome"],
   "properties": {

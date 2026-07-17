@@ -1,8 +1,8 @@
-# Denet
+# Dennett
 
 [Русская версия](README.ru.md)
 
-**Denet — персональная агентная операционная среда:** постоянный главный оркестратор, прямые проектные агенты в реальных папках и репозиториях, доказательная долговременная память, голосовое и фоновое восприятие, заменяемые модели и инструменты, работа с нескольких устройств и регулируемая пользователем автономность.
+**Dennett — персональная агентная операционная среда:** постоянный главный оркестратор, прямые проектные агенты в реальных папках и репозиториях, доказательная долговременная память, голосовое и фоновое восприятие, заменяемые модели и инструменты, работа с нескольких устройств и регулируемая пользователем автономность.
 
 > **Статус репозитория:** архитектурно завершённая заготовка реализации. Сам продукт ещё не реализован. Репозиторий содержит канонические продуктовые спецификации, четыре архитектурных тома, исполняемые формы ключевых контрактов, границы модулей, тестовые сценарии и намеренно тонкий кодовый каркас для дальнейшей реализации людьми и coding-agent-ами.
 
@@ -10,12 +10,12 @@
 
 | Цель | Что читать |
 |---|---|
-| Понять продукт за 15 минут | [`docs/README.md`](docs/README.md) → [`00_Denet_Functional_Concept.md`](docs/specifications/00_Denet_Functional_Concept.md) |
+| Понять продукт за 15 минут | [`docs/README.md`](docs/README.md) → [`00_Dennett_Functional_Concept.md`](docs/specifications/00_Dennett_Functional_Concept.md) |
 | Понять архитектуру | [`docs/architecture/README.md`](docs/architecture/README.md) → тома 80–83 |
 | Реализовать конкретную часть | [`docs/implementation/README.md`](docs/implementation/README.md) → корневой [`AGENTS.md`](AGENTS.md) → ближайший вложенный `AGENTS.md` |
 | Понять порядок реализации всего проекта | [`04_MILESTONE_DEPENDENCY_MAP.md`](docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md) → [`ROADMAP.md`](ROADMAP.md) |
-| Добавить провайдера, MCP, skill, connector, voice- или computer-use-backend | [Том 82](docs/architecture/82_Denet_Agent_Voice_Capability_and_Integration_Architecture.md) и [`adapters/AGENTS.md`](adapters/AGENTS.md) |
-| Работать с памятью или синхронизацией | [Спецификация 10](docs/specifications/10_Denet_Memory_Fabric.md), [том 81](docs/architecture/81_Denet_Data_Memory_Storage_Sync_and_Protocol_Architecture.md), затем `crates/denet-memory-core/AGENTS.md` |
+| Добавить провайдера, MCP, skill, connector, voice- или computer-use-backend | [Том 82](docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md) и [`adapters/AGENTS.md`](adapters/AGENTS.md) |
+| Работать с памятью или синхронизацией | [Спецификация 10](docs/specifications/10_Dennett_Memory_Fabric.md), [том 81](docs/architecture/81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.md), затем `crates/dennett-memory-core/AGENTS.md` |
 | Посмотреть принятые решения и компромиссы | [`docs/decisions/README.md`](docs/decisions/README.md) |
 
 ## Ключевые принципы
@@ -26,7 +26,7 @@
 - **Переход устройства в Head — только по предварительному разрешению.** Новое устройство всегда получает `head_eligibility = none`; только владелец может выдать `emergency` или `full`.
 - **Стабильное ядро, заменяемые края.** Провайдеры, agent runtimes, speech, computer-use, screen capture, MCP и connectors подключаются адаптерами через типизированные порты.
 - **Каноническое состояние живёт вне model context.** Задачи, разрешения, эффекты, память, artifacts и sync имеют явных владельцев и пути восстановления.
-- **Закрытие окна не останавливает Denet.** Tauri — оболочка desktop; `denet-node` — постоянный локальный демон.
+- **Закрытие окна не останавливает Dennett.** Tauri — оболочка desktop; `dennett-node` — постоянный локальный демон.
 - **Тестируемость является частью архитектуры.** Для границ предусмотрены fake-реализации, conformance suites, детерминированные сценарии отказов и наблюдаемое состояние.
 
 ## Карта репозитория
@@ -78,4 +78,4 @@ cargo test --workspace
 
 ## Лицензия
 
-Лицензия проекта пока не выбрана. До появления `LICENSE` репозиторий следует считать **all rights reserved** в отношении распространения и производных работ.
+Лицензия проекта пока не выбрана. Файл `LICENSE` намеренно отсутствует до отдельного решения владельца.

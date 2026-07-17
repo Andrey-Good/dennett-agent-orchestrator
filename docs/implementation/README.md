@@ -4,7 +4,7 @@ This section turns the product and architecture into a sustainable execution sys
 
 ## Reading order
 
-1. [`00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md`](00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md) — how Denet is built and kept maintainable for years.
+1. [`00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md`](00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md) — how Dennett is built and kept maintainable for years.
 2. [`01_AGENT_EXECUTION_PROTOCOL.md`](01_AGENT_EXECUTION_PROTOCOL.md) — exact operating protocol for GPT-5.6 Sol or another coding agent.
 3. [`02_OWNER_PLAYBOOK.md`](02_OWNER_PLAYBOOK.md) — what the repository owner decides and how to supervise without micromanaging code.
 4. [`03_WORK_PACKAGE_SYSTEM.md`](03_WORK_PACKAGE_SYSTEM.md) — machine-readable milestones, work packages and autonomous batches.
