@@ -10,7 +10,12 @@
 - Python adapter-host and developer-tool unit tests: passed in the frozen uv environment.
 - Repository, documentation, planning, generated-index and metadata checks: run by `just verify`.
 - `just check`: passed the complete repository, docs, planning, Rust, Python, TypeScript,
-  protocol and generated-artifact gate on the clean WP-M00-003 commit.
+  protocol and generated-artifact gate on WP-M00-008 implementation commit `ac99f50`.
+- The milestone schema now exposes the canonical `PROPOSED` → `REFINED` → `ACTIVE` →
+  `QUALIFYING` → `ACCEPTED` lifecycle, and generated test views keep exactly one
+  `ACTIVE` or `QUALIFYING` milestone as current.
+- `TEST-MILESTONE-QUALIFYING-001`: passed all 9 focused generator tests, including
+  deterministic `QUALIFYING` output and rejection of zero or multiple current milestones.
 - The exact CI sequence `just bootstrap` → clean-worktree probe → `just check` →
   clean-worktree probe passed without tracked or untracked drift.
 - GitHub Actions `Fast Gate` run `29572378188` and `Protocol Compatibility` run

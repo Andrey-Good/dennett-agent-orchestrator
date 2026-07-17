@@ -233,6 +233,33 @@
       "owner": "quality"
     },
     {
+      "id": "TEST-MILESTONE-QUALIFYING-001",
+      "title": "Current milestone test views support the qualification lifecycle",
+      "status": "automated",
+      "priority": "critical",
+      "risk": "R1",
+      "domains": ["planning", "testing"],
+      "levels": ["static"],
+      "requirement_refs": ["IMPL-04:MilestoneLifecycle", "M00:ExitGate"],
+      "work_package_refs": ["WP-M00-008"],
+      "expected": [
+        "The milestone schema accepts the canonical QUALIFYING lifecycle state",
+        "Exactly one ACTIVE or QUALIFYING milestone is selected as current",
+        "QUALIFYING keeps the current milestone test plan deterministic",
+        "Zero or multiple current milestones are rejected"
+      ],
+      "implementation": {
+        "target_suite": "tools",
+        "status": "automated",
+        "test_paths": [
+          "schemas/milestone.schema.json",
+          "tools/generate_test_catalogue.py",
+          "tools/tests/test_generate_test_catalogue.py"
+        ]
+      },
+      "owner": "quality"
+    },
+    {
       "id": "TEST-FAKE-CHAT-001",
       "title": "Credential-free fake conversation reaches result and memory",
       "status": "automated",

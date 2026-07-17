@@ -37,7 +37,8 @@
       "title": "Planning and quality gates",
       "work_packages": [
         "WP-M00-004",
-        "WP-M00-005"
+        "WP-M00-005",
+        "WP-M00-008"
       ]
     }
   ],
@@ -337,7 +338,7 @@
       "version": 1,
       "id": "WP-M00-003",
       "title": "Establish fast required pull-request checks",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M00",
       "vertical_slice": "VS-M00-01",
       "risk": "R2",
@@ -681,6 +682,92 @@
         "Codex SDK remains intentionally out of scope until M01.",
         "Planning lifecycle records, generated test views and generated repository metadata are package-completion artifacts.",
         "The planning test fixture may be adjusted only to isolate legitimate RUNNING batch state exposed by this package."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M00-008",
+      "title": "Support milestone qualification in generated test views",
+      "status": "MERGE_READY",
+      "milestone": "M00",
+      "vertical_slice": "VS-M00-02",
+      "risk": "R1",
+      "outcome": "The machine-readable milestone contract and generated current-milestone test plan remain valid and deterministic while the one current milestone transitions from ACTIVE to QUALIFYING.",
+      "non_goals": [
+        "accepting M00 on behalf of the owner",
+        "adding future milestone plans",
+        "changing test catalogue semantics outside current-milestone selection"
+      ],
+      "requirement_refs": [
+        "IMPL-04:MilestoneLifecycle",
+        "M00:ExitGate"
+      ],
+      "architecture_refs": [
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#2-общие-правила-перехода",
+        "docs/testing/TEST_CATALOGUE_AND_QUALITY_GATES.md#14-генерируемые-документы"
+      ],
+      "depends_on": [
+        "WP-M00-003",
+        "WP-M00-005"
+      ],
+      "allowed_roots": [
+        "tools/generate_test_catalogue.py",
+        "tools/tests/test_generate_test_catalogue.py",
+        "schemas/milestone.schema.json",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "VALIDATION.md",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "milestone lifecycle status and structured test catalogue"
+        ],
+        "writes": [
+          "rebuildable current-milestone test projections"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": true,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-MILESTONE-QUALIFYING-001"
+      ],
+      "required_commands": [
+        "uv run python -m unittest tools.tests.test_generate_test_catalogue",
+        "just check"
+      ],
+      "observability": [
+        "selection errors report the observed current milestone count"
+      ],
+      "rollback": [
+        "revert current-milestone selection to ACTIVE-only before entering QUALIFYING"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 1,
+        "max_diff_lines": 500
+      },
+      "notes": [
+        "This package was discovered by the final M00 lifecycle transition and is limited to generator/tooling semantics."
       ]
     }
   ],

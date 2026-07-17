@@ -6,9 +6,12 @@
     "summary": "Established one pinned Fast Gate for every pull request and main push, added structural CI and clean-worktree verification, and enforced the up-to-date check on protected main without administrator bypass.",
     "commits": [
       "240c0aa",
-      "e72403f"
+      "e72403f",
+      "77d4d97",
+      "384f2a5"
     ],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       ".github/workflows/ci.yml",
       ".github/branch-protection.main.json",
@@ -40,6 +43,8 @@
         "protocol generation and compatibility checks against origin/main",
         "GitHub Actions Fast Gate run 29572378188",
         "GitHub Actions Protocol Compatibility run 29572378080",
+        "final PR Fast Gate run 29574203477 and Protocol Compatibility run 29574203649",
+        "main Fast Gate run 29574381298 and Protocol Compatibility run 29574381302",
         "saved GitHub branch protection rule 80381387 reopened and verified",
         "git diff --check"
       ],
@@ -72,6 +77,7 @@
       "No provider credentials or production provider adapters are exercised in M00"
     ],
     "follow_up_candidates": [
+      "WP-M00-008",
       "M01"
     ],
     "owner_decision_required": false

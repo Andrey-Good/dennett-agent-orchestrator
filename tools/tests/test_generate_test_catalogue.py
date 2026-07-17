@@ -106,6 +106,12 @@ class TestCatalogueGeneratorTests(unittest.TestCase):
             schema_root=ROOT / "schemas",
         )
 
+    def set_milestone_status(self, status: str) -> None:
+        path = self.root / "planning" / "milestones" / "M00.json"
+        milestone = json.loads(path.read_text(encoding="utf-8"))
+        milestone["status"] = status
+        self.write_json("planning/milestones/M00.json", milestone)
+
     def test_generates_all_views_deterministically(self) -> None:
         self.assertEqual(self.synchronize(), [])
         output_dir = self.root / "docs" / "testing" / "generated"
@@ -127,13 +133,66 @@ class TestCatalogueGeneratorTests(unittest.TestCase):
         reversed_context = generate_test_catalogue.CatalogueContext(
             root=context.root,
             cases=tuple(reversed(context.cases)),
-            active_milestone=context.active_milestone,
+            current_milestone=context.current_milestone,
             packages=context.packages,
             source_count=context.source_count,
         )
         self.assertEqual(
             generate_test_catalogue.render_views(context),
             generate_test_catalogue.render_views(reversed_context),
+        )
+
+    def test_qualifying_milestone_remains_current(self) -> None:
+        self.set_milestone_status("QUALIFYING")
+
+        self.assertEqual(self.synchronize(), [])
+        context = generate_test_catalogue.load_context(
+            self.root,
+            schema_root=ROOT / "schemas",
+        )
+        self.assertEqual(context.current_milestone["status"], "QUALIFYING")
+
+    def test_zero_current_milestones_is_rejected(self) -> None:
+        self.set_milestone_status("ACCEPTED")
+
+        with self.assertRaises(generate_test_catalogue.CatalogueError) as raised:
+            self.synchronize()
+
+        self.assertIn(
+            "expected exactly one ACTIVE or QUALIFYING milestone, found 0",
+            str(raised.exception),
+        )
+
+    def test_multiple_current_milestones_are_rejected(self) -> None:
+        self.write_json(
+            "planning/milestones/M01.json",
+            {"id": "M01", "title": "Second fixture", "status": "QUALIFYING", "work_packages": []},
+        )
+
+        with self.assertRaises(generate_test_catalogue.CatalogueError) as raised:
+            self.synchronize()
+
+        self.assertIn(
+            "expected exactly one ACTIVE or QUALIFYING milestone, found 2",
+            str(raised.exception),
+        )
+
+    def test_schema_exposes_canonical_milestone_lifecycle(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas" / "milestone.schema.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            schema["properties"]["status"]["enum"],
+            [
+                "PROPOSED",
+                "REFINED",
+                "ACTIVE",
+                "QUALIFYING",
+                "ACCEPTED",
+                "PAUSED",
+                "BLOCKED",
+                "CANCELLED",
+            ],
         )
 
     def test_check_reports_missing_stale_and_unexpected_views(self) -> None:
