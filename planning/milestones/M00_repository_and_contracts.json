@@ -246,7 +246,7 @@
       "version": 1,
       "id": "WP-M00-002",
       "title": "Generate and validate protocol clients",
-      "status": "REVIEW",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-01",
       "risk": "R2",
