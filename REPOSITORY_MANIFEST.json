@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 284,
+  "file_count": 285,
   "files": [
     {
       "path": ".editorconfig",
@@ -986,7 +986,7 @@
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 20160,
-      "sha256": "902b320f88c916c55827b8936765c50965909d8db71ae43556dd31edcebf406d"
+      "sha256": "dcf4c708716f17f1161f9aed43a13b7e93f8d1c96b64cc91a90575788554a8f0"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -997,6 +997,11 @@
       "path": "planning/results/WP-M00-002.json",
       "bytes": 3929,
       "sha256": "0b4067dee4067921b5970364280f0c0da3b771a8e1365a27ba30c5ca0d5d67c6"
+    },
+    {
+      "path": "planning/results/WP-M00-004.json",
+      "bytes": 2255,
+      "sha256": "3d3666d57c22a67bba95d7683ecf03d5eb7dfb97e9ee988a39fcb6a254530223"
     },
     {
       "path": "planning/results/WP-M00-006.json",
@@ -1400,8 +1405,8 @@
     },
     {
       "path": "tools/tests/test_verify_planning.py",
-      "bytes": 9700,
-      "sha256": "b53d6099c929c89bdab44155537e4c0a041ff9f75ddbe3352513db7ae64257d8"
+      "bytes": 9877,
+      "sha256": "ca9ed301cbfa131d7abaa6483c85a6328903c434cdae5fe42dc9151fc15d490e"
     },
     {
       "path": "tools/verify_docs.py",

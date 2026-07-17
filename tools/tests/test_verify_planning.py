@@ -114,6 +114,10 @@ class PlanningValidatorTests(unittest.TestCase):
         def remove_acceptance_evidence(package: dict[str, Any]) -> None:
             package["acceptance"] = []
 
+        self.update_package(
+            "WP-M00-004",
+            lambda package: package.update(status="IN_PROGRESS"),
+        )
         self.update_package("WP-M00-005", make_ready)
         self.update_package("WP-M00-007", remove_acceptance_evidence)
         decision = self.read("planning/decisions/DEC-0003.json")
@@ -148,6 +152,7 @@ class PlanningValidatorTests(unittest.TestCase):
 
     def test_owner_gate_blocks_start_and_resolution_must_match_package(self) -> None:
         def add_invalid_gate(package: dict[str, Any]) -> None:
+            package["status"] = "IN_PROGRESS"
             package["owner_decision"]["required_before_start"] = True
             package["owner_decision"]["resolved_by"] = ["DEC-0001"]
 

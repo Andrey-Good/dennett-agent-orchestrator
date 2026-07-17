@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-004",
+    "status": "completed",
+    "summary": "Added strict planning schemas and graph validation for package lifecycle, references, dependencies, owner gates, batch envelopes, debt dates and completion evidence.",
+    "commits": ["0306263"],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      "planning/batches/AB-M00-002.json",
+      "planning/batches/AB-M00-003.json",
+      "planning/milestones/M00_repository_and_contracts.json",
+      "schemas/autonomous-batch.schema.json",
+      "schemas/decision-request.schema.json",
+      "schemas/milestone.schema.json",
+      "schemas/technical-debt.schema.json",
+      "schemas/work-package-result.schema.json",
+      "schemas/work-package.schema.json",
+      "tests/catalog/foundations.seed.json",
+      "tools/verify_planning.py",
+      "tools/tests/test_verify_planning.py",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "IMPL-03:PlanningValidation",
+      "M00:BoundedWorkPackages",
+      "TEST-PLANNING-VALIDATION-001"
+    ],
+    "tests": {
+      "passed": [
+        "uv run python -m unittest discover -s tools/tests: 28 tests",
+        "uv run python tools/verify_planning.py",
+        "just check",
+        "git diff --check"
+      ],
+      "not_run": [],
+      "failed": []
+    },
+    "review": {
+      "method": "R1 self-review against WP-M00-004 and IMPL-03 section 15",
+      "findings_closed": [
+        "Malformed schema records now produce diagnostics without crashing graph validation",
+        "Owner decision evidence must resolve and belong to the referenced package",
+        "Completion evidence must include every package acceptance ID",
+        "Blocked and partial result packets may represent zero-change outcomes"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "Every validation error reports a repository-relative file and JSON field"
+    ],
+    "known_limitations": [
+      "Milestone-named debt review gates remain human-reviewed; obsolete ISO debt dates are rejected automatically"
+    ],
+    "follow_up_candidates": ["WP-M00-005"],
+    "owner_decision_required": false
+  }
+}

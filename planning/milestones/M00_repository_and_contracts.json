@@ -422,7 +422,7 @@
       "version": 1,
       "id": "WP-M00-004",
       "title": "Add complete planning schema and graph validation",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-02",
       "risk": "R1",
