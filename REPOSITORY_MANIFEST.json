@@ -436,7 +436,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "c286f8034807cf2435182da7323ae3fd199ed5997ebd3da05d434ffa10105068"
+      "sha256": "216f9b0c077ad041e8f513641dd5276626745792948f2766a5faefbbd842eed7"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -885,8 +885,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1270,
-      "sha256": "e7ee88fdf0f93f5a56e9005e5acaae0c053df74ed08ae934e694d2bb533efc35"
+      "bytes": 1244,
+      "sha256": "4b9fa00fcb1a29e258fbbcd5ec118fe87d51fd9bd7a53bad16aaad51a2e23719"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -980,8 +980,8 @@
     },
     {
       "path": "planning/batches/AB-M00-003.json",
-      "bytes": 869,
-      "sha256": "7da8ec0bd8cc5f4954068a24d44a5864f3922fb4760df1cc83f6f4c515f72405"
+      "bytes": 867,
+      "sha256": "8e388038692c00fb75cd008c888ddb61a7d8893178ad5905ed40fbcde0be1398"
     },
     {
       "path": "planning/debt/DEBT-0001.json",
@@ -1010,8 +1010,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 20887,
-      "sha256": "95686e8da5ff286bcb523f972eeba07e3daa0814855ecdc403f2ba2687a75741"
+      "bytes": 20880,
+      "sha256": "778dba6b68deacce1549b94b068371b88eaac9e55d201cfe19df9c4f742f81eb"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1040,8 +1040,8 @@
     },
     {
       "path": "planning/results/WP-M00-007.json",
-      "bytes": 2685,
-      "sha256": "08e74893495d5a1a7387d61fb006db9392580054d7528050de44aeefb62a1ece"
+      "bytes": 2900,
+      "sha256": "d9569d87e0d7748c60bf301c79dcb0b33f6dfe335d4440f0f1491a816e59b91c"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
@@ -1455,8 +1455,8 @@
     },
     {
       "path": "tools/tests/test_verify_planning.py",
-      "bytes": 10138,
-      "sha256": "d3ed376fafe146b1d0fbd8a523d958cbc4004dccf6c35674be58a727d2454b85"
+      "bytes": 10546,
+      "sha256": "0bf7ce8b75dc02c297b83fff373630fbb84f088b6cc895b02f249e0740fbe408"
     },
     {
       "path": "tools/verify_docs.py",

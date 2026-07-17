@@ -232,6 +232,13 @@ class PlanningValidatorTests(unittest.TestCase):
         packet["tests"]["passed"] = []
         packet.pop("merged_at")
         self.write("planning/results/WP-M00-002.json", result)
+        milestone_path = "planning/milestones/M00_repository_and_contracts.json"
+        milestone = self.read(milestone_path)
+        active_states = {"READY", "IN_PROGRESS", "VERIFYING", "REVIEW", "MERGE_READY"}
+        for package in milestone["work_packages"]:
+            if package["status"] in active_states:
+                package["status"] = "REFINED"
+        self.write(milestone_path, milestone)
         for path in sorted((self.root / "planning" / "batches").glob("*.json")):
             relative = path.relative_to(self.root).as_posix()
             batch = self.read(relative)

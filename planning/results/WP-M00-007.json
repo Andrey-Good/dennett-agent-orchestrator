@@ -5,9 +5,12 @@
     "status": "completed",
     "summary": "Added a documented credential-free Head demo and integration test that run the provider-neutral fake agent, return a correlated Result Envelope and commit the matching in-memory Memory Event.",
     "commits": [
-      "e99db03"
+      "e99db03",
+      "d78d3ed",
+      "22e4f28"
     ],
     "merge_ready_at": "2026-07-17",
+    "merged_at": "2026-07-17",
     "changed_files": [
       "Justfile",
       "README.md",
@@ -38,6 +41,9 @@
         "Rust format, clippy and workspace tests",
         "desktop, mobile and Node adapter-host TypeScript checks",
         "protocol generation and compatibility checks against origin/main",
+        "main integration: just check",
+        "GitHub Actions Protocol Compatibility run 29569574417",
+        "GitHub Actions CI run 29569574399",
         "git diff --check"
       ],
       "not_run": [
