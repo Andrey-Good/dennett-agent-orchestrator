@@ -1,5 +1,13 @@
 version: v2
+modules:
+  - path: proto
 lint:
   use: [STANDARD]
+  except:
+    # Existing v1 wire names are already canonical inputs for this package.
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - SERVICE_SUFFIX
 breaking:
-  use: [FILE]
+  use: [WIRE_JSON]

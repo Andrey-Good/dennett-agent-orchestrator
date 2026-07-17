@@ -42,6 +42,7 @@ def main() -> int:
     run(["cargo", "fetch", "--locked"])
     run(["cargo", "fmt", "--version"])
     run(["cargo", "clippy", "--version"])
+    run([sys.executable, "tools/protocol_codegen.py", "generate"])
     create_local_config()
     return doctor.main()
 

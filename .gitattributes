@@ -7,3 +7,4 @@
 *.webp binary
 *.zip binary
 *.pdf binary
+/generated/** text eol=lf linguist-generated=true

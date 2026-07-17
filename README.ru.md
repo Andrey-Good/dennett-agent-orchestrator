@@ -41,10 +41,15 @@ mise trust
 mise install
 just bootstrap
 just check
+just generate
+just test-contracts
 ```
 
 Версии инструментов и все зависимости закреплены lock-файлами. Python и его пакеты
 устанавливаются только через `uv`; bootstrap работает без cloud credentials. На Windows для
 Rust нужен Visual Studio Build Tools с workload **Desktop development with C++**.
+
+`just generate` воспроизводит зафиксированные Rust- и TypeScript-клиенты из
+`protocols/proto`, а `just test-contracts` проверяет их актуальность и совместимость с `main`.
 
 Лицензия пока не выбрана; файл `LICENSE` намеренно отсутствует до отдельного решения владельца.

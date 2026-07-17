@@ -246,7 +246,7 @@
       "version": 1,
       "id": "WP-M00-002",
       "title": "Generate and validate protocol clients",
-      "status": "READY",
+      "status": "REVIEW",
       "milestone": "M00",
       "vertical_slice": "VS-M00-01",
       "risk": "R2",
@@ -277,7 +277,12 @@
         ".gitattributes",
         "Justfile",
         "README.md",
-        "CONTRIBUTING.md"
+        "README.ru.md",
+        "CONTRIBUTING.md",
+        "planning",
+        "tests",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256"
       ],
       "forbidden_roots": [
         "docs/specifications"
@@ -323,7 +328,10 @@
         "target_agent_hours": 4,
         "max_diff_lines": 4000
       },
-      "notes": []
+      "notes": [
+        "Planning lifecycle, test-catalogue evidence and generated repository metadata are package-completion artifacts.",
+        "The pre-M00 dennett.v1 package layout remains unchanged because AB-M00-002 forbids public breaking changes; DEBT-0001 tracks convergence before production consumers."
+      ]
     },
     {
       "version": 1,
