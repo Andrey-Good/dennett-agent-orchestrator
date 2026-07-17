@@ -1,4 +1,16 @@
 
+[project]
+name = "dennett-dev"
+version = "0.0.0"
+requires-python = "==3.13.5"
+dependencies = []
+
+[dependency-groups]
+dev = ["jsonschema>=4.23,<5"]
+
+[tool.uv]
+package = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"

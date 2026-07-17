@@ -1,22 +1,37 @@
 
-set shell := ["bash", "-cu"]
+set shell := ["sh", "-eu", "-c"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 default: verify
 
+bootstrap:
+    mise install
+    mise exec -- uv python install 3.13.5
+    mise exec -- uv sync --project . --frozen
+    mise exec -- uv run --project . --frozen python tools/bootstrap.py
+
+doctor:
+    mise exec -- uv run --project . --frozen python tools/doctor.py
+
 verify:
-    python tools/verify_repo.py
-    python tools/verify_docs.py
-    python tools/verify_planning.py
+    mise exec -- uv run --project . --frozen python tools/verify_repo.py
+    mise exec -- uv run --project . --frozen python tools/verify_docs.py
+    mise exec -- uv run --project . --frozen python tools/verify_planning.py
+    mise exec -- uv run --project . --frozen python tools/generate_doc_index.py --check
+    mise exec -- uv run --project . --frozen python tools/generate_repository_metadata.py --check
 
 rust:
-    cargo fmt --check
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo fmt --check
+    mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo clippy --workspace --all-targets -- -D warnings
+    mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test --workspace
 
 python:
-    python -m unittest discover -s services/adapter-host-python/tests
+    mise exec -- uv run --project . --frozen python -m unittest discover -s services/adapter-host-python/tests
+    mise exec -- uv run --project . --frozen python -m unittest discover -s tools/tests
 
 ts:
-    pnpm typecheck
+    mise exec -- corepack pnpm typecheck
 
-all: verify rust python ts
+check: verify rust python ts
+
+all: check

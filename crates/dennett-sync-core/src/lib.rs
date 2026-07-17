@@ -1,4 +1,3 @@
-
 //! Domain-level operation log shapes; transport and storage are adapters.
 
 use dennett_contracts::{CommandId, DeviceId};
@@ -15,11 +14,23 @@ pub struct OfflineOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OperationDisposition { Accept, RejectStaleEpoch, RequireRevalidation }
+pub enum OperationDisposition {
+    Accept,
+    RejectStaleEpoch,
+    RequireRevalidation,
+}
 
 #[must_use]
-pub fn classify_operation(op: &OfflineOperation, current_epoch: u64, consequential: bool) -> OperationDisposition {
-    if op.authority_epoch_seen != current_epoch { return OperationDisposition::RejectStaleEpoch; }
-    if consequential { return OperationDisposition::RequireRevalidation; }
+pub fn classify_operation(
+    op: &OfflineOperation,
+    current_epoch: u64,
+    consequential: bool,
+) -> OperationDisposition {
+    if op.authority_epoch_seen != current_epoch {
+        return OperationDisposition::RejectStaleEpoch;
+    }
+    if consequential {
+        return OperationDisposition::RequireRevalidation;
+    }
     OperationDisposition::Accept
 }

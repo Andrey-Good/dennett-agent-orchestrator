@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 257,
+  "file_count": 266,
   "files": [
     {
       "path": ".editorconfig",
@@ -25,8 +25,8 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 1236,
-      "sha256": "acac58c5f38793f24477f0e29b7bdf0bfd2c0eee47a841f2e619055e8adc8226"
+      "bytes": 1613,
+      "sha256": "5f204817b27b3b66b745727e03c8d4aaa0a376a9d4f4df1e2e77239d58fe83d0"
     },
     {
       "path": ".github/workflows/protocol-compatibility.yml",
@@ -55,13 +55,18 @@
     },
     {
       "path": "CONTRIBUTING.md",
-      "bytes": 3519,
-      "sha256": "1c7c4fd083a1ca5373de8a709842200806ab91b3cf5bb830c36a987e4cffa6d7"
+      "bytes": 3428,
+      "sha256": "8a9b1eed2b8700c86a48bb5437c426e1d1a0ea695b89be976d69785c651a8286"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 14955,
+      "sha256": "fe8ffeb49aa246af99dc1759c9fa46f746a2ac626df99b544986145307cfa095"
     },
     {
       "path": "Cargo.toml",
       "bytes": 867,
-      "sha256": "36d24b19213e698b91f9dc629c31a30d0af06ded938899915c14b082ca1b0a08"
+      "sha256": "e65e5c03164df06f717a3be09ade78db18f88bff2620a9221c453da022c35beb"
     },
     {
       "path": "GOVERNANCE.md",
@@ -70,18 +75,18 @@
     },
     {
       "path": "Justfile",
-      "bytes": 401,
-      "sha256": "c8200e9869e9ada7d3a222f048bde4b5c054c350094ea59b566869e7e00fe47b"
+      "bytes": 1443,
+      "sha256": "c43b213ca71563d410b122c47f191530a525fc3797af050b9b4f6d1a4202ff3a"
     },
     {
       "path": "README.md",
-      "bytes": 7718,
-      "sha256": "441fe77cd6b5f4c8debf5d3c7bc854b409dc210bb23b8a2ee18786490d3d2e9b"
+      "bytes": 7806,
+      "sha256": "3d808a056d19d6e687dcdf67cd8601d3b04b934347da29fb1c0652814fcbc06a"
     },
     {
       "path": "README.ru.md",
-      "bytes": 3009,
-      "sha256": "9bfd5e4653fd7398affdba1b5faea5c3b7a1378396fb3b9ff1fcccb14e46ea50"
+      "bytes": 3544,
+      "sha256": "280f385669d3f21fa18f8dd81208d652c331f323ced97f7a0eaf3dbdc7e99b1d"
     },
     {
       "path": "ROADMAP.md",
@@ -95,8 +100,8 @@
     },
     {
       "path": "VALIDATION.md",
-      "bytes": 1263,
-      "sha256": "fd621f53bb3164bc4f1761b7872013db5250841c6f54545e3518e5cbfc56bdbd"
+      "bytes": 1186,
+      "sha256": "f9b13813cb223260c9124dc91161d12a3d2e10c0cbb2e7cf4778807484ccfa00"
     },
     {
       "path": "adapters/AGENTS.md",
@@ -280,8 +285,8 @@
     },
     {
       "path": "crates/dennett-agent-core/src/lib.rs",
-      "bytes": 938,
-      "sha256": "0db68aef0b4cfac520933aef426936b785144013387290d40feeaa82ac4dcf1f"
+      "bytes": 949,
+      "sha256": "da278cf53c3688e1b58a4328eba92df9ef281ad4e1a5830f1dfe837f1eb45021"
     },
     {
       "path": "crates/dennett-contracts/AGENTS.md",
@@ -300,8 +305,8 @@
     },
     {
       "path": "crates/dennett-contracts/src/lib.rs",
-      "bytes": 1888,
-      "sha256": "10e3b80a4ec8bf6eb609c5bc052ba7438a9df44264082e5c2be49a38bd437dfd"
+      "bytes": 1909,
+      "sha256": "72cefe3cec158a7c852482807f37c13f8c4082a7ce27edf5daf26767aa0852d2"
     },
     {
       "path": "crates/dennett-effect-core/AGENTS.md",
@@ -320,8 +325,8 @@
     },
     {
       "path": "crates/dennett-effect-core/src/lib.rs",
-      "bytes": 784,
-      "sha256": "afa6da609ccbb06125e82ad945425c8e20354622f24ebece5ac786e1fd697dec"
+      "bytes": 836,
+      "sha256": "229f18d802467ef6d4f04d9c5d997d9b44c3d4fd1ca50714d97c83f44d0097c5"
     },
     {
       "path": "crates/dennett-kernel/AGENTS.md",
@@ -340,8 +345,8 @@
     },
     {
       "path": "crates/dennett-kernel/src/lib.rs",
-      "bytes": 666,
-      "sha256": "1612bfb855fa364cb023885fe517cacac94646525a4dd2207a2666e73d66e9e8"
+      "bytes": 665,
+      "sha256": "6665edf26d4fe7288db8a4795e75f7d30a1f0259eb9db273d5a4c80230099117"
     },
     {
       "path": "crates/dennett-memory-core/AGENTS.md",
@@ -360,8 +365,8 @@
     },
     {
       "path": "crates/dennett-memory-core/src/lib.rs",
-      "bytes": 1312,
-      "sha256": "5f7514efba464312508c9f66e568218ad5bab6a040cb41e140af07e868bfe5b0"
+      "bytes": 1451,
+      "sha256": "8bc657a72b09f109b650b3c8123ac8b14b1e57eaf3e9ddeec5387d600301b5eb"
     },
     {
       "path": "crates/dennett-observability/AGENTS.md",
@@ -380,8 +385,8 @@
     },
     {
       "path": "crates/dennett-observability/src/lib.rs",
-      "bytes": 425,
-      "sha256": "c46b88999603f9c1f6e43a3f9de4f29b31b1392f8fa5223f99a9bae9f1e3d49a"
+      "bytes": 424,
+      "sha256": "32cec69a87a55f34177014f95122a313be8ce34e8b63db31d619f58a8be9dbfb"
     },
     {
       "path": "crates/dennett-sync-core/AGENTS.md",
@@ -400,8 +405,8 @@
     },
     {
       "path": "crates/dennett-sync-core/src/lib.rs",
-      "bytes": 907,
-      "sha256": "756316881eb6f3cbe7fc53f7e213b0453d70a1bbad959682d3c2d4076bcd1be4"
+      "bytes": 958,
+      "sha256": "2431dd8897e20568a7d5313ac58322853ac37e08fe3e476a8cb9fe09c17623ee"
     },
     {
       "path": "crates/dennett-trust-core/AGENTS.md",
@@ -420,8 +425,8 @@
     },
     {
       "path": "crates/dennett-trust-core/src/lib.rs",
-      "bytes": 1974,
-      "sha256": "6a4e319b2216ec10e96315002a6e27d5787fb0c759a2b04979d619fa5cd3ea16"
+      "bytes": 2266,
+      "sha256": "88c9713b71894a8157aa89ce9bae480065188ab71c963cd734bc9b3c5a7d31de"
     },
     {
       "path": "deploy/README.md",
@@ -874,9 +879,14 @@
       "sha256": "c21c88be53c0685d93cc8810f8b968daa92e76aa0fe3aa47339dea57aab44539"
     },
     {
+      "path": "mise.toml",
+      "bytes": 181,
+      "sha256": "db4f40abf660dfd740feb869063be5b8753a07e1e288f802527a883fba91765e"
+    },
+    {
       "path": "package.json",
-      "bytes": 430,
-      "sha256": "da316be74062fb7dbcc21da3c408e334359ff8508515a4d568eb9f33630da294"
+      "bytes": 703,
+      "sha256": "4b2e5d0288ac98bf8d2f80695e43a0e39a921f29090397a9ba7323a69dc29433"
     },
     {
       "path": "packages/README.md",
@@ -925,8 +935,13 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 19168,
-      "sha256": "e2109b955315423086f4d20a67adb075230e398c40c5e738986378970fa3d58b"
+      "bytes": 19484,
+      "sha256": "6ff370ea93b893ebb51b3386ac3e453d38ec273e4641a540d4b6d85edb276fed"
+    },
+    {
+      "path": "planning/results/WP-M00-001.json",
+      "bytes": 3076,
+      "sha256": "486fe10b2145f273cec1c4d40666e59e25e0641e94e851e6dcd11939b5d7edd8"
     },
     {
       "path": "planning/results/WP-M00-006.json",
@@ -947,6 +962,11 @@
       "path": "planning/templates/work-package.template.yaml",
       "bytes": 725,
       "sha256": "c7f7c9d2d7fe57b00490333515e4177e65284447d3dc71626cb583e0e8a42bb4"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "bytes": 101085,
+      "sha256": "c5bdd7a50a15ba89430cec9d1dab3ca0a24f21ba844108ead565e322ec530cc6"
     },
     {
       "path": "pnpm-workspace.yaml",
@@ -995,8 +1015,8 @@
     },
     {
       "path": "pyproject.toml",
-      "bytes": 149,
-      "sha256": "cffc4bc9899ea4b767eb00ba2b8cb44e1d1faedd42b3cfde5953d791b1be3797"
+      "bytes": 324,
+      "sha256": "5375d956f299b5ffd61c5a49462245afd30650f2ac601486271ea1c15664c7a0"
     },
     {
       "path": "requirements-dev.txt",
@@ -1006,7 +1026,7 @@
     {
       "path": "rust-toolchain.toml",
       "bytes": 87,
-      "sha256": "d5a9a97e47af4baf42ff39ec05b13d22e0b7a81b5e7da5118fb3cef0548ba130"
+      "sha256": "999e9b8cc9a19165c509377c99782e81b394831644ab85e8d1080a25384fd5fd"
     },
     {
       "path": "schemas/README.md",
@@ -1050,8 +1070,8 @@
     },
     {
       "path": "services/adapter-host-node/package.json",
-      "bytes": 218,
-      "sha256": "6541d1544f9e4d56d035e33ba6265c2ffd1504d3de8bb32dbb1ce4ab7977640d"
+      "bytes": 303,
+      "sha256": "65c582b9fa700e2a7e52c1230e050217db5b7bc4720938aef312640095595740"
     },
     {
       "path": "services/adapter-host-node/src/index.ts",
@@ -1110,13 +1130,13 @@
     },
     {
       "path": "services/head/src/lib.rs",
-      "bytes": 1435,
-      "sha256": "57185b40c48e23480729d14d036d6e6ba8225a741f28aa2593f1c0480857bc51"
+      "bytes": 1547,
+      "sha256": "601d1260a7ce5f4cd25b5ced2286ebb618eaeae07b27c082d21065d77e915a93"
     },
     {
       "path": "services/head/src/main.rs",
-      "bytes": 774,
-      "sha256": "4f4ec8a0529e78862c19eea09746bc4ba8518e581231e337520242b7ff43d266"
+      "bytes": 834,
+      "sha256": "aa0848d1874a93b18aa9eec8e2df97cab19165acbdfc53e5e94148767239d7db"
     },
     {
       "path": "services/memoryd/AGENTS.md",
@@ -1190,8 +1210,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 9929,
-      "sha256": "24c0d45f49345c41fb50d50fbc314b2edbe7368c4f631106008fc889356aba8c"
+      "bytes": 10168,
+      "sha256": "b6cdeda10a2180557a56865e2bb15b6daf10297af25d6bd6ba77d9579d437602"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1244,6 +1264,11 @@
       "sha256": "918036deb66f15d5bd32e903ab523b96f801fab45871bbac414cfffd1c7c21f4"
     },
     {
+      "path": "tools/bootstrap.py",
+      "bytes": 1402,
+      "sha256": "65bd7d44fa494b228d5c83cd07251bdb4326e6d7197b7ea6895f805d66999cc0"
+    },
+    {
       "path": "tools/dennettctl/Cargo.toml",
       "bytes": 180,
       "sha256": "e99781910dccc834214c877eca6c9ff4600983038b18070a8eaaef3390f2c4e9"
@@ -1255,13 +1280,13 @@
     },
     {
       "path": "tools/dennettctl/src/main.rs",
-      "bytes": 374,
-      "sha256": "aaba6c498a2370be684334eed3b5b7a70b821a4d257540647bab80a546ef80f4"
+      "bytes": 373,
+      "sha256": "5e83b0cc5a80431ea6451ea6a2f4b8e91bcbda08d97d1e3486badd3132d36ad7"
     },
     {
       "path": "tools/doctor.py",
-      "bytes": 213,
-      "sha256": "e17e625a7cd62ce17815a33a1d5627f80d753ad86ccc948255aca9f6435f9308"
+      "bytes": 4280,
+      "sha256": "df38d12c1bd44f77f87552988a10d92cb39734fb59cb45f2000ca717e0fdfb4c"
     },
     {
       "path": "tools/generate_doc_index.py",
@@ -1272,6 +1297,21 @@
       "path": "tools/generate_repository_metadata.py",
       "bytes": 4932,
       "sha256": "f57ed8e266fd5c0484a20a1340ffce1702ef2135b81df31873ba22455b4b56f3"
+    },
+    {
+      "path": "tools/run_in_toolchain.py",
+      "bytes": 1838,
+      "sha256": "b4ecbad8104e89d4429571bb761d2e6181a5a22583605bc001ca20b856a6e9ee"
+    },
+    {
+      "path": "tools/tests/test_bootstrap.py",
+      "bytes": 1711,
+      "sha256": "0853c4c3e0d5e072d727b8f9da87e79867860aaba16e6fec1c1ec1ba333c8c5a"
+    },
+    {
+      "path": "tools/tests/test_doctor.py",
+      "bytes": 1666,
+      "sha256": "f2396dbdaece4bf33ee540e55338584bccd710d99d015d571d37a7c0ce204e49"
     },
     {
       "path": "tools/verify_docs.py",
@@ -1287,6 +1327,11 @@
       "path": "tools/verify_repo.py",
       "bytes": 3799,
       "sha256": "08532cf4b8e76a419d722555e7cd0333cd745b67e9f75d1230da46ee5c69ea21"
+    },
+    {
+      "path": "uv.lock",
+      "bytes": 8662,
+      "sha256": "97cb93e1ea31630d90899967dde18556c9337c25f9824c4c519c30b715e75783"
     }
   ]
 }

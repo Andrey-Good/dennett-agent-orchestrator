@@ -2,12 +2,21 @@
   "name": "dennett-workspace",
   "private": true,
   "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": "22.23.1",
+    "pnpm": "10.0.0"
+  },
   "scripts": {
-    "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
-    "lint": "pnpm -r --if-present lint",
-    "docs:check": "python tools/verify_docs.py",
-    "repo:check": "python tools/verify_repo.py && python tools/verify_planning.py",
-    "planning:check": "python tools/verify_planning.py"
+    "typecheck": "corepack pnpm -r --if-present typecheck",
+    "test": "corepack pnpm -r --if-present test",
+    "lint": "corepack pnpm -r --if-present lint",
+    "docs:check": "uv run --project . --frozen python tools/verify_docs.py",
+    "repo:check": "uv run --project . --frozen python tools/verify_repo.py && uv run --project . --frozen python tools/verify_planning.py",
+    "planning:check": "uv run --project . --frozen python tools/verify_planning.py"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

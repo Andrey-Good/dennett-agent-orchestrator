@@ -1,4 +1,3 @@
-
 //! One logical Memory Fabric with replaceable embedded/service persistence adapters.
 
 use async_trait::async_trait;
@@ -20,7 +19,11 @@ pub struct MemoryEvent {
 #[async_trait]
 pub trait MemoryPort: Send + Sync {
     async fn append(&self, event: MemoryEvent) -> DennettResult<()>;
-    async fn recent_for_project(&self, project_id: ProjectId, limit: usize) -> DennettResult<Vec<MemoryEvent>>;
+    async fn recent_for_project(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> DennettResult<Vec<MemoryEvent>>;
 }
 
 #[derive(Clone, Default)]
@@ -35,8 +38,18 @@ impl MemoryPort for InMemoryMemory {
         Ok(())
     }
 
-    async fn recent_for_project(&self, project_id: ProjectId, limit: usize) -> DennettResult<Vec<MemoryEvent>> {
+    async fn recent_for_project(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> DennettResult<Vec<MemoryEvent>> {
         let events = self.events.read().await;
-        Ok(events.iter().rev().filter(|e| e.project_id == project_id).take(limit).cloned().collect())
+        Ok(events
+            .iter()
+            .rev()
+            .filter(|e| e.project_id == project_id)
+            .take(limit)
+            .cloned()
+            .collect())
     }
 }

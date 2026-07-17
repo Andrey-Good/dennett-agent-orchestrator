@@ -1,4 +1,3 @@
-
 use dennett_agent_core::{AgentRequest, AgentRuntimePort};
 use dennett_contracts::{MemoryEventId, ProjectChatCommand, ResultEnvelope};
 use dennett_kernel::{DennettResult, ProjectChatUseCase};
@@ -11,24 +10,31 @@ pub struct HeadApplication<A: AgentRuntimePort, M: MemoryPort> {
 }
 
 impl<A: AgentRuntimePort, M: MemoryPort> HeadApplication<A, M> {
-    pub fn new(agent: Arc<A>, memory: Arc<M>) -> Self { Self { agent, memory } }
+    pub fn new(agent: Arc<A>, memory: Arc<M>) -> Self {
+        Self { agent, memory }
+    }
 }
 
 #[async_trait::async_trait]
 impl<A: AgentRuntimePort, M: MemoryPort> ProjectChatUseCase for HeadApplication<A, M> {
     async fn execute(&self, command: ProjectChatCommand) -> DennettResult<ResultEnvelope> {
-        let response = self.agent.respond(AgentRequest {
-            prompt: command.text.clone(),
-            context_handles: Vec::new(),
-        }).await?;
+        let response = self
+            .agent
+            .respond(AgentRequest {
+                prompt: command.text.clone(),
+                context_handles: Vec::new(),
+            })
+            .await?;
 
-        self.memory.append(MemoryEvent {
-            event_id: MemoryEventId::new(),
-            project_id: command.project_id,
-            session_id: command.session_id,
-            kind: "project_chat_completed".to_owned(),
-            summary: response.text.clone(),
-        }).await?;
+        self.memory
+            .append(MemoryEvent {
+                event_id: MemoryEventId::new(),
+                project_id: command.project_id,
+                session_id: command.session_id,
+                kind: "project_chat_completed".to_owned(),
+                summary: response.text.clone(),
+            })
+            .await?;
 
         Ok(ResultEnvelope {
             command_id: command.command_id,

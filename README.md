@@ -49,26 +49,25 @@ tools/         Проверки репозитория, документации
 Каркас намеренно реализует только тонкий vertical slice и стабильные интерфейсы. В нём нет фиктивной «полной реализации», спрятанной за сотнями `TODO`.
 
 ```bash
-# Один раз: зависимости инструментов репозитория
-python -m pip install -r requirements-dev.txt
+# Один раз после установки mise
+mise trust
+mise install
+just bootstrap
 
-# Проверка репозитория и документации
-python tools/verify_repo.py
-python tools/verify_docs.py
-python tools/verify_planning.py
+# Все локальные проверки
+just check
 
-# Тесты Python adapter host
-python -m unittest discover -s services/adapter-host-python/tests
-
-# После установки зависимостей TypeScript
-pnpm install
-pnpm typecheck
-
-# После установки stable Rust toolchain
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+# Отдельные группы проверок
+just verify
+just rust
+just python
+just ts
 ```
+
+`mise.toml`, `rust-toolchain.toml`, `uv.lock`, `pnpm-lock.yaml` и `Cargo.lock`
+фиксируют инструменты и зависимости. Python и его пакеты устанавливаются только через `uv`;
+cloud credentials для bootstrap и проверок не нужны. На Windows для Rust требуется Visual Studio
+Build Tools с workload **Desktop development with C++**; `just rust` сам активирует MSVC environment.
 
 Перед изменениями прочитайте [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
