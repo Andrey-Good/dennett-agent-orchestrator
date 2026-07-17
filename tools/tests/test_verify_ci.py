@@ -42,6 +42,10 @@ class CiConfigurationTests(unittest.TestCase):
     def test_repository_fast_gate_contract_is_valid(self) -> None:
         self.assertEqual(verify_ci.validate(ROOT), [])
 
+    def test_doc_index_generator_pins_cross_platform_lf(self) -> None:
+        source = (ROOT / "tools/generate_doc_index.py").read_text(encoding="utf-8")
+        self.assertIn('write_text(content, encoding="utf-8", newline="\\n")', source)
+
     def test_unpinned_action_is_rejected_structurally(self) -> None:
         self.replace(verify_ci.WORKFLOW, verify_ci.CHECKOUT, "actions/checkout@v4")
         self.assertTrue(self.diagnostics_contain("steps differ"))

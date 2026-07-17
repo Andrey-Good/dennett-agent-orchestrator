@@ -38,6 +38,6 @@ def main() -> None:
                 if not target.exists() or target.read_text(encoding="utf-8") != content:
                     print(f"stale navigation: {target.relative_to(ROOT)}"); failed = True
             else:
-                target.write_text(content, encoding="utf-8")
+                target.write_text(content, encoding="utf-8", newline="\n")
     raise SystemExit(1 if failed else 0)
 if __name__ == "__main__": main()

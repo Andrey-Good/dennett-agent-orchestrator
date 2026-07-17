@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 299,
+  "file_count": 300,
   "files": [
     {
       "path": ".editorconfig",
@@ -105,8 +105,8 @@
     },
     {
       "path": "VALIDATION.md",
-      "bytes": 1422,
-      "sha256": "6b288fd350b782949e5974b6836f1fabc813b6071f16d7fc90671987af618d97"
+      "bytes": 1977,
+      "sha256": "b2b8ad4d7afdf2a63a4195245c1fb7c41592c11b99ddd98d902e7510654b4779"
     },
     {
       "path": "adapters/AGENTS.md",
@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "a246d5977db80bdde07591e0407bc0d286614d30a9a49650b93419d295c4d21d"
+      "sha256": "d789f0a132308a0abff99e4035667934d42f8f074696187aea5a3b521d40630b"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -891,7 +891,7 @@
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
       "bytes": 1256,
-      "sha256": "dce93cc6b47a3888c5901ee0c31f400f8b17227e584f4e9e036a113d1429b57c"
+      "sha256": "ec59abfb6ea368e6260cbb8217e1c29373fc0292b161f81d2b457a15e5011e6d"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1016,7 +1016,7 @@
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 21246,
-      "sha256": "783723c6bae0a5c2b5379442579efde1e94d77ae95ab9430c8246a3df8c51b43"
+      "sha256": "1b2a3100ebdf13fbf808627bce1f052f76b41656a8276a5b8822f693f51baaf3"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1027,6 +1027,11 @@
       "path": "planning/results/WP-M00-002.json",
       "bytes": 3929,
       "sha256": "0b4067dee4067921b5970364280f0c0da3b771a8e1365a27ba30c5ca0d5d67c6"
+    },
+    {
+      "path": "planning/results/WP-M00-003.json",
+      "bytes": 3479,
+      "sha256": "c3131108d0726f6707d8a5b0f21fa40be84e7244d92f7cdd6462aef59e9d26d8"
     },
     {
       "path": "planning/results/WP-M00-004.json",
@@ -1415,8 +1420,8 @@
     },
     {
       "path": "tools/generate_doc_index.py",
-      "bytes": 1795,
-      "sha256": "e0f7f2cbaff51a0dc6908c30511c683438a5e5ce172d2517e59fc14929b7149b"
+      "bytes": 1809,
+      "sha256": "70bcae89d2abcd86d7d864372bcb6021d1220ddff743bf698a9e9adbc5729e03"
     },
     {
       "path": "tools/generate_repository_metadata.py",
@@ -1460,8 +1465,8 @@
     },
     {
       "path": "tools/tests/test_verify_ci.py",
-      "bytes": 5400,
-      "sha256": "f37f69e702ae53df387f8b960c0a5d706caeb3c3bac2c277c4ca17199be7a5a5"
+      "bytes": 5642,
+      "sha256": "014c6a1452c3605ee30605d8b44879e82bc90ba79340b9b07389f36bdaa65e21"
     },
     {
       "path": "tools/tests/test_verify_planning.py",

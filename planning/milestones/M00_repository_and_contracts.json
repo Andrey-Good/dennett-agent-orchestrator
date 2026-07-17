@@ -337,7 +337,7 @@
       "version": 1,
       "id": "WP-M00-003",
       "title": "Establish fast required pull-request checks",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-01",
       "risk": "R2",
