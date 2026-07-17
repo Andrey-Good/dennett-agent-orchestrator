@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-007",
+    "status": "completed",
+    "summary": "Added a documented credential-free Head demo and integration test that run the provider-neutral fake agent, return a correlated Result Envelope and commit the matching in-memory Memory Event.",
+    "commits": [
+      "e99db03"
+    ],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      "Justfile",
+      "README.md",
+      "VALIDATION.md",
+      "services/head/src/main.rs",
+      "services/head/tests/fake_chat.rs",
+      "tests/catalog/foundations.seed.json",
+      "tools/tests/test_verify_planning.py",
+      "docs/testing/generated/*.md",
+      "planning/batches/AB-M00-003.json",
+      "planning/milestones/M00_repository_and_contracts.json",
+      "docs/CHECKSUMS.sha256",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "ARCH-83:FirstVerticalSlice",
+      "M00:FakeVerticalPath",
+      "ROOT:LocalOnlyWithoutCloudCredentials",
+      "TEST-FAKE-CHAT-001"
+    ],
+    "tests": {
+      "passed": [
+        "just demo-fake with emitted command, result and memory-event identifiers",
+        "cargo test -p dennett-head: credential-free fake conversation integration test",
+        "just check",
+        "33 developer-tool unit tests and 2 Python adapter-host tests",
+        "Rust format, clippy and workspace tests",
+        "desktop, mobile and Node adapter-host TypeScript checks",
+        "protocol generation and compatibility checks against origin/main",
+        "git diff --check"
+      ],
+      "not_run": [
+        "repeated or concurrent command correlation is outside this single-command proof",
+        "runtime and memory failure injection belongs to later resilience packages"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "R2 detached review in a fresh independent agent context using the exact commit diff and relevant unchanged core contracts",
+      "findings_closed": [],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "just demo-fake emits submitted command, Result Envelope, Memory Event, project and session identifiers"
+    ],
+    "known_limitations": [
+      "Result-to-memory correlation is proven for one command against a fresh in-memory event log",
+      "The integration test exercises the public use case while stdout is verified by the separately required just demo-fake command",
+      "This package covers the deterministic success path and does not inject runtime or memory failures"
+    ],
+    "follow_up_candidates": [
+      "WP-M00-003"
+    ],
+    "owner_decision_required": false
+  }
+}

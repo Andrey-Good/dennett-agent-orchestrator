@@ -586,7 +586,7 @@
       "version": 1,
       "id": "WP-M00-007",
       "title": "Prove the credential-free fake conversation path",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-01",
       "risk": "R2",
