@@ -23,6 +23,10 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertNotIn("pip install", content)
         self.assertNotIn("python -m pip", content)
 
+    def test_bootstrap_subprocesses_are_non_interactive(self) -> None:
+        content = (ROOT / "tools" / "bootstrap.py").read_text(encoding="utf-8")
+        self.assertIn('"CI": "true"', content)
+
     def test_bootstrap_does_not_require_provider_credentials(self) -> None:
         content = (ROOT / "tools" / "bootstrap.py").read_text(encoding="utf-8")
         for variable in (
