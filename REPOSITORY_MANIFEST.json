@@ -105,8 +105,8 @@
     },
     {
       "path": "VALIDATION.md",
-      "bytes": 3675,
-      "sha256": "0977c1d2f5897c99f9340234cac42dc210e3c675a9c1cf319ee4e34d429c4fb7"
+      "bytes": 4259,
+      "sha256": "dff0c4a7ed91aa5cc44a6927ac919bdc8d960551f37f1e32da4285b1eec532b8"
     },
     {
       "path": "adapters/AGENTS.md",
@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "62fc78045a284b3de4ef5125f9be23488fee3cc0bad4cbb81597a18eb2640bf1"
+      "sha256": "973a305827ce1ac6ede2e853ea01f41c447b190a06c8c5d86478ee5d9fa6c1a6"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -890,8 +890,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 1553,
-      "sha256": "9dd3b14f075cf5577281951f635c0ebc398d3a86861f4e48238e9b459d79186c"
+      "bytes": 302,
+      "sha256": "5e5d79dab90a1756d3169e8045aabad2b5a5bdff9b6b9776921edc005fb6ddcc"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1015,8 +1015,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 29930,
-      "sha256": "1010eb51f1fe9ab9ead33ccc04215e0f3bfb7e40503bc346120a5c5a37dc11b7"
+      "bytes": 29928,
+      "sha256": "c4373263457a7bff9bcd94c5cff5ad8d2c7bc922c159ce5f525223fa6e4fd9b9"
     },
     {
       "path": "planning/results/WP-M00-001.json",

@@ -11,8 +11,17 @@
 - Repository, documentation, planning, generated-index and metadata checks: run by `just verify`.
 - `just check`: passed the complete repository, docs, planning, Rust, Python, TypeScript,
   protocol and generated-artifact gate on M00 qualification commit `ed8f0f8`.
-- M00 qualification has 10 `MERGED` Work Packages, 16 catalogued tests and one
-  current milestone in `QUALIFYING`; generated views reproduce that exact state.
+- The owner accepted M00 on 2026-07-17 after reviewing its intended outcome,
+  implementation evidence, test strategy and known limitations.
+- M00 has 10 `MERGED` Work Packages and 16 catalogued tests. Its lifecycle is now
+  `ACCEPTED`; generated views explicitly report that no milestone is current until
+  a later milestone is promoted to `ACTIVE` or `QUALIFYING`.
+- `just check` passed the complete gate after the owner-accepted lifecycle transition.
+- `just demo-fake` passed on the accepted state. Command and result used
+  `019f70c5-d63e-78d3-b093-f53ca6845819`; memory event
+  `019f70c5-d63e-78d3-b093-f5624f5bcacd` was committed for project
+  `019f70c5-d63e-78d3-b093-f546a8f869af` and session
+  `019f70c5-d63e-78d3-b093-f55fafe64b43`.
 - The milestone schema now exposes the canonical `PROPOSED` → `REFINED` → `ACTIVE` →
   `QUALIFYING` → `ACCEPTED` lifecycle, and generated test views keep at most one
   `ACTIVE` or `QUALIFYING` milestone as current.
