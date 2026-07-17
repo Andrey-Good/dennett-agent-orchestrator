@@ -861,7 +861,7 @@
       "version": 1,
       "id": "WP-M00-010",
       "title": "Support the accepted milestone handoff in generated test views",
-      "status": "VERIFYING",
+      "status": "MERGE_READY",
       "milestone": "M00",
       "vertical_slice": "VS-M00-02",
       "risk": "R1",

@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M00-010",
+    "status": "completed",
+    "summary": "Made the generated milestone test plan support the canonical accepted-milestone handoff: zero ACTIVE or QUALIFYING milestones render an explicit deterministic no-current plan, while multiple current milestones remain invalid.",
+    "commits": [
+      "05240df",
+      "73bf01e"
+    ],
+    "merge_ready_at": "2026-07-17",
+    "changed_files": [
+      "tools/generate_test_catalogue.py",
+      "tools/tests/test_generate_test_catalogue.py",
+      "tests/catalog/foundations.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M00_repository_and_contracts.json",
+      "planning/results/WP-M00-010.json",
+      "VALIDATION.md",
+      "docs/CHECKSUMS.sha256",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "IMPL-04:MilestoneLifecycle",
+      "IMPL-04:RollingWavePlanning",
+      "M00:ExitGate",
+      "TEST-MILESTONE-ACCEPTED-HANDOFF-001"
+    ],
+    "tests": {
+      "passed": [
+        "9 focused test-catalogue generator tests including deterministic M00 ACCEPTED and M01 REFINED handoff",
+        "multiple ACTIVE or QUALIFYING milestones remain rejected",
+        "clean-worktree probe, just check, clean-worktree probe on implementation commit 73bf01e",
+        "49 developer-tool tests, 2 Python adapter-host tests, Rust and TypeScript workspace checks",
+        "protocol generation and compatibility checks against origin/main",
+        "git diff --check"
+      ],
+      "not_run": [
+        "M00 acceptance is an owner lifecycle decision, not a package test"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "R1 self-review of the exact implementation diff, canonical lifecycle and rolling-wave contracts",
+      "findings_closed": [
+        "Added a REFINED M01 fixture and repeated generation to prove the accepted handoff is deterministic",
+        "Confirmed verify_planning continues to validate acceptance references for every historical package"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "MILESTONE_TEST_PLAN explicitly reports when no current milestone exists and identifies the next lifecycle action"
+    ],
+    "known_limitations": [
+      "The generator does not create or activate the next milestone",
+      "This package does not accept M00 on behalf of the owner"
+    ],
+    "follow_up_candidates": [
+      "M00 owner acceptance",
+      "M01 refinement"
+    ],
+    "owner_decision_required": false
+  }
+}
