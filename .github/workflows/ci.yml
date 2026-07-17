@@ -28,7 +28,9 @@ jobs:
           cache: true
       - name: Bootstrap pinned tools and frozen dependencies
         run: just bootstrap
-      - name: Reject generated or lockfile drift from bootstrap
-        run: git diff --exit-code
+      - name: Reject generated, lockfile or untracked drift from bootstrap
+        run: uv run --project . --frozen python tools/verify_worktree_clean.py
       - name: Run complete fast gate
         run: just check
+      - name: Reject verification drift
+        run: uv run --project . --frozen python tools/verify_worktree_clean.py

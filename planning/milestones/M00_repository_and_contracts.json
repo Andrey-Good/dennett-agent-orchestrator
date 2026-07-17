@@ -366,6 +366,8 @@
         ".github",
         "Justfile",
         "package.json",
+        "pyproject.toml",
+        "uv.lock",
         "README.md",
         "CONTRIBUTING.md",
         "VALIDATION.md",

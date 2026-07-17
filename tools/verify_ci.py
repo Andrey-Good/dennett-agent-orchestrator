@@ -1,24 +1,108 @@
-"""Validate the required GitHub Fast Gate and its branch-protection contract."""
+"""Validate the structured GitHub Fast Gate and branch-protection contract."""
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
-import re
 import sys
 from typing import Any
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = Path(".github/workflows/ci.yml")
 PROTECTION = Path(".github/branch-protection.main.json")
 JUSTFILE = Path("Justfile")
-FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
-ACTION_LINE = re.compile(r"^\s*-\s+uses:\s+([^@\s]+)@([^\s#]+)")
-JOB_LINE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
-EXPECTED_ACTIONS = {
-    "actions/checkout": "34e114876b0b11c390a56381ad16ebd13914f8d5",
-    "jdx/mise-action": "5228313ee0372e111a38da051671ca30fc5a96db",
+BOOTSTRAP = Path("tools/bootstrap.py")
+CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+MISE_ACTION = "jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db"
+CLEAN_COMMAND = "uv run --project . --frozen python tools/verify_worktree_clean.py"
+EXPECTED_STEPS = [
+    {"uses": CHECKOUT, "with": {"fetch-depth": 0}},
+    {
+        "uses": MISE_ACTION,
+        "with": {"version": "2026.7.7", "cache": True},
+    },
+    {
+        "name": "Bootstrap pinned tools and frozen dependencies",
+        "run": "just bootstrap",
+    },
+    {
+        "name": "Reject generated, lockfile or untracked drift from bootstrap",
+        "run": CLEAN_COMMAND,
+    },
+    {"name": "Run complete fast gate", "run": "just check"},
+    {"name": "Reject verification drift", "run": CLEAN_COMMAND},
+]
+EXPECTED_RECIPES = {
+    "bootstrap": (
+        [],
+        [
+            "mise install",
+            "mise exec -- uv python install 3.13.5",
+            "mise exec -- uv sync --project . --frozen",
+            "mise exec -- uv run --project . --frozen python tools/bootstrap.py",
+        ],
+    ),
+    "verify": (
+        [],
+        [
+            "mise exec -- uv run --project . --frozen python tools/verify_repo.py",
+            "mise exec -- uv run --project . --frozen python tools/verify_docs.py",
+            "mise exec -- uv run --project . --frozen python tools/verify_planning.py",
+            "mise exec -- uv run --project . --frozen python tools/verify_ci.py",
+            "mise exec -- uv run --project . --frozen python tools/generate_test_catalogue.py --check",
+            "mise exec -- uv run --project . --frozen python tools/generate_doc_index.py --check",
+            "mise exec -- uv run --project . --frozen python tools/generate_repository_metadata.py --check",
+        ],
+    ),
+    "test-contracts": (
+        [],
+        [
+            "mise exec -- uv run --project . --frozen python tools/protocol_codegen.py check"
+        ],
+    ),
+    "rust": (
+        [],
+        [
+            "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo fmt --check",
+            "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo clippy --workspace --all-targets -- -D warnings",
+            "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test --workspace",
+        ],
+    ),
+    "python": (
+        [],
+        [
+            "mise exec -- uv run --project . --frozen python -m unittest discover -s services/adapter-host-python/tests",
+            "mise exec -- uv run --project . --frozen python -m unittest discover -s tools/tests",
+        ],
+    ),
+    "ts": ([], ["mise exec -- corepack pnpm typecheck"]),
+    "check": (["verify", "rust", "python", "ts", "test-contracts"], []),
+}
+EXPECTED_BOOTSTRAP_COMMANDS = {
+    ("corepack", "install"),
+    ("corepack", "pnpm", "install", "--frozen-lockfile"),
+    ("cargo", "fetch", "--locked"),
+    ("cargo", "fmt", "--version"),
+    ("cargo", "clippy", "--version"),
+    ("<python>", "tools/protocol_codegen.py", "generate"),
+}
+EXPECTED_PROTECTION = {
+    "branch": "main",
+    "required_status_checks": {"strict": True, "contexts": ["Fast Gate"]},
+    "enforce_admins": True,
+    "required_pull_request_reviews": None,
+    "restrictions": None,
+    "required_linear_history": False,
+    "allow_force_pushes": False,
+    "allow_deletions": False,
+    "block_creations": False,
+    "required_conversation_resolution": False,
+    "lock_branch": False,
+    "allow_fork_syncing": False,
 }
 
 
@@ -30,108 +114,133 @@ def _read(root: Path, relative: Path, diagnostics: list[str]) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
-def _job_ids(workflow: str) -> list[str]:
-    lines = workflow.splitlines()
+def _mapping(value: Any) -> dict[Any, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _validate_workflow(text: str, diagnostics: list[str]) -> None:
     try:
-        start = lines.index("jobs:") + 1
-    except ValueError:
-        return []
-    jobs: list[str] = []
-    for line in lines[start:]:
-        if line and not line.startswith(" "):
-            break
-        match = JOB_LINE.match(line)
-        if match:
-            jobs.append(match.group(1))
-    return jobs
-
-
-def _validate_workflow(workflow: str, diagnostics: list[str]) -> None:
-    required_snippets = {
-        "    name: Fast Gate": "job must expose the stable Fast Gate check name",
-        "  pull_request:": "pull_request trigger is required",
-        "  push:": "push trigger is required",
-        "    branches: [main]": "push trigger must include main",
-        "  merge_group:": "merge_group trigger is required",
-        "  contents: read": "workflow permissions must be read-only",
-        "    runs-on: ubuntu-24.04": "runner image must be pinned to ubuntu-24.04",
-        "    timeout-minutes: 10": "fast gate must have a ten-minute timeout",
-        "          fetch-depth: 0": "checkout must fetch the PR base for compatibility checks",
-        '          version: "2026.7.7"': "mise itself must be pinned",
-        "        run: just bootstrap": "frozen bootstrap must run",
-        "        run: git diff --exit-code": "bootstrap drift must fail the gate",
-        "        run: just check": "the complete documented gate must run",
-    }
-    for snippet, message in required_snippets.items():
-        if snippet not in workflow:
-            diagnostics.append(f"{WORKFLOW.as_posix()}: {message}")
-    if not workflow.startswith("name: Fast Gate\n"):
-        diagnostics.append(
-            f"{WORKFLOW.as_posix()}: workflow must expose the stable Fast Gate name"
-        )
-
-    forbidden = {
-        "pull_request_target": "pull_request_target is forbidden for repository code",
-        "continue-on-error": "required checks cannot continue on error",
-        "|| true": "required checks cannot mask command failures",
-    }
-    for token, message in forbidden.items():
-        if token in workflow:
-            diagnostics.append(f"{WORKFLOW.as_posix()}: {message}")
-
-    jobs = _job_ids(workflow)
-    if jobs != ["fast-gate"]:
-        diagnostics.append(
-            f"{WORKFLOW.as_posix()}: expected one fast-gate job, found {jobs!r}"
-        )
-
-    observed_actions: dict[str, str] = {}
-    action_count = 0
-    for number, line in enumerate(workflow.splitlines(), start=1):
-        match = ACTION_LINE.match(line)
-        if not match:
-            continue
-        action, reference = match.groups()
-        action_count += 1
-        observed_actions[action] = reference
-        if not FULL_SHA.fullmatch(reference):
-            diagnostics.append(
-                f"{WORKFLOW.as_posix()}:{number}: action {action} is not pinned to a full SHA"
-            )
-    if action_count != len(EXPECTED_ACTIONS) or observed_actions != EXPECTED_ACTIONS:
-        diagnostics.append(
-            f"{WORKFLOW.as_posix()}: action set or pins differ from the approved map"
-        )
-
-
-def _validate_protection(data: Any, diagnostics: list[str]) -> None:
-    if not isinstance(data, dict):
-        diagnostics.append(f"{PROTECTION.as_posix()}: root must be an object")
+        document = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        diagnostics.append(f"{WORKFLOW.as_posix()}: invalid YAML: {error}")
         return
-    checks = data.get("required_status_checks")
-    expected_checks = {"strict": True, "contexts": ["Fast Gate"]}
-    if checks != expected_checks:
+    if not isinstance(document, dict):
+        diagnostics.append(f"{WORKFLOW.as_posix()}: workflow root must be a mapping")
+        return
+
+    if document.get("name") != "Fast Gate":
+        diagnostics.append(f"{WORKFLOW.as_posix()}: workflow name must be Fast Gate")
+    triggers = document.get("on", document.get(True))
+    trigger_map = _mapping(triggers)
+    if set(trigger_map) != {"pull_request", "push", "merge_group"}:
         diagnostics.append(
-            f"{PROTECTION.as_posix()}: required status checks must be {expected_checks!r}"
+            f"{WORKFLOW.as_posix()}: triggers must be pull_request, push and merge_group"
         )
-    expected_values = {
-        "branch": "main",
-        "enforce_admins": False,
-        "required_pull_request_reviews": None,
-        "restrictions": None,
-        "required_linear_history": False,
-        "allow_force_pushes": False,
-        "allow_deletions": False,
-        "block_creations": False,
-        "required_conversation_resolution": False,
-        "lock_branch": False,
-        "allow_fork_syncing": False,
+    if _mapping(trigger_map.get("push")).get("branches") != ["main"]:
+        diagnostics.append(f"{WORKFLOW.as_posix()}: push trigger must target main")
+    if document.get("permissions") != {"contents": "read"}:
+        diagnostics.append(f"{WORKFLOW.as_posix()}: permissions must be contents: read")
+    expected_concurrency = {
+        "group": "fast-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+        "cancel-in-progress": True,
     }
-    for key, expected in expected_values.items():
-        if data.get(key) != expected:
+    if document.get("concurrency") != expected_concurrency:
+        diagnostics.append(f"{WORKFLOW.as_posix()}: concurrency contract differs")
+
+    jobs = _mapping(document.get("jobs"))
+    if set(jobs) != {"fast-gate"}:
+        diagnostics.append(f"{WORKFLOW.as_posix()}: exactly one fast-gate job is required")
+        return
+    job = _mapping(jobs.get("fast-gate"))
+    expected_job_values = {
+        "name": "Fast Gate",
+        "runs-on": "ubuntu-24.04",
+        "timeout-minutes": 10,
+    }
+    for key, expected in expected_job_values.items():
+        if job.get(key) != expected:
             diagnostics.append(
-                f"{PROTECTION.as_posix()}: {key} must be {expected!r}"
+                f"{WORKFLOW.as_posix()}: fast-gate {key} must be {expected!r}"
             )
+    if job.get("steps") != EXPECTED_STEPS:
+        diagnostics.append(
+            f"{WORKFLOW.as_posix()}: fast-gate steps differ from the approved sequence"
+        )
+    unexpected_job_keys = set(job) - {"name", "runs-on", "timeout-minutes", "steps"}
+    if unexpected_job_keys:
+        diagnostics.append(
+            f"{WORKFLOW.as_posix()}: unexpected fast-gate keys {sorted(unexpected_job_keys)!r}"
+        )
+
+
+def _recipe(justfile: str, name: str) -> tuple[list[str], list[str]] | None:
+    lines = justfile.splitlines()
+    prefix = f"{name}:"
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
+            continue
+        dependencies = line.removeprefix(prefix).strip().split()
+        body: list[str] = []
+        for candidate in lines[index + 1 :]:
+            if not candidate.strip():
+                continue
+            if not candidate.startswith((" ", "\t")):
+                break
+            body.append(candidate.strip())
+        return dependencies, body
+    return None
+
+
+def _validate_justfile(text: str, diagnostics: list[str]) -> None:
+    for name, expected in EXPECTED_RECIPES.items():
+        observed = _recipe(text, name)
+        if observed != expected:
+            diagnostics.append(
+                f"{JUSTFILE.as_posix()}: recipe {name} differs from the approved Fast Gate contract"
+            )
+
+
+def _command_value(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "sys"
+        and node.attr == "executable"
+    ):
+        return "<python>"
+    return None
+
+
+def _bootstrap_commands(text: str) -> set[tuple[str, ...]]:
+    tree = ast.parse(text)
+    commands: set[tuple[str, ...]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "run" or not node.args:
+            continue
+        argument = node.args[0]
+        if not isinstance(argument, (ast.List, ast.Tuple)):
+            continue
+        values = tuple(_command_value(element) for element in argument.elts)
+        if all(value is not None for value in values):
+            commands.add(tuple(value for value in values if value is not None))
+    return commands
+
+
+def _validate_bootstrap(text: str, diagnostics: list[str]) -> None:
+    try:
+        observed = _bootstrap_commands(text)
+    except SyntaxError as error:
+        diagnostics.append(f"{BOOTSTRAP.as_posix()}: invalid Python: {error}")
+        return
+    if not EXPECTED_BOOTSTRAP_COMMANDS.issubset(observed):
+        missing = sorted(EXPECTED_BOOTSTRAP_COMMANDS - observed)
+        diagnostics.append(
+            f"{BOOTSTRAP.as_posix()}: frozen bootstrap commands missing {missing!r}"
+        )
 
 
 def validate(root: Path = ROOT) -> list[str]:
@@ -139,6 +248,7 @@ def validate(root: Path = ROOT) -> list[str]:
     workflow = _read(root, WORKFLOW, diagnostics)
     protection_text = _read(root, PROTECTION, diagnostics)
     justfile = _read(root, JUSTFILE, diagnostics)
+    bootstrap = _read(root, BOOTSTRAP, diagnostics)
 
     if workflow is not None:
         _validate_workflow(workflow, diagnostics)
@@ -148,19 +258,14 @@ def validate(root: Path = ROOT) -> list[str]:
         except json.JSONDecodeError as error:
             diagnostics.append(f"{PROTECTION.as_posix()}: invalid JSON: {error}")
         else:
-            _validate_protection(protection, diagnostics)
+            if protection != EXPECTED_PROTECTION:
+                diagnostics.append(
+                    f"{PROTECTION.as_posix()}: configuration differs from the approved contract"
+                )
     if justfile is not None:
-        if "check: verify rust python ts test-contracts" not in justfile:
-            diagnostics.append(
-                f"{JUSTFILE.as_posix()}: check must compose verify, rust, python, ts and test-contracts"
-            )
-        invocation = (
-            "mise exec -- uv run --project . --frozen python tools/verify_ci.py"
-        )
-        if invocation not in justfile:
-            diagnostics.append(
-                f"{JUSTFILE.as_posix()}: verify must execute tools/verify_ci.py"
-            )
+        _validate_justfile(justfile, diagnostics)
+    if bootstrap is not None:
+        _validate_bootstrap(bootstrap, diagnostics)
     return diagnostics
 
 

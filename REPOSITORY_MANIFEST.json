@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 298,
+  "file_count": 299,
   "files": [
     {
       "path": ".editorconfig",
@@ -25,13 +25,13 @@
     },
     {
       "path": ".github/branch-protection.main.json",
-      "bytes": 435,
-      "sha256": "f0000c3c17cd51dea4af8c158eea0ad2db98b11aa116d23b41b95ca06fc7578b"
+      "bytes": 434,
+      "sha256": "412e303cf68c86706c730fb88d564405b0b37a2ba9e89e30fa81bd48011ffb60"
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 864,
-      "sha256": "c1ab170a0bee57306f68b36d326d4bd93fc72270203990695d58fdc178b78a19"
+      "bytes": 1039,
+      "sha256": "f1acb5b6206889ad5ac2690f2639c141e1605cc413b96da53863cf0b0daeb170"
     },
     {
       "path": ".github/workflows/protocol-compatibility.yml",
@@ -85,8 +85,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 9353,
-      "sha256": "7b7e99b9c27bc5d9b4fc8f597daa2f4b515541c5e3bde06ed7c443828d77a783"
+      "bytes": 9339,
+      "sha256": "fca1b5e975f014c1986268c21e48d4adfe65c770839d06ed6d18c5bdac8fd6c0"
     },
     {
       "path": "README.ru.md",
@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11448,
-      "sha256": "1b27444c292b804855fe9c52291a2ed468140d0ba6d1eb01e43ea3b5fa9c33e7"
+      "sha256": "a246d5977db80bdde07591e0407bc0d286614d30a9a49650b93419d295c4d21d"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -885,8 +885,8 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 4660,
-      "sha256": "c0411369f5746c728fd71f1383ad02f7da4da310b949caba3639b4fa8644dfbd"
+      "bytes": 4728,
+      "sha256": "02b3c03924ea0d4cf94568cb9b513bd8c005f7bd80c1a9248f803a1cb31b4eec"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
@@ -1015,8 +1015,8 @@
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
-      "bytes": 21201,
-      "sha256": "999aaae2ca6ae48cee2822f5fb8bd42dd7e31cee35353254686eebda74ca66d9"
+      "bytes": 21246,
+      "sha256": "783723c6bae0a5c2b5379442579efde1e94d77ae95ab9430c8246a3df8c51b43"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1115,8 +1115,8 @@
     },
     {
       "path": "pyproject.toml",
-      "bytes": 324,
-      "sha256": "5375d956f299b5ffd61c5a49462245afd30650f2ac601486271ea1c15664c7a0"
+      "bytes": 355,
+      "sha256": "afe2e708b3e8d02a894e24053936e6400b12015049d2144088b24182e8ca8c2f"
     },
     {
       "path": "requirements-dev.txt",
@@ -1335,8 +1335,8 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 11493,
-      "sha256": "4f06d177e7b51bc58fbe1bdcf5a2be33f7d006045fe852a2f0da782c1497add4"
+      "bytes": 11537,
+      "sha256": "ad7cf6278d9e033ad953a34a3b64974cf8452602d0982e4c7d08480d81121f13"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1460,8 +1460,8 @@
     },
     {
       "path": "tools/tests/test_verify_ci.py",
-      "bytes": 3629,
-      "sha256": "55acd1bce3524e9c5eff23d8aa45bf91e70652e194d1187a5957e56e4547df19"
+      "bytes": 5400,
+      "sha256": "f37f69e702ae53df387f8b960c0a5d706caeb3c3bac2c277c4ca17199be7a5a5"
     },
     {
       "path": "tools/tests/test_verify_planning.py",
@@ -1470,8 +1470,8 @@
     },
     {
       "path": "tools/verify_ci.py",
-      "bytes": 6745,
-      "sha256": "9482f1ce1d0b8b5747868434a36b8cec6c3f9e41e42f48d84bcb6b81cd0d89af"
+      "bytes": 10609,
+      "sha256": "073f831d9829de31b6cc1c9bae74588774bf56ae8a9bc3f820647c16257e1ca4"
     },
     {
       "path": "tools/verify_docs.py",
@@ -1489,9 +1489,14 @@
       "sha256": "08532cf4b8e76a419d722555e7cd0333cd745b67e9f75d1230da46ee5c69ea21"
     },
     {
+      "path": "tools/verify_worktree_clean.py",
+      "bytes": 1029,
+      "sha256": "57539793975ee84473e1724dd144568733eb73d405cdb32e660023cbc68f2779"
+    },
+    {
       "path": "uv.lock",
-      "bytes": 8662,
-      "sha256": "97cb93e1ea31630d90899967dde18556c9337c25f9824c4c519c30b715e75783"
+      "bytes": 12362,
+      "sha256": "a7c06bfe519007864c7855c558884e476c4dbe349f1b5390d4006dc7a8c93732"
     }
   ]
 }

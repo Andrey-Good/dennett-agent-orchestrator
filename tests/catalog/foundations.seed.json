@@ -170,6 +170,7 @@
           ".github/workflows/ci.yml",
           "Justfile",
           "tools/verify_ci.py",
+          "tools/verify_worktree_clean.py",
           "tools/tests/test_verify_ci.py"
         ]
       },
