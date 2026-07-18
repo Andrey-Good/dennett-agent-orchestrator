@@ -2,7 +2,7 @@
   "version": 1,
   "id": "AB-M01-002",
   "title": "Establish the reviewed M01 protocol epoch",
-  "status": "RUNNING",
+  "status": "COMPLETED",
   "packages": [
     "WP-M01-002"
   ],

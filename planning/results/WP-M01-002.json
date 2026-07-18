@@ -7,9 +7,12 @@
     "commits": [
       "aa9d82c",
       "308e446",
-      "1a5d084edf1424bc0e2c5806a8a6fd573122560b"
+      "1a5d084edf1424bc0e2c5806a8a6fd573122560b",
+      "e190454d2dcdb18afae1070049571bdc622e187d",
+      "2a8777f28f198d0d3dd506c54a0044ff24cdc7d4"
     ],
     "merge_ready_at": "2026-07-18",
+    "merged_at": "2026-07-18",
     "changed_files": [
       ".github/workflows/protocol-compatibility.yml",
       "docs/decisions/ADR-006-m01-protocol-epoch.md",

@@ -138,7 +138,7 @@
       "version": 1,
       "id": "WP-M01-002",
       "title": "Establish the M01 protocol epoch and generated clients",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R3",
