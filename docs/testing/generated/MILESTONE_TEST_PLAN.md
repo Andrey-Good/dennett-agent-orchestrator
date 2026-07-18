@@ -6,7 +6,7 @@
 
 Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 
-- Package status: `IN_PROGRESS` 1, `MERGED` 2, `REFINED` 4
+- Package status: `MERGED` 2, `REFINED` 4, `REVIEW` 1
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -16,8 +16,8 @@ Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 | `WP-M01-002` | `MERGED` | `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `automated` | `protocol` |
 | `WP-M01-002` | `MERGED` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
 | `WP-M01-002` | `MERGED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
-| `WP-M01-003` | `IN_PROGRESS` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `desktop` |
-| `WP-M01-003` | `IN_PROGRESS` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-003` | `REVIEW` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-003` | `REVIEW` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-004` | `REFINED` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `specified` | `agents` |
 | `WP-M01-004` | `REFINED` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `specified` | `agents` |
 | `WP-M01-004` | `REFINED` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `specified` | `agents` |

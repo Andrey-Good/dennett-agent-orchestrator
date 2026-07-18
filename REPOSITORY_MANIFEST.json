@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 327,
+  "file_count": 329,
   "files": [
     {
       "path": ".editorconfig",
@@ -220,8 +220,8 @@
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 19529,
-      "sha256": "b1c5c483f0ceb91310e2457bd466021cb334915954f65bc3acb5475eb175f9a1"
+      "bytes": 19801,
+      "sha256": "14b6bd183842966c77398d557c9e12e1ac2367d53ee4507568a03ac6c5b33fd1"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -240,8 +240,8 @@
     },
     {
       "path": "apps/desktop/src/styles.css",
-      "bytes": 22360,
-      "sha256": "129462b01c5d6d47233b0807492561d4e0ee01724bbf0c3e07a7f4c01f6e8a2a"
+      "bytes": 22438,
+      "sha256": "31c115dde832ba9db3ebc845a1bc0a8747ec2861e7a4702d62820ca86204e725"
     },
     {
       "path": "apps/desktop/src/test/setup.ts",
@@ -464,9 +464,14 @@
       "sha256": "75eb30ca71cdd837e4c6fd805cc72c455c29765dcd03ffd50bda81c200445370"
     },
     {
+      "path": "design-qa.md",
+      "bytes": 5154,
+      "sha256": "90420ae70b0b1851c19498a0ab9a62f035e1b07831eb61f6a2e6f1635597bf38"
+    },
+    {
       "path": "docs/CHECKSUMS.sha256",
-      "bytes": 11559,
-      "sha256": "3a347cdb1e7e6d54be817ca76bfc16f8bf3db96e16c44cfd21f75c34c6068ccf"
+      "bytes": 11684,
+      "sha256": "0f5b4f979478e3c2d0a8727a572517d24e32df765893dd02fe6cb0cd0f812f32"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -602,6 +607,11 @@
       "path": "docs/decisions/README.md",
       "bytes": 946,
       "sha256": "3a81b7ca43d5cc8d1b1ab7b41c7ed1b2b19854e0e8daa0c2441a4d7f4ee69fc1"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-streaming-1280x720.png",
+      "bytes": 80411,
+      "sha256": "1daf6de839ba6d060b71065ccad36e642fea745337233a6fa2f4e93511e38e62"
     },
     {
       "path": "docs/implementation/00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md",
@@ -920,8 +930,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 2485,
-      "sha256": "9047728ce9df2ad8d3222e98d90607f38306841c73834e8e7c25765c95ff18f1"
+      "bytes": 2470,
+      "sha256": "bcee6a0c4cd2dc822ed4c2577c891905f3a49d2db519e3438213049861eacefc"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1070,8 +1080,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 31342,
-      "sha256": "97b420caf1d9e1926728305a3d1fcfd810fb6c636f7f82107f1c0fb4fb8de00c"
+      "bytes": 31361,
+      "sha256": "19102197e07fc54dcb9116e287d43ddb361ca2c589a00517e2b561eedd82db63"
     },
     {
       "path": "planning/results/WP-M00-001.json",
