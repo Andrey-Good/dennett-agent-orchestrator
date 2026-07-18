@@ -5,9 +5,12 @@
     "status": "completed",
     "summary": "Added a secret-safe Codex SDK 0.144.5 canary that uses a dedicated Codex-managed ChatGPT subscription login, proves two ordered streamed turns on the same observed thread, and isolates normal user auth, configuration, Git state and project content.",
     "commits": [
-      "27a8674"
+      "27a8674",
+      "c0fd43b",
+      "61cc26012238b5cf33c9275ae08b1ab504dc6531"
     ],
     "merge_ready_at": "2026-07-18",
+    "merged_at": "2026-07-18",
     "changed_files": [
       "services/adapter-host-node/package.json",
       "services/adapter-host-node/README.md",
