@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 341,
+  "file_count": 342,
   "files": [
     {
       "path": ".editorconfig",
@@ -260,18 +260,18 @@
     },
     {
       "path": "apps/desktop/src-tauri/tauri.conf.json",
-      "bytes": 768,
-      "sha256": "2635ddfb0480155a6077817d0c4b3353825a60dad31b6b29281902aa0a258ccf"
+      "bytes": 786,
+      "sha256": "46d92cdd032fc1a8f2477809fd64678e7c022af062ac4bfbde331f45aa1c9a58"
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
-      "bytes": 10096,
-      "sha256": "8ca9f572e9cf7e2f421ffc6e6769f6ad457d19ddf776314b9364d2afd83bdea4"
+      "bytes": 15016,
+      "sha256": "62dbda3a6c74505f7a372d93eac5a7af38c41fe80fc0516bf42091e0dc76dc87"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 33711,
-      "sha256": "ba4f971eeabb6fcae316dfafdbf2cadd7b7c3968033ab7d7473b910906fae2e5"
+      "bytes": 36547,
+      "sha256": "b7c4946816f3d6e7ce76a1ff8a5a029b7c7447714cc71d4a3374f7424d8f2069"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -290,13 +290,18 @@
     },
     {
       "path": "apps/desktop/src/styles.css",
-      "bytes": 27552,
-      "sha256": "a62b20fc3087411c413dbb8ce6f6d3fc063962327e0243bb98c5824e9a7b7aa2"
+      "bytes": 27868,
+      "sha256": "7f14fc45baab60c33d1187137e5f7d9544907f3d94fb8a34978964f0f4d48fbd"
     },
     {
       "path": "apps/desktop/src/test/setup.ts",
       "bytes": 150,
       "sha256": "c2ccf2417a8183a91935356b3d91c9aefc75b23abe2e72e335e671c12654f65d"
+    },
+    {
+      "path": "apps/desktop/src/vite-env.d.ts",
+      "bytes": 38,
+      "sha256": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5"
     },
     {
       "path": "apps/desktop/tsconfig.json",
@@ -515,13 +520,13 @@
     },
     {
       "path": "design-qa.md",
-      "bytes": 6885,
-      "sha256": "aa109cde89a7c00a032651535bc9b5b02539df22155a00352650148da83289b0"
+      "bytes": 10071,
+      "sha256": "9c34d7782584a4220a9e91c9b6734228dfd21c0b10719bbe45df5f42ac8aa262"
     },
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11924,
-      "sha256": "f480244a7deb5a5c09f6c24ae1317523104a4dc4bc79e3086236d44672421d3a"
+      "sha256": "1ec43f05f15adba3edbb013ac987459bc63463234899778b4460d5eea67b92d0"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -665,8 +670,8 @@
     },
     {
       "path": "docs/design/WP-M01-003/project-chat-monochrome-v2-1536x971.png",
-      "bytes": 96159,
-      "sha256": "574be78580fdf03870b70a80cdc933c4534e4ac97f1275656846b17d4a9cd9a1"
+      "bytes": 97341,
+      "sha256": "7545f81880f73ee7aefeea15ac6123dd95b5c689b25d035cbe6fc28e9527552f"
     },
     {
       "path": "docs/design/WP-M01-003/project-chat-streaming-1280x720.png",
@@ -1140,8 +1145,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 32418,
-      "sha256": "93cb568e7caa5d0251006a0f7c8cf07d0adc9e2d457ccc7c08185f982bb67c2c"
+      "bytes": 32792,
+      "sha256": "04d248cb863daa150cf54a4224ab3d95df5c9af33ffc12a73be515a669436556"
     },
     {
       "path": "planning/results/WP-M00-001.json",

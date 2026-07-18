@@ -17,7 +17,7 @@ No additional focused crops were needed: two owner attachments are already dedic
 
 ## Findings
 
-No actionable visual P0, P1 or P2 findings remain. The report stays blocked only until the required detached R2 closure re-review confirms the implementation corrections.
+No actionable visual P0, P1 or P2 findings remain. The required detached R2 closure re-review passed against implementation commit `b48520d`; it independently reran the desktop suite (14/14) and confirmed that all prior findings are closed without introducing a new visual, interaction or accessibility regression.
 
 - Typography: Segoe UI/system fallbacks, restrained 10-13 px metadata and 13 px conversation copy preserve the compact desktop hierarchy without clipped controls or broken wrapping at the reviewed sizes.
 - Layout and spacing: the title row, 52 px rail and 264 px project/chat sidebar read as one surface. The partial-height divider, centered conversation, anchored composer and 316 px resource workspace remain aligned. At 1100 px the workspace becomes a truthful closable overlay; at 900 px both side panes remain operable overlays with no document-level horizontal or vertical overflow.
@@ -52,6 +52,7 @@ No actionable visual P0, P1 or P2 findings remain. The report stays blocked only
 - Connected access/runtime triggers to their popovers, moved keyboard focus directly into the first choice and restored it to the trigger on Escape.
 - Caught a packaging regression during the native launch check: a raw Cargo build still targeted the development URL and showed `ERR_CONNECTION_REFUSED`. The Tauri hooks now invoke the pinned package manager through Corepack, and the official release build was rerun; the rebuilt executable opened the embedded production UI with no dev server running.
 - The first closure re-review found two remaining hard-coded resource-heading grays below AA contrast. All solid text foregrounds now route through contrast-tested semantic tokens, a regression test rejects literal text-color hex values, and the 1536 x 971 implementation was recaptured and compared with all three owner references. The brighter resource headings preserve the reference hierarchy without introducing a chromatic accent or a new visual mismatch.
+- The final detached R2 re-review at `b48520d` returned PASS. It verified the semantic-token correction and literal-color guard, reran all 14 desktop tests and found no remaining P0, P1 or P2 issue. This closes independent implementation review; the separate owner visual-approval gate remains open.
 
 ## Primary Interactions Tested
 
@@ -84,4 +85,4 @@ No actionable visual P0, P1 or P2 findings remain. The report stays blocked only
 
 Do not merge WP-M01-003 until the owner accepts this second visual checkpoint. Approval covers the visual direction and presentation interactions only; it does not approve real provider, browser, file, PDF or Git effects.
 
-final result: blocked
+final result: passed
