@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "migration_id": "M00-SCAFFOLD-TO-M01",
+  "previous_epoch": "m00-scaffold",
+  "current_epoch": "m01",
+  "base_module_sha256": "533a24dbf4fd598024799711944a56cf7010f75928b0e69296b9b8c0a03f7ba4",
+  "candidate_module_sha256": "ecd6d41f0c9ec18a3e16590550a511ac5f66e0522af6e29663970f6c233486de",
+  "retired_packages": [
+    "dennett.v1"
+  ],
+  "introduced_packages": [
+    "dennett.common.v1",
+    "dennett.control.v1",
+    "dennett.sync.v1"
+  ],
+  "retired_symbol_families": [
+    "dennett.v1 common references, errors and HeadEligibility",
+    "dennett.v1 DennettControl.ProjectChat stream",
+    "dennett.v1 DennettMemory.Append command",
+    "dennett.v1 DennettSync.Synchronize stream",
+    "dennett.v1 voice turn messages"
+  ],
+  "introduced_symbol_families": [
+    "dennett.common.v1 stable references, command metadata, acceptance and typed errors",
+    "dennett.control.v1 SystemService handshake, bootstrap and health",
+    "dennett.control.v1 ProjectService typed project commands",
+    "dennett.control.v1 SessionService typed turn, cancellation and watch commands",
+    "dennett.control.v1 revisioned session snapshot and delta frames",
+    "dennett.sync.v1 watch cursor, heartbeat and resync control frames"
+  ],
+  "decision_ref": "docs/decisions/ADR-006-m01-protocol-epoch.md",
+  "owner_gate": "WP-M01-002"
+}

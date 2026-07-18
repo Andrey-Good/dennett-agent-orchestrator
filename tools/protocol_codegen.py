@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -20,81 +22,33 @@ GENERATED = ROOT / "generated"
 GENERATOR_TEMPLATE = PROTOCOLS / "buf.gen.yaml"
 DO_NOT_EDIT_HEADER = b"// DO NOT EDIT. Generated from protocols/proto by Buf.\n"
 GENERATED_LANGUAGES = ("rust", "ts")
-APPROVED_BUF_CONFIG_SHA256 = "fc3a78d852c0835a24b4e42c481dcd3423bd5bb4836bd9d70913aded4671ddfd"
+APPROVED_BUF_CONFIG_SHA256 = "c6c396e445f7d4296c2bec35ceee630878767fad405d656eacc7c3f270302609"
+EPOCH_MIGRATION_MANIFEST = PROTOCOLS / "epoch-migrations" / "m00-to-m01.json"
+APPROVED_EPOCH_MIGRATION_SHA256 = (
+    "856dea516be7e8a36825b5934f07fd97e7f32417ee84b11a3a600225b132563f"
+)
 COMPARISON_BUF_CONFIG = """version: v2
 modules:
   - path: proto
 breaking:
   use: [WIRE_JSON]
 """
-STRICT_LINT_BUF_CONFIG = """version: v2
-modules:
-  - path: proto
-lint:
-  use: [STANDARD]
-"""
 LintViolation = tuple[str, str, str]
-APPROVED_LINT_VIOLATIONS: frozenset[LintViolation] = frozenset(
-    {
-        (
-            "proto/dennett/v1/control.proto",
-            "SERVICE_SUFFIX",
-            'Service name "DennettControl" should be suffixed with "Service".',
-        ),
-        (
-            "proto/dennett/v1/control.proto",
-            "RPC_REQUEST_STANDARD_NAME",
-            'RPC request type "ProjectChatCommand" should be named '
-            '"ProjectChatRequest" or "DennettControlProjectChatRequest".',
-        ),
-        (
-            "proto/dennett/v1/control.proto",
-            "RPC_RESPONSE_STANDARD_NAME",
-            'RPC response type "ResultEnvelope" should be named '
-            '"ProjectChatResponse" or "DennettControlProjectChatResponse".',
-        ),
-        (
-            "proto/dennett/v1/memory.proto",
-            "SERVICE_SUFFIX",
-            'Service name "DennettMemory" should be suffixed with "Service".',
-        ),
-        (
-            "proto/dennett/v1/memory.proto",
-            "RPC_REQUEST_STANDARD_NAME",
-            'RPC request type "AppendMemoryEventRequest" should be named '
-            '"AppendRequest" or "DennettMemoryAppendRequest".',
-        ),
-        (
-            "proto/dennett/v1/memory.proto",
-            "RPC_RESPONSE_STANDARD_NAME",
-            'RPC response type "AppendMemoryEventResponse" should be named '
-            '"AppendResponse" or "DennettMemoryAppendResponse".',
-        ),
-        (
-            "proto/dennett/v1/sync.proto",
-            "SERVICE_SUFFIX",
-            'Service name "DennettSync" should be suffixed with "Service".',
-        ),
-        (
-            "proto/dennett/v1/sync.proto",
-            "RPC_REQUEST_RESPONSE_UNIQUE",
-            'RPC "Synchronize" has the same type "dennett.v1.OperationBatch" '
-            "for the request and response.",
-        ),
-        (
-            "proto/dennett/v1/sync.proto",
-            "RPC_REQUEST_STANDARD_NAME",
-            'RPC request type "OperationBatch" should be named '
-            '"SynchronizeRequest" or "DennettSyncSynchronizeRequest".',
-        ),
-        (
-            "proto/dennett/v1/sync.proto",
-            "RPC_RESPONSE_STANDARD_NAME",
-            'RPC response type "OperationBatch" should be named '
-            '"SynchronizeResponse" or "DennettSyncSynchronizeResponse".',
-        ),
-    }
-)
+
+
+@dataclass(frozen=True)
+class EpochMigration:
+    migration_id: str
+    previous_epoch: str
+    current_epoch: str
+    base_module_sha256: str
+    candidate_module_sha256: str
+    retired_packages: tuple[str, ...]
+    introduced_packages: tuple[str, ...]
+    retired_symbol_families: tuple[str, ...]
+    introduced_symbol_families: tuple[str, ...]
+    decision_ref: str
+    owner_gate: str
 
 
 class ProtocolCheckError(RuntimeError):
@@ -148,8 +102,14 @@ def add_do_not_edit_headers(root: Path) -> list[Path]:
         if not path.is_file() or path.suffix not in {".rs", ".ts"}:
             continue
         content = path.read_bytes()
-        if not content.startswith(DO_NOT_EDIT_HEADER):
-            path.write_bytes(DO_NOT_EDIT_HEADER + content)
+        body = (
+            content[len(DO_NOT_EDIT_HEADER) :]
+            if content.startswith(DO_NOT_EDIT_HEADER)
+            else content
+        )
+        normalized = DO_NOT_EDIT_HEADER + body.rstrip(b"\r\n") + b"\n"
+        if content != normalized:
+            path.write_bytes(normalized)
             changed.append(path)
     return changed
 
@@ -266,6 +226,170 @@ def extract_protocol_baseline(ref: str, destination: Path) -> None:
         target.write_bytes(content)
 
 
+def protocol_module_sha256(module: Path) -> str:
+    digest = hashlib.sha256()
+    files = sorted((module / "proto").rglob("*.proto"))
+    if not files:
+        raise ProtocolCheckError(f"no protocol sources found in {module}")
+    for path in files:
+        relative = path.relative_to(module).as_posix().encode("utf-8")
+        content = path.read_bytes()
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def protocol_packages(module: Path) -> tuple[str, ...]:
+    packages: set[str] = set()
+    package_pattern = re.compile(r"^package\s+([a-zA-Z0-9_.]+);$", re.MULTILINE)
+    for path in sorted((module / "proto").rglob("*.proto")):
+        match = package_pattern.search(path.read_text(encoding="utf-8"))
+        if match is None:
+            raise ProtocolCheckError(
+                f"protocol source has no package declaration: {path.relative_to(module)}"
+            )
+        packages.add(match.group(1))
+    return tuple(sorted(packages))
+
+
+def protocol_epoch_changed(baseline: Path, candidate: Path) -> bool:
+    return protocol_packages(baseline) != protocol_packages(candidate)
+
+
+def _manifest_string_list(payload: object, field: str) -> tuple[str, ...]:
+    if not isinstance(payload, list) or not payload:
+        raise ProtocolCheckError(f"epoch migration field {field} must be a non-empty list")
+    if not all(isinstance(item, str) and item for item in payload):
+        raise ProtocolCheckError(f"epoch migration field {field} contains an invalid value")
+    values = tuple(payload)
+    if len(values) != len(set(values)):
+        raise ProtocolCheckError(f"epoch migration field {field} contains duplicates")
+    return values
+
+
+def load_epoch_migration(path: Path = EPOCH_MIGRATION_MANIFEST) -> EpochMigration:
+    if not path.is_file():
+        raise ProtocolCheckError(f"protocol epoch migration manifest is missing: {path}")
+    try:
+        raw_manifest = path.read_bytes()
+    except OSError as error:
+        raise ProtocolCheckError(
+            f"protocol epoch migration manifest is unreadable: {error}"
+        ) from error
+    digest = hashlib.sha256(raw_manifest).hexdigest()
+    if digest != APPROVED_EPOCH_MIGRATION_SHA256:
+        raise ProtocolCheckError(
+            "protocol epoch migration manifest changed without checker approval; "
+            f"expected {APPROVED_EPOCH_MIGRATION_SHA256}, got {digest}"
+        )
+    try:
+        payload = json.loads(raw_manifest.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ProtocolCheckError(
+            f"protocol epoch migration manifest is unreadable: {error}"
+        ) from error
+    expected_fields = {
+        "version",
+        "migration_id",
+        "previous_epoch",
+        "current_epoch",
+        "base_module_sha256",
+        "candidate_module_sha256",
+        "retired_packages",
+        "introduced_packages",
+        "retired_symbol_families",
+        "introduced_symbol_families",
+        "decision_ref",
+        "owner_gate",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_fields:
+        raise ProtocolCheckError("epoch migration manifest fields are not canonical")
+    if payload["version"] != 1:
+        raise ProtocolCheckError("unsupported protocol epoch migration manifest version")
+    for field in (
+        "migration_id",
+        "previous_epoch",
+        "current_epoch",
+        "decision_ref",
+        "owner_gate",
+    ):
+        if not isinstance(payload[field], str) or not payload[field]:
+            raise ProtocolCheckError(f"epoch migration field {field} must be non-empty")
+    for field in ("base_module_sha256", "candidate_module_sha256"):
+        value = payload[field]
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ProtocolCheckError(f"epoch migration field {field} is not a SHA-256")
+    decision_root = (ROOT / "docs" / "decisions").resolve()
+    decision_path = (ROOT / str(payload["decision_ref"])).resolve()
+    if not decision_path.is_relative_to(decision_root):
+        raise ProtocolCheckError(
+            "epoch migration decision_ref must stay under docs/decisions"
+        )
+    if not decision_path.is_file():
+        raise ProtocolCheckError(
+            f"epoch migration decision does not exist: {payload['decision_ref']}"
+        )
+    return EpochMigration(
+        migration_id=str(payload["migration_id"]),
+        previous_epoch=str(payload["previous_epoch"]),
+        current_epoch=str(payload["current_epoch"]),
+        base_module_sha256=str(payload["base_module_sha256"]),
+        candidate_module_sha256=str(payload["candidate_module_sha256"]),
+        retired_packages=_manifest_string_list(
+            payload["retired_packages"], "retired_packages"
+        ),
+        introduced_packages=_manifest_string_list(
+            payload["introduced_packages"], "introduced_packages"
+        ),
+        retired_symbol_families=_manifest_string_list(
+            payload["retired_symbol_families"], "retired_symbol_families"
+        ),
+        introduced_symbol_families=_manifest_string_list(
+            payload["introduced_symbol_families"], "introduced_symbol_families"
+        ),
+        decision_ref=str(payload["decision_ref"]),
+        owner_gate=str(payload["owner_gate"]),
+    )
+
+
+def epoch_migration_differences(
+    baseline: Path,
+    candidate: Path,
+    migration: EpochMigration,
+) -> list[str]:
+    differences: list[str] = []
+    actual_base_hash = protocol_module_sha256(baseline)
+    actual_candidate_hash = protocol_module_sha256(candidate)
+    base_packages = set(protocol_packages(baseline))
+    candidate_packages = set(protocol_packages(candidate))
+    actual_retired = tuple(sorted(base_packages - candidate_packages))
+    actual_introduced = tuple(sorted(candidate_packages - base_packages))
+
+    if migration.previous_epoch == migration.current_epoch:
+        differences.append("previous and current epochs are identical")
+    if actual_base_hash != migration.base_module_sha256:
+        differences.append(
+            f"base module hash is {actual_base_hash}, expected {migration.base_module_sha256}"
+        )
+    if actual_candidate_hash != migration.candidate_module_sha256:
+        differences.append(
+            "candidate module hash is "
+            f"{actual_candidate_hash}, expected {migration.candidate_module_sha256}"
+        )
+    if actual_retired != tuple(sorted(migration.retired_packages)):
+        differences.append(
+            f"retired packages are {actual_retired}, expected {migration.retired_packages}"
+        )
+    if actual_introduced != tuple(sorted(migration.introduced_packages)):
+        differences.append(
+            "introduced packages are "
+            f"{actual_introduced}, expected {migration.introduced_packages}"
+        )
+    return differences
+
+
 def _normalise_lint_path(raw_path: str) -> str:
     path = raw_path.replace("\\", "/")
     if path.startswith("proto/"):
@@ -302,46 +426,23 @@ def parse_lint_violations(
     return frozenset(violations)
 
 
-def strict_lint_violations(module: Path = PROTOCOLS) -> frozenset[LintViolation]:
-    with TemporaryDirectory(prefix="dennett-protocol-strict-lint-") as directory:
-        strict_module = Path(directory) / "protocols"
-        snapshot_protocol_module(module, strict_module, STRICT_LINT_BUF_CONFIG)
-        result = run(
-            ["buf", "lint", str(strict_module), "--error-format", "json"],
-            capture_output=True,
-            check=False,
-        )
-        return parse_lint_violations(result)
-
-
-def lint_debt_differences(
-    actual: frozenset[LintViolation],
-    approved: frozenset[LintViolation] = APPROVED_LINT_VIOLATIONS,
-) -> list[str]:
-    differences = [
-        f"new violation: {path} [{rule}] {message}"
-        for path, rule, message in sorted(actual - approved)
-    ]
-    differences.extend(
-        f"resolved violation requires debt update: {path} [{rule}] {message}"
-        for path, rule, message in sorted(approved - actual)
-    )
-    return differences
-
-
-def check_grandfathered_lint_debt() -> None:
-    differences = lint_debt_differences(strict_lint_violations())
-    if differences:
-        details = "\n".join(f"- {difference}" for difference in differences)
-        raise ProtocolCheckError(f"grandfathered Buf lint debt changed:\n{details}")
-    print(f"Grandfathered Buf lint debt is unchanged ({len(APPROVED_LINT_VIOLATIONS)} findings).")
+def check_strict_standard_lint() -> None:
+    run(["buf", "lint", str(PROTOCOLS)])
+    print("Buf STANDARD lint passed with no ignores or grandfathered findings.")
 
 
 def check_negative_lint_probe() -> None:
     with TemporaryDirectory(prefix="dennett-protocol-lint-probe-") as directory:
         candidate = Path(directory) / "protocols"
         shutil.copytree(PROTOCOLS, candidate)
-        target = candidate / "proto" / "dennett" / "v1" / "control.proto"
+        target = (
+            candidate
+            / "proto"
+            / "dennett"
+            / "control"
+            / "v1"
+            / "session.proto"
+        )
         with target.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(
                 "\nmessage ProbeRequest {}\n"
@@ -351,13 +452,23 @@ def check_negative_lint_probe() -> None:
                 "}\n"
             )
         run(["buf", "build", str(candidate)])
-        run(["buf", "lint", str(candidate)])
-        differences = lint_debt_differences(strict_lint_violations(candidate))
-        if not any(difference.startswith("new violation:") for difference in differences):
+        result = run(
+            ["buf", "lint", str(candidate), "--error-format", "json"],
+            capture_output=True,
+            check=False,
+        )
+        violations = parse_lint_violations(result)
+        expected = (
+            "proto/dennett/control/v1/session.proto",
+            "SERVICE_SUFFIX",
+        )
+        if result.returncode == 0 or not any(
+            (path, rule) == expected for path, rule, _message in violations
+        ):
             raise ProtocolCheckError(
-                "grandfathered lint guard accepted a new violation in an ignored file"
+                "strict lint negative probe accepted a service without the required suffix"
             )
-    print("Negative lint probe rejected a new violation in a grandfathered file.")
+    print("Negative lint probe rejected a newly introduced STANDARD violation.")
 
 
 def generate_into(cwd: Path) -> Path:
@@ -421,14 +532,42 @@ def check_generated() -> None:
 
 def check_against_main(explicit_base_ref: str | None) -> None:
     base_ref, commit = resolve_base_ref(explicit_base_ref)
+    migration_used: EpochMigration | None = None
     with TemporaryDirectory(prefix="dennett-protocol-baseline-") as directory:
         root = Path(directory)
         baseline = root / "baseline"
         candidate = root / "candidate"
         extract_protocol_baseline(base_ref, baseline)
         snapshot_protocol_module(PROTOCOLS, candidate, COMPARISON_BUF_CONFIG)
-        run(["buf", "breaking", str(candidate), "--against", str(baseline)])
-    print(f"Protocol compatibility passed against {base_ref} ({commit[:12]}).")
+        result = run(
+            ["buf", "breaking", str(candidate), "--against", str(baseline)],
+            capture_output=True,
+            check=False,
+        )
+        package_epoch_changed = protocol_epoch_changed(baseline, candidate)
+        if package_epoch_changed:
+            migration = load_epoch_migration()
+            differences = epoch_migration_differences(baseline, candidate, migration)
+            if differences:
+                _print_process_output(result)
+                details = "\n".join(f"- {difference}" for difference in differences)
+                raise ProtocolCheckError(
+                    "breaking protocol change does not match the approved epoch "
+                    f"migration {migration.migration_id}:\n{details}"
+                )
+            migration_used = migration
+        elif result.returncode != 0:
+            _print_process_output(result)
+            raise ProtocolCheckError(
+                f"protocol compatibility failed against {base_ref} ({commit[:12]})"
+            )
+    if migration_used is None:
+        print(f"Protocol compatibility passed against {base_ref} ({commit[:12]}).")
+    else:
+        print(
+            f"Protocol epoch migration {migration_used.migration_id} exactly matches "
+            f"{base_ref} ({commit[:12]}); owner gate {migration_used.owner_gate} remains."
+        )
 
 
 def check_negative_breaking_probe() -> None:
@@ -438,7 +577,14 @@ def check_negative_breaking_probe() -> None:
         candidate = root / "candidate"
         snapshot_protocol_module(PROTOCOLS, baseline, COMPARISON_BUF_CONFIG)
         snapshot_protocol_module(PROTOCOLS, candidate, COMPARISON_BUF_CONFIG)
-        target = candidate / "proto" / "dennett" / "v1" / "common.proto"
+        target = (
+            candidate
+            / "proto"
+            / "dennett"
+            / "common"
+            / "v1"
+            / "common.proto"
+        )
         content = target.read_text(encoding="utf-8")
         original = "string kind = 1;"
         incompatible = "int64 kind = 1;"
@@ -466,8 +612,7 @@ def check_negative_breaking_probe() -> None:
 
 def check(explicit_base_ref: str | None) -> None:
     check_approved_buf_configuration()
-    run(["buf", "lint", str(PROTOCOLS)])
-    check_grandfathered_lint_debt()
+    check_strict_standard_lint()
     check_negative_lint_probe()
     check_format()
     check_generated()

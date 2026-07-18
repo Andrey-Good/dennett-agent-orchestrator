@@ -6,16 +6,16 @@
 
 Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 
-- Package status: `MERGED` 1, `REFINED` 6
+- Package status: `MERGED` 1, `REFINED` 5, `REVIEW` 1
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
 | `WP-M01-001` | `MERGED` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `R2` | `manual` | `agents` |
 | `WP-M01-001` | `MERGED` | `TEST-CODEX-SDK-CONTRACT-001` | `R2` | `automated` | `agents` |
 | `WP-M01-001` | `MERGED` | `TEST-REPO-STRUCTURE-001` | `R1` | `automated` | `repository` |
-| `WP-M01-002` | `REFINED` | `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `specified` | `protocol` |
-| `WP-M01-002` | `REFINED` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
-| `WP-M01-002` | `REFINED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
+| `WP-M01-002` | `REVIEW` | `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `automated` | `protocol` |
+| `WP-M01-002` | `REVIEW` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
+| `WP-M01-002` | `REVIEW` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
 | `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-004` | `REFINED` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `specified` | `agents` |

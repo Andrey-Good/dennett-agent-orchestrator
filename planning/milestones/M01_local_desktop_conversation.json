@@ -136,7 +136,7 @@
       "version": 1,
       "id": "WP-M01-002",
       "title": "Establish the M01 protocol epoch and generated clients",
-      "status": "REFINED",
+      "status": "REVIEW",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R3",
@@ -168,6 +168,7 @@
         "generated",
         "tools/protocol_codegen.py",
         "tools/tests/test_protocol_codegen.py",
+        "tools/tests/test_verify_planning.py",
         "tests/catalog",
         "docs/decisions",
         "docs/testing/generated",
@@ -226,12 +227,14 @@
       },
       "estimate": {
         "target_agent_hours": 5,
-        "max_diff_lines": 2600
+        "max_diff_lines": 7200
       },
       "notes": [
         "This package is the mandatory repayment trigger recorded by DEBT-0001 and DEBT-0002.",
         "The change is intentionally breaking only for the non-production M00 scaffold and requires detached adversarial protocol review plus owner approval before merge.",
-        "The full M01 wire surface is bounded to handshake, bootstrap, project/session commands, cancellation, typed errors and revisioned session watch frames."
+        "The full M01 wire surface is bounded to handshake, bootstrap, project/session commands, cancellation, typed errors and revisioned session watch frames.",
+        "Retiring DEBT-0001 exposed a planning-validator unit test coupled to that live debt record; WP-M01-002 also replaces it with an isolated synthetic fixture.",
+        "The gross diff budget was corrected from 2600 to 7200 after deterministic replacement of checked-in Rust and TypeScript clients accounted for about 5300 changed lines; the handwritten change remains below the original budget and was not simplified to optimize the counter."
       ]
     },
     {

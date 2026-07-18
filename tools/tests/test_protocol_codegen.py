@@ -29,6 +29,13 @@ class ProtocolCodegenTests(unittest.TestCase):
         ).hexdigest()
         self.assertEqual(digest, protocol_codegen.APPROVED_BUF_CONFIG_SHA256)
 
+    def test_buf_standard_configuration_has_no_lint_exceptions(self) -> None:
+        config = (ROOT / "protocols" / "buf.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("use: [STANDARD]", config)
+        self.assertNotIn("ignore", config)
+        self.assertNotIn("except", config)
+
     def test_comparison_snapshot_uses_checker_owned_wire_json_config(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -59,21 +66,82 @@ class ProtocolCodegenTests(unittest.TestCase):
                 (destination / "buf.yaml").read_text(encoding="utf-8"),
             )
 
-    def test_structured_lint_debt_rejects_an_added_finding(self) -> None:
-        added = (
-            "proto/dennett/v1/control.proto",
-            "SERVICE_SUFFIX",
-            'Service name "NewLegacy" should be suffixed with "Service".',
-        )
-        actual = frozenset({*protocol_codegen.APPROVED_LINT_VIOLATIONS, added})
+    def test_epoch_manifest_matches_explicit_approval_hash(self) -> None:
+        digest = hashlib.sha256(
+            protocol_codegen.EPOCH_MIGRATION_MANIFEST.read_bytes()
+        ).hexdigest()
 
-        self.assertEqual(
-            protocol_codegen.lint_debt_differences(actual),
-            [
-                "new violation: proto/dennett/v1/control.proto [SERVICE_SUFFIX] "
-                'Service name "NewLegacy" should be suffixed with "Service".'
-            ],
-        )
+        self.assertEqual(digest, protocol_codegen.APPROVED_EPOCH_MIGRATION_SHA256)
+        migration = protocol_codegen.load_epoch_migration()
+        self.assertEqual(migration.owner_gate, "WP-M01-002")
+        self.assertEqual(migration.retired_packages, ("dennett.v1",))
+
+    def test_epoch_migration_requires_exact_tree_hashes_and_packages(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = root / "baseline"
+            candidate = root / "candidate"
+            self._write_proto(
+                baseline,
+                "dennett/v1/common.proto",
+                "dennett.v1",
+                "message Old {}",
+            )
+            self._write_proto(
+                candidate,
+                "dennett/common/v1/common.proto",
+                "dennett.common.v1",
+                "message New {}",
+            )
+            same_epoch = root / "same-epoch"
+            self._write_proto(
+                same_epoch,
+                "dennett/v1/replacement.proto",
+                "dennett.v1",
+                "message Replacement {}",
+            )
+            self.assertTrue(
+                protocol_codegen.protocol_epoch_changed(baseline, candidate)
+            )
+            self.assertFalse(
+                protocol_codegen.protocol_epoch_changed(baseline, same_epoch)
+            )
+            migration = protocol_codegen.EpochMigration(
+                migration_id="test",
+                previous_epoch="old",
+                current_epoch="new",
+                base_module_sha256=protocol_codegen.protocol_module_sha256(baseline),
+                candidate_module_sha256=protocol_codegen.protocol_module_sha256(
+                    candidate
+                ),
+                retired_packages=("dennett.v1",),
+                introduced_packages=("dennett.common.v1",),
+                retired_symbol_families=("old",),
+                introduced_symbol_families=("new",),
+                decision_ref="docs/decisions/test.md",
+                owner_gate="WP-M01-002",
+            )
+
+            self.assertEqual(
+                protocol_codegen.epoch_migration_differences(
+                    baseline, candidate, migration
+                ),
+                [],
+            )
+
+            path = candidate / "proto" / "dennett" / "common" / "v1" / "common.proto"
+            path.write_text(
+                path.read_text(encoding="utf-8") + "\nmessage Extra {}\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                any(
+                    difference.startswith("candidate module hash is")
+                    for difference in protocol_codegen.epoch_migration_differences(
+                        baseline, candidate, migration
+                    )
+                )
+            )
 
     def test_json_lint_output_is_normalised_across_platforms(self) -> None:
         result = subprocess.CompletedProcess(
@@ -119,14 +187,77 @@ class ProtocolCodegenTests(unittest.TestCase):
                 path.relative_to(ROOT).as_posix(),
             )
 
+    def test_m01_protocol_epoch_exposes_only_the_bounded_typed_surface(self) -> None:
+        sources = {
+            path.relative_to(protocol_codegen.PROTOCOLS).as_posix(): path.read_text(
+                encoding="utf-8"
+            )
+            for path in protocol_codegen.proto_files()
+        }
+
+        self.assertEqual(
+            set(sources),
+            {
+                "proto/dennett/common/v1/common.proto",
+                "proto/dennett/control/v1/project.proto",
+                "proto/dennett/control/v1/session.proto",
+                "proto/dennett/control/v1/system.proto",
+                "proto/dennett/sync/v1/watch.proto",
+            },
+        )
+        combined = "\n".join(sources.values())
+        self.assertNotIn("package dennett.v1;", combined)
+        self.assertNotIn("google.protobuf.Any", combined)
+        self.assertNotRegex(combined, r"bytes\s+payload\s*=")
+        self.assertNotIn("MemoryService", combined)
+        self.assertNotIn("VoiceService", combined)
+
+        system = sources["proto/dennett/control/v1/system.proto"]
+        for method in ("Handshake", "Bootstrap", "GetHealth"):
+            self.assertRegex(system, rf"rpc {method}\({method}Request\)")
+
+        project = sources["proto/dennett/control/v1/project.proto"]
+        for method in ("CreateProject", "ListProjects", "GetProject"):
+            self.assertRegex(project, rf"rpc {method}\({method}Request\)")
+
+        session = sources["proto/dennett/control/v1/session.proto"]
+        for method in ("CreateSession", "SendTurn", "CancelTurn", "WatchSession"):
+            self.assertRegex(session, rf"rpc {method}\({method}Request\)")
+        for contract in (
+            "message SessionSnapshot",
+            "message SessionDelta",
+            "uint64 base_revision",
+            "uint64 new_revision",
+            "oneof frame",
+            "ResyncRequired resync_required",
+            "ErrorEnvelope error",
+        ):
+            self.assertIn(contract, session)
+
+        common = sources["proto/dennett/common/v1/common.proto"]
+        for field in (
+            "string command_id",
+            "string idempotency_key",
+            "string correlation_id",
+            "string message_key",
+            "bool retryable",
+            "bool user_action_required",
+            "optional uint64 current_revision",
+        ):
+            self.assertIn(field, common)
+
     def test_header_application_is_idempotent(self) -> None:
         with TemporaryDirectory() as directory:
             generated = Path(directory)
             path = generated / "client.ts"
-            path.write_bytes(b"// generated\n")
+            path.write_bytes(b"// generated\n\n")
 
             self.assertEqual(protocol_codegen.add_do_not_edit_headers(generated), [path])
             first = path.read_bytes()
+            self.assertEqual(
+                first,
+                protocol_codegen.DO_NOT_EDIT_HEADER + b"// generated\n",
+            )
             self.assertEqual(protocol_codegen.add_do_not_edit_headers(generated), [])
             self.assertEqual(path.read_bytes(), first)
 
@@ -162,6 +293,20 @@ class ProtocolCodegenTests(unittest.TestCase):
         self.assertEqual(
             protocol_codegen.base_ref_candidates("known-commit", {}),
             ["known-commit"],
+        )
+
+    @staticmethod
+    def _write_proto(
+        module: Path,
+        relative_path: str,
+        package: str,
+        declaration: str,
+    ) -> None:
+        path = module / "proto" / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f'syntax = "proto3";\npackage {package};\n{declaration}\n',
+            encoding="utf-8",
         )
 
 

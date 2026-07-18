@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package dennett.sync.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// WatchCursor orders every frame within one server-created stream.
+message WatchCursor {
+  string stream_id = 1;
+  uint64 sequence = 2;
+}
+
+// WatchHeartbeat updates freshness without changing domain state.
+message WatchHeartbeat {
+  google.protobuf.Timestamp observed_at = 1;
+  uint64 current_revision = 2;
+}
+
+// ResyncRequired forbids the client from applying later deltas until a new snapshot.
+message ResyncRequired {
+  string reason_code = 1;
+  uint64 current_revision = 2;
+  bool snapshot_required = 3;
+}

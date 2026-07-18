@@ -12,25 +12,25 @@ Each row links one requirement to its catalogue evidence.
 | `ADR-003` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
 | `ARCH-81:EffectClaim` | `TEST-EFFECT-UNKNOWN-001` | — | `effects` | `tests/scenarios/effect-timeout-no-duplicate.yaml` | `release` |
 | `ARCH-81:MemoryAuthority` | `TEST-MEMORY-ONE-LOGICAL-001` | — | `memory` | `tests/scenarios/offline-client-memory-not-canonical.yaml` | `release` |
-| `ARCH-81:ProtocolPackages` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
-| `ARCH-81:ProtocolPackages` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
+| `ARCH-81:ProtocolPackages` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `docs/decisions/ADR-006-m01-protocol-epoch.md`, `protocols/buf.yaml`, `protocols/epoch-migrations/m00-to-m01.json`, `protocols/proto/dennett/common/v1/common.proto`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/session.proto`, `protocols/proto/dennett/control/v1/system.proto`, `protocols/proto/dennett/sync/v1/watch.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
+| `ARCH-81:ProtocolPackages` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-83:Bootstrap` | `TEST-BOOTSTRAP-CLEAN-001` | `WP-M00-001` | `repository` | `Justfile`, `tools/bootstrap.py`, `tools/doctor.py`, `tools/tests/test_bootstrap.py`, `tools/tests/test_doctor.py` | `release` |
 | `ARCH-83:Correlation` | `TEST-M01-TRACE-CORRELATION-001` | `WP-M01-007` | `observability` | — | — |
 | `ARCH-83:DesktopLifecycle` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | — | `release` |
 | `ARCH-83:DraftPersistence` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `WP-M01-005` | `desktop` | — | — |
 | `ARCH-83:FirstVerticalSlice` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
 | `ARCH-83:FirstVerticalSlice` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `WP-M01-007` | `quality` | — | `release` |
-| `ARCH-83:GeneratedClients` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
+| `ARCH-83:GeneratedClients` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-83:LocalDesktopIPC` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | — | `release` |
 | `ARCH-83:Milestone0` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
-| `ARCH-83:ProtocolCompatibility` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
+| `ARCH-83:ProtocolCompatibility` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `ARCH-83:ProviderLiveSmoke` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-login.ts` | `release` |
 | `ARCH-83:RepositoryLayout` | `TEST-REPO-STRUCTURE-001` | `WP-M00-001`, `WP-M01-001` | `repository` | `tools/tests/test_verify_repo.py`, `tools/verify_repo.py` | `release` |
 | `ARCH-83:TauriBridge` | `TEST-TAURI-WATCH-BRIDGE-001` | `WP-M01-006` | `desktop` | — | `release` |
 | `ARCH-83:WatchReducer` | `TEST-TAURI-WATCH-BRIDGE-001` | `WP-M01-006` | `desktop` | — | `release` |
 | `ARCH-83:WatchReducer` | `TEST-WATCH-GAP-RESYNC-001` | `WP-M01-005` | `sync` | `crates/dennett-sync-core/src/lib.rs` | `release` |
-| `DEBT-0001` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
-| `DEBT-0002` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
+| `DEBT-0001` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `docs/decisions/ADR-006-m01-protocol-epoch.md`, `protocols/buf.yaml`, `protocols/epoch-migrations/m00-to-m01.json`, `protocols/proto/dennett/common/v1/common.proto`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/session.proto`, `protocols/proto/dennett/control/v1/system.proto`, `protocols/proto/dennett/sync/v1/watch.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
+| `DEBT-0002` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `docs/decisions/ADR-006-m01-protocol-epoch.md`, `protocols/buf.yaml`, `protocols/epoch-migrations/m00-to-m01.json`, `protocols/proto/dennett/common/v1/common.proto`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/session.proto`, `protocols/proto/dennett/control/v1/system.proto`, `protocols/proto/dennett/sync/v1/watch.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `IMPL-00:PRGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | `.github/branch-protection.main.json`, `.github/workflows/ci.yml`, `Justfile`, `tools/tests/test_verify_ci.py`, `tools/verify_ci.py`, `tools/verify_worktree_clean.py` | `release` |
 | `IMPL-03:PlanningValidation` | `TEST-PLANNING-VALIDATION-001` | `WP-M00-004` | `planning` | `schemas/autonomous-batch.schema.json`, `schemas/decision-request.schema.json`, `schemas/milestone.schema.json`, `schemas/technical-debt.schema.json`, `schemas/work-package-result.schema.json`, `schemas/work-package.schema.json`, `tools/tests/test_verify_planning.py`, `tools/verify_planning.py` | `release` |
 | `IMPL-04:MilestoneLifecycle` | `TEST-MILESTONE-ACCEPTED-HANDOFF-001` | `WP-M00-010` | `quality` | `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | `release` |
@@ -42,7 +42,7 @@ Each row links one requirement to its catalogue evidence.
 | `M00:ExitGate` | `TEST-MILESTONE-CURRENT-LABEL-001` | `WP-M00-009` | `quality` | `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | — |
 | `M00:ExitGate` | `TEST-MILESTONE-QUALIFYING-001` | `WP-M00-008` | `quality` | `schemas/milestone.schema.json`, `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | `release` |
 | `M00:FakeVerticalPath` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
-| `M00:ProtocolBreakingGate` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
+| `M00:ProtocolBreakingGate` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `M00:RustBaseline` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
 | `M01:AuthenticatedHandshake` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | — | `release` |
 | `M01:ExitGate` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `WP-M01-007` | `quality` | — | `release` |

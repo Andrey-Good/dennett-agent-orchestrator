@@ -4,7 +4,7 @@
     {
       "id": "TEST-M01-PROTOCOL-EPOCH-001",
       "title": "M01 protocol epoch replaces the scaffold before production consumers",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R3",
       "domains": ["protocol", "compatibility", "desktop", "node"],
@@ -20,11 +20,18 @@
       ],
       "implementation": {
         "target_suite": "protocol epoch",
-        "status": "planned",
+        "status": "automated",
         "test_paths": [
+          "protocols/proto/dennett/common/v1/common.proto",
+          "protocols/proto/dennett/control/v1/project.proto",
+          "protocols/proto/dennett/control/v1/session.proto",
+          "protocols/proto/dennett/control/v1/system.proto",
+          "protocols/proto/dennett/sync/v1/watch.proto",
           "protocols/buf.yaml",
+          "protocols/epoch-migrations/m00-to-m01.json",
           "tools/protocol_codegen.py",
-          "tools/tests/test_protocol_codegen.py"
+          "tools/tests/test_protocol_codegen.py",
+          "docs/decisions/ADR-006-m01-protocol-epoch.md"
         ]
       },
       "owner": "protocol"

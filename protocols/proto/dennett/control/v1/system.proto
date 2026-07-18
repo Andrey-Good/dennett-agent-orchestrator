@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package dennett.control.v1;
+
+import "dennett/control/v1/project.proto";
+import "dennett/control/v1/session.proto";
+import "google/protobuf/timestamp.proto";
+
+enum CompatibilityMode {
+  COMPATIBILITY_MODE_UNSPECIFIED = 0;
+  COMPATIBILITY_MODE_FULL = 1;
+  COMPATIBILITY_MODE_READ_ONLY = 2;
+  COMPATIBILITY_MODE_FEATURE_DEGRADED = 3;
+  COMPATIBILITY_MODE_UPDATE_REQUIRED = 4;
+  COMPATIBILITY_MODE_BLOCKED_SECURITY = 5;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_STARTING = 1;
+  HEALTH_STATE_READY = 2;
+  HEALTH_STATE_DEGRADED = 3;
+  HEALTH_STATE_RECOVERY_REQUIRED = 4;
+}
+
+message ClientHello {
+  string client_component = 1;
+  string component_version = 2;
+  repeated uint32 protocol_versions = 3;
+  string installation_id = 4;
+  string device_id = 5;
+  bytes session_challenge = 6;
+  repeated string requested_features = 7;
+}
+
+message ServerWelcome {
+  uint32 protocol_version = 1;
+  string node_version = 2;
+  uint64 authority_epoch_seen = 3;
+  repeated string enabled_features = 4;
+  bytes session_proof = 5;
+  bool resync_required = 6;
+  CompatibilityMode compatibility_mode = 7;
+  uint64 max_message_bytes = 8;
+}
+
+message HandshakeRequest {
+  ClientHello hello = 1;
+}
+
+message HandshakeResponse {
+  ServerWelcome welcome = 1;
+}
+
+message BootstrapRequest {
+  // The short-lived proof is consumed by the trusted bridge, never the renderer.
+  bytes session_proof = 1;
+  // Absence requests a full canonical bootstrap snapshot.
+  optional uint64 known_revision = 2;
+}
+
+message BootstrapSnapshot {
+  uint64 revision = 1;
+  uint64 authority_epoch = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  repeated ProjectSummary projects = 4;
+  repeated SessionSummary recent_sessions = 5;
+  string active_project_id = 6;
+  string active_session_id = 7;
+  HealthState node_state = 8;
+}
+
+message BootstrapResponse {
+  BootstrapSnapshot snapshot = 1;
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  HealthState state = 1;
+  string node_version = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  string status_code = 4;
+}
+
+service SystemService {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Bootstrap(BootstrapRequest) returns (BootstrapResponse);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+}

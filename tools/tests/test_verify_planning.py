@@ -248,13 +248,24 @@ class PlanningValidatorTests(unittest.TestCase):
         self.assertEqual(self.diagnostics(), [])
 
     def test_obsolete_debt_review_date_is_rejected(self) -> None:
-        debt = self.read("planning/debt/DEBT-0001.json")
-        debt["debt"]["deadline_or_review"] = "2026-07-16"
-        self.write("planning/debt/DEBT-0001.json", debt)
+        debt = {
+            "version": 1,
+            "debt": {
+                "id": "DEBT-9999",
+                "introduced_by": "planning validator unit test",
+                "reason": "Synthetic debt exercises obsolete review-date validation.",
+                "consequence": "The fixture exists only inside the temporary test repository.",
+                "owner": "planning",
+                "repayment_trigger": "remove after the test",
+                "deadline_or_review": "2026-07-16",
+                "tests_protecting_behavior": [],
+            },
+        }
+        self.write("planning/debt/DEBT-9999.json", debt)
         diagnostics = self.diagnostics()
         self.assert_diagnostic(
             diagnostics,
-            "planning/debt/DEBT-0001.json:$.debt.deadline_or_review",
+            "planning/debt/DEBT-9999.json:$.debt.deadline_or_review",
             "debt review date 2026-07-16 is obsolete",
         )
 
