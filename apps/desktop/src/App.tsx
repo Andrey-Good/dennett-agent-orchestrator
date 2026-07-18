@@ -157,6 +157,7 @@ export function App(): React.JSX.Element {
   const [commandOpen, setCommandOpen] = React.useState(false);
   const searchRef = React.useRef<HTMLInputElement>(null);
   const commandRef = React.useRef<HTMLInputElement>(null);
+  const conversationRef = React.useRef<HTMLElement>(null);
 
   React.useEffect(() => {
     let current = true;
@@ -186,6 +187,11 @@ export function App(): React.JSX.Element {
   React.useEffect(() => {
     if (commandOpen) commandRef.current?.focus();
   }, [commandOpen]);
+
+  React.useEffect(() => {
+    const conversation = conversationRef.current;
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
+  }, [snapshot, localMessages.length]);
 
   const sendDraft = () => {
     const content = draft.trim();
@@ -323,7 +329,7 @@ export function App(): React.JSX.Element {
           </div>
         </header>
 
-        <section className="conversation" aria-label="Conversation">
+        <section ref={conversationRef} className="conversation" aria-label="Conversation">
           <div className="conversation-inner">
             {snapshot ? (
               <>
