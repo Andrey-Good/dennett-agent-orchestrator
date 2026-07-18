@@ -9,7 +9,7 @@
 - Browser viewport and state: 1536 x 971, dark theme, `streaming` fixture, project/chat navigation open, workspace resources open, full plan collapsed.
 - Responsive checks: 1100 x 800 and 900 x 800.
 - Native check: the official Tauri release pipeline embedded the production frontend, and the resulting standalone executable opened on Windows at its configured 1280 x 800 size without a dev server. The transparent custom chrome, Acrylic window material and custom close control were observed in the native window.
-- Implementation commits: `542078a` (review corrections) and `0d5997e` (reproducible standalone Tauri build) on `codex/wp-m01-003-project-chat-screen`.
+- Implementation commits: `542078a` (review corrections), `0d5997e` (reproducible standalone Tauri build) and `eed2138` (resource-contrast closure) on `codex/wp-m01-003-project-chat-screen`.
 
 The three private references and the implementation capture were inspected together in one comparison input. The full-window source establishes the quiet Codex-like density and unified chrome; the project-list crop establishes projects with nested chats followed by standalone recent chats; the results-pane crop establishes the resource grouping and compact rounded surface.
 
@@ -51,6 +51,7 @@ No actionable visual P0, P1 or P2 findings remain. The report stays blocked only
 - Expanded component coverage from spot checks to explicit assertions for every streaming, restored, cached, stopped, timed-out, stale, resyncing, loading and empty fixture. Loading now shows only its skeleton rather than the empty-session prompt.
 - Connected access/runtime triggers to their popovers, moved keyboard focus directly into the first choice and restored it to the trigger on Escape.
 - Caught a packaging regression during the native launch check: a raw Cargo build still targeted the development URL and showed `ERR_CONNECTION_REFUSED`. The Tauri hooks now invoke the pinned package manager through Corepack, and the official release build was rerun; the rebuilt executable opened the embedded production UI with no dev server running.
+- The first closure re-review found two remaining hard-coded resource-heading grays below AA contrast. All solid text foregrounds now route through contrast-tested semantic tokens, a regression test rejects literal text-color hex values, and the 1536 x 971 implementation was recaptured and compared with all three owner references. The brighter resource headings preserve the reference hierarchy without introducing a chromatic accent or a new visual mismatch.
 
 ## Primary Interactions Tested
 
@@ -67,7 +68,7 @@ No actionable visual P0, P1 or P2 findings remain. The report stays blocked only
 ## Verification
 
 - Desktop typecheck: passed.
-- Desktop tests: 13 passed, including all nine fixture states, per-session draft isolation, distinct new-chat creation, popover focus and deterministic WCAG contrast.
+- Desktop tests: 14 passed, including all nine fixture states, per-session draft isolation, distinct new-chat creation, popover focus, deterministic WCAG contrast and a semantic text-color invariant.
 - Desktop production build: passed.
 - Automated structural accessibility and deterministic WCAG token-contrast checks: passed.
 - Monochrome CSS token scan: passed.
