@@ -25,8 +25,8 @@
 | `TEST-CODEX-SDK-CONTINUATION-001` | Codex continuation remains opaque and resumable | `agents`, `providers`, `sessions` | `R2` | `specified` | `high` | `agents` | `planned` |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | Unsent desktop draft survives UI restart without becoming canonical memory | `desktop`, `recovery`, `sessions` | `R2` | `specified` | `high` | `desktop` | `planned` |
 | `TEST-DESKTOP-NODE-LIFECYCLE-001` | Closing the desktop window leaves Node and active state alive | `desktop`, `lifecycle`, `node`, `recovery` | `R2` | `specified` | `critical` | `desktop` | `planned` |
-| `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | Project Chat remains operable by keyboard and assistive technology | `accessibility`, `desktop`, `project-chat` | `R2` | `specified` | `critical` | `desktop` | `planned` |
-| `TEST-DESKTOP-PROJECT-CHAT-UI-001` | Project Chat renders the approved workbench states | `desktop`, `project-chat`, `ux` | `R2` | `specified` | `critical` | `desktop` | `planned` |
+| `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | Project Chat remains operable by keyboard and assistive technology | `accessibility`, `desktop`, `project-chat` | `R2` | `specified` | `critical` | `desktop` | `automated` |
+| `TEST-DESKTOP-PROJECT-CHAT-UI-001` | Project Chat renders the approved workbench states | `desktop`, `project-chat`, `ux` | `R2` | `specified` | `critical` | `desktop` | `automated` |
 | `TEST-LOCAL-IPC-HANDSHAKE-001` | Desktop and Node establish a versioned authenticated local IPC session | `desktop`, `ipc`, `node`, `security` | `R2` | `specified` | `critical` | `transport` | `planned` |
 | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | Local desktop conversation completes and restores end to end | `agents`, `desktop`, `head`, `memory`, `node` | `R2` | `specified` | `critical` | `quality` | `planned` |
 | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | Provider timeout is visible recoverable and never shown as success | `agents`, `desktop`, `providers`, `recovery` | `R2` | `specified` | `critical` | `quality` | `planned` |

@@ -115,8 +115,8 @@
       ],
       "implementation": {
         "target_suite": "apps/desktop renderer",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": ["apps/desktop/src/App.test.tsx"]
       },
       "owner": "desktop"
     },
@@ -138,8 +138,8 @@
       ],
       "implementation": {
         "target_suite": "apps/desktop accessibility",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": ["apps/desktop/src/App.test.tsx"]
       },
       "owner": "desktop"
     },

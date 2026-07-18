@@ -250,7 +250,7 @@
       "version": 1,
       "id": "WP-M01-003",
       "title": "Approve the first Project Chat workbench screen",
-      "status": "REFINED",
+      "status": "IN_PROGRESS",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
@@ -318,9 +318,9 @@
         "TEST-DESKTOP-PROJECT-CHAT-A11Y-001"
       ],
       "required_commands": [
-        "corepack pnpm --filter @dennett/desktop typecheck",
-        "corepack pnpm --filter @dennett/desktop test",
-        "corepack pnpm --filter @dennett/desktop build"
+        "mise exec -- corepack pnpm --filter @dennett/desktop typecheck",
+        "mise exec -- corepack pnpm --filter @dennett/desktop test",
+        "mise exec -- corepack pnpm --filter @dennett/desktop build"
       ],
       "observability": [
         "visual review artifact records viewport, state fixture and commit",
@@ -335,12 +335,13 @@
       },
       "estimate": {
         "target_agent_hours": 4,
-        "max_diff_lines": 2200
+        "max_diff_lines": 3200
       },
       "notes": [
         "The owner chose the first generated visual direction, requested more minimal composer settings at the bottom and explicitly rejected generated UX semantics as authority.",
         "Canonical UX comes from specification 60 plus independent review; the image is visual reference only.",
-        "The auxiliary pane is read-only in M01; real review and Git actions remain M02."
+        "The auxiliary pane is read-only in M01; real review and Git actions remain M02.",
+        "The gross diff budget includes the generated pnpm lockfile expansion for the icon and accessibility-test dependencies; increasing it from 2200 to 3200 prevents visual quality or test depth from being traded against a mechanical line counter."
       ]
     },
     {
