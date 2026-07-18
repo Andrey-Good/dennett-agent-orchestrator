@@ -4,6 +4,30 @@
 
 > Source: `tests/catalog/*.json`. Regenerate with `uv run python tools/generate_test_catalogue.py`.
 
-No current milestone.
+Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 
-Promote one `REFINED` milestone to `ACTIVE` to generate its package acceptance plan.
+- Package status: `REFINED` 6, `REVIEW` 1
+
+| Work Package | Package status | Acceptance case | Risk | Case status | Owner |
+| --- | --- | --- | --- | --- | --- |
+| `WP-M01-001` | `REVIEW` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `R2` | `manual` | `agents` |
+| `WP-M01-001` | `REVIEW` | `TEST-CODEX-SDK-CONTRACT-001` | `R2` | `automated` | `agents` |
+| `WP-M01-001` | `REVIEW` | `TEST-REPO-STRUCTURE-001` | `R1` | `automated` | `repository` |
+| `WP-M01-002` | `REFINED` | `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `specified` | `protocol` |
+| `WP-M01-002` | `REFINED` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
+| `WP-M01-002` | `REFINED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
+| `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-004` | `REFINED` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `specified` | `agents` |
+| `WP-M01-004` | `REFINED` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `specified` | `agents` |
+| `WP-M01-004` | `REFINED` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `specified` | `agents` |
+| `WP-M01-004` | `REFINED` | `TEST-CODEX-SDK-CONTINUATION-001` | `R2` | `specified` | `agents` |
+| `WP-M01-005` | `REFINED` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-005` | `REFINED` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `specified` | `memory` |
+| `WP-M01-005` | `REFINED` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `specified` | `sync` |
+| `WP-M01-006` | `REFINED` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-006` | `REFINED` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `specified` | `transport` |
+| `WP-M01-006` | `REFINED` | `TEST-TAURI-WATCH-BRIDGE-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-007` | `REFINED` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `specified` | `quality` |
+| `WP-M01-007` | `REFINED` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `specified` | `quality` |
+| `WP-M01-007` | `REFINED` | `TEST-M01-TRACE-CORRELATION-001` | `R2` | `specified` | `observability` |

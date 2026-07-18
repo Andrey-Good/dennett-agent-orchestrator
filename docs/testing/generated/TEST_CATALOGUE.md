@@ -4,26 +4,42 @@
 
 > Source: `tests/catalog/*.json`. Regenerate with `uv run python tools/generate_test_catalogue.py`.
 
-16 cases from 1 structured source file(s).
+34 cases from 2 structured source file(s).
 
 ## Summary
 
-- Status: `automated` 13, `specified` 3
-- Risk: `R1` 8, `R2` 5, `R3` 3
-- Domain: `agents` 1, `architecture` 1, `ci` 1, `compatibility` 1, `connectors` 1, `contracts` 1, `devices` 2, `documentation` 2, `effects` 1, `head` 2, `memory` 2, `planning` 4, `protocol` 2, `repository` 8, `rust` 1, `sync` 1, `testing` 4, `tooling` 1, `trust` 1
+- Status: `automated` 14, `manual` 1, `specified` 19
+- Risk: `R1` 8, `R2` 21, `R3` 5
+- Domain: `accessibility` 1, `adapters` 1, `agents` 10, `architecture` 1, `authentication` 1, `ci` 1, `compatibility` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 11, `devices` 2, `documentation` 2, `effects` 1, `head` 3, `ipc` 1, `lifecycle` 1, `memory` 5, `node` 4, `observability` 1, `planning` 4, `project-chat` 2, `protocol` 3, `providers` 6, `recovery` 4, `reliability` 1, `repository` 8, `rust` 1, `security` 1, `sessions` 4, `streaming` 2, `sync` 3, `tauri` 1, `testing` 4, `tooling` 1, `trust` 1, `ux` 1
 
 ## Cases
 
 | ID | Title | Domains | Risk | Status | Priority | Owner | Implementation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `TEST-CODEX-SDK-CONTRACT-001` | Codex SDK adapter preserves the provider boundary | `adapters`, `agents`, `providers` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-FAKE-CHAT-001` | Credential-free fake conversation reaches result and memory | `agents`, `head`, `memory`, `repository` | `R2` | `automated` | `critical` | `agents` | `automated` |
+| `TEST-CODEX-SDK-CHATGPT-AUTH-001` | Codex SDK live canary uses ChatGPT subscription authentication | `agents`, `authentication`, `providers` | `R2` | `manual` | `critical` | `agents` | `manual` |
+| `TEST-AGENT-RUNTIME-CANCEL-001` | Cancellation is scoped acknowledged and terminal | `agents`, `control`, `streaming` | `R2` | `specified` | `critical` | `agents` | `planned` |
+| `TEST-AGENT-RUNTIME-STREAM-001` | Agent runtimes emit ordered provider-neutral stream events | `agents`, `providers`, `streaming` | `R2` | `specified` | `critical` | `agents` | `planned` |
+| `TEST-AGENT-RUNTIME-TIMEOUT-001` | Runtime deadlines produce an honest timeout outcome | `agents`, `providers`, `reliability` | `R2` | `specified` | `critical` | `agents` | `planned` |
+| `TEST-CODEX-SDK-CONTINUATION-001` | Codex continuation remains opaque and resumable | `agents`, `providers`, `sessions` | `R2` | `specified` | `high` | `agents` | `planned` |
+| `TEST-DESKTOP-DRAFT-RECOVERY-001` | Unsent desktop draft survives UI restart without becoming canonical memory | `desktop`, `recovery`, `sessions` | `R2` | `specified` | `high` | `desktop` | `planned` |
+| `TEST-DESKTOP-NODE-LIFECYCLE-001` | Closing the desktop window leaves Node and active state alive | `desktop`, `lifecycle`, `node`, `recovery` | `R2` | `specified` | `critical` | `desktop` | `planned` |
+| `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | Project Chat remains operable by keyboard and assistive technology | `accessibility`, `desktop`, `project-chat` | `R2` | `specified` | `critical` | `desktop` | `planned` |
+| `TEST-DESKTOP-PROJECT-CHAT-UI-001` | Project Chat renders the approved workbench states | `desktop`, `project-chat`, `ux` | `R2` | `specified` | `critical` | `desktop` | `planned` |
+| `TEST-LOCAL-IPC-HANDSHAKE-001` | Desktop and Node establish a versioned authenticated local IPC session | `desktop`, `ipc`, `node`, `security` | `R2` | `specified` | `critical` | `transport` | `planned` |
+| `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | Local desktop conversation completes and restores end to end | `agents`, `desktop`, `head`, `memory`, `node` | `R2` | `specified` | `critical` | `quality` | `planned` |
+| `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | Provider timeout is visible recoverable and never shown as success | `agents`, `desktop`, `providers`, `recovery` | `R2` | `specified` | `critical` | `quality` | `planned` |
+| `TEST-TAURI-WATCH-BRIDGE-001` | Tauri forwards typed watch frames without owning domain state | `desktop`, `sync`, `tauri` | `R2` | `specified` | `critical` | `desktop` | `planned` |
 | `TEST-EFFECT-UNKNOWN-001` | Unknown external effect is reconciled instead of blindly retried | `connectors`, `effects` | `R3` | `specified` | `critical` | `effects` | `planned` |
 | `TEST-HEAD-OPTIN-001` | Unapproved device cannot promote itself to Head | `devices`, `head`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | Client cache cannot become a second canonical memory | `devices`, `memory`, `sync` | `R3` | `specified` | `critical` | `memory` | `planned` |
+| `TEST-M01-TRACE-CORRELATION-001` | One privacy-aware trace joins the complete M01 turn | `agents`, `desktop`, `memory`, `observability` | `R2` | `specified` | `high` | `observability` | `planned` |
 | `TEST-MILESTONE-ACCEPTED-HANDOFF-001` | Generated milestone plan supports the accepted-milestone handoff | `planning`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
 | `TEST-MILESTONE-CURRENT-LABEL-001` | Generated milestone plan reports the actual current lifecycle state | `planning`, `testing` | `R1` | `automated` | `high` | `quality` | `automated` |
 | `TEST-MILESTONE-QUALIFYING-001` | Current milestone test views support the qualification lifecycle | `planning`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
 | `TEST-PLANNING-VALIDATION-001` | Planning validator rejects invalid graph and unsafe ready work | `planning`, `repository` | `R1` | `automated` | `critical` | `planning` | `automated` |
+| `TEST-M01-PROTOCOL-EPOCH-001` | M01 protocol epoch replaces the scaffold before production consumers | `compatibility`, `desktop`, `node`, `protocol` | `R3` | `specified` | `critical` | `protocol` | `planned` |
 | `TEST-PROTOCOL-BREAKING-001` | Protocol compatibility gate rejects breaking changes | `compatibility`, `protocol` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-GENERATION-001` | Protocol clients regenerate deterministically from canonical schemas | `protocol`, `repository` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PR-FAST-GATE-001` | Pull request fast gate covers every M00 required check | `ci`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
@@ -31,4 +47,6 @@
 | `TEST-BOOTSTRAP-CLEAN-001` | Clean checkout bootstrap installs pinned development dependencies | `repository`, `tooling` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-REPO-STRUCTURE-001` | Required repository boundaries and AGENTS files exist | `architecture`, `repository` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-RUST-WORKSPACE-001` | Pinned Rust workspace format lint and tests pass | `repository`, `rust` | `R1` | `automated` | `critical` | `repository` | `automated` |
+| `TEST-PROJECT-SESSION-RESTORE-001` | Project session restores authoritative turns after restart | `memory`, `recovery`, `sessions` | `R3` | `specified` | `critical` | `memory` | `planned` |
+| `TEST-WATCH-GAP-RESYNC-001` | A watch sequence gap marks state stale and requires resync | `desktop`, `sessions`, `sync` | `R2` | `specified` | `critical` | `sync` | `planned` |
 | `TEST-CATALOGUE-VIEWS-001` | Structured catalogue generates deterministic human views | `documentation`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |

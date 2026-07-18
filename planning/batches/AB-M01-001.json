@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "AB-M01-001",
+  "title": "Prove the real Codex runtime path",
+  "status": "RUNNING",
+  "packages": [
+    "WP-M01-001"
+  ],
+  "execution": {
+    "order": "dependency",
+    "max_parallel": 1,
+    "stop_after_packages": 1,
+    "merge_after_each": true,
+    "require_green_main": true
+  },
+  "limits": {
+    "max_risk": "R2",
+    "new_production_dependencies": "allow only the official @openai/codex-sdk dependency pinned by pnpm-lock.yaml",
+    "architecture_changes": "forbid core, protocol, persistence, IPC and desktop architecture changes",
+    "external_effects": "allow one trivial subscription-authenticated Codex inference canary; forbid consequential external actions",
+    "public_breaking_changes": "forbidden"
+  },
+  "stop_conditions": [
+    "SDK requires API-key billing instead of the verified ChatGPT authentication session",
+    "credential or prompt content would enter tracked files, fixtures or logs",
+    "test failure after two bounded repair attempts",
+    "scope expansion into core protocols, persistence or desktop UI",
+    "main becomes red",
+    "merge conflict",
+    "owner decision required"
+  ],
+  "reporting": {
+    "on_package_start": true,
+    "on_package_end": true,
+    "on_decision": true,
+    "periodic_noise": false
+  }
+}

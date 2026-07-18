@@ -10,11 +10,15 @@
       "domains": ["repository", "architecture"],
       "levels": ["static"],
       "requirement_refs": ["ARCH-83:RepositoryLayout"],
-      "expected": ["Repository verification passes"],
+      "work_package_refs": ["WP-M00-001", "WP-M01-001"],
+      "expected": [
+        "Repository verification passes",
+        "Tracked canonical JSON is validated while ignored dependency, build and cache trees are excluded"
+      ],
       "implementation": {
         "target_suite": "tools",
         "status": "automated",
-        "test_paths": ["tools/verify_repo.py"]
+        "test_paths": ["tools/verify_repo.py", "tools/tests/test_verify_repo.py"]
       },
       "owner": "repository"
     },

@@ -1,0 +1,764 @@
+{
+  "version": 1,
+  "id": "M01",
+  "title": "Local desktop conversation",
+  "status": "ACTIVE",
+  "outcome": "A user opens Dennett Desktop, creates or resumes a local project conversation, receives a streaming response from a replaceable agent runtime, can stop the active turn, and sees the authoritative session restored after the UI restarts.",
+  "non_goals": [
+    "editing project files, reviewing diffs, running project tests or performing Git actions, which belong to M02",
+    "managed background Tasks, Runs, Action Inbox or Agent Radar, which belong to M03",
+    "shipping local-model or second-provider adapters before their credentials and runtimes are available",
+    "production installers, remote-device sync, voice, ambient interaction or external connectors"
+  ],
+  "owner_decisions": [],
+  "vertical_slices": [
+    {
+      "id": "VS-M01-01",
+      "title": "Replaceable streaming agent runtime",
+      "work_packages": [
+        "WP-M01-001",
+        "WP-M01-002",
+        "WP-M01-004"
+      ]
+    },
+    {
+      "id": "VS-M01-02",
+      "title": "Persistent project conversation workbench",
+      "work_packages": [
+        "WP-M01-003",
+        "WP-M01-005",
+        "WP-M01-006",
+        "WP-M01-007"
+      ]
+    }
+  ],
+  "work_packages": [
+    {
+      "version": 1,
+      "id": "WP-M01-001",
+      "title": "Prove the subscription-authenticated Codex SDK path",
+      "status": "REVIEW",
+      "milestone": "M01",
+      "vertical_slice": "VS-M01-01",
+      "risk": "R2",
+      "outcome": "The Node adapter host contains a secret-safe Codex SDK canary and deterministic contract tests proving that the pinned SDK can stream a trivial turn and resume the same thread through a dedicated Codex-managed login to the owner's existing ChatGPT subscription without an API key.",
+      "non_goals": [
+        "making live provider calls part of the normal CI gate",
+        "defining the final cross-process runtime protocol",
+        "desktop UI or Tauri integration",
+        "supporting providers other than Codex in this package"
+      ],
+      "requirement_refs": [
+        "M01:OneRealRuntime",
+        "SPEC-41:ReplaceableProviders",
+        "ARCH-83:ProviderLiveSmoke",
+        "OWNER:UseChatGPTSubscriptionBeforeApiBilling"
+      ],
+      "architecture_refs": [
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#49-provider-и-llm-testing",
+        "docs/specifications/41_Dennett_Capabilities_Providers_and_Integrations.md"
+      ],
+      "depends_on": [
+        "WP-M00-007"
+      ],
+      "allowed_roots": [
+        "services/adapter-host-node",
+        "tools/verify_repo.py",
+        "tools/tests/test_verify_repo.py",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "apps",
+        "crates",
+        "protocols",
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "ephemeral canary prompt and dedicated Codex-managed ChatGPT authentication session"
+        ],
+        "writes": [
+          "normalized canary evidence and ephemeral Codex thread state only"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": true
+      },
+      "acceptance": [
+        "TEST-CODEX-SDK-CONTRACT-001",
+        "TEST-CODEX-SDK-CHATGPT-AUTH-001",
+        "TEST-REPO-STRUCTURE-001"
+      ],
+      "required_commands": [
+        "corepack pnpm --filter @dennett/adapter-host-node build",
+        "corepack pnpm --filter @dennett/adapter-host-node test",
+        "corepack pnpm --filter @dennett/adapter-host-node run canary:codex"
+      ],
+      "observability": [
+        "canary reports SDK/runtime version, normalized event kinds, thread continuation and latency without prompt text, tokens or credentials",
+        "missing or non-ChatGPT authentication fails with an actionable diagnostic before model execution"
+      ],
+      "rollback": [
+        "remove the Codex SDK dependency, canary and adapter tests without changing core contracts or user data"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 3,
+        "max_diff_lines": 1400
+      },
+      "notes": [
+        "The owner explicitly selected ChatGPT subscription usage and authorized login on 2026-07-17; API-key auth is out of scope because it uses separate API billing.",
+        "The SDK consumes a dedicated Dennett canary login created by the official Codex ChatGPT flow; the normal Codex auth file is never read, linked or modified.",
+        "Tests, logs and runtime code never parse, copy or print token values; per-run hard links and all session state remain inside bounded disposable directories.",
+        "Installing the first M01 dependency exposed that repository JSON validation scanned ignored dependency trees; the bounded verifier repair validates tracked canonical JSON only.",
+        "Planning lifecycle records, generated test views and generated repository metadata are package-completion artifacts."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M01-002",
+      "title": "Establish the M01 protocol epoch and generated clients",
+      "status": "REFINED",
+      "milestone": "M01",
+      "vertical_slice": "VS-M01-01",
+      "risk": "R3",
+      "outcome": "The pre-production dennett.v1 scaffold is replaced by the canonical subsystem package layout, M01 System, Project and Session commands plus snapshot/delta watch contracts are generated deterministically for Rust and TypeScript, strict Buf lint has no grandfathered exceptions, and the one-time epoch migration explicitly retires DEBT-0001 and DEBT-0002 before any production client compiles.",
+      "non_goals": [
+        "desktop, Node, Head or provider implementation",
+        "mobile, voice, external-effect or multi-device protocol surfaces",
+        "preserving the pre-M01 generated API as a public compatibility promise",
+        "hand-written transport DTOs outside canonical Protobuf sources"
+      ],
+      "requirement_refs": [
+        "ARCH-81:ProtocolPackages",
+        "ARCH-83:GeneratedClients",
+        "ARCH-83:LocalDesktopIPC",
+        "DEBT-0001",
+        "DEBT-0002"
+      ],
+      "architecture_refs": [
+        "docs/architecture/81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.md",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#18-local-desktop-ipc",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#20-code-generation"
+      ],
+      "depends_on": [
+        "WP-M01-001",
+        "WP-M00-002"
+      ],
+      "allowed_roots": [
+        "protocols",
+        "generated",
+        "tools/protocol_codegen.py",
+        "tools/tests/test_protocol_codegen.py",
+        "tests/catalog",
+        "docs/decisions",
+        "docs/testing/generated",
+        "planning",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "apps",
+        "crates",
+        "services",
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "M00 protocol scaffold, checker-owned compatibility baseline and canonical subsystem package rules"
+        ],
+        "writes": [
+          "canonical M01 Protobuf sources, generated clients and explicit protocol-epoch compatibility evidence"
+        ]
+      },
+      "contract_changes": {
+        "public_api": true,
+        "protocol": true,
+        "persistent_schema": false,
+        "migration": true
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-M01-PROTOCOL-EPOCH-001",
+        "TEST-PROTOCOL-GENERATION-001",
+        "TEST-PROTOCOL-BREAKING-001"
+      ],
+      "required_commands": [
+        "uv run --project . --frozen python -m unittest tools.tests.test_protocol_codegen",
+        "uv run --project . --frozen python tools/protocol_codegen.py check",
+        "just check"
+      ],
+      "observability": [
+        "migration evidence lists every retired package and generated public symbol family without user data",
+        "compatibility diagnostics identify source file, field or method and the approved epoch boundary"
+      ],
+      "rollback": [
+        "revert the complete protocol epoch before a production consumer merges; never mix old and new generated packages",
+        "restore DEBT-0001 and DEBT-0002 records if the epoch is abandoned"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": true
+      },
+      "estimate": {
+        "target_agent_hours": 5,
+        "max_diff_lines": 2600
+      },
+      "notes": [
+        "This package is the mandatory repayment trigger recorded by DEBT-0001 and DEBT-0002.",
+        "The change is intentionally breaking only for the non-production M00 scaffold and requires detached adversarial protocol review plus owner approval before merge.",
+        "The full M01 wire surface is bounded to handshake, bootstrap, project/session commands, cancellation, typed errors and revisioned session watch frames."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M01-003",
+      "title": "Approve the first Project Chat workbench screen",
+      "status": "REFINED",
+      "milestone": "M01",
+      "vertical_slice": "VS-M01-02",
+      "risk": "R2",
+      "outcome": "A runnable renderer implements the owner-selected dark translucent workbench direction for one Project Chat screen, with Activity Rail, session/project sidebar, direct chat, compact bottom composer controls and a read-only auxiliary pane, and exposes material states through deterministic fixtures for owner review.",
+      "non_goals": [
+        "real daemon or provider integration",
+        "working Git, diff, terminal or project-file mutations",
+        "Orchestrator, Inbox, Radar or managed-run screens",
+        "locking every future visual token or layout variation"
+      ],
+      "requirement_refs": [
+        "SPEC-60:ProjectWorkspace",
+        "SPEC-60:ProjectChat",
+        "SPEC-60:ProgressiveDisclosure",
+        "M01:OwnerUxGate"
+      ],
+      "architecture_refs": [
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#15-project-workspace--основная-рабочая-среда",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#16-project-chat",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#50-desktop-testing"
+      ],
+      "depends_on": [
+        "WP-M01-002"
+      ],
+      "allowed_roots": [
+        "apps/desktop",
+        "packages",
+        "tests/catalog",
+        "docs/design",
+        "docs/testing/generated",
+        "planning",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "crates",
+        "services",
+        "protocols",
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "deterministic Project Chat fixture through a transport-neutral DennettClient fake"
+        ],
+        "writes": [
+          "presentation state, draft text and layout preferences only"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-DESKTOP-PROJECT-CHAT-UI-001",
+        "TEST-DESKTOP-PROJECT-CHAT-A11Y-001"
+      ],
+      "required_commands": [
+        "corepack pnpm --filter @dennett/desktop typecheck",
+        "corepack pnpm --filter @dennett/desktop test",
+        "corepack pnpm --filter @dennett/desktop build"
+      ],
+      "observability": [
+        "visual review artifact records viewport, state fixture and commit",
+        "UI status distinguishes cached, streaming, stopped, timed out and stale states without technical-log dependence"
+      ],
+      "rollback": [
+        "revert the renderer components and visual tokens while retaining the skeleton bridge"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": true
+      },
+      "estimate": {
+        "target_agent_hours": 4,
+        "max_diff_lines": 2200
+      },
+      "notes": [
+        "The owner chose the first generated visual direction, requested more minimal composer settings at the bottom and explicitly rejected generated UX semantics as authority.",
+        "Canonical UX comes from specification 60 plus independent review; the image is visual reference only.",
+        "The auxiliary pane is read-only in M01; real review and Git actions remain M02."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M01-004",
+      "title": "Normalize streaming runtime continuation and control",
+      "status": "REFINED",
+      "milestone": "M01",
+      "vertical_slice": "VS-M01-01",
+      "risk": "R2",
+      "outcome": "The provider-neutral agent runtime contract supports ordered streaming events, opaque continuation identity, deadline and scoped cancellation; a scripted fake and the Codex adapter pass the same conformance suite without provider types escaping the adapter boundary.",
+      "non_goals": [
+        "provider routing or automatic model fallback",
+        "tool execution against project files",
+        "multi-agent orchestration",
+        "persisting conversations or exposing desktop IPC"
+      ],
+      "requirement_refs": [
+        "SPEC-20:DirectProjectAgent",
+        "SPEC-41:ProviderAdapter",
+        "M01:StreamingCancelTimeout"
+      ],
+      "architecture_refs": [
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#48-adapter-conformance",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#49-provider-и-llm-testing"
+      ],
+      "depends_on": [
+        "WP-M01-001",
+        "WP-M01-002"
+      ],
+      "allowed_roots": [
+        "crates/dennett-agent-core",
+        "services/adapter-host-node",
+        "adapters/agent-runtimes",
+        "protocols",
+        "generated",
+        "tests/contracts",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "Cargo.toml",
+        "Cargo.lock",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "apps",
+        "crates/dennett-memory-core",
+        "services/node",
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "provider-neutral runtime request and adapter-local continuation handle"
+        ],
+        "writes": [
+          "ordered normalized runtime events and cancellation acknowledgement"
+        ]
+      },
+      "contract_changes": {
+        "public_api": true,
+        "protocol": true,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": true
+      },
+      "acceptance": [
+        "TEST-AGENT-RUNTIME-STREAM-001",
+        "TEST-AGENT-RUNTIME-CANCEL-001",
+        "TEST-AGENT-RUNTIME-TIMEOUT-001",
+        "TEST-CODEX-SDK-CONTINUATION-001"
+      ],
+      "required_commands": [
+        "cargo test -p dennett-agent-core",
+        "corepack pnpm --filter @dennett/adapter-host-node test",
+        "uv run --project . --frozen python tools/protocol_codegen.py check"
+      ],
+      "observability": [
+        "events carry runtime request, turn and provider correlation identifiers but not prompt content",
+        "cancel, timeout and malformed provider events are distinct terminal outcomes"
+      ],
+      "rollback": [
+        "retain the unary fake runtime path and revert additive streaming protocol fields before any durable consumer depends on them"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 5,
+        "max_diff_lines": 2400
+      },
+      "notes": [
+        "Codex is the only real runtime in M01, but every core-facing type remains provider-neutral.",
+        "Provider-specific event payloads stay inside services/adapter-host-node or explicit wire conversion modules."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M01-005",
+      "title": "Persist local project sessions and revisioned watch state",
+      "status": "REFINED",
+      "milestone": "M01",
+      "vertical_slice": "VS-M01-02",
+      "risk": "R3",
+      "outcome": "The embedded local Head owns a versioned durable project-session journal and exposes bootstrap snapshots plus monotonic deltas so completed, partial, cancelled and timed-out turns restore after process restart and a detected stream gap requires resync.",
+      "non_goals": [
+        "full Memory Fabric retrieval, evidence extraction or semantic indexing",
+        "multi-device replication or Head promotion",
+        "production backup and encryption policy beyond the bounded development profile",
+        "desktop rendering or provider SDK integration"
+      ],
+      "requirement_refs": [
+        "SPEC-50:OperationLog",
+        "SPEC-50:WatchSnapshotDelta",
+        "M01:SessionRestore",
+        "M01:StreamResync"
+      ],
+      "architecture_refs": [
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#123-watch-reducer-contract",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#47-persistence-tests",
+        "docs/specifications/50_Dennett_Server_Runtime_Events_Sync_and_Portability.md"
+      ],
+      "depends_on": [
+        "WP-M01-004"
+      ],
+      "allowed_roots": [
+        "crates/dennett-contracts",
+        "crates/dennett-kernel",
+        "crates/dennett-memory-core",
+        "crates/dennett-sync-core",
+        "services/head",
+        "adapters/storage",
+        "tests/integration",
+        "tests/simulation",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "Cargo.toml",
+        "Cargo.lock",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "apps",
+        "services/adapter-host-node",
+        "services/node",
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "canonical local project-session events and client watch cursor"
+        ],
+        "writes": [
+          "versioned embedded-Head session journal, snapshots and monotonic revisions"
+        ]
+      },
+      "contract_changes": {
+        "public_api": true,
+        "protocol": true,
+        "persistent_schema": true,
+        "migration": true
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": false
+      },
+      "acceptance": [
+        "TEST-PROJECT-SESSION-RESTORE-001",
+        "TEST-WATCH-GAP-RESYNC-001",
+        "TEST-DESKTOP-DRAFT-RECOVERY-001"
+      ],
+      "required_commands": [
+        "cargo test -p dennett-memory-core -p dennett-sync-core -p dennett-head",
+        "uv run --project . --frozen python tools/protocol_codegen.py check"
+      ],
+      "observability": [
+        "session revisions, stream sequence and command correlation are observable without message content in metric labels",
+        "recovery reports migration, integrity and stale-cursor failures explicitly"
+      ],
+      "rollback": [
+        "export the development session journal, revert the adapter and restore the previous schema version in an isolated profile",
+        "never silently delete or reinterpret an existing session database"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": true
+      },
+      "estimate": {
+        "target_agent_hours": 6,
+        "max_diff_lines": 2800
+      },
+      "notes": [
+        "This is the first durable schema in active development and therefore requires owner review before merge plus detached technical review.",
+        "Ordinary UI caches remain non-canonical; this package writes only through the embedded Head's Memory and session ports."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M01-006",
+      "title": "Connect Tauri to the persistent Node over authenticated local IPC",
+      "status": "REFINED",
+      "milestone": "M01",
+      "vertical_slice": "VS-M01-02",
+      "risk": "R2",
+      "outcome": "Dennett Desktop discovers or starts an independently owned dennett-node, completes a versioned authenticated Named Pipe handshake on Windows, obtains a bootstrap snapshot, forwards watch frames through a thin Tauri channel and reconnects without stopping Node when the window closes.",
+      "non_goals": [
+        "production OS service installers for every platform",
+        "unauthenticated localhost HTTP fallback",
+        "domain logic inside Tauri commands",
+        "mobile transport or remote Head connectivity"
+      ],
+      "requirement_refs": [
+        "ARCH-83:DesktopLifecycle",
+        "ARCH-83:LocalDesktopIPC",
+        "M01:NodeSurvivesWindow",
+        "M01:AuthenticatedHandshake"
+      ],
+      "architecture_refs": [
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#12-desktop-lifecycle",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#18-local-desktop-ipc",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#9-tauri-bridge"
+      ],
+      "depends_on": [
+        "WP-M01-005"
+      ],
+      "allowed_roots": [
+        "services/node",
+        "apps/desktop/src-tauri",
+        "apps/desktop/src/lib",
+        "protocols",
+        "generated",
+        "adapters/transport",
+        "tests/integration",
+        "tests/e2e",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "Cargo.toml",
+        "Cargo.lock",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "apps/mobile",
+        "crates/dennett-memory-core",
+        "services/adapter-host-node",
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "per-install Node endpoint metadata and authoritative bootstrap/watch frames"
+        ],
+        "writes": [
+          "short-lived authenticated UI session and presentation-facing channel frames only"
+        ]
+      },
+      "contract_changes": {
+        "public_api": true,
+        "protocol": true,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": true
+      },
+      "acceptance": [
+        "TEST-LOCAL-IPC-HANDSHAKE-001",
+        "TEST-DESKTOP-NODE-LIFECYCLE-001",
+        "TEST-TAURI-WATCH-BRIDGE-001"
+      ],
+      "required_commands": [
+        "cargo test -p dennett-node",
+        "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+        "corepack pnpm --filter @dennett/desktop test",
+        "uv run --project . --frozen python tools/protocol_codegen.py check"
+      ],
+      "observability": [
+        "startup trace records discovery, handshake, bootstrap and watch subscription phases",
+        "Node absent, protocol mismatch and reconnect failures map to actionable UI-safe errors"
+      ],
+      "rollback": [
+        "disable the M01 IPC feature and restore the skeleton bridge without stopping or deleting Node data"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": false
+      },
+      "estimate": {
+        "target_agent_hours": 6,
+        "max_diff_lines": 3000
+      },
+      "notes": [
+        "Windows Named Pipe is the first implementation; Unix Domain Socket support must remain a transport adapter, not a different application contract.",
+        "Closing or crashing the Tauri window never sends the explicit Stop Dennett on Device command."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M01-007",
+      "title": "Qualify the complete local desktop conversation",
+      "status": "REFINED",
+      "milestone": "M01",
+      "vertical_slice": "VS-M01-02",
+      "risk": "R2",
+      "outcome": "The approved Project Chat screen drives the real Node and embedded Head through a transport-neutral client, supports fake and Codex runtimes, displays streaming progress, scoped Stop and visible timeout, resyncs a forced gap, and restores the same authoritative session after UI restart with one joined trace.",
+      "non_goals": [
+        "project file edits, diff approval or Git operations",
+        "background managed Runs or multi-agent execution",
+        "release installers and cross-platform certification",
+        "using exact natural-language output as a correctness assertion"
+      ],
+      "requirement_refs": [
+        "M01:UserOutcome",
+        "M01:ExitGate",
+        "ARCH-83:FirstVerticalSlice",
+        "SPEC-60:ProjectChat"
+      ],
+      "architecture_refs": [
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#4-m01--local-desktop-conversation",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#86-first-vertical-slice",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#16-project-chat"
+      ],
+      "depends_on": [
+        "WP-M01-003",
+        "WP-M01-006"
+      ],
+      "allowed_roots": [
+        "apps/desktop",
+        "services/node",
+        "services/head",
+        "services/adapter-host-node",
+        "packages",
+        "tests/e2e",
+        "tests/integration",
+        "tests/scenarios",
+        "tests/catalog",
+        "docs/testing/generated",
+        "docs/design",
+        "planning",
+        "README.md",
+        "README.ru.md",
+        "VALIDATION.md",
+        "Cargo.toml",
+        "Cargo.lock",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": [
+        "apps/mobile",
+        "docs/specifications",
+        "docs/architecture"
+      ],
+      "state_ownership": {
+        "reads": [
+          "authoritative project-session snapshot, ordered watch frames and normalized runtime events"
+        ],
+        "writes": [
+          "project chat commands through dennett-node and local presentation preferences"
+        ]
+      },
+      "contract_changes": {
+        "public_api": false,
+        "protocol": false,
+        "persistent_schema": false,
+        "migration": false
+      },
+      "security_effects": {
+        "permission_change": false,
+        "external_effect": false,
+        "secret_access": true
+      },
+      "acceptance": [
+        "TEST-M01-DESKTOP-CONVERSATION-E2E-001",
+        "TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001",
+        "TEST-M01-TRACE-CORRELATION-001"
+      ],
+      "required_commands": [
+        "just check",
+        "corepack pnpm --filter @dennett/desktop test",
+        "cargo test -p dennett-node -p dennett-head",
+        "corepack pnpm --filter @dennett/adapter-host-node test"
+      ],
+      "observability": [
+        "one trace joins installation, component, project, session, command, runtime turn, provider and memory event identifiers",
+        "prompts and model responses remain out of metric labels and secret-safe diagnostics"
+      ],
+      "rollback": [
+        "switch the runtime binding to the deterministic fake and disable the desktop integration flag while preserving the durable session journal"
+      ],
+      "owner_decision": {
+        "required_before_start": false,
+        "required_before_merge": true
+      },
+      "estimate": {
+        "target_agent_hours": 5,
+        "max_diff_lines": 2600
+      },
+      "notes": [
+        "Milestone acceptance requires a live owner demo after automated qualification.",
+        "Codex live failure degrades the provider canary but does not invalidate deterministic core tests."
+      ]
+    }
+  ],
+  "batches": [
+    "AB-M01-001"
+  ],
+  "owner_acceptance": [
+    "Project Chat feels like a direct coding-agent conversation rather than infrastructure management",
+    "Stop, active runtime and project scope are understandable without opening diagnostics",
+    "The chosen visual system remains attractive and minimal in the real first screen",
+    "Closing and reopening the desktop window restores the same session while Node remains alive",
+    "Timeout, cancellation and stale/resync states are visible and honest",
+    "Codex uses the owner's ChatGPT subscription login and no API-billed key is required"
+  ]
+}

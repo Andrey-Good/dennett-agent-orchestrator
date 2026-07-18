@@ -1,0 +1,437 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "TEST-M01-PROTOCOL-EPOCH-001",
+      "title": "M01 protocol epoch replaces the scaffold before production consumers",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["protocol", "compatibility", "desktop", "node"],
+      "levels": ["static", "contract", "migration"],
+      "requirement_refs": ["ARCH-81:ProtocolPackages", "DEBT-0001", "DEBT-0002"],
+      "work_package_refs": ["WP-M01-002"],
+      "expected": [
+        "Canonical subsystem packages replace the non-production dennett.v1 scaffold as one explicit epoch",
+        "Handshake, bootstrap, project, session, cancel, typed error and revisioned watch contracts generate for Rust and TypeScript",
+        "Buf STANDARD lint passes with no grandfathered file exceptions and negative lint probes still fail",
+        "The checker-owned compatibility baseline changes only through reviewed epoch evidence and still rejects field-number reuse",
+        "DEBT-0001 and DEBT-0002 are retired only after generated clients and migration checks pass"
+      ],
+      "implementation": {
+        "target_suite": "protocol epoch",
+        "status": "planned",
+        "test_paths": [
+          "protocols/buf.yaml",
+          "tools/protocol_codegen.py",
+          "tools/tests/test_protocol_codegen.py"
+        ]
+      },
+      "owner": "protocol"
+    },
+    {
+      "id": "TEST-CODEX-SDK-CONTRACT-001",
+      "title": "Codex SDK adapter preserves the provider boundary",
+      "status": "automated",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["agents", "providers", "adapters"],
+      "levels": ["unit", "contract"],
+      "requirement_refs": ["SPEC-41:ProviderAdapter", "M01:OneRealRuntime"],
+      "work_package_refs": ["WP-M01-001"],
+      "expected": [
+        "Deterministic tests exercise the adapter without a live model call",
+        "Provider-specific SDK event types do not escape the Node adapter host",
+        "The canary pins SDK and CLI 0.144.5, the built-in OpenAI provider and exact ChatGPT login status while removing API-key and custom-provider environment variables",
+        "Tool, file-change, MCP and web-search stream items fail the canary instead of being accepted as connectivity evidence",
+        "Malformed event ordering, identities, item fields, usage and late iterator cleanup fail closed with normalized diagnostics",
+        "Logs and fixtures contain no authentication token, prompt text or private response content",
+        "The official SDK version is pinned by the workspace lockfile"
+      ],
+      "implementation": {
+        "target_suite": "services/adapter-host-node",
+        "status": "automated",
+        "test_paths": [
+          "services/adapter-host-node/src/codex-canary-lib.test.ts",
+          "services/adapter-host-node/src/codex-cli.test.ts",
+          "services/adapter-host-node/src/codex-workspace.test.ts"
+        ]
+      },
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-CODEX-SDK-CHATGPT-AUTH-001",
+      "title": "Codex SDK live canary uses ChatGPT subscription authentication",
+      "status": "manual",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["agents", "providers", "authentication"],
+      "levels": ["live-canary"],
+      "requirement_refs": ["OWNER:UseChatGPTSubscriptionBeforeApiBilling", "ARCH-83:ProviderLiveSmoke"],
+      "work_package_refs": ["WP-M01-001"],
+      "expected": [
+        "The login and canary reject API-key mode and confirm a dedicated Codex-managed ChatGPT subscription session without reading token values or touching normal Codex authentication",
+        "The live turns run in a deadline-bounded disposable Git workspace with isolated home and Git configuration that contains no project files and is removed afterward",
+        "A temporary isolated CODEX_HOME exposes only a same-volume filesystem link to the dedicated canary authentication and does not load user configuration, plugins, skills or MCP servers",
+        "One trivial streamed turn reaches a terminal success through the official Codex SDK",
+        "A second turn emits the same observed SDK thread identity and both turns have bounded deadlines",
+        "The report contains versions, event kinds and latency but no prompt, response, token or credential values"
+      ],
+      "implementation": {
+        "target_suite": "services/adapter-host-node live canary",
+        "status": "manual",
+        "test_paths": [
+          "services/adapter-host-node/src/codex-login.ts",
+          "services/adapter-host-node/src/codex-canary.ts"
+        ]
+      },
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-DESKTOP-PROJECT-CHAT-UI-001",
+      "title": "Project Chat renders the approved workbench states",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "ux", "project-chat"],
+      "levels": ["component", "visual"],
+      "requirement_refs": ["SPEC-60:ProjectWorkspace", "SPEC-60:ProjectChat", "M01:OwnerUxGate"],
+      "work_package_refs": ["WP-M01-003"],
+      "expected": [
+        "The default screen contains a narrow Activity Rail, session/project sidebar, direct chat, compact composer toolbar and collapsible read-only auxiliary pane",
+        "User messages use restrained gray surfaces while agent messages remain unboxed",
+        "Loading, streaming, stopped, timed-out, stale, resyncing, empty and restored fixtures are reviewable",
+        "No working Git, diff approval or project mutation action is implied before M02"
+      ],
+      "implementation": {
+        "target_suite": "apps/desktop renderer",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-DESKTOP-PROJECT-CHAT-A11Y-001",
+      "title": "Project Chat remains operable by keyboard and assistive technology",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "accessibility", "project-chat"],
+      "levels": ["component", "accessibility"],
+      "requirement_refs": ["SPEC-60:Accessibility", "SPEC-60:ProjectChat"],
+      "work_package_refs": ["WP-M01-003"],
+      "expected": [
+        "All primary controls are keyboard reachable with visible focus and no keyboard trap",
+        "Stop is discoverable and scoped to the active session",
+        "Streaming status is announced in bounded updates rather than once per token",
+        "Text, controls and focus indicators meet the selected contrast and target-size baseline"
+      ],
+      "implementation": {
+        "target_suite": "apps/desktop accessibility",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-AGENT-RUNTIME-STREAM-001",
+      "title": "Agent runtimes emit ordered provider-neutral stream events",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["agents", "providers", "streaming"],
+      "levels": ["unit", "contract"],
+      "requirement_refs": ["SPEC-41:ProviderAdapter", "M01:StreamingCancelTimeout"],
+      "work_package_refs": ["WP-M01-004"],
+      "expected": [
+        "Every stream starts, advances monotonically and reaches at most one terminal outcome",
+        "Text, progress, usage and completion events are normalized independently of the provider SDK",
+        "Late or malformed events are rejected without inventing completion",
+        "The scripted fake and Codex adapter execute the same conformance cases"
+      ],
+      "implementation": {
+        "target_suite": "agent runtime conformance",
+        "status": "planned",
+        "test_paths": ["crates/dennett-agent-core/src/lib.rs"]
+      },
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-AGENT-RUNTIME-CANCEL-001",
+      "title": "Cancellation is scoped acknowledged and terminal",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["agents", "control", "streaming"],
+      "levels": ["unit", "contract"],
+      "requirement_refs": ["SPEC-20:StopSemantics", "M01:StreamingCancelTimeout"],
+      "work_package_refs": ["WP-M01-004"],
+      "expected": [
+        "A cancel command identifies the exact session and active runtime turn",
+        "Cancellation is idempotent and emits an authoritative acknowledgement",
+        "A cancelled turn cannot later be reported as completed",
+        "Cancelling one turn does not cancel another session"
+      ],
+      "implementation": {
+        "target_suite": "agent runtime conformance",
+        "status": "planned",
+        "test_paths": ["crates/dennett-agent-core/src/lib.rs"]
+      },
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-AGENT-RUNTIME-TIMEOUT-001",
+      "title": "Runtime deadlines produce an honest timeout outcome",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["agents", "providers", "reliability"],
+      "levels": ["unit", "contract"],
+      "requirement_refs": ["SPEC-41:ProviderFailure", "M01:StreamingCancelTimeout"],
+      "work_package_refs": ["WP-M01-004"],
+      "expected": [
+        "The scripted runtime can deterministically exceed a configured deadline",
+        "Timeout is distinct from cancellation, refusal and transport failure",
+        "Partial output remains explicitly partial",
+        "A late provider completion cannot overwrite the timeout outcome"
+      ],
+      "implementation": {
+        "target_suite": "agent runtime conformance",
+        "status": "planned",
+        "test_paths": ["crates/dennett-agent-core/src/lib.rs"]
+      },
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-CODEX-SDK-CONTINUATION-001",
+      "title": "Codex continuation remains opaque and resumable",
+      "status": "specified",
+      "priority": "high",
+      "risk": "R2",
+      "domains": ["agents", "providers", "sessions"],
+      "levels": ["contract", "live-canary"],
+      "requirement_refs": ["SPEC-41:ProviderContinuation", "M01:OneRealRuntime"],
+      "work_package_refs": ["WP-M01-004"],
+      "expected": [
+        "Core receives an opaque continuation reference rather than a Codex SDK object",
+        "The adapter resumes a prior Codex thread through the pinned SDK",
+        "Missing provider continuation state returns a recoverable error",
+        "Provider replacement does not require changing project-session identity"
+      ],
+      "implementation": {
+        "target_suite": "services/adapter-host-node",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-PROJECT-SESSION-RESTORE-001",
+      "title": "Project session restores authoritative turns after restart",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["sessions", "memory", "recovery"],
+      "levels": ["repository", "process-integration"],
+      "requirement_refs": ["SPEC-50:OperationLog", "M01:SessionRestore"],
+      "work_package_refs": ["WP-M01-005"],
+      "expected": [
+        "Accepted user turns and terminal runtime outcomes are durably committed before acknowledgement",
+        "Restart reconstructs the same project and session identity in order",
+        "Completed, partial, cancelled and timed-out turns retain distinct states",
+        "Integrity or migration failure stops restore with an actionable error instead of silently dropping history"
+      ],
+      "implementation": {
+        "target_suite": "embedded Head persistence",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "memory"
+    },
+    {
+      "id": "TEST-WATCH-GAP-RESYNC-001",
+      "title": "A watch sequence gap marks state stale and requires resync",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["sync", "desktop", "sessions"],
+      "levels": ["unit", "property", "integration"],
+      "requirement_refs": ["ARCH-83:WatchReducer", "M01:StreamResync"],
+      "work_package_refs": ["WP-M01-005"],
+      "expected": [
+        "A snapshot establishes stream identity and base revision",
+        "Duplicate deltas are no-ops and a future sequence gap enters resyncing",
+        "No later delta is applied until a fresh snapshot is accepted",
+        "Unavailable state preserves the last permitted value while protected content is removed on revoke"
+      ],
+      "implementation": {
+        "target_suite": "watch reducer and Head stream",
+        "status": "planned",
+        "test_paths": ["crates/dennett-sync-core/src/lib.rs"]
+      },
+      "owner": "sync"
+    },
+    {
+      "id": "TEST-DESKTOP-DRAFT-RECOVERY-001",
+      "title": "Unsent desktop draft survives UI restart without becoming canonical memory",
+      "status": "specified",
+      "priority": "high",
+      "risk": "R2",
+      "domains": ["desktop", "sessions", "recovery"],
+      "levels": ["component", "process-integration"],
+      "requirement_refs": ["ARCH-83:DraftPersistence", "M01:SessionRestore"],
+      "work_package_refs": ["WP-M01-005"],
+      "expected": [
+        "An unsent composer draft restores after UI restart",
+        "The draft is visibly unsent and never appears as a canonical session turn",
+        "Sending the restored draft creates one command with a stable command identifier",
+        "Discarding the draft does not mutate authoritative project history"
+      ],
+      "implementation": {
+        "target_suite": "desktop draft persistence",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-LOCAL-IPC-HANDSHAKE-001",
+      "title": "Desktop and Node establish a versioned authenticated local IPC session",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "node", "ipc", "security"],
+      "levels": ["contract", "process-integration"],
+      "requirement_refs": ["ARCH-83:LocalDesktopIPC", "M01:AuthenticatedHandshake"],
+      "work_package_refs": ["WP-M01-006"],
+      "expected": [
+        "Windows uses a per-install Named Pipe with OS-local access controls and no default TCP listener",
+        "ClientHello and ServerWelcome negotiate a supported protocol version and short-lived session proof",
+        "Invalid challenge, incompatible protocol and wrong installation identity are rejected",
+        "The React renderer never receives Node credentials or raw endpoint secrets"
+      ],
+      "implementation": {
+        "target_suite": "desktop Node IPC",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "transport"
+    },
+    {
+      "id": "TEST-DESKTOP-NODE-LIFECYCLE-001",
+      "title": "Closing the desktop window leaves Node and active state alive",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "node", "lifecycle", "recovery"],
+      "levels": ["process-integration", "e2e"],
+      "requirement_refs": ["ARCH-83:DesktopLifecycle", "M01:NodeSurvivesWindow"],
+      "work_package_refs": ["WP-M01-006"],
+      "expected": [
+        "Desktop startup renders a local shell before bootstrap completes and reports freshness",
+        "Closing or crashing the Tauri window does not terminate dennett-node",
+        "Reopening creates a new UI session, reconnects and restores the prior authoritative session",
+        "Node absent and protocol mismatch lead to Recovery actions instead of an empty application"
+      ],
+      "implementation": {
+        "target_suite": "desktop lifecycle integration",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-TAURI-WATCH-BRIDGE-001",
+      "title": "Tauri forwards typed watch frames without owning domain state",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "tauri", "sync"],
+      "levels": ["contract", "component"],
+      "requirement_refs": ["ARCH-83:TauriBridge", "ARCH-83:WatchReducer"],
+      "work_package_refs": ["WP-M01-006"],
+      "expected": [
+        "Tauri validates command payloads and forwards stable command identifiers",
+        "A Tauri channel carries snapshot and delta frames without reimplementing session semantics",
+        "Reconnect and Node-absent errors map to transport-neutral client errors",
+        "Frontend features depend on DennettClient rather than importing Tauri APIs directly"
+      ],
+      "implementation": {
+        "target_suite": "Tauri bridge and renderer client",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-M01-DESKTOP-CONVERSATION-E2E-001",
+      "title": "Local desktop conversation completes and restores end to end",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "node", "head", "agents", "memory"],
+      "levels": ["e2e"],
+      "requirement_refs": ["ARCH-83:FirstVerticalSlice", "M01:ExitGate"],
+      "work_package_refs": ["WP-M01-007"],
+      "expected": [
+        "A user creates a project session and receives an ordered streamed fake response in Project Chat",
+        "The terminal Result Envelope and matching Memory Event share the submitted command identity",
+        "Stop reaches an authoritative cancelled state and is not lost",
+        "After the desktop window closes and reopens, Node remains alive and the same session is restored",
+        "The same application path can select the live Codex adapter without changing UI or core contracts"
+      ],
+      "implementation": {
+        "target_suite": "desktop E2E",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "quality"
+    },
+    {
+      "id": "TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001",
+      "title": "Provider timeout is visible recoverable and never shown as success",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "agents", "providers", "recovery"],
+      "levels": ["integration", "e2e"],
+      "requirement_refs": ["M01:ExitGate", "SPEC-60:ProjectChatFailure"],
+      "work_package_refs": ["WP-M01-007"],
+      "expected": [
+        "A deterministic fake timeout produces a timed-out authoritative turn",
+        "Project Chat shows the timeout, retained partial output and an explicit retry path",
+        "The UI never derives success from model text or optimistic state",
+        "A late provider event cannot replace the visible terminal timeout"
+      ],
+      "implementation": {
+        "target_suite": "desktop E2E",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "quality"
+    },
+    {
+      "id": "TEST-M01-TRACE-CORRELATION-001",
+      "title": "One privacy-aware trace joins the complete M01 turn",
+      "status": "specified",
+      "priority": "high",
+      "risk": "R2",
+      "domains": ["observability", "desktop", "agents", "memory"],
+      "levels": ["integration"],
+      "requirement_refs": ["ARCH-83:Correlation", "M01:ExitGate"],
+      "work_package_refs": ["WP-M01-007"],
+      "expected": [
+        "Trace evidence joins project, session, command, runtime turn, provider and memory event identifiers",
+        "Component and protocol-version attributes identify each boundary",
+        "Prompt text, response text, credentials and private object identifiers are absent from metric labels",
+        "A failed or cancelled turn remains diagnosable through the same correlation chain"
+      ],
+      "implementation": {
+        "target_suite": "M01 integration observability",
+        "status": "planned",
+        "test_paths": []
+      },
+      "owner": "observability"
+    }
+  ]
+}
