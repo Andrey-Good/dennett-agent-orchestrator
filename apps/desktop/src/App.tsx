@@ -235,9 +235,10 @@ export function App(): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [resourcesOpen, setResourcesOpen] = React.useState(true);
   const [selectedSession, setSelectedSession] = React.useState("screen");
+  const [localSessions, setLocalSessions] = React.useState<Array<SessionItem & { projectId?: string }>>([]);
   const [surface, setSurface] = React.useState<WorkspaceSurface>({ kind: "chat" });
   const [draft, setDraft] = React.useState("");
-  const [localMessages, setLocalMessages] = React.useState<ChatMessage[]>([]);
+  const [localMessages, setLocalMessages] = React.useState<Record<string, ChatMessage[]>>({});
   const [announcement, setAnnouncement] = React.useState("Project Chat opened");
   const [commandOpen, setCommandOpen] = React.useState(false);
   const [composerPopover, setComposerPopover] = React.useState<ComposerPopover>(null);
@@ -252,11 +253,23 @@ export function App(): React.JSX.Element {
   const composerRef = React.useRef<HTMLTextAreaElement>(null);
   const composerShellRef = React.useRef<HTMLDivElement>(null);
   const conversationRef = React.useRef<HTMLElement>(null);
+  const accessTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const accessFirstRef = React.useRef<HTMLButtonElement>(null);
+  const runtimeTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const runtimeFirstRef = React.useRef<HTMLButtonElement>(null);
+  const nextLocalSessionIdRef = React.useRef(1);
+  const nextLocalMessageIdRef = React.useRef(1);
   const nativeShell = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-  const allSessions = [...projectGroups.flatMap((project) => project.sessions), ...recentChats];
+  const visibleProjectGroups = projectGroups.map((project) => ({
+    ...project,
+    sessions: [...project.sessions, ...localSessions.filter((session) => session.projectId === project.id)],
+  }));
+  const standaloneSessions = [...localSessions.filter((session) => !session.projectId), ...recentChats];
+  const allSessions = [...visibleProjectGroups.flatMap((project) => project.sessions), ...standaloneSessions];
   const selectedTitle = allSessions.find((session) => session.id === selectedSession)?.title ?? allSessions[0].title;
-  const selectedProject = projectGroups.find((project) => project.sessions.some((session) => session.id === selectedSession));
+  const selectedProject = visibleProjectGroups.find((project) => project.sessions.some((session) => session.id === selectedSession));
+  const selectedLocalMessages = localMessages[selectedSession] ?? [];
 
   const openCommandCenter = React.useCallback(() => {
     setComposerPopover(null);
@@ -292,12 +305,18 @@ export function App(): React.JSX.Element {
       }
       if (event.key === "Escape") {
         closeCommandCenter();
+        const returnTarget = composerPopover === "access"
+          ? accessTriggerRef.current
+          : composerPopover === "runtime"
+            ? runtimeTriggerRef.current
+            : null;
         setComposerPopover(null);
+        requestAnimationFrame(() => returnTarget?.focus());
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeCommandCenter, openCommandCenter]);
+  }, [closeCommandCenter, composerPopover, openCommandCenter]);
 
   React.useEffect(() => {
     if (!composerPopover) return;
@@ -309,6 +328,11 @@ export function App(): React.JSX.Element {
   }, [composerPopover]);
 
   React.useEffect(() => {
+    if (composerPopover === "access") accessFirstRef.current?.focus();
+    if (composerPopover === "runtime") runtimeFirstRef.current?.focus();
+  }, [composerPopover]);
+
+  React.useEffect(() => {
     if (commandOpen) commandRef.current?.focus();
     else if (commandWasOpenRef.current) returnFocusRef.current?.focus();
     commandWasOpenRef.current = commandOpen;
@@ -317,7 +341,7 @@ export function App(): React.JSX.Element {
   React.useEffect(() => {
     const conversation = conversationRef.current;
     if (conversation && surface.kind === "chat") conversation.scrollTop = conversation.scrollHeight;
-  }, [snapshot, localMessages.length, surface.kind]);
+  }, [snapshot, selectedLocalMessages.length, surface.kind]);
 
   const selectSession = (sessionId: string) => {
     setSelectedSession(sessionId);
@@ -325,17 +349,27 @@ export function App(): React.JSX.Element {
     setAnnouncement(`Opened ${allSessions.find((item) => item.id === sessionId)?.title ?? "chat"}.`);
   };
 
-  const startNewChat = () => {
-    setSelectedSession("screen");
+  const startNewChat = (projectId?: string) => {
+    const sessionId = `local-chat-${nextLocalSessionIdRef.current++}`;
+    setLocalSessions((sessions) => [...sessions, { id: sessionId, title: "Untitled chat", meta: "now", projectId }]);
+    setSelectedSession(sessionId);
     setFixture("empty");
     setSurface({ kind: "chat" });
-    setAnnouncement("New project chat preview opened.");
+    setComposerPopover(null);
+    setAnnouncement(projectId ? "New project chat preview opened." : "New standalone chat preview opened.");
+    requestAnimationFrame(() => composerRef.current?.focus());
   };
 
   const sendDraft = () => {
     const content = draft.trim();
     if (!content) return;
-    setLocalMessages((items) => [...items, { id: `local-${items.length}`, author: "user", paragraphs: [content], timestamp: "now" }]);
+    setLocalMessages((messagesBySession) => ({
+      ...messagesBySession,
+      [selectedSession]: [
+        ...(messagesBySession[selectedSession] ?? []),
+        { id: `local-message-${nextLocalMessageIdRef.current++}`, author: "user", paragraphs: [content], timestamp: "now" },
+      ],
+    }));
     setDraft("");
     setAnnouncement("Draft added to this local preview. No runtime command was sent.");
   };
@@ -385,7 +419,7 @@ export function App(): React.JSX.Element {
     }
   };
 
-  const messages = [...(snapshot?.messages ?? []), ...localMessages];
+  const messages = [...(snapshot?.messages ?? []), ...selectedLocalMessages];
   const planExpanded = planPinned || planHovered;
 
   return (
@@ -429,7 +463,7 @@ export function App(): React.JSX.Element {
       <nav className="activity-rail" aria-label="Primary navigation">
         <div className="rail-main">
           <div className="rail-brand" role="img" aria-label="Dennett"><BracketsCurly size={19} weight="bold" aria-hidden="true" /></div>
-          <IconButton label="New chat" icon={PencilSimpleLine} onClick={startNewChat} />
+          <IconButton label="New chat" icon={PencilSimpleLine} onClick={() => startNewChat()} />
           <IconButton label="Projects" icon={FolderSimple} active onClick={() => setSidebarOpen(true)} />
           <IconButton label="Tasks — available in a later milestone" icon={ListChecks} disabled />
           <IconButton label="Plugins — available in a later milestone" icon={Plug} disabled />
@@ -442,13 +476,13 @@ export function App(): React.JSX.Element {
             <button type="button" className="sidebar-title" aria-label="Projects list"><span>Projects</span><CaretDown size={14} aria-hidden="true" /></button>
             <div>
               <IconButton label="Project options — available in a later milestone" icon={DotsThree} disabled />
-              <IconButton label="New project chat" icon={Plus} onClick={startNewChat} />
+              <IconButton label="New project chat" icon={Plus} onClick={() => startNewChat(selectedProject?.id ?? projectGroups[0].id)} />
             </div>
           </div>
 
           <div className="sidebar-scroll">
             <div className="project-groups">
-              {projectGroups.map((project) => (
+              {visibleProjectGroups.map((project) => (
                 <details key={project.id} open>
                   <summary><FolderSimple size={17} aria-hidden="true" /><span>{project.title}</span></summary>
                   <div className="nested-chats">
@@ -469,7 +503,7 @@ export function App(): React.JSX.Element {
 
             <section className="recent-chats" aria-labelledby="recent-chats-heading">
               <h2 id="recent-chats-heading">Recent</h2>
-              {recentChats.map((session) => (
+              {standaloneSessions.map((session) => (
                 <button
                   type="button"
                   key={session.id}
@@ -505,8 +539,13 @@ export function App(): React.JSX.Element {
                       <span>{snapshot.notice}</span>
                       <small>{snapshot.freshness}</small>
                     </div>
-                    {messages.length ? messages.map((message) => <Message key={message.id} message={message} />) : <EmptyConversation onSuggestion={useSuggestion} />}
-                    {snapshot.state === "loading" && <div className="loading-lines" aria-hidden="true"><span /><span /><span /></div>}
+                    {snapshot.state === "loading" ? (
+                      <div className="loading-lines" role="status" aria-label="Loading conversation content"><span /><span /><span /></div>
+                    ) : messages.length ? (
+                      messages.map((message) => <Message key={message.id} message={message} />)
+                    ) : (
+                      <EmptyConversation onSuggestion={useSuggestion} />
+                    )}
                   </>
                 ) : (
                   <div className="loading-lines" role="status" aria-label="Loading Project Chat"><span /><span /><span /></div>
@@ -533,12 +572,28 @@ export function App(): React.JSX.Element {
                     <div className="composer-tools">
                       <IconButton label="Add context" icon={Plus} active={composerPopover === "context"} onClick={() => setComposerPopover((open) => open === "context" ? null : "context")} />
                       <IconButton label="Plugins" icon={Plug} active={composerPopover === "plugins"} onClick={() => setComposerPopover((open) => open === "plugins" ? null : "plugins")} />
-                      <button type="button" className="composer-setting" aria-expanded={composerPopover === "access"} onClick={() => setComposerPopover((open) => open === "access" ? null : "access")}>
+                      <button
+                        ref={accessTriggerRef}
+                        type="button"
+                        className="composer-setting"
+                        aria-expanded={composerPopover === "access"}
+                        aria-controls="composer-access-popover"
+                        aria-haspopup="dialog"
+                        onClick={() => setComposerPopover((open) => open === "access" ? null : "access")}
+                      >
                         <ShieldCheck size={14} aria-hidden="true" />{accessMode === "full" ? "Full access" : "Auto-approve"}<CaretDown size={11} aria-hidden="true" />
                       </button>
                     </div>
                     <div className="composer-send">
-                      <button type="button" className="runtime-setting" aria-expanded={composerPopover === "runtime"} onClick={() => setComposerPopover((open) => open === "runtime" ? null : "runtime")}>
+                      <button
+                        ref={runtimeTriggerRef}
+                        type="button"
+                        className="runtime-setting"
+                        aria-expanded={composerPopover === "runtime"}
+                        aria-controls="composer-runtime-popover"
+                        aria-haspopup="dialog"
+                        onClick={() => setComposerPopover((open) => open === "runtime" ? null : "runtime")}
+                      >
                         <span>Codex</span><small>{reasoning === "high" ? "High" : "Medium"}</small><CaretDown size={11} aria-hidden="true" />
                       </button>
                       <IconButton label="Voice input — available in a later milestone" icon={Microphone} disabled />
@@ -565,18 +620,18 @@ export function App(): React.JSX.Element {
                   </div>
                 )}
                 {composerPopover === "access" && (
-                  <div className="composer-popover popover-left popover-access" role="dialog" aria-label="Agent access">
+                  <div id="composer-access-popover" className="composer-popover popover-left popover-access" role="dialog" aria-label="Agent access">
                     <strong>Agent access</strong>
-                    <button type="button" className={accessMode === "full" ? "is-selected" : ""} onClick={() => { setAccessMode("full"); setComposerPopover(null); }}><ShieldCheck size={14} />Full access{accessMode === "full" && <CheckCircle size={14} />}</button>
-                    <button type="button" className={accessMode === "auto" ? "is-selected" : ""} onClick={() => { setAccessMode("auto"); setComposerPopover(null); }}><Command size={14} />Auto-approve{accessMode === "auto" && <CheckCircle size={14} />}</button>
+                    <button ref={accessFirstRef} type="button" className={accessMode === "full" ? "is-selected" : ""} onClick={() => { setAccessMode("full"); setComposerPopover(null); accessTriggerRef.current?.focus(); }}><ShieldCheck size={14} />Full access{accessMode === "full" && <CheckCircle size={14} />}</button>
+                    <button type="button" className={accessMode === "auto" ? "is-selected" : ""} onClick={() => { setAccessMode("auto"); setComposerPopover(null); accessTriggerRef.current?.focus(); }}><Command size={14} />Auto-approve{accessMode === "auto" && <CheckCircle size={14} />}</button>
                   </div>
                 )}
                 {composerPopover === "runtime" && (
-                  <div className="composer-popover popover-right runtime-popover" role="dialog" aria-label="Agent runtime">
+                  <div id="composer-runtime-popover" className="composer-popover popover-right runtime-popover" role="dialog" aria-label="Agent runtime">
                     <strong>Agent runtime</strong>
                     <div className="runtime-row"><span><Robot size={14} />Source</span><b>Codex SDK</b></div>
                     <div className="runtime-row"><span><Brain size={14} />Model</span><b>Provider default</b></div>
-                    <div className="runtime-choice"><span><Gauge size={14} />Reasoning</span><div><button type="button" className={reasoning === "medium" ? "is-selected" : ""} onClick={() => setReasoning("medium")}>Medium</button><button type="button" className={reasoning === "high" ? "is-selected" : ""} onClick={() => setReasoning("high")}>High</button></div></div>
+                    <div className="runtime-choice"><span><Gauge size={14} />Reasoning</span><div><button ref={runtimeFirstRef} type="button" className={reasoning === "medium" ? "is-selected" : ""} onClick={() => setReasoning("medium")}>Medium</button><button type="button" className={reasoning === "high" ? "is-selected" : ""} onClick={() => setReasoning("high")}>High</button></div></div>
                     <div className="runtime-row"><span>Speed</span><b>Provider managed</b></div>
                   </div>
                 )}

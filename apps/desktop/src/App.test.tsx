@@ -5,6 +5,38 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { createFixtureDennettClient, type DennettClient } from "./fixtures/projectChat";
+import stylesCss from "./styles.css?raw";
+
+const fixtureExpectations = [
+  ["streaming", "Codex is checking the renderer. You can steer or stop this session."],
+  ["restored", "The session was restored from the authoritative local snapshot."],
+  ["cached", "Showing the last local snapshot while the node reconnects."],
+  ["stopped", "Generation stopped for this session. The partial response is preserved."],
+  ["timed-out", "The runtime did not acknowledge completion. Retry when the connection is healthy."],
+  ["stale", "This view is behind the authoritative revision. Mutating actions are unavailable."],
+  ["resyncing", "Refreshing the session snapshot after a revision gap."],
+  ["loading", "Opening the local Project Chat snapshot."],
+  ["empty", "Start a direct conversation with the project agent."],
+] as const;
+
+function colorToken(name: string): string {
+  const match = stylesCss.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"));
+  if (!match) throw new Error(`Missing solid color token --${name}`);
+  return match[1];
+}
+
+function relativeLuminance(hex: string): number {
+  const channels = hex.slice(1).match(/../g)?.map((value) => Number.parseInt(value, 16) / 255) ?? [];
+  const [red, green, blue] = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+    / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+}
 
 describe("Project Chat workbench", () => {
   it("renders the owner-directed zones and truthful runtime state", async () => {
@@ -45,13 +77,42 @@ describe("Project Chat workbench", () => {
     render(<App />);
     const selector = screen.getByRole("combobox", { name: "Preview state" });
 
-    expect(within(selector).getAllByRole("option")).toHaveLength(9);
-    await user.selectOptions(selector, "stale");
-    expect(await screen.findByText("This view is behind the authoritative revision. Mutating actions are unavailable.")).toBeVisible();
-    expect(screen.getByText("Last synced 11 min ago")).toBeVisible();
+    expect(within(selector).getAllByRole("option")).toHaveLength(fixtureExpectations.length);
+    for (const [fixtureId, expectedNotice] of fixtureExpectations) {
+      await user.selectOptions(selector, fixtureId);
+      expect(await screen.findByText(expectedNotice)).toBeVisible();
+    }
 
-    await user.selectOptions(selector, "empty");
+    expect(screen.getByText("No messages yet")).toBeVisible();
     expect(await screen.findByRole("heading", { name: "Start with the project" })).toBeVisible();
+
+    await user.selectOptions(selector, "loading");
+    expect(await screen.findByRole("status", { name: "Loading conversation content" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Start with the project" })).not.toBeInTheDocument();
+  });
+
+  it("keeps local draft messages scoped to their session and creates a distinct chat", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    const composer = screen.getByRole("textbox", { name: "Message to project agent" });
+    await user.type(composer, "Only visible in the owner checkpoint");
+    fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true });
+    expect(await screen.findByText("Only visible in the owner checkpoint")).toBeVisible();
+
+    const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
+    await user.click(within(sidebar).getByRole("button", { name: /M01 protocol epoch/ }));
+    expect(screen.queryByText("Only visible in the owner checkpoint")).not.toBeInTheDocument();
+
+    await user.click(within(sidebar).getByRole("button", { name: /Project Chat owner checkpoint/ }));
+    expect(await screen.findByText("Only visible in the owner checkpoint")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
+    expect(await screen.findByRole("heading", { name: "Start with the project" })).toBeVisible();
+    expect(screen.queryByText("Only visible in the owner checkpoint")).not.toBeInTheDocument();
+    expect(within(sidebar).getByRole("button", { name: /Untitled chat/ })).toBeVisible();
   });
 
   it("scopes Stop to the selected session and preserves partial output", async () => {
@@ -96,18 +157,26 @@ describe("Project Chat workbench", () => {
     render(<App />);
     await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
 
-    await user.click(screen.getByRole("button", { name: "Full access" }));
+    const accessTrigger = screen.getByRole("button", { name: "Full access" });
+    expect(accessTrigger).toHaveAttribute("aria-controls", "composer-access-popover");
+    await user.click(accessTrigger);
     const accessDialog = screen.getByRole("dialog", { name: "Agent access" });
+    expect(within(accessDialog).getByRole("button", { name: "Full access" })).toHaveFocus();
     await user.click(within(accessDialog).getByRole("button", { name: "Auto-approve" }));
     expect(screen.getByRole("button", { name: "Auto-approve" })).toBeVisible();
+    expect(accessTrigger).toHaveFocus();
 
-    await user.click(screen.getByRole("button", { name: /CodexHigh/ }));
+    const runtimeTrigger = screen.getByRole("button", { name: /CodexHigh/ });
+    expect(runtimeTrigger).toHaveAttribute("aria-controls", "composer-runtime-popover");
+    await user.click(runtimeTrigger);
     const runtimeDialog = screen.getByRole("dialog", { name: "Agent runtime" });
     expect(within(runtimeDialog).getByText("Codex SDK")).toBeVisible();
+    expect(within(runtimeDialog).getByRole("button", { name: "Medium" })).toHaveFocus();
     await user.click(within(runtimeDialog).getByRole("button", { name: "Medium" }));
     expect(screen.getByRole("button", { name: /CodexMedium/ })).toBeVisible();
-    await user.click(screen.getByRole("textbox", { name: "Message to project agent" }));
+    fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Agent runtime" })).not.toBeInTheDocument();
+    await waitFor(() => expect(runtimeTrigger).toHaveFocus());
 
     await user.click(screen.getByRole("button", { name: "Add context" }));
     expect(screen.getByRole("dialog", { name: "Add context" })).toBeVisible();
@@ -129,12 +198,22 @@ describe("Project Chat workbench", () => {
     expect(screen.getByRole("region", { name: "Conversation" })).toBeVisible();
   });
 
-  it("has no automated accessibility violations in the default state", async () => {
+  it("has no automated structural accessibility violations in the default state", async () => {
     const { container } = render(<App />);
     await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
 
     const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
     expect(result.violations, result.violations.map((violation) => violation.help).join("\n")).toEqual([]);
+  });
+
+  it("keeps muted text tokens at WCAG AA contrast on the lightest dark surface", () => {
+    const lightestSurface = colorToken("surface-active");
+    const foregrounds = [colorToken("text"), colorToken("text-muted"), colorToken("text-faint")];
+
+    for (const foreground of foregrounds) {
+      expect(contrastRatio(foreground, lightestSurface), `${foreground} on ${lightestSurface}`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(contrastRatio(colorToken("text-faint"), colorToken("message-user"))).toBeGreaterThanOrEqual(4.5);
   });
 
   it("keeps focus stable when a fixture update arrives", async () => {
