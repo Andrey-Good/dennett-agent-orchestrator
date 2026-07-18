@@ -10,4 +10,20 @@ Quarantined, waived, retired-without-replacement and not-yet-automated cases.
 | --- | --- | --- | --- | --- |
 | `TEST-EFFECT-UNKNOWN-001` | `R3` | `effects` | missing automation | `tests/scenarios/effect-timeout-no-duplicate.yaml` |
 | `TEST-HEAD-OPTIN-001` | `R3` | `trust` | missing automation | `tests/scenarios/head-promotion-opt-in.yaml` |
+| `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `protocol` | missing automation | `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `memory` | missing automation | `tests/scenarios/offline-client-memory-not-canonical.yaml` |
+| `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `memory` | missing automation | — |
+| `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `agents` | missing automation | `crates/dennett-agent-core/src/lib.rs` |
+| `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `agents` | missing automation | `crates/dennett-agent-core/src/lib.rs` |
+| `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `agents` | missing automation | `crates/dennett-agent-core/src/lib.rs` |
+| `TEST-CODEX-SDK-CONTINUATION-001` | `R2` | `agents` | missing automation | — |
+| `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `desktop` | missing automation | — |
+| `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `desktop` | missing automation | — |
+| `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `desktop` | missing automation | — |
+| `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `desktop` | missing automation | — |
+| `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `transport` | missing automation | — |
+| `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `quality` | missing automation | — |
+| `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `quality` | missing automation | — |
+| `TEST-M01-TRACE-CORRELATION-001` | `R2` | `observability` | missing automation | — |
+| `TEST-TAURI-WATCH-BRIDGE-001` | `R2` | `desktop` | missing automation | — |
+| `TEST-WATCH-GAP-RESYNC-001` | `R2` | `sync` | missing automation | `crates/dennett-sync-core/src/lib.rs` |

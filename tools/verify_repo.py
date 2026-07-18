@@ -1,14 +1,18 @@
-
 from __future__ import annotations
+
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Iterable
+
 
 ROOT = Path(__file__).resolve().parents[1]
-required = [
-    "README.md", "AGENTS.md", "Cargo.toml",
+REQUIRED = [
+    "README.md",
+    "AGENTS.md",
+    "Cargo.toml",
     "docs/specifications/00_Dennett_Functional_Concept.md",
     "docs/architecture/80_Dennett_System_Architecture_and_Runtime_Topology.md",
     "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md",
@@ -28,90 +32,135 @@ required = [
     "schemas/work-package.schema.json",
     "tools/generate_repository_metadata.py",
 ]
-missing = [p for p in required if not (ROOT / p).exists()]
-if missing:
-    print("Missing required repository files:", *missing, sep="\n- ")
-    sys.exit(1)
-
-# Validate JSON files.
-for p in ROOT.rglob("*.json"):
-    try:
-        json.loads(p.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"Invalid JSON: {p.relative_to(ROOT)}: {exc}")
-        sys.exit(1)
-
-# Major bounded roots need instructions.
-for p in [
-    "apps/desktop", "apps/mobile", "services/head", "services/node",
-    "services/memoryd", "services/sensor-worker", "crates/dennett-memory-core",
-    "crates/dennett-trust-core", "adapters", "protocols", "tests/scenarios"
-]:
-    if not (ROOT / p / "AGENTS.md").exists():
-        print(f"Missing nested AGENTS.md: {p}")
-        sys.exit(1)
-
-# Canonical product identity is an owner decision for M00.
-tracked_result = subprocess.run(
-    ["git", "ls-files", "-z"],
-    cwd=ROOT,
-    check=True,
-    capture_output=True,
-)
-tracked = [
-    path
-    for path in tracked_result.stdout.decode("utf-8").split("\0")
-    if path
+INSTRUCTION_ROOTS = [
+    "apps/desktop",
+    "apps/mobile",
+    "services/head",
+    "services/node",
+    "services/memoryd",
+    "services/sensor-worker",
+    "crates/dennett-memory-core",
+    "crates/dennett-trust-core",
+    "adapters",
+    "protocols",
+    "tests/scenarios",
 ]
-legacy_name = re.compile("dene" + r"t(?!t)", re.IGNORECASE)
-legacy_paths = [path for path in tracked if legacy_name.search(path)]
-if legacy_paths:
-    print("Legacy product-name paths remain:", *legacy_paths, sep="\n- ")
-    sys.exit(1)
-
-allowed_legacy_text = {"planning/decisions/DEC-0001.json"}
-text_suffixes = {
-    ".json", ".md", ".proto", ".py", ".rs", ".toml", ".ts", ".tsx",
-    ".txt", ".yaml", ".yml",
+TEXT_SUFFIXES = {
+    ".json",
+    ".md",
+    ".proto",
+    ".py",
+    ".rs",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".yaml",
+    ".yml",
 }
-legacy_text: list[str] = []
-for relative_path in tracked:
-    if relative_path in allowed_legacy_text:
-        continue
-    path = ROOT / relative_path
-    if not path.is_file():
-        continue
-    if path.suffix.lower() not in text_suffixes and path.name not in {
-        ".env.example",
-        ".gitattributes",
-        ".gitignore",
-        "Justfile",
-    }:
-        continue
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        continue
-    if legacy_name.search(text):
-        legacy_text.append(relative_path)
-if legacy_text:
-    print("Legacy product-name identifiers remain:", *legacy_text, sep="\n- ")
-    sys.exit(1)
+SPECIAL_TEXT_FILES = {".env.example", ".gitattributes", ".gitignore", "Justfile"}
+ALLOWED_LEGACY_TEXT = {"planning/decisions/DEC-0001.json"}
 
-license_files = [
-    path.name
-    for path in ROOT.iterdir()
-    if path.is_file() and path.name.upper().startswith("LICENSE")
-]
-if license_files:
-    print("No license has been selected; remove license files:", *license_files, sep="\n- ")
-    sys.exit(1)
 
-metadata_check = subprocess.run(
-    [sys.executable, str(ROOT / "tools" / "generate_repository_metadata.py"), "--check"],
-    cwd=ROOT,
-)
-if metadata_check.returncode:
-    sys.exit(metadata_check.returncode)
+def tracked_files(root: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    return [path for path in result.stdout.decode("utf-8").split("\0") if path]
 
-print("Repository structure verification passed.")
+
+def invalid_tracked_json(
+    root: Path, relative_paths: Iterable[str]
+) -> list[tuple[str, str]]:
+    invalid: list[tuple[str, str]] = []
+    for relative_path in relative_paths:
+        path = root / relative_path
+        if path.suffix.lower() != ".json" or not path.is_file():
+            continue
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            invalid.append((relative_path, str(error)))
+    return invalid
+
+
+def main(root: Path = ROOT) -> int:
+    missing = [path for path in REQUIRED if not (root / path).exists()]
+    if missing:
+        print("Missing required repository files:", *missing, sep="\n- ")
+        return 1
+
+    tracked = tracked_files(root)
+    invalid_json = invalid_tracked_json(root, tracked)
+    if invalid_json:
+        for path, error in invalid_json:
+            print(f"Invalid JSON: {path}: {error}")
+        return 1
+
+    for relative_path in INSTRUCTION_ROOTS:
+        if not (root / relative_path / "AGENTS.md").exists():
+            print(f"Missing nested AGENTS.md: {relative_path}")
+            return 1
+
+    legacy_name = re.compile("dene" + r"t(?!t)", re.IGNORECASE)
+    legacy_paths = [path for path in tracked if legacy_name.search(path)]
+    if legacy_paths:
+        print("Legacy product-name paths remain:", *legacy_paths, sep="\n- ")
+        return 1
+
+    legacy_text: list[str] = []
+    for relative_path in tracked:
+        if relative_path in ALLOWED_LEGACY_TEXT:
+            continue
+        path = root / relative_path
+        if not path.is_file():
+            continue
+        if (
+            path.suffix.lower() not in TEXT_SUFFIXES
+            and path.name not in SPECIAL_TEXT_FILES
+        ):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if legacy_name.search(text):
+            legacy_text.append(relative_path)
+    if legacy_text:
+        print("Legacy product-name identifiers remain:", *legacy_text, sep="\n- ")
+        return 1
+
+    license_files = [
+        path.name
+        for path in root.iterdir()
+        if path.is_file() and path.name.upper().startswith("LICENSE")
+    ]
+    if license_files:
+        print(
+            "No license has been selected; remove license files:",
+            *license_files,
+            sep="\n- ",
+        )
+        return 1
+
+    metadata_check = subprocess.run(
+        [
+            sys.executable,
+            str(root / "tools" / "generate_repository_metadata.py"),
+            "--check",
+        ],
+        cwd=root,
+        check=False,
+    )
+    if metadata_check.returncode:
+        return metadata_check.returncode
+
+    print("Repository structure verification passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

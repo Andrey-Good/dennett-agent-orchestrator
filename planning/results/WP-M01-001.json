@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M01-001",
+    "status": "completed",
+    "summary": "Added a secret-safe Codex SDK 0.144.5 canary that uses a dedicated Codex-managed ChatGPT subscription login, proves two ordered streamed turns on the same observed thread, and isolates normal user auth, configuration, Git state and project content.",
+    "commits": [
+      "27a8674"
+    ],
+    "merge_ready_at": "2026-07-18",
+    "changed_files": [
+      "services/adapter-host-node/package.json",
+      "services/adapter-host-node/README.md",
+      "services/adapter-host-node/src/codex-*.ts",
+      "pnpm-lock.yaml",
+      "tools/verify_repo.py",
+      "tools/tests/test_verify_repo.py",
+      "tests/catalog/foundations.seed.json",
+      "tests/catalog/m01.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/batches/AB-M01-001.json",
+      "planning/milestones/M01_local_desktop_conversation.json",
+      "planning/results/WP-M01-001.json",
+      "docs/CHECKSUMS.sha256",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "M01:OneRealRuntime",
+      "SPEC-41:ReplaceableProviders",
+      "ARCH-83:ProviderLiveSmoke",
+      "OWNER:UseChatGPTSubscriptionBeforeApiBilling",
+      "TEST-CODEX-SDK-CONTRACT-001",
+      "TEST-CODEX-SDK-CHATGPT-AUTH-001",
+      "TEST-REPO-STRUCTURE-001"
+    ],
+    "tests": {
+      "passed": [
+        "19 deterministic Node adapter tests cover auth mode, exact versions, environment isolation, event shape and order, continuation identity, deadlines, late cleanup reconciliation and secret-safe failures",
+        "live canary through ChatGPT subscription: SDK and CLI 0.144.5, first turn completed in 16846 ms, continuation completed in 11027 ms with sameThread true",
+        "corepack pnpm --filter @dennett/adapter-host-node build and typecheck",
+        "production dependency audit reported no known vulnerabilities",
+        "just check: repository, docs, planning, CI metadata, generated catalogue, Rust fmt/clippy/tests, 53 Python tests, workspace TypeScript and protocol compatibility",
+        "git diff --check and staged secret/path review"
+      ],
+      "not_run": [
+        "live subscription calls remain an explicit manual canary and are not part of normal CI",
+        "physical cancellation of an in-flight Node filesystem syscall is unavailable; timeout paths fail closed and schedule one bounded reconciliation pass"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "R2 detached read-only review through an isolated Codex SDK model context using line-numbered bounded source input; successive findings were repaired and the final exact cleanup re-review returned R2 GATE: PASS",
+      "findings_closed": [
+        "Pinned built-in OpenAI provider, exact ChatGPT login output and SDK/CLI 0.144.5 while stripping API-key, custom-provider and injected-token environment",
+        "Moved authentication to a dedicated official Codex ChatGPT login so normal Codex auth is never read, linked or modified",
+        "Isolated per-run CODEX_HOME, HOME, Git configuration and empty Git workspace from user config, plugins, skills, MCP and project content",
+        "Validated runtime event ordering and field shapes, rejected tool, file, MCP, web and unknown item classes, and normalized all printed failure details",
+        "Bounded Git, filesystem, turn and iterator cleanup; setup and cleanup timeouts fail closed and schedule one non-recursive late reconciliation pass",
+        "Proved continuation from the observed streamed thread identifier rather than an assumed SDK object property",
+        "Made repository JSON validation use tracked canonical files instead of ignored dependency and build trees"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "canary emits only auth mode, normalized SDK/CLI versions, event kinds, terminal state, agent-message count, same-thread evidence and latency",
+      "authentication, configuration, model, network, rate-limit, service and tooling failures map to fixed safe classifications without provider payloads"
+    ],
+    "known_limitations": [
+      "The dedicated canary ChatGPT login is local development state and may require an occasional official browser re-login",
+      "Exact English CLI status and version matching intentionally fail closed after upstream wording or version changes",
+      "Node filesystem operations are not physically cancellable; timed-out mutations are reported as cleanup failure and receive one bounded late reconciliation pass",
+      "@modelcontextprotocol/sdk remains a development-only type-resolution workaround for the pinned Codex SDK declaration package"
+    ],
+    "follow_up_candidates": [
+      "WP-M01-002",
+      "WP-M01-004"
+    ],
+    "owner_decision_required": false
+  }
+}

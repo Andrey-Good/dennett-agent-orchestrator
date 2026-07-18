@@ -5,11 +5,17 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test dist/*.test.js",
-    "build": "tsc"
+    "test": "tsc && node --test dist/*.test.js",
+    "build": "tsc",
+    "login:codex": "tsc && node dist/codex-login.js",
+    "canary:codex": "tsc && node dist/codex-canary.js"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.24.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.144.5"
   }
 }
