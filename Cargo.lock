@@ -40,6 +40,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "dennett-kernel",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

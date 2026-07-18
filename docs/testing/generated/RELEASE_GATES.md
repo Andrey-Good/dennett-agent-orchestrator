@@ -13,9 +13,9 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `automated` | `automated` | evidence available |
 | `release` | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `specified` | `planned` | missing evidence |
+| `release` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `automated` | `automated` | evidence available |
+| `release` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `automated` | `automated` | evidence available |
+| `release` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `R2` | `manual` | `manual` | evidence available |
 | `release` | `TEST-CODEX-SDK-CONTRACT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `specified` | `planned` | missing evidence |

@@ -146,7 +146,7 @@
     {
       "id": "TEST-AGENT-RUNTIME-STREAM-001",
       "title": "Agent runtimes emit ordered provider-neutral stream events",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["agents", "providers", "streaming"],
@@ -161,15 +161,19 @@
       ],
       "implementation": {
         "target_suite": "agent runtime conformance",
-        "status": "planned",
-        "test_paths": ["crates/dennett-agent-core/src/lib.rs"]
+        "status": "automated",
+        "test_paths": [
+          "tests/contracts/agent_runtime_conformance.json",
+          "crates/dennett-agent-core/tests/runtime_conformance.rs",
+          "services/adapter-host-node/src/codex-runtime-adapter.test.ts"
+        ]
       },
       "owner": "agents"
     },
     {
       "id": "TEST-AGENT-RUNTIME-CANCEL-001",
       "title": "Cancellation is scoped acknowledged and terminal",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["agents", "control", "streaming"],
@@ -184,15 +188,19 @@
       ],
       "implementation": {
         "target_suite": "agent runtime conformance",
-        "status": "planned",
-        "test_paths": ["crates/dennett-agent-core/src/lib.rs"]
+        "status": "automated",
+        "test_paths": [
+          "tests/contracts/agent_runtime_conformance.json",
+          "crates/dennett-agent-core/tests/runtime_conformance.rs",
+          "services/adapter-host-node/src/codex-runtime-adapter.test.ts"
+        ]
       },
       "owner": "agents"
     },
     {
       "id": "TEST-AGENT-RUNTIME-TIMEOUT-001",
       "title": "Runtime deadlines produce an honest timeout outcome",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["agents", "providers", "reliability"],
@@ -207,15 +215,19 @@
       ],
       "implementation": {
         "target_suite": "agent runtime conformance",
-        "status": "planned",
-        "test_paths": ["crates/dennett-agent-core/src/lib.rs"]
+        "status": "automated",
+        "test_paths": [
+          "tests/contracts/agent_runtime_conformance.json",
+          "crates/dennett-agent-core/tests/runtime_conformance.rs",
+          "services/adapter-host-node/src/codex-runtime-adapter.test.ts"
+        ]
       },
       "owner": "agents"
     },
     {
       "id": "TEST-CODEX-SDK-CONTINUATION-001",
       "title": "Codex continuation remains opaque and resumable",
-      "status": "specified",
+      "status": "automated",
       "priority": "high",
       "risk": "R2",
       "domains": ["agents", "providers", "sessions"],
@@ -230,8 +242,14 @@
       ],
       "implementation": {
         "target_suite": "services/adapter-host-node",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "tests/contracts/agent_runtime_conformance.json",
+          "crates/dennett-agent-core/tests/runtime_conformance.rs",
+          "services/adapter-host-node/src/codex-runtime-adapter.test.ts",
+          "services/adapter-host-node/src/codex-runtime-canary.ts",
+          "services/adapter-host-node/src/codex-canary.ts"
+        ]
       },
       "owner": "agents"
     },

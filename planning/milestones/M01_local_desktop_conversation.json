@@ -197,7 +197,7 @@
       },
       "contract_changes": {
         "public_api": true,
-        "protocol": true,
+        "protocol": false,
         "persistent_schema": false,
         "migration": true
       },
@@ -347,7 +347,7 @@
       "version": 1,
       "id": "WP-M01-004",
       "title": "Normalize streaming runtime continuation and control",
-      "status": "REFINED",
+      "status": "IN_PROGRESS",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R2",
@@ -438,11 +438,15 @@
       },
       "estimate": {
         "target_agent_hours": 5,
-        "max_diff_lines": 2400
+        "max_diff_lines": 3300
       },
       "notes": [
         "Codex is the only real runtime in M01, but every core-facing type remains provider-neutral.",
-        "Provider-specific event payloads stay inside services/adapter-host-node or explicit wire conversion modules."
+        "Provider-specific event payloads stay inside services/adapter-host-node or explicit wire conversion modules.",
+        "Implementation starts from green main c555b6a in isolated worktree C:/Dev/dennett-agent-orchestrator-wp-m01-004 on branch codex/wp-m01-004-streaming-runtime.",
+        "dennett-agent-core owns scoped ordered runtime lifecycle semantics; the Node adapter host owns Codex SDK types, thread mapping and subscription-authenticated execution. Cancellation is idempotent and scoped by session plus runtime turn; timeout, cancellation and provider failure are distinct terminal outcomes.",
+        "ADR-006 intentionally fixes the bounded M01 desktop control wire surface and excludes provider payloads. WP-M01-004 therefore keeps the new runtime conformance contract at the stable Rust port and Node adapter boundary while the existing generated control protocol remains unchanged and compatibility-checked.",
+        "The gross diff budget was raised from 2400 to 3300 instead of compressing lifecycle code, cross-language conformance tests or generated evidence after the real subscription canary was routed through the same adapter and provider-failure/privacy cases were added to both implementations."
       ]
     },
     {

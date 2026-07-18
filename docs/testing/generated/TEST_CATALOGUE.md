@@ -8,7 +8,7 @@
 
 ## Summary
 
-- Status: `automated` 15, `manual` 1, `specified` 18
+- Status: `automated` 19, `manual` 1, `specified` 14
 - Risk: `R1` 8, `R2` 21, `R3` 5
 - Domain: `accessibility` 1, `adapters` 1, `agents` 10, `architecture` 1, `authentication` 1, `ci` 1, `compatibility` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 11, `devices` 2, `documentation` 2, `effects` 1, `head` 3, `ipc` 1, `lifecycle` 1, `memory` 5, `node` 4, `observability` 1, `planning` 4, `project-chat` 2, `protocol` 3, `providers` 6, `recovery` 4, `reliability` 1, `repository` 8, `rust` 1, `security` 1, `sessions` 4, `streaming` 2, `sync` 3, `tauri` 1, `testing` 4, `tooling` 1, `trust` 1, `ux` 1
 
@@ -16,13 +16,13 @@
 
 | ID | Title | Domains | Risk | Status | Priority | Owner | Implementation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `TEST-AGENT-RUNTIME-CANCEL-001` | Cancellation is scoped acknowledged and terminal | `agents`, `control`, `streaming` | `R2` | `automated` | `critical` | `agents` | `automated` |
+| `TEST-AGENT-RUNTIME-STREAM-001` | Agent runtimes emit ordered provider-neutral stream events | `agents`, `providers`, `streaming` | `R2` | `automated` | `critical` | `agents` | `automated` |
+| `TEST-AGENT-RUNTIME-TIMEOUT-001` | Runtime deadlines produce an honest timeout outcome | `agents`, `providers`, `reliability` | `R2` | `automated` | `critical` | `agents` | `automated` |
+| `TEST-CODEX-SDK-CONTINUATION-001` | Codex continuation remains opaque and resumable | `agents`, `providers`, `sessions` | `R2` | `automated` | `high` | `agents` | `automated` |
 | `TEST-CODEX-SDK-CONTRACT-001` | Codex SDK adapter preserves the provider boundary | `adapters`, `agents`, `providers` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-FAKE-CHAT-001` | Credential-free fake conversation reaches result and memory | `agents`, `head`, `memory`, `repository` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | Codex SDK live canary uses ChatGPT subscription authentication | `agents`, `authentication`, `providers` | `R2` | `manual` | `critical` | `agents` | `manual` |
-| `TEST-AGENT-RUNTIME-CANCEL-001` | Cancellation is scoped acknowledged and terminal | `agents`, `control`, `streaming` | `R2` | `specified` | `critical` | `agents` | `planned` |
-| `TEST-AGENT-RUNTIME-STREAM-001` | Agent runtimes emit ordered provider-neutral stream events | `agents`, `providers`, `streaming` | `R2` | `specified` | `critical` | `agents` | `planned` |
-| `TEST-AGENT-RUNTIME-TIMEOUT-001` | Runtime deadlines produce an honest timeout outcome | `agents`, `providers`, `reliability` | `R2` | `specified` | `critical` | `agents` | `planned` |
-| `TEST-CODEX-SDK-CONTINUATION-001` | Codex continuation remains opaque and resumable | `agents`, `providers`, `sessions` | `R2` | `specified` | `high` | `agents` | `planned` |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | Unsent desktop draft survives UI restart without becoming canonical memory | `desktop`, `recovery`, `sessions` | `R2` | `specified` | `high` | `desktop` | `planned` |
 | `TEST-DESKTOP-NODE-LIFECYCLE-001` | Closing the desktop window leaves Node and active state alive | `desktop`, `lifecycle`, `node`, `recovery` | `R2` | `specified` | `critical` | `desktop` | `planned` |
 | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | Project Chat remains operable by keyboard and assistive technology | `accessibility`, `desktop`, `project-chat` | `R2` | `specified` | `critical` | `desktop` | `planned` |
