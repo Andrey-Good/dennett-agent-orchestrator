@@ -17,7 +17,7 @@ No additional focused crops were needed: two owner attachments are already dedic
 
 ## Findings
 
-No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint comparison. Detached review of owner-correction commit `49f6ca2` found two behavioral P2 findings: the New Project trigger did not own its focus-restoration ref, and the Command Center created a standalone chat while a project was selected. Both are corrected locally with regression coverage; a detached closure review of the correction commit is still required before the result below returns to `passed`.
+No actionable visual P0, P1 or P2 findings remain in the third-checkpoint comparison. Detached review of owner-correction commit `49f6ca2` found two behavioral P2 findings: the New Project trigger did not own its focus-restoration ref, and the Command Center created a standalone chat while a project was selected. Both were corrected with regression coverage, and detached closure review of exact commit `297eb20` returned PASS after rerunning desktop typecheck and all 16 desktop tests.
 
 - Typography: Segoe UI/system fallbacks, restrained 10-13 px metadata and 13 px conversation copy preserve the compact desktop hierarchy without clipped controls or broken wrapping at the reviewed sizes.
 - Layout and spacing: the title row, 52 px rail and 264 px project/chat sidebar read as one surface. The partial-height divider, centered conversation, anchored composer and 316 px resource workspace remain aligned. At 1100 px the workspace becomes a truthful closable overlay; at 900 px both side panes remain operable overlays with no document-level horizontal or vertical overflow.
@@ -69,7 +69,7 @@ No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint 
 - Detached review at `49f6ca2` found that closing the Projects menu could not reliably restore keyboard focus because the trigger ref was not attached to the rendered button.
 - The same review found that the Command Center's chat-creation action ignored the currently selected project and always created a standalone Recent chat.
 - The project trigger now receives the focus-restoration ref, with tests covering Escape and action-completion return paths. The Command Center now labels and creates its chat in the selected project, or explicitly creates a standalone chat when a Recent session is selected.
-- A fresh detached closure review of the exact correction commit remains required.
+- Detached closure re-review of exact commit `297eb20` returned PASS. It verified both focus-restoration paths and selected-scope chat creation, reran desktop typecheck and all 16 desktop tests, and reported no remaining P0, P1 or P2 finding.
 
 ## Primary Interactions Tested
 
@@ -103,4 +103,4 @@ No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint 
 
 Do not merge WP-M01-003 until the owner accepts this third visual checkpoint. Approval covers the visual direction and presentation interactions only; it does not approve real provider, browser, file, PDF, project-folder or Git effects.
 
-final result: pending detached review
+final result: passed

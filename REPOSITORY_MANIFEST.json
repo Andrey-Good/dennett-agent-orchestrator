@@ -520,8 +520,8 @@
     },
     {
       "path": "design-qa.md",
-      "bytes": 12988,
-      "sha256": "a1a935b778438e1ecc4173d8e29c9d7bf52ed16dfcdad777841dac9428c65f5f"
+      "bytes": 13132,
+      "sha256": "fd30b3f27c1e286b57096b8f10743d7cf620324e28c9f42e7644be19cf5b11e5"
     },
     {
       "path": "docs/CHECKSUMS.sha256",
@@ -1160,8 +1160,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 33558,
-      "sha256": "9c9fe335b13f3965f0de8faa01be91eaca95effd9cc5f255c45f7fcd30b3ea2e"
+      "bytes": 33675,
+      "sha256": "7fb659a4595db33f5c5ae1ea36e3121d5385570d4a2b76df9bad9194ce810946"
     },
     {
       "path": "planning/results/WP-M00-001.json",
