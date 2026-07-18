@@ -37,7 +37,7 @@
       "version": 1,
       "id": "WP-M01-001",
       "title": "Prove the subscription-authenticated Codex SDK path",
-      "status": "REVIEW",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R2",
