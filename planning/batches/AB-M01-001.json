@@ -2,7 +2,7 @@
   "version": 1,
   "id": "AB-M01-001",
   "title": "Prove the real Codex runtime path",
-  "status": "RUNNING",
+  "status": "COMPLETED",
   "packages": [
     "WP-M01-001"
   ],
