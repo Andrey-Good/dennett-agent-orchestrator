@@ -167,6 +167,7 @@ class ProtocolCodegenTests(unittest.TestCase):
 
         self.assertEqual(len(action_refs), 3)
         self.assertTrue(all(len(reference) == 40 for reference in action_refs))
+        self.assertIn("github_token: ${{ github.token }}", workflow)
         self.assertIn("if: github.event_name == 'pull_request'", workflow)
         self.assertIn('--base-ref "${{ github.event.pull_request.base.sha }}"', workflow)
         self.assertIn("if: github.event_name == 'push'", workflow)

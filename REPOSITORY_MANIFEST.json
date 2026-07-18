@@ -35,8 +35,8 @@
     },
     {
       "path": ".github/workflows/protocol-compatibility.yml",
-      "bytes": 1463,
-      "sha256": "692afebca0aa0ac7351bb0619ad54bad4afb7ea63f6761ccd19742f8365e5e93"
+      "bytes": 1507,
+      "sha256": "644c24678aa54f235865c32e4e17ea022071b4b3a781246f89b876c370ca2558"
     },
     {
       "path": ".gitignore",
@@ -1035,8 +1035,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 30347,
-      "sha256": "28ad9daa75ec0dafbbd6f86ec45d33b9057a4c2e1df116fdca98f2dfa5a53fd0"
+      "bytes": 30660,
+      "sha256": "8a5a3bc40ce6702feb8b4002655a66658aa17af4ad01fb4c404dfa1c47978c4f"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1550,8 +1550,8 @@
     },
     {
       "path": "tools/tests/test_protocol_codegen.py",
-      "bytes": 12123,
-      "sha256": "0f8ca9f1cfe4aa10b465146fe8e075d696fe77a388a01f14aa1ef9fbdf0e92da"
+      "bytes": 12192,
+      "sha256": "5e717eb83ca1ef5e8ad11964cf4d17cae02594613a7546bbb8b32a089d699376"
     },
     {
       "path": "tools/tests/test_verify_ci.py",

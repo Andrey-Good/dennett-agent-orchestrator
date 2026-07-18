@@ -166,6 +166,7 @@
       "allowed_roots": [
         "protocols",
         "generated",
+        ".github/workflows/protocol-compatibility.yml",
         "tools/protocol_codegen.py",
         "tools/tests/test_protocol_codegen.py",
         "tools/tests/test_verify_planning.py",
@@ -234,7 +235,8 @@
         "The change is intentionally breaking only for the non-production M00 scaffold and requires detached adversarial protocol review plus owner approval before merge.",
         "The full M01 wire surface is bounded to handshake, bootstrap, project/session commands, cancellation, typed errors and revisioned session watch frames.",
         "Retiring DEBT-0001 exposed a planning-validator unit test coupled to that live debt record; WP-M01-002 also replaces it with an isolated synthetic fixture.",
-        "The gross diff budget was corrected from 2600 to 7200 after deterministic replacement of checked-in Rust and TypeScript clients accounted for about 5300 changed lines; the handwritten change remains below the original budget and was not simplified to optimize the counter."
+        "The gross diff budget was corrected from 2600 to 7200 after deterministic replacement of checked-in Rust and TypeScript clients accounted for about 5300 changed lines; the handwritten change remains below the original budget and was not simplified to optimize the counter.",
+        "The first remote protocol run exposed anonymous GitHub API rate limiting in buf-setup-action before any repository code ran; the bounded workflow repair passes the read-only job token to the action and is protected by the protocol workflow test."
       ]
     },
     {
