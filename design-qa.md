@@ -8,8 +8,8 @@
 - Browser URL during review: `http://127.0.0.1:5173/`.
 - Browser viewport and state: 1536 x 971, dark theme, `streaming` fixture, project/chat navigation open, workspace resources open, full plan collapsed.
 - Responsive checks: 1100 x 800 and 900 x 800.
-- Native check: release Tauri shell built and opened on Windows at its configured 1280 x 800 size with transparent custom chrome and Acrylic window effects.
-- Implementation commit: `5665905` on `codex/wp-m01-003-project-chat-screen`.
+- Native check: the official Tauri release pipeline embedded the production frontend, and the resulting standalone executable opened on Windows at its configured 1280 x 800 size without a dev server. The transparent custom chrome, Acrylic window material and custom close control were observed in the native window.
+- Implementation commits: `542078a` (review corrections) and `0d5997e` (reproducible standalone Tauri build) on `codex/wp-m01-003-project-chat-screen`.
 
 The three private references and the implementation capture were inspected together in one comparison input. The full-window source establishes the quiet Codex-like density and unified chrome; the project-list crop establishes projects with nested chats followed by standalone recent chats; the results-pane crop establishes the resource grouping and compact rounded surface.
 
@@ -17,7 +17,7 @@ No additional focused crops were needed: two owner attachments are already dedic
 
 ## Findings
 
-No actionable P0, P1 or P2 findings remain.
+No actionable visual P0, P1 or P2 findings remain. The report stays blocked only until the required detached R2 closure re-review confirms the implementation corrections.
 
 - Typography: Segoe UI/system fallbacks, restrained 10-13 px metadata and 13 px conversation copy preserve the compact desktop hierarchy without clipped controls or broken wrapping at the reviewed sizes.
 - Layout and spacing: the title row, 52 px rail and 264 px project/chat sidebar read as one surface. The partial-height divider, centered conversation, anchored composer and 316 px resource workspace remain aligned. At 1100 px the workspace becomes a truthful closable overlay; at 900 px both side panes remain operable overlays with no document-level horizontal or vertical overflow.
@@ -25,7 +25,7 @@ No actionable P0, P1 or P2 findings remain.
 - Native material: the web preview stays opaque enough for repeatable screenshots. The native shell uses a transparent Tauri window, Windows Acrylic and more translucent native-only CSS layers; reduced-transparency mode retains an opaque neutral fallback.
 - Icons and imagery: visible interface icons use Phosphor Icons. The provisional application icon is a generated monochrome raster source converted by the Tauri icon pipeline into platform assets; it is not treated as approved branding.
 - Copy and truthfulness: the UI names Codex SDK as the only available source, labels unavailable features as later work, keeps external effects read-only and does not imply that Git, plugins, voice or provider routing are implemented.
-- Accessibility: semantic landmarks and names are present; Command Center traps and restores focus; composer popovers close on Escape, outside interaction or prompt focus; disabled controls are truthful; reduced-motion, reduced-transparency and higher-contrast fallbacks are present. The default state passes the automated accessibility check.
+- Accessibility: semantic landmarks and names are present; Command Center traps and restores focus; access and runtime popovers expose `aria-controls`, focus their first choice and return focus on Escape; disabled controls are truthful; reduced-motion, reduced-transparency and higher-contrast fallbacks are present. Structural checks pass in axe, while a separate deterministic token test verifies WCAG AA text contrast because jsdom cannot calculate rendered CSS contrast reliably.
 
 ## Comparison History
 
@@ -44,27 +44,34 @@ No actionable P0, P1 or P2 findings remain.
 - Replaced composer scope clutter with context, plugin, access and truthful Codex runtime controls.
 - Added native Acrylic configuration, generated app resources and a standalone desktop-shell Cargo boundary so the release executable can be built and opened.
 
+### Detached R2 findings and corrections
+
+- Raised all faint metadata to an achromatic token that remains at or above 4.5:1 on the lightest supported dark surface, removed the lower-contrast timestamp and heading overrides, and added a deterministic WCAG contrast test.
+- Replaced one global local-message list with per-session draft storage. New chat now creates a distinct temporary session instead of reusing the owner-checkpoint session; switching chats cannot leak a locally submitted draft.
+- Expanded component coverage from spot checks to explicit assertions for every streaming, restored, cached, stopped, timed-out, stale, resyncing, loading and empty fixture. Loading now shows only its skeleton rather than the empty-session prompt.
+- Connected access/runtime triggers to their popovers, moved keyboard focus directly into the first choice and restored it to the trigger on Escape.
+- Caught a packaging regression during the native launch check: a raw Cargo build still targeted the development URL and showed `ERR_CONNECTION_REFUSED`. The Tauri hooks now invoke the pinned package manager through Corepack, and the official release build was rerun; the rebuilt executable opened the embedded production UI with no dev server running.
+
 ## Primary Interactions Tested
 
 - Opened Command Center, verified initial focus, focus wrapping, Escape closure and focus restoration.
-- Switched `Full access` to `Auto-approve`.
-- Opened the Codex runtime control, switched reasoning from High to Medium and returned focus to the prompt.
+- Opened access and runtime controls, verified `aria-controls`, first-choice focus and Escape focus restoration, then switched `Full access` to `Auto-approve` and reasoning from High to Medium.
+- Submitted a local preview message, verified that it disappears in another session and returns only with its owning session, then created a distinct empty standalone chat.
 - Expanded and collapsed the current plan.
 - Collapsed and reopened workspace resources.
 - Opened the Browser resource in the central viewer and returned to chat.
 - Verified deterministic streaming, restored, cached, stopped, timed-out, stale, resyncing, loading and empty fixtures in component tests.
 - Checked 1100 x 800 and 900 x 800 geometry: no document overflow; both compact overlays retain controls.
-- Opened a fresh in-app browser tab and found no warning or error console entries.
-- Built the Tauri release executable and opened the real Windows window; custom minimize, maximize/restore and close controls were exposed by the native accessibility tree.
+- Built the standalone Tauri release executable through the official pipeline, opened the real Windows window without a dev server, observed the embedded UI/Acrylic chrome in the native capture and verified the custom Close control terminates the app.
 
 ## Verification
 
 - Desktop typecheck: passed.
-- Desktop tests: 11 passed.
+- Desktop tests: 13 passed, including all nine fixture states, per-session draft isolation, distinct new-chat creation, popover focus and deterministic WCAG contrast.
 - Desktop production build: passed.
-- Automated accessibility check: passed.
+- Automated structural accessibility and deterministic WCAG token-contrast checks: passed.
 - Monochrome CSS token scan: passed.
-- Tauri release build without installer bundling: passed.
+- Official Tauri release build without installer bundling: passed; standalone launch and custom Close behavior passed.
 
 ## Follow-up Polish
 
@@ -76,4 +83,4 @@ No actionable P0, P1 or P2 findings remain.
 
 Do not merge WP-M01-003 until the owner accepts this second visual checkpoint. Approval covers the visual direction and presentation interactions only; it does not approve real provider, browser, file, PDF or Git effects.
 
-final result: passed
+final result: blocked
