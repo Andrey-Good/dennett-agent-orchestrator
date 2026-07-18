@@ -5,7 +5,7 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { CommandAccepted, CommandMetadata } from "../../common/v1/common_pb";
+import type { CommandAccepted, CommandMetadata, ErrorEnvelope } from "../../common/v1/common_pb";
 import { file_dennett_common_v1_common } from "../../common/v1/common_pb";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
@@ -15,7 +15,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/control/v1/project.proto.
  */
 export const file_dennett_control_v1_project: GenFile = /*@__PURE__*/
-  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvcHJvamVjdC5wcm90bxISZGVubmV0dC5jb250cm9sLnYxIrMBCg5Qcm9qZWN0U3VtbWFyeRISCgpwcm9qZWN0X2lkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIvCgVzdGF0ZRgDIAEoDjIgLmRlbm5ldHQuY29udHJvbC52MS5Qcm9qZWN0U3RhdGUSEAoIcmV2aXNpb24YBCABKAQSNAoQbGFzdF9hY3Rpdml0eV9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi6AEKB1Byb2plY3QSEgoKcHJvamVjdF9pZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSEAoIcm9vdF91cmkYAyABKAkSLwoFc3RhdGUYBCABKA4yIC5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN0YXRlEhAKCHJldmlzaW9uGAUgASgEEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wInMKFENyZWF0ZVByb2plY3RSZXF1ZXN0EjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kTWV0YWRhdGESFAoMZGlzcGxheV9uYW1lGAIgASgJEhAKCHJvb3RfdXJpGAMgASgJInsKFUNyZWF0ZVByb2plY3RSZXNwb25zZRI0CghhY2NlcHRlZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRBY2NlcHRlZBIsCgdwcm9qZWN0GAIgASgLMhsuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3QiPAoTTGlzdFByb2plY3RzUmVxdWVzdBIRCglwYWdlX3NpemUYASABKA0SEgoKcGFnZV90b2tlbhgCIAEoCSKAAQoUTGlzdFByb2plY3RzUmVzcG9uc2USNAoIcHJvamVjdHMYASADKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN1bW1hcnkSFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJEhkKEXNuYXBzaG90X3JldmlzaW9uGAMgASgEIicKEUdldFByb2plY3RSZXF1ZXN0EhIKCnByb2plY3RfaWQYASABKAkiQgoSR2V0UHJvamVjdFJlc3BvbnNlEiwKB3Byb2plY3QYASABKAsyGy5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdCqaAQoMUHJvamVjdFN0YXRlEh0KGVBST0pFQ1RfU1RBVEVfVU5TUEVDSUZJRUQQABIXChNQUk9KRUNUX1NUQVRFX1JFQURZEAESGQoVUFJPSkVDVF9TVEFURV9NSVNTSU5HEAISGgoWUFJPSkVDVF9TVEFURV9ERVRBQ0hFRBADEhsKF1BST0pFQ1RfU1RBVEVfUkVBRF9PTkxZEAQytgIKDlByb2plY3RTZXJ2aWNlEmQKDUNyZWF0ZVByb2plY3QSKC5kZW5uZXR0LmNvbnRyb2wudjEuQ3JlYXRlUHJvamVjdFJlcXVlc3QaKS5kZW5uZXR0LmNvbnRyb2wudjEuQ3JlYXRlUHJvamVjdFJlc3BvbnNlEmEKDExpc3RQcm9qZWN0cxInLmRlbm5ldHQuY29udHJvbC52MS5MaXN0UHJvamVjdHNSZXF1ZXN0GiguZGVubmV0dC5jb250cm9sLnYxLkxpc3RQcm9qZWN0c1Jlc3BvbnNlElsKCkdldFByb2plY3QSJS5kZW5uZXR0LmNvbnRyb2wudjEuR2V0UHJvamVjdFJlcXVlc3QaJi5kZW5uZXR0LmNvbnRyb2wudjEuR2V0UHJvamVjdFJlc3BvbnNlYgZwcm90bzM", [file_dennett_common_v1_common, file_google_protobuf_timestamp]);
+  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvcHJvamVjdC5wcm90bxISZGVubmV0dC5jb250cm9sLnYxIrMBCg5Qcm9qZWN0U3VtbWFyeRISCgpwcm9qZWN0X2lkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIvCgVzdGF0ZRgDIAEoDjIgLmRlbm5ldHQuY29udHJvbC52MS5Qcm9qZWN0U3RhdGUSEAoIcmV2aXNpb24YBCABKAQSNAoQbGFzdF9hY3Rpdml0eV9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi6AEKB1Byb2plY3QSEgoKcHJvamVjdF9pZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSEAoIcm9vdF91cmkYAyABKAkSLwoFc3RhdGUYBCABKA4yIC5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN0YXRlEhAKCHJldmlzaW9uGAUgASgEEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wInMKFENyZWF0ZVByb2plY3RSZXF1ZXN0EjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kTWV0YWRhdGESFAoMZGlzcGxheV9uYW1lGAIgASgJEhAKCHJvb3RfdXJpGAMgASgJImAKFUNyZWF0ZVByb2plY3RBY2NlcHRlZBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZEFjY2VwdGVkEhIKCnByb2plY3RfaWQYAiABKAkilAEKFUNyZWF0ZVByb2plY3RSZXNwb25zZRI9CghhY2NlcHRlZBgBIAEoCzIpLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVQcm9qZWN0QWNjZXB0ZWRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIlcKE0xpc3RQcm9qZWN0c1JlcXVlc3QSEQoJcGFnZV9zaXplGAEgASgNEhIKCnBhZ2VfdG9rZW4YAiABKAkSGQoRY2xpZW50X3Nlc3Npb25faWQYAyABKAkifgoSTGlzdFByb2plY3RzUmVzdWx0EjQKCHByb2plY3RzGAEgAygLMiIuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3RTdW1tYXJ5EhcKD25leHRfcGFnZV90b2tlbhgCIAEoCRIZChFzbmFwc2hvdF9yZXZpc2lvbhgDIAEoBCKOAQoUTGlzdFByb2plY3RzUmVzcG9uc2USOAoGcmVzdWx0GAEgASgLMiYuZGVubmV0dC5jb250cm9sLnYxLkxpc3RQcm9qZWN0c1Jlc3VsdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUiQgoRR2V0UHJvamVjdFJlcXVlc3QSEgoKcHJvamVjdF9pZBgBIAEoCRIZChFjbGllbnRfc2Vzc2lvbl9pZBgCIAEoCSKCAQoSR2V0UHJvamVjdFJlc3BvbnNlEi4KB3Byb2plY3QYASABKAsyGy5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUqmgEKDFByb2plY3RTdGF0ZRIdChlQUk9KRUNUX1NUQVRFX1VOU1BFQ0lGSUVEEAASFwoTUFJPSkVDVF9TVEFURV9SRUFEWRABEhkKFVBST0pFQ1RfU1RBVEVfTUlTU0lORxACEhoKFlBST0pFQ1RfU1RBVEVfREVUQUNIRUQQAxIbChdQUk9KRUNUX1NUQVRFX1JFQURfT05MWRAEMrYCCg5Qcm9qZWN0U2VydmljZRJkCg1DcmVhdGVQcm9qZWN0EiguZGVubmV0dC5jb250cm9sLnYxLkNyZWF0ZVByb2plY3RSZXF1ZXN0GikuZGVubmV0dC5jb250cm9sLnYxLkNyZWF0ZVByb2plY3RSZXNwb25zZRJhCgxMaXN0UHJvamVjdHMSJy5kZW5uZXR0LmNvbnRyb2wudjEuTGlzdFByb2plY3RzUmVxdWVzdBooLmRlbm5ldHQuY29udHJvbC52MS5MaXN0UHJvamVjdHNSZXNwb25zZRJbCgpHZXRQcm9qZWN0EiUuZGVubmV0dC5jb250cm9sLnYxLkdldFByb2plY3RSZXF1ZXN0GiYuZGVubmV0dC5jb250cm9sLnYxLkdldFByb2plY3RSZXNwb25zZWIGcHJvdG8z", [file_dennett_common_v1_common, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message dennett.control.v1.ProjectSummary
@@ -131,18 +131,49 @@ export const CreateProjectRequestSchema: GenMessage<CreateProjectRequest> = /*@_
   messageDesc(file_dennett_control_v1_project, 2);
 
 /**
+ * CreateProjectAccepted allocates identity but does not claim project completion.
+ *
+ * @generated from message dennett.control.v1.CreateProjectAccepted
+ */
+export type CreateProjectAccepted = Message<"dennett.control.v1.CreateProjectAccepted"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandAccepted command = 1;
+   */
+  command?: CommandAccepted | undefined;
+
+  /**
+   * @generated from field: string project_id = 2;
+   */
+  projectId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.CreateProjectAccepted.
+ * Use `create(CreateProjectAcceptedSchema)` to create a new message.
+ */
+export const CreateProjectAcceptedSchema: GenMessage<CreateProjectAccepted> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 3);
+
+/**
  * @generated from message dennett.control.v1.CreateProjectResponse
  */
 export type CreateProjectResponse = Message<"dennett.control.v1.CreateProjectResponse"> & {
   /**
-   * @generated from field: dennett.common.v1.CommandAccepted accepted = 1;
+   * @generated from oneof dennett.control.v1.CreateProjectResponse.outcome
    */
-  accepted?: CommandAccepted | undefined;
-
-  /**
-   * @generated from field: dennett.control.v1.Project project = 2;
-   */
-  project?: Project | undefined;
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.CreateProjectAccepted accepted = 1;
+     */
+    value: CreateProjectAccepted;
+    case: "accepted";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
 };
 
 /**
@@ -150,7 +181,7 @@ export type CreateProjectResponse = Message<"dennett.control.v1.CreateProjectRes
  * Use `create(CreateProjectResponseSchema)` to create a new message.
  */
 export const CreateProjectResponseSchema: GenMessage<CreateProjectResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_project, 3);
+  messageDesc(file_dennett_control_v1_project, 4);
 
 /**
  * @generated from message dennett.control.v1.ListProjectsRequest
@@ -169,6 +200,11 @@ export type ListProjectsRequest = Message<"dennett.control.v1.ListProjectsReques
    * @generated from field: string page_token = 2;
    */
   pageToken: string;
+
+  /**
+   * @generated from field: string client_session_id = 3;
+   */
+  clientSessionId: string;
 };
 
 /**
@@ -176,12 +212,12 @@ export type ListProjectsRequest = Message<"dennett.control.v1.ListProjectsReques
  * Use `create(ListProjectsRequestSchema)` to create a new message.
  */
 export const ListProjectsRequestSchema: GenMessage<ListProjectsRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_project, 4);
+  messageDesc(file_dennett_control_v1_project, 5);
 
 /**
- * @generated from message dennett.control.v1.ListProjectsResponse
+ * @generated from message dennett.control.v1.ListProjectsResult
  */
-export type ListProjectsResponse = Message<"dennett.control.v1.ListProjectsResponse"> & {
+export type ListProjectsResult = Message<"dennett.control.v1.ListProjectsResult"> & {
   /**
    * @generated from field: repeated dennett.control.v1.ProjectSummary projects = 1;
    */
@@ -199,11 +235,40 @@ export type ListProjectsResponse = Message<"dennett.control.v1.ListProjectsRespo
 };
 
 /**
+ * Describes the message dennett.control.v1.ListProjectsResult.
+ * Use `create(ListProjectsResultSchema)` to create a new message.
+ */
+export const ListProjectsResultSchema: GenMessage<ListProjectsResult> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 6);
+
+/**
+ * @generated from message dennett.control.v1.ListProjectsResponse
+ */
+export type ListProjectsResponse = Message<"dennett.control.v1.ListProjectsResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.ListProjectsResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.ListProjectsResult result = 1;
+     */
+    value: ListProjectsResult;
+    case: "result";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
  * Describes the message dennett.control.v1.ListProjectsResponse.
  * Use `create(ListProjectsResponseSchema)` to create a new message.
  */
 export const ListProjectsResponseSchema: GenMessage<ListProjectsResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_project, 5);
+  messageDesc(file_dennett_control_v1_project, 7);
 
 /**
  * @generated from message dennett.control.v1.GetProjectRequest
@@ -213,6 +278,11 @@ export type GetProjectRequest = Message<"dennett.control.v1.GetProjectRequest"> 
    * @generated from field: string project_id = 1;
    */
   projectId: string;
+
+  /**
+   * @generated from field: string client_session_id = 2;
+   */
+  clientSessionId: string;
 };
 
 /**
@@ -220,16 +290,28 @@ export type GetProjectRequest = Message<"dennett.control.v1.GetProjectRequest"> 
  * Use `create(GetProjectRequestSchema)` to create a new message.
  */
 export const GetProjectRequestSchema: GenMessage<GetProjectRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_project, 6);
+  messageDesc(file_dennett_control_v1_project, 8);
 
 /**
  * @generated from message dennett.control.v1.GetProjectResponse
  */
 export type GetProjectResponse = Message<"dennett.control.v1.GetProjectResponse"> & {
   /**
-   * @generated from field: dennett.control.v1.Project project = 1;
+   * @generated from oneof dennett.control.v1.GetProjectResponse.outcome
    */
-  project?: Project | undefined;
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.Project project = 1;
+     */
+    value: Project;
+    case: "project";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
 };
 
 /**
@@ -237,7 +319,7 @@ export type GetProjectResponse = Message<"dennett.control.v1.GetProjectResponse"
  * Use `create(GetProjectResponseSchema)` to create a new message.
  */
 export const GetProjectResponseSchema: GenMessage<GetProjectResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_project, 7);
+  messageDesc(file_dennett_control_v1_project, 9);
 
 /**
  * @generated from enum dennett.control.v1.ProjectState

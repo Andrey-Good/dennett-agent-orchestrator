@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/common/v1/common.proto.
  */
 export const file_dennett_common_v1_common: GenFile = /*@__PURE__*/
-  fileDesc("Ch5kZW5uZXR0L2NvbW1vbi92MS9jb21tb24ucHJvdG8SEWRlbm5ldHQuY29tbW9uLnYxIiUKCVN0YWJsZVJlZhIMCgRraW5kGAEgASgJEgoKAmlkGAIgASgJItoBCg9Db21tYW5kTWV0YWRhdGESEgoKY29tbWFuZF9pZBgBIAEoCRIXCg9pZGVtcG90ZW5jeV9rZXkYAiABKAkSFgoOY29ycmVsYXRpb25faWQYAyABKAkSHAoUYXV0aG9yaXR5X2Vwb2NoX3NlZW4YBCABKAQSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASHgoRZXhwZWN0ZWRfcmV2aXNpb24YBiABKARIAIgBAUIUChJfZXhwZWN0ZWRfcmV2aXNpb24ibgoPQ29tbWFuZEFjY2VwdGVkEhIKCmNvbW1hbmRfaWQYASABKAkSFgoOY29ycmVsYXRpb25faWQYAiABKAkSFAoMb3BlcmF0aW9uX2lkGAMgASgJEhkKEWFjY2VwdGVkX3JldmlzaW9uGAQgASgEIscBCg1FcnJvckVudmVsb3BlEgwKBGNvZGUYASABKAkSEwoLbWVzc2FnZV9rZXkYAiABKAkSFgoOY29ycmVsYXRpb25faWQYAyABKAkSEQoJcmV0cnlhYmxlGAQgASgIEhwKFHVzZXJfYWN0aW9uX3JlcXVpcmVkGAUgASgIEhYKDmRldGFpbHNfaGFuZGxlGAYgASgJEh0KEGN1cnJlbnRfcmV2aXNpb24YByABKARIAIgBAUITChFfY3VycmVudF9yZXZpc2lvbmIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("Ch5kZW5uZXR0L2NvbW1vbi92MS9jb21tb24ucHJvdG8SEWRlbm5ldHQuY29tbW9uLnYxIiUKCVN0YWJsZVJlZhIMCgRraW5kGAEgASgJEgoKAmlkGAIgASgJIvUBCg9Db21tYW5kTWV0YWRhdGESEgoKY29tbWFuZF9pZBgBIAEoCRIXCg9pZGVtcG90ZW5jeV9rZXkYAiABKAkSFgoOY29ycmVsYXRpb25faWQYAyABKAkSHAoUYXV0aG9yaXR5X2Vwb2NoX3NlZW4YBCABKAQSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASHgoRZXhwZWN0ZWRfcmV2aXNpb24YBiABKARIAIgBARIZChFjbGllbnRfc2Vzc2lvbl9pZBgHIAEoCUIUChJfZXhwZWN0ZWRfcmV2aXNpb24ibgoPQ29tbWFuZEFjY2VwdGVkEhIKCmNvbW1hbmRfaWQYASABKAkSFgoOY29ycmVsYXRpb25faWQYAiABKAkSFAoMb3BlcmF0aW9uX2lkGAMgASgJEhkKEWFjY2VwdGVkX3JldmlzaW9uGAQgASgEIscBCg1FcnJvckVudmVsb3BlEgwKBGNvZGUYASABKAkSEwoLbWVzc2FnZV9rZXkYAiABKAkSFgoOY29ycmVsYXRpb25faWQYAyABKAkSEQoJcmV0cnlhYmxlGAQgASgIEhwKFHVzZXJfYWN0aW9uX3JlcXVpcmVkGAUgASgIEhYKDmRldGFpbHNfaGFuZGxlGAYgASgJEh0KEGN1cnJlbnRfcmV2aXNpb24YByABKARIAIgBAUITChFfY3VycmVudF9yZXZpc2lvbiKHAQoNQ29tbWFuZFJlc3VsdBIaChJjb21wbGV0ZWRfcmV2aXNpb24YASABKAQSNAoOY2Fub25pY2FsX3JlZnMYAiADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYSEwoLbWVzc2FnZV9rZXkYAyABKAkSDwoHcGFydGlhbBgEIAEoCCKtAQoPQ29tbWFuZFRlcm1pbmFsEhIKCmNvbW1hbmRfaWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEjIKBnJlc3VsdBgDIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRSZXN1bHRIABIxCgVlcnJvchgEIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * StableRef identifies a canonical object without embedding its private payload.
@@ -76,6 +76,13 @@ export type CommandMetadata = Message<"dennett.common.v1.CommandMetadata"> & {
    * @generated from field: optional uint64 expected_revision = 6;
    */
   expectedRevision?: bigint | undefined;
+
+  /**
+   * Opaque authenticated bridge session returned by the handshake.
+   *
+   * @generated from field: string client_session_id = 7;
+   */
+  clientSessionId: string;
 };
 
 /**
@@ -107,6 +114,8 @@ export type CommandAccepted = Message<"dennett.common.v1.CommandAccepted"> & {
   operationId: string;
 
   /**
+   * Revision of durable admission bookkeeping, never the target entity revision.
+   *
    * @generated from field: uint64 accepted_revision = 4;
    */
   acceptedRevision: bigint;
@@ -121,6 +130,8 @@ export const CommandAcceptedSchema: GenMessage<CommandAccepted> = /*@__PURE__*/
 
 /**
  * ErrorEnvelope is safe for cross-process handling and UI localization.
+ * Domain failures occupy the error arm of a unary response or watch frame;
+ * non-OK gRPC status is reserved for failures that prevent decoding a response.
  *
  * @generated from message dennett.common.v1.ErrorEnvelope
  */
@@ -169,3 +180,76 @@ export type ErrorEnvelope = Message<"dennett.common.v1.ErrorEnvelope"> & {
  */
 export const ErrorEnvelopeSchema: GenMessage<ErrorEnvelope> = /*@__PURE__*/
   messageDesc(file_dennett_common_v1_common, 3);
+
+/**
+ * @generated from message dennett.common.v1.CommandResult
+ */
+export type CommandResult = Message<"dennett.common.v1.CommandResult"> & {
+  /**
+   * @generated from field: uint64 completed_revision = 1;
+   */
+  completedRevision: bigint;
+
+  /**
+   * @generated from field: repeated dennett.common.v1.StableRef canonical_refs = 2;
+   */
+  canonicalRefs: StableRef[];
+
+  /**
+   * @generated from field: string message_key = 3;
+   */
+  messageKey: string;
+
+  /**
+   * @generated from field: bool partial = 4;
+   */
+  partial: boolean;
+};
+
+/**
+ * Describes the message dennett.common.v1.CommandResult.
+ * Use `create(CommandResultSchema)` to create a new message.
+ */
+export const CommandResultSchema: GenMessage<CommandResult> = /*@__PURE__*/
+  messageDesc(file_dennett_common_v1_common, 4);
+
+/**
+ * CommandTerminal is the authoritative completion paired with CommandAccepted.
+ *
+ * @generated from message dennett.common.v1.CommandTerminal
+ */
+export type CommandTerminal = Message<"dennett.common.v1.CommandTerminal"> & {
+  /**
+   * @generated from field: string command_id = 1;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: string operation_id = 2;
+   */
+  operationId: string;
+
+  /**
+   * @generated from oneof dennett.common.v1.CommandTerminal.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.common.v1.CommandResult result = 3;
+     */
+    value: CommandResult;
+    case: "result";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 4;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.common.v1.CommandTerminal.
+ * Use `create(CommandTerminalSchema)` to create a new message.
+ */
+export const CommandTerminalSchema: GenMessage<CommandTerminal> = /*@__PURE__*/
+  messageDesc(file_dennett_common_v1_common, 5);

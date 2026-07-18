@@ -114,7 +114,8 @@ message SessionDelta {
 }
 
 message SessionWatchFrame {
-  // The first domain frame is a snapshot; cursor sequences then increase by one.
+  // The first domain frame is a snapshot. Apply later frames only when the
+  // cursor epoch matches bootstrap and sequences increase by exactly one.
   dennett.sync.v1.WatchCursor cursor = 1;
   oneof frame {
     SessionSnapshot snapshot = 2;
@@ -131,9 +132,17 @@ message CreateSessionRequest {
   string title = 3;
 }
 
+// CreateSessionAccepted allocates identity but does not claim session completion.
+message CreateSessionAccepted {
+  dennett.common.v1.CommandAccepted command = 1;
+  string session_id = 2;
+}
+
 message CreateSessionResponse {
-  dennett.common.v1.CommandAccepted accepted = 1;
-  SessionSummary session = 2;
+  oneof outcome {
+    CreateSessionAccepted accepted = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
 }
 
 message SendTurnRequest {
@@ -144,9 +153,16 @@ message SendTurnRequest {
   repeated ContextAttachment attachments = 5;
 }
 
-message SendTurnResponse {
-  dennett.common.v1.CommandAccepted accepted = 1;
+message SendTurnAccepted {
+  dennett.common.v1.CommandAccepted command = 1;
   string turn_id = 2;
+}
+
+message SendTurnResponse {
+  oneof outcome {
+    SendTurnAccepted accepted = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
 }
 
 message CancelTurnRequest {
@@ -157,13 +173,17 @@ message CancelTurnRequest {
 }
 
 message CancelTurnResponse {
-  dennett.common.v1.CommandAccepted accepted = 1;
+  oneof outcome {
+    dennett.common.v1.CommandAccepted accepted = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
 }
 
 message WatchSessionRequest {
   string session_id = 1;
   // A value is a freshness hint only; every stream still starts with a snapshot.
   optional uint64 known_revision = 2;
+  string client_session_id = 3;
 }
 
 message WatchSessionResponse {

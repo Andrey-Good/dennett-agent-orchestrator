@@ -25,6 +25,9 @@ pub struct CommandMetadata {
     /// Absence means that no optimistic revision check was requested.
     #[prost(uint64, optional, tag="6")]
     pub expected_revision: ::core::option::Option<u64>,
+    /// Opaque authenticated bridge session returned by the handshake.
+    #[prost(string, tag="7")]
+    pub client_session_id: ::prost::alloc::string::String,
 }
 /// CommandAccepted acknowledges durable command admission, not completion.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -35,10 +38,13 @@ pub struct CommandAccepted {
     pub correlation_id: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub operation_id: ::prost::alloc::string::String,
+    /// Revision of durable admission bookkeeping, never the target entity revision.
     #[prost(uint64, tag="4")]
     pub accepted_revision: u64,
 }
 /// ErrorEnvelope is safe for cross-process handling and UI localization.
+/// Domain failures occupy the error arm of a unary response or watch frame;
+/// non-OK gRPC status is reserved for failures that prevent decoding a response.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ErrorEnvelope {
     #[prost(string, tag="1")]
@@ -56,5 +62,36 @@ pub struct ErrorEnvelope {
     /// Present only when recovery requires the caller to reconcile a stale revision.
     #[prost(uint64, optional, tag="7")]
     pub current_revision: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommandResult {
+    #[prost(uint64, tag="1")]
+    pub completed_revision: u64,
+    #[prost(message, repeated, tag="2")]
+    pub canonical_refs: ::prost::alloc::vec::Vec<StableRef>,
+    #[prost(string, tag="3")]
+    pub message_key: ::prost::alloc::string::String,
+    #[prost(bool, tag="4")]
+    pub partial: bool,
+}
+/// CommandTerminal is the authoritative completion paired with CommandAccepted.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommandTerminal {
+    #[prost(string, tag="1")]
+    pub command_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(oneof="command_terminal::Outcome", tags="3, 4")]
+    pub outcome: ::core::option::Option<command_terminal::Outcome>,
+}
+/// Nested message and enum types in `CommandTerminal`.
+pub mod command_terminal {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="3")]
+        Result(super::CommandResult),
+        #[prost(message, tag="4")]
+        Error(super::ErrorEnvelope),
+    }
 }
 // @@protoc_insertion_point(module)

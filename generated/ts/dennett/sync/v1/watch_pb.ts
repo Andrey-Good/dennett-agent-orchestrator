@@ -3,8 +3,8 @@
 // @generated from file dennett/sync/v1/watch.proto (package dennett.sync.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
@@ -13,10 +13,10 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/sync/v1/watch.proto.
  */
 export const file_dennett_sync_v1_watch: GenFile = /*@__PURE__*/
-  fileDesc("ChtkZW5uZXR0L3N5bmMvdjEvd2F0Y2gucHJvdG8SD2Rlbm5ldHQuc3luYy52MSIyCgtXYXRjaEN1cnNvchIRCglzdHJlYW1faWQYASABKAkSEAoIc2VxdWVuY2UYAiABKAQiWwoOV2F0Y2hIZWFydGJlYXQSLwoLb2JzZXJ2ZWRfYXQYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhgKEGN1cnJlbnRfcmV2aXNpb24YAiABKAQiWgoOUmVzeW5jUmVxdWlyZWQSEwoLcmVhc29uX2NvZGUYASABKAkSGAoQY3VycmVudF9yZXZpc2lvbhgCIAEoBBIZChFzbmFwc2hvdF9yZXF1aXJlZBgDIAEoCGIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("ChtkZW5uZXR0L3N5bmMvdjEvd2F0Y2gucHJvdG8SD2Rlbm5ldHQuc3luYy52MSJLCgtXYXRjaEN1cnNvchIRCglzdHJlYW1faWQYASABKAkSEAoIc2VxdWVuY2UYAiABKAQSFwoPYXV0aG9yaXR5X2Vwb2NoGAMgASgEIlsKDldhdGNoSGVhcnRiZWF0Ei8KC29ic2VydmVkX2F0GAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIYChBjdXJyZW50X3JldmlzaW9uGAIgASgEInQKDlJlc3luY1JlcXVpcmVkEi0KBnJlYXNvbhgBIAEoDjIdLmRlbm5ldHQuc3luYy52MS5SZXN5bmNSZWFzb24SGAoQY3VycmVudF9yZXZpc2lvbhgCIAEoBBIZChFzbmFwc2hvdF9yZXF1aXJlZBgDIAEoCCrfAQoMUmVzeW5jUmVhc29uEh0KGVJFU1lOQ19SRUFTT05fVU5TUEVDSUZJRUQQABIeChpSRVNZTkNfUkVBU09OX1NFUVVFTkNFX0dBUBABEh4KGlJFU1lOQ19SRUFTT05fUkVWSVNJT05fR0FQEAISKQolUkVTWU5DX1JFQVNPTl9BVVRIT1JJVFlfRVBPQ0hfQ0hBTkdFRBADEiEKHVJFU1lOQ19SRUFTT05fU1RSRUFNX1JFUExBQ0VEEAQSIgoeUkVTWU5DX1JFQVNPTl9TTkFQU0hPVF9JTlZBTElEEAViBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
- * WatchCursor orders every frame within one server-created stream.
+ * WatchCursor orders every frame within one authenticated authority epoch.
  *
  * @generated from message dennett.sync.v1.WatchCursor
  */
@@ -30,6 +30,14 @@ export type WatchCursor = Message<"dennett.sync.v1.WatchCursor"> & {
    * @generated from field: uint64 sequence = 2;
    */
   sequence: bigint;
+
+  /**
+   * Clients reject a lower epoch. Any higher epoch stops delta application and
+   * requires a new handshake/bootstrap before a replacement snapshot applies.
+   *
+   * @generated from field: uint64 authority_epoch = 3;
+   */
+  authorityEpoch: bigint;
 };
 
 /**
@@ -70,9 +78,9 @@ export const WatchHeartbeatSchema: GenMessage<WatchHeartbeat> = /*@__PURE__*/
  */
 export type ResyncRequired = Message<"dennett.sync.v1.ResyncRequired"> & {
   /**
-   * @generated from field: string reason_code = 1;
+   * @generated from field: dennett.sync.v1.ResyncReason reason = 1;
    */
-  reasonCode: string;
+  reason: ResyncReason;
 
   /**
    * @generated from field: uint64 current_revision = 2;
@@ -91,3 +99,44 @@ export type ResyncRequired = Message<"dennett.sync.v1.ResyncRequired"> & {
  */
 export const ResyncRequiredSchema: GenMessage<ResyncRequired> = /*@__PURE__*/
   messageDesc(file_dennett_sync_v1_watch, 2);
+
+/**
+ * @generated from enum dennett.sync.v1.ResyncReason
+ */
+export enum ResyncReason {
+  /**
+   * @generated from enum value: RESYNC_REASON_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: RESYNC_REASON_SEQUENCE_GAP = 1;
+   */
+  SEQUENCE_GAP = 1,
+
+  /**
+   * @generated from enum value: RESYNC_REASON_REVISION_GAP = 2;
+   */
+  REVISION_GAP = 2,
+
+  /**
+   * @generated from enum value: RESYNC_REASON_AUTHORITY_EPOCH_CHANGED = 3;
+   */
+  AUTHORITY_EPOCH_CHANGED = 3,
+
+  /**
+   * @generated from enum value: RESYNC_REASON_STREAM_REPLACED = 4;
+   */
+  STREAM_REPLACED = 4,
+
+  /**
+   * @generated from enum value: RESYNC_REASON_SNAPSHOT_INVALID = 5;
+   */
+  SNAPSHOT_INVALID = 5,
+}
+
+/**
+ * Describes the enum dennett.sync.v1.ResyncReason.
+ */
+export const ResyncReasonSchema: GenEnum<ResyncReason> = /*@__PURE__*/
+  enumDesc(file_dennett_sync_v1_watch, 0);

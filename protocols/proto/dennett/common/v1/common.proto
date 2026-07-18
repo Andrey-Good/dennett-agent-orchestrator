@@ -19,6 +19,8 @@ message CommandMetadata {
   google.protobuf.Timestamp created_at = 5;
   // Absence means that no optimistic revision check was requested.
   optional uint64 expected_revision = 6;
+  // Opaque authenticated bridge session returned by the handshake.
+  string client_session_id = 7;
 }
 
 // CommandAccepted acknowledges durable command admission, not completion.
@@ -26,10 +28,13 @@ message CommandAccepted {
   string command_id = 1;
   string correlation_id = 2;
   string operation_id = 3;
+  // Revision of durable admission bookkeeping, never the target entity revision.
   uint64 accepted_revision = 4;
 }
 
 // ErrorEnvelope is safe for cross-process handling and UI localization.
+// Domain failures occupy the error arm of a unary response or watch frame;
+// non-OK gRPC status is reserved for failures that prevent decoding a response.
 message ErrorEnvelope {
   string code = 1;
   string message_key = 2;
@@ -39,4 +44,21 @@ message ErrorEnvelope {
   string details_handle = 6;
   // Present only when recovery requires the caller to reconcile a stale revision.
   optional uint64 current_revision = 7;
+}
+
+message CommandResult {
+  uint64 completed_revision = 1;
+  repeated StableRef canonical_refs = 2;
+  string message_key = 3;
+  bool partial = 4;
+}
+
+// CommandTerminal is the authoritative completion paired with CommandAccepted.
+message CommandTerminal {
+  string command_id = 1;
+  string operation_id = 2;
+  oneof outcome {
+    CommandResult result = 3;
+    ErrorEnvelope error = 4;
+  }
 }

@@ -17,7 +17,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/control/v1/session.proto.
  */
 export const file_dennett_control_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvc2Vzc2lvbi5wcm90bxISZGVubmV0dC5jb250cm9sLnYxItgBCg5TZXNzaW9uU3VtbWFyeRISCgpzZXNzaW9uX2lkGAEgASgJEhIKCnByb2plY3RfaWQYAiABKAkSDQoFdGl0bGUYAyABKAkSLwoFc3RhdGUYBCABKA4yIC5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblN0YXRlEhAKCHJldmlzaW9uGAUgASgEEhYKDmFjdGl2ZV90dXJuX2lkGAYgASgJEjQKEGxhc3RfYWN0aXZpdHlfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIlAKEUNvbnRleHRBdHRhY2htZW50EiwKBnNvdXJjZRgBIAEoCzIcLmRlbm5ldHQuY29tbW9uLnYxLlN0YWJsZVJlZhINCgVsYWJlbBgCIAEoCSK4AQoOUmVzdWx0RW52ZWxvcGUSEgoKY29tbWFuZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJEg8KB3N1bW1hcnkYAyABKAkSDwoHcGFydGlhbBgEIAEoCBIvCglhcnRpZmFjdHMYBSADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYSLgoIZXZpZGVuY2UYBiADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYi8QIKDFR1cm5TbmFwc2hvdBIPCgd0dXJuX2lkGAEgASgJEhIKCmNvbW1hbmRfaWQYAiABKAkSKgoEcm9sZRgDIAEoDjIcLmRlbm5ldHQuY29udHJvbC52MS5UdXJuUm9sZRIsCgVzdGF0ZRgEIAEoDjIdLmRlbm5ldHQuY29udHJvbC52MS5UdXJuU3RhdGUSDAoEdGV4dBgFIAEoCRI0CgZyZXN1bHQYBiABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUmVzdWx0RW52ZWxvcGVIABIxCgVlcnJvchgHIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIABIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIwCgxjb21wbGV0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgkKB291dGNvbWUilQEKD1Nlc3Npb25TbmFwc2hvdBIzCgdzZXNzaW9uGAEgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5EhwKFHNuYXBzaG90X2ZpbmdlcnByaW50GAIgASgMEi8KBXR1cm5zGAMgAygLMiAuZGVubmV0dC5jb250cm9sLnYxLlR1cm5TbmFwc2hvdCIvCg5UdXJuVGV4dEFwcGVuZBIPCgd0dXJuX2lkGAEgASgJEgwKBHRleHQYAiABKAkiwQEKDFR1cm5UZXJtaW5hbBIPCgd0dXJuX2lkGAEgASgJEiwKBXN0YXRlGAIgASgOMh0uZGVubmV0dC5jb250cm9sLnYxLlR1cm5TdGF0ZRI0CgZyZXN1bHQYAyABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUmVzdWx0RW52ZWxvcGVIABIxCgVlcnJvchgEIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIqUBChVTZXNzaW9uTWV0YWRhdGFVcGRhdGUSEgoFdGl0bGUYASABKAlIAIgBARI0CgVzdGF0ZRgCIAEoDjIgLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uU3RhdGVIAYgBARIbCg5hY3RpdmVfdHVybl9pZBgDIAEoCUgCiAEBQggKBl90aXRsZUIICgZfc3RhdGVCEQoPX2FjdGl2ZV90dXJuX2lkIpQCCg9TZXNzaW9uTXV0YXRpb24SNwoLdXBzZXJ0X3R1cm4YASABKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuVHVyblNuYXBzaG90SAASPgoQYXBwZW5kX3R1cm5fdGV4dBgCIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5UdXJuVGV4dEFwcGVuZEgAEjcKC2ZpbmlzaF90dXJuGAMgASgLMiAuZGVubmV0dC5jb250cm9sLnYxLlR1cm5UZXJtaW5hbEgAEkMKDnVwZGF0ZV9zZXNzaW9uGAQgASgLMikuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25NZXRhZGF0YVVwZGF0ZUgAQgoKCG11dGF0aW9uInMKDFNlc3Npb25EZWx0YRIVCg1iYXNlX3JldmlzaW9uGAEgASgEEhQKDG5ld19yZXZpc2lvbhgCIAEoBBI2CgltdXRhdGlvbnMYAyADKAsyIy5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbk11dGF0aW9uItsCChFTZXNzaW9uV2F0Y2hGcmFtZRIsCgZjdXJzb3IYASABKAsyHC5kZW5uZXR0LnN5bmMudjEuV2F0Y2hDdXJzb3ISNwoIc25hcHNob3QYAiABKAsyIy5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblNuYXBzaG90SAASMQoFZGVsdGEYAyABKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbkRlbHRhSAASNAoJaGVhcnRiZWF0GAQgASgLMh8uZGVubmV0dC5zeW5jLnYxLldhdGNoSGVhcnRiZWF0SAASOgoPcmVzeW5jX3JlcXVpcmVkGAUgASgLMh8uZGVubmV0dC5zeW5jLnYxLlJlc3luY1JlcXVpcmVkSAASMQoFZXJyb3IYBiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCBwoFZnJhbWUibgoUQ3JlYXRlU2Vzc2lvblJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJIoIBChVDcmVhdGVTZXNzaW9uUmVzcG9uc2USNAoIYWNjZXB0ZWQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kQWNjZXB0ZWQSMwoHc2Vzc2lvbhgCIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uU3VtbWFyeSK4AQoPU2VuZFR1cm5SZXF1ZXN0EjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kTWV0YWRhdGESEgoKcHJvamVjdF9pZBgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJEgwKBHRleHQYBCABKAkSOgoLYXR0YWNobWVudHMYBSADKAsyJS5kZW5uZXR0LmNvbnRyb2wudjEuQ29udGV4dEF0dGFjaG1lbnQiWQoQU2VuZFR1cm5SZXNwb25zZRI0CghhY2NlcHRlZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRBY2NlcHRlZBIPCgd0dXJuX2lkGAIgASgJIoEBChFDYW5jZWxUdXJuUmVxdWVzdBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZE1ldGFkYXRhEhIKCnByb2plY3RfaWQYAiABKAkSEgoKc2Vzc2lvbl9pZBgDIAEoCRIPCgd0dXJuX2lkGAQgASgJIkoKEkNhbmNlbFR1cm5SZXNwb25zZRI0CghhY2NlcHRlZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRBY2NlcHRlZCJZChNXYXRjaFNlc3Npb25SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBAUIRCg9fa25vd25fcmV2aXNpb24iTAoUV2F0Y2hTZXNzaW9uUmVzcG9uc2USNAoFZnJhbWUYASABKAsyJS5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbldhdGNoRnJhbWUqsQEKDFNlc3Npb25TdGF0ZRIdChlTRVNTSU9OX1NUQVRFX1VOU1BFQ0lGSUVEEAASFgoSU0VTU0lPTl9TVEFURV9JRExFEAESGQoVU0VTU0lPTl9TVEFURV9SVU5OSU5HEAISGQoVU0VTU0lPTl9TVEFURV9XQUlUSU5HEAMSGAoUU0VTU0lPTl9TVEFURV9GQUlMRUQQBBIaChZTRVNTSU9OX1NUQVRFX0FSQ0hJVkVEEAUqZAoIVHVyblJvbGUSGQoVVFVSTl9ST0xFX1VOU1BFQ0lGSUVEEAASEgoOVFVSTl9ST0xFX1VTRVIQARITCg9UVVJOX1JPTEVfQUdFTlQQAhIUChBUVVJOX1JPTEVfU1lTVEVNEAMqvwEKCVR1cm5TdGF0ZRIaChZUVVJOX1NUQVRFX1VOU1BFQ0lGSUVEEAASFwoTVFVSTl9TVEFURV9BQ0NFUFRFRBABEhgKFFRVUk5fU1RBVEVfU1RSRUFNSU5HEAISGAoUVFVSTl9TVEFURV9DT01QTEVURUQQAxIYChRUVVJOX1NUQVRFX0NBTkNFTExFRBAEEhgKFFRVUk5fU1RBVEVfVElNRURfT1VUEAUSFQoRVFVSTl9TVEFURV9GQUlMRUQQBjKPAwoOU2Vzc2lvblNlcnZpY2USZAoNQ3JlYXRlU2Vzc2lvbhIoLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uUmVxdWVzdBopLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uUmVzcG9uc2USVQoIU2VuZFR1cm4SIy5kZW5uZXR0LmNvbnRyb2wudjEuU2VuZFR1cm5SZXF1ZXN0GiQuZGVubmV0dC5jb250cm9sLnYxLlNlbmRUdXJuUmVzcG9uc2USWwoKQ2FuY2VsVHVybhIlLmRlbm5ldHQuY29udHJvbC52MS5DYW5jZWxUdXJuUmVxdWVzdBomLmRlbm5ldHQuY29udHJvbC52MS5DYW5jZWxUdXJuUmVzcG9uc2USYwoMV2F0Y2hTZXNzaW9uEicuZGVubmV0dC5jb250cm9sLnYxLldhdGNoU2Vzc2lvblJlcXVlc3QaKC5kZW5uZXR0LmNvbnRyb2wudjEuV2F0Y2hTZXNzaW9uUmVzcG9uc2UwAWIGcHJvdG8z", [file_dennett_common_v1_common, file_dennett_sync_v1_watch, file_google_protobuf_timestamp]);
+  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvc2Vzc2lvbi5wcm90bxISZGVubmV0dC5jb250cm9sLnYxItgBCg5TZXNzaW9uU3VtbWFyeRISCgpzZXNzaW9uX2lkGAEgASgJEhIKCnByb2plY3RfaWQYAiABKAkSDQoFdGl0bGUYAyABKAkSLwoFc3RhdGUYBCABKA4yIC5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblN0YXRlEhAKCHJldmlzaW9uGAUgASgEEhYKDmFjdGl2ZV90dXJuX2lkGAYgASgJEjQKEGxhc3RfYWN0aXZpdHlfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIlAKEUNvbnRleHRBdHRhY2htZW50EiwKBnNvdXJjZRgBIAEoCzIcLmRlbm5ldHQuY29tbW9uLnYxLlN0YWJsZVJlZhINCgVsYWJlbBgCIAEoCSK4AQoOUmVzdWx0RW52ZWxvcGUSEgoKY29tbWFuZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJEg8KB3N1bW1hcnkYAyABKAkSDwoHcGFydGlhbBgEIAEoCBIvCglhcnRpZmFjdHMYBSADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYSLgoIZXZpZGVuY2UYBiADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYi8QIKDFR1cm5TbmFwc2hvdBIPCgd0dXJuX2lkGAEgASgJEhIKCmNvbW1hbmRfaWQYAiABKAkSKgoEcm9sZRgDIAEoDjIcLmRlbm5ldHQuY29udHJvbC52MS5UdXJuUm9sZRIsCgVzdGF0ZRgEIAEoDjIdLmRlbm5ldHQuY29udHJvbC52MS5UdXJuU3RhdGUSDAoEdGV4dBgFIAEoCRI0CgZyZXN1bHQYBiABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUmVzdWx0RW52ZWxvcGVIABIxCgVlcnJvchgHIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIABIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIwCgxjb21wbGV0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgkKB291dGNvbWUilQEKD1Nlc3Npb25TbmFwc2hvdBIzCgdzZXNzaW9uGAEgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5EhwKFHNuYXBzaG90X2ZpbmdlcnByaW50GAIgASgMEi8KBXR1cm5zGAMgAygLMiAuZGVubmV0dC5jb250cm9sLnYxLlR1cm5TbmFwc2hvdCIvCg5UdXJuVGV4dEFwcGVuZBIPCgd0dXJuX2lkGAEgASgJEgwKBHRleHQYAiABKAkiwQEKDFR1cm5UZXJtaW5hbBIPCgd0dXJuX2lkGAEgASgJEiwKBXN0YXRlGAIgASgOMh0uZGVubmV0dC5jb250cm9sLnYxLlR1cm5TdGF0ZRI0CgZyZXN1bHQYAyABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUmVzdWx0RW52ZWxvcGVIABIxCgVlcnJvchgEIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIqUBChVTZXNzaW9uTWV0YWRhdGFVcGRhdGUSEgoFdGl0bGUYASABKAlIAIgBARI0CgVzdGF0ZRgCIAEoDjIgLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uU3RhdGVIAYgBARIbCg5hY3RpdmVfdHVybl9pZBgDIAEoCUgCiAEBQggKBl90aXRsZUIICgZfc3RhdGVCEQoPX2FjdGl2ZV90dXJuX2lkIpQCCg9TZXNzaW9uTXV0YXRpb24SNwoLdXBzZXJ0X3R1cm4YASABKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuVHVyblNuYXBzaG90SAASPgoQYXBwZW5kX3R1cm5fdGV4dBgCIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5UdXJuVGV4dEFwcGVuZEgAEjcKC2ZpbmlzaF90dXJuGAMgASgLMiAuZGVubmV0dC5jb250cm9sLnYxLlR1cm5UZXJtaW5hbEgAEkMKDnVwZGF0ZV9zZXNzaW9uGAQgASgLMikuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25NZXRhZGF0YVVwZGF0ZUgAQgoKCG11dGF0aW9uInMKDFNlc3Npb25EZWx0YRIVCg1iYXNlX3JldmlzaW9uGAEgASgEEhQKDG5ld19yZXZpc2lvbhgCIAEoBBI2CgltdXRhdGlvbnMYAyADKAsyIy5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbk11dGF0aW9uItsCChFTZXNzaW9uV2F0Y2hGcmFtZRIsCgZjdXJzb3IYASABKAsyHC5kZW5uZXR0LnN5bmMudjEuV2F0Y2hDdXJzb3ISNwoIc25hcHNob3QYAiABKAsyIy5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblNuYXBzaG90SAASMQoFZGVsdGEYAyABKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbkRlbHRhSAASNAoJaGVhcnRiZWF0GAQgASgLMh8uZGVubmV0dC5zeW5jLnYxLldhdGNoSGVhcnRiZWF0SAASOgoPcmVzeW5jX3JlcXVpcmVkGAUgASgLMh8uZGVubmV0dC5zeW5jLnYxLlJlc3luY1JlcXVpcmVkSAASMQoFZXJyb3IYBiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCBwoFZnJhbWUibgoUQ3JlYXRlU2Vzc2lvblJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJImAKFUNyZWF0ZVNlc3Npb25BY2NlcHRlZBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZEFjY2VwdGVkEhIKCnNlc3Npb25faWQYAiABKAkilAEKFUNyZWF0ZVNlc3Npb25SZXNwb25zZRI9CghhY2NlcHRlZBgBIAEoCzIpLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uQWNjZXB0ZWRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIrgBCg9TZW5kVHVyblJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEhIKCnNlc3Npb25faWQYAyABKAkSDAoEdGV4dBgEIAEoCRI6CgthdHRhY2htZW50cxgFIAMoCzIlLmRlbm5ldHQuY29udHJvbC52MS5Db250ZXh0QXR0YWNobWVudCJYChBTZW5kVHVybkFjY2VwdGVkEjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kQWNjZXB0ZWQSDwoHdHVybl9pZBgCIAEoCSKKAQoQU2VuZFR1cm5SZXNwb25zZRI4CghhY2NlcHRlZBgBIAEoCzIkLmRlbm5ldHQuY29udHJvbC52MS5TZW5kVHVybkFjY2VwdGVkSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSKBAQoRQ2FuY2VsVHVyblJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEhIKCnNlc3Npb25faWQYAyABKAkSDwoHdHVybl9pZBgEIAEoCSKKAQoSQ2FuY2VsVHVyblJlc3BvbnNlEjYKCGFjY2VwdGVkGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZEFjY2VwdGVkSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSJ0ChNXYXRjaFNlc3Npb25SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBARIZChFjbGllbnRfc2Vzc2lvbl9pZBgDIAEoCUIRCg9fa25vd25fcmV2aXNpb24iTAoUV2F0Y2hTZXNzaW9uUmVzcG9uc2USNAoFZnJhbWUYASABKAsyJS5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbldhdGNoRnJhbWUqsQEKDFNlc3Npb25TdGF0ZRIdChlTRVNTSU9OX1NUQVRFX1VOU1BFQ0lGSUVEEAASFgoSU0VTU0lPTl9TVEFURV9JRExFEAESGQoVU0VTU0lPTl9TVEFURV9SVU5OSU5HEAISGQoVU0VTU0lPTl9TVEFURV9XQUlUSU5HEAMSGAoUU0VTU0lPTl9TVEFURV9GQUlMRUQQBBIaChZTRVNTSU9OX1NUQVRFX0FSQ0hJVkVEEAUqZAoIVHVyblJvbGUSGQoVVFVSTl9ST0xFX1VOU1BFQ0lGSUVEEAASEgoOVFVSTl9ST0xFX1VTRVIQARITCg9UVVJOX1JPTEVfQUdFTlQQAhIUChBUVVJOX1JPTEVfU1lTVEVNEAMqvwEKCVR1cm5TdGF0ZRIaChZUVVJOX1NUQVRFX1VOU1BFQ0lGSUVEEAASFwoTVFVSTl9TVEFURV9BQ0NFUFRFRBABEhgKFFRVUk5fU1RBVEVfU1RSRUFNSU5HEAISGAoUVFVSTl9TVEFURV9DT01QTEVURUQQAxIYChRUVVJOX1NUQVRFX0NBTkNFTExFRBAEEhgKFFRVUk5fU1RBVEVfVElNRURfT1VUEAUSFQoRVFVSTl9TVEFURV9GQUlMRUQQBjKPAwoOU2Vzc2lvblNlcnZpY2USZAoNQ3JlYXRlU2Vzc2lvbhIoLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uUmVxdWVzdBopLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uUmVzcG9uc2USVQoIU2VuZFR1cm4SIy5kZW5uZXR0LmNvbnRyb2wudjEuU2VuZFR1cm5SZXF1ZXN0GiQuZGVubmV0dC5jb250cm9sLnYxLlNlbmRUdXJuUmVzcG9uc2USWwoKQ2FuY2VsVHVybhIlLmRlbm5ldHQuY29udHJvbC52MS5DYW5jZWxUdXJuUmVxdWVzdBomLmRlbm5ldHQuY29udHJvbC52MS5DYW5jZWxUdXJuUmVzcG9uc2USYwoMV2F0Y2hTZXNzaW9uEicuZGVubmV0dC5jb250cm9sLnYxLldhdGNoU2Vzc2lvblJlcXVlc3QaKC5kZW5uZXR0LmNvbnRyb2wudjEuV2F0Y2hTZXNzaW9uUmVzcG9uc2UwAWIGcHJvdG8z", [file_dennett_common_v1_common, file_dennett_sync_v1_watch, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message dennett.control.v1.SessionSummary
@@ -386,7 +386,8 @@ export const SessionDeltaSchema: GenMessage<SessionDelta> = /*@__PURE__*/
  */
 export type SessionWatchFrame = Message<"dennett.control.v1.SessionWatchFrame"> & {
   /**
-   * The first domain frame is a snapshot; cursor sequences then increase by one.
+   * The first domain frame is a snapshot. Apply later frames only when the
+   * cursor epoch matches bootstrap and sequences increase by exactly one.
    *
    * @generated from field: dennett.sync.v1.WatchCursor cursor = 1;
    */
@@ -463,18 +464,49 @@ export const CreateSessionRequestSchema: GenMessage<CreateSessionRequest> = /*@_
   messageDesc(file_dennett_control_v1_session, 11);
 
 /**
+ * CreateSessionAccepted allocates identity but does not claim session completion.
+ *
+ * @generated from message dennett.control.v1.CreateSessionAccepted
+ */
+export type CreateSessionAccepted = Message<"dennett.control.v1.CreateSessionAccepted"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandAccepted command = 1;
+   */
+  command?: CommandAccepted | undefined;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.CreateSessionAccepted.
+ * Use `create(CreateSessionAcceptedSchema)` to create a new message.
+ */
+export const CreateSessionAcceptedSchema: GenMessage<CreateSessionAccepted> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 12);
+
+/**
  * @generated from message dennett.control.v1.CreateSessionResponse
  */
 export type CreateSessionResponse = Message<"dennett.control.v1.CreateSessionResponse"> & {
   /**
-   * @generated from field: dennett.common.v1.CommandAccepted accepted = 1;
+   * @generated from oneof dennett.control.v1.CreateSessionResponse.outcome
    */
-  accepted?: CommandAccepted | undefined;
-
-  /**
-   * @generated from field: dennett.control.v1.SessionSummary session = 2;
-   */
-  session?: SessionSummary | undefined;
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.CreateSessionAccepted accepted = 1;
+     */
+    value: CreateSessionAccepted;
+    case: "accepted";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
 };
 
 /**
@@ -482,7 +514,7 @@ export type CreateSessionResponse = Message<"dennett.control.v1.CreateSessionRes
  * Use `create(CreateSessionResponseSchema)` to create a new message.
  */
 export const CreateSessionResponseSchema: GenMessage<CreateSessionResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 12);
+  messageDesc(file_dennett_control_v1_session, 13);
 
 /**
  * @generated from message dennett.control.v1.SendTurnRequest
@@ -519,16 +551,16 @@ export type SendTurnRequest = Message<"dennett.control.v1.SendTurnRequest"> & {
  * Use `create(SendTurnRequestSchema)` to create a new message.
  */
 export const SendTurnRequestSchema: GenMessage<SendTurnRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 13);
+  messageDesc(file_dennett_control_v1_session, 14);
 
 /**
- * @generated from message dennett.control.v1.SendTurnResponse
+ * @generated from message dennett.control.v1.SendTurnAccepted
  */
-export type SendTurnResponse = Message<"dennett.control.v1.SendTurnResponse"> & {
+export type SendTurnAccepted = Message<"dennett.control.v1.SendTurnAccepted"> & {
   /**
-   * @generated from field: dennett.common.v1.CommandAccepted accepted = 1;
+   * @generated from field: dennett.common.v1.CommandAccepted command = 1;
    */
-  accepted?: CommandAccepted | undefined;
+  command?: CommandAccepted | undefined;
 
   /**
    * @generated from field: string turn_id = 2;
@@ -537,11 +569,40 @@ export type SendTurnResponse = Message<"dennett.control.v1.SendTurnResponse"> & 
 };
 
 /**
+ * Describes the message dennett.control.v1.SendTurnAccepted.
+ * Use `create(SendTurnAcceptedSchema)` to create a new message.
+ */
+export const SendTurnAcceptedSchema: GenMessage<SendTurnAccepted> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 15);
+
+/**
+ * @generated from message dennett.control.v1.SendTurnResponse
+ */
+export type SendTurnResponse = Message<"dennett.control.v1.SendTurnResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.SendTurnResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.SendTurnAccepted accepted = 1;
+     */
+    value: SendTurnAccepted;
+    case: "accepted";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
  * Describes the message dennett.control.v1.SendTurnResponse.
  * Use `create(SendTurnResponseSchema)` to create a new message.
  */
 export const SendTurnResponseSchema: GenMessage<SendTurnResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 14);
+  messageDesc(file_dennett_control_v1_session, 16);
 
 /**
  * @generated from message dennett.control.v1.CancelTurnRequest
@@ -573,16 +634,28 @@ export type CancelTurnRequest = Message<"dennett.control.v1.CancelTurnRequest"> 
  * Use `create(CancelTurnRequestSchema)` to create a new message.
  */
 export const CancelTurnRequestSchema: GenMessage<CancelTurnRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 15);
+  messageDesc(file_dennett_control_v1_session, 17);
 
 /**
  * @generated from message dennett.control.v1.CancelTurnResponse
  */
 export type CancelTurnResponse = Message<"dennett.control.v1.CancelTurnResponse"> & {
   /**
-   * @generated from field: dennett.common.v1.CommandAccepted accepted = 1;
+   * @generated from oneof dennett.control.v1.CancelTurnResponse.outcome
    */
-  accepted?: CommandAccepted | undefined;
+  outcome: {
+    /**
+     * @generated from field: dennett.common.v1.CommandAccepted accepted = 1;
+     */
+    value: CommandAccepted;
+    case: "accepted";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
 };
 
 /**
@@ -590,7 +663,7 @@ export type CancelTurnResponse = Message<"dennett.control.v1.CancelTurnResponse"
  * Use `create(CancelTurnResponseSchema)` to create a new message.
  */
 export const CancelTurnResponseSchema: GenMessage<CancelTurnResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 16);
+  messageDesc(file_dennett_control_v1_session, 18);
 
 /**
  * @generated from message dennett.control.v1.WatchSessionRequest
@@ -607,6 +680,11 @@ export type WatchSessionRequest = Message<"dennett.control.v1.WatchSessionReques
    * @generated from field: optional uint64 known_revision = 2;
    */
   knownRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: string client_session_id = 3;
+   */
+  clientSessionId: string;
 };
 
 /**
@@ -614,7 +692,7 @@ export type WatchSessionRequest = Message<"dennett.control.v1.WatchSessionReques
  * Use `create(WatchSessionRequestSchema)` to create a new message.
  */
 export const WatchSessionRequestSchema: GenMessage<WatchSessionRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 17);
+  messageDesc(file_dennett_control_v1_session, 19);
 
 /**
  * @generated from message dennett.control.v1.WatchSessionResponse
@@ -631,7 +709,7 @@ export type WatchSessionResponse = Message<"dennett.control.v1.WatchSessionRespo
  * Use `create(WatchSessionResponseSchema)` to create a new message.
  */
 export const WatchSessionResponseSchema: GenMessage<WatchSessionResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 18);
+  messageDesc(file_dennett_control_v1_session, 20);
 
 /**
  * @generated from enum dennett.control.v1.SessionState

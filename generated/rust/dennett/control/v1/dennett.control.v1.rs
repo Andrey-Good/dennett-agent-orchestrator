@@ -41,12 +41,28 @@ pub struct CreateProjectRequest {
     #[prost(string, tag="3")]
     pub root_uri: ::prost::alloc::string::String,
 }
+/// CreateProjectAccepted allocates identity but does not claim project completion.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CreateProjectAccepted {
+    #[prost(message, optional, tag="1")]
+    pub command: ::core::option::Option<super::super::common::v1::CommandAccepted>,
+    #[prost(string, tag="2")]
+    pub project_id: ::prost::alloc::string::String,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateProjectResponse {
-    #[prost(message, optional, tag="1")]
-    pub accepted: ::core::option::Option<super::super::common::v1::CommandAccepted>,
-    #[prost(message, optional, tag="2")]
-    pub project: ::core::option::Option<Project>,
+    #[prost(oneof="create_project_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<create_project_response::Outcome>,
+}
+/// Nested message and enum types in `CreateProjectResponse`.
+pub mod create_project_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Accepted(super::CreateProjectAccepted),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListProjectsRequest {
@@ -56,9 +72,11 @@ pub struct ListProjectsRequest {
     /// Empty means the first page.
     #[prost(string, tag="2")]
     pub page_token: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub client_session_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListProjectsResponse {
+pub struct ListProjectsResult {
     #[prost(message, repeated, tag="1")]
     pub projects: ::prost::alloc::vec::Vec<ProjectSummary>,
     #[prost(string, tag="2")]
@@ -66,15 +84,42 @@ pub struct ListProjectsResponse {
     #[prost(uint64, tag="3")]
     pub snapshot_revision: u64,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListProjectsResponse {
+    #[prost(oneof="list_projects_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<list_projects_response::Outcome>,
+}
+/// Nested message and enum types in `ListProjectsResponse`.
+pub mod list_projects_response {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Result(super::ListProjectsResult),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetProjectRequest {
     #[prost(string, tag="1")]
     pub project_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub client_session_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetProjectResponse {
-    #[prost(message, optional, tag="1")]
-    pub project: ::core::option::Option<Project>,
+    #[prost(oneof="get_project_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<get_project_response::Outcome>,
+}
+/// Nested message and enum types in `GetProjectResponse`.
+pub mod get_project_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Project(super::Project),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -255,7 +300,8 @@ pub struct SessionDelta {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionWatchFrame {
-    /// The first domain frame is a snapshot; cursor sequences then increase by one.
+    /// The first domain frame is a snapshot. Apply later frames only when the
+    /// cursor epoch matches bootstrap and sequences increase by exactly one.
     #[prost(message, optional, tag="1")]
     pub cursor: ::core::option::Option<super::super::sync::v1::WatchCursor>,
     #[prost(oneof="session_watch_frame::Frame", tags="2, 3, 4, 5, 6")]
@@ -286,12 +332,28 @@ pub struct CreateSessionRequest {
     #[prost(string, tag="3")]
     pub title: ::prost::alloc::string::String,
 }
+/// CreateSessionAccepted allocates identity but does not claim session completion.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CreateSessionAccepted {
+    #[prost(message, optional, tag="1")]
+    pub command: ::core::option::Option<super::super::common::v1::CommandAccepted>,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateSessionResponse {
-    #[prost(message, optional, tag="1")]
-    pub accepted: ::core::option::Option<super::super::common::v1::CommandAccepted>,
-    #[prost(message, optional, tag="2")]
-    pub session: ::core::option::Option<SessionSummary>,
+    #[prost(oneof="create_session_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<create_session_response::Outcome>,
+}
+/// Nested message and enum types in `CreateSessionResponse`.
+pub mod create_session_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Accepted(super::CreateSessionAccepted),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SendTurnRequest {
@@ -307,11 +369,26 @@ pub struct SendTurnRequest {
     pub attachments: ::prost::alloc::vec::Vec<ContextAttachment>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SendTurnResponse {
+pub struct SendTurnAccepted {
     #[prost(message, optional, tag="1")]
-    pub accepted: ::core::option::Option<super::super::common::v1::CommandAccepted>,
+    pub command: ::core::option::Option<super::super::common::v1::CommandAccepted>,
     #[prost(string, tag="2")]
     pub turn_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SendTurnResponse {
+    #[prost(oneof="send_turn_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<send_turn_response::Outcome>,
+}
+/// Nested message and enum types in `SendTurnResponse`.
+pub mod send_turn_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Accepted(super::SendTurnAccepted),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CancelTurnRequest {
@@ -326,8 +403,18 @@ pub struct CancelTurnRequest {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CancelTurnResponse {
-    #[prost(message, optional, tag="1")]
-    pub accepted: ::core::option::Option<super::super::common::v1::CommandAccepted>,
+    #[prost(oneof="cancel_turn_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<cancel_turn_response::Outcome>,
+}
+/// Nested message and enum types in `CancelTurnResponse`.
+pub mod cancel_turn_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Accepted(super::super::super::common::v1::CommandAccepted),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WatchSessionRequest {
@@ -336,6 +423,8 @@ pub struct WatchSessionRequest {
     /// A value is a freshness hint only; every stream still starts with a snapshot.
     #[prost(uint64, optional, tag="2")]
     pub known_revision: ::core::option::Option<u64>,
+    #[prost(string, tag="3")]
+    pub client_session_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WatchSessionResponse {
@@ -488,6 +577,9 @@ pub struct ServerWelcome {
     pub compatibility_mode: i32,
     #[prost(uint64, tag="8")]
     pub max_message_bytes: u64,
+    /// Opaque short-lived identity for the trusted bridge, never the renderer.
+    #[prost(string, tag="9")]
+    pub client_session_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HandshakeRequest {
@@ -496,8 +588,18 @@ pub struct HandshakeRequest {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HandshakeResponse {
-    #[prost(message, optional, tag="1")]
-    pub welcome: ::core::option::Option<ServerWelcome>,
+    #[prost(oneof="handshake_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<handshake_response::Outcome>,
+}
+/// Nested message and enum types in `HandshakeResponse`.
+pub mod handshake_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Welcome(super::ServerWelcome),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BootstrapRequest {
@@ -507,6 +609,8 @@ pub struct BootstrapRequest {
     /// Absence requests a full canonical bootstrap snapshot.
     #[prost(uint64, optional, tag="2")]
     pub known_revision: ::core::option::Option<u64>,
+    #[prost(string, tag="3")]
+    pub client_session_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BootstrapSnapshot {
@@ -529,14 +633,25 @@ pub struct BootstrapSnapshot {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BootstrapResponse {
-    #[prost(message, optional, tag="1")]
-    pub snapshot: ::core::option::Option<BootstrapSnapshot>,
+    #[prost(oneof="bootstrap_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<bootstrap_response::Outcome>,
 }
+/// Nested message and enum types in `BootstrapResponse`.
+pub mod bootstrap_response {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Snapshot(super::BootstrapSnapshot),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
+}
+/// GetHealth is a bounded pre-auth liveness query and exposes no user state.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetHealthRequest {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetHealthResponse {
+pub struct GetHealthResult {
     #[prost(enumeration="HealthState", tag="1")]
     pub state: i32,
     #[prost(string, tag="2")]
@@ -545,6 +660,119 @@ pub struct GetHealthResponse {
     pub observed_at: ::core::option::Option<::prost_types::Timestamp>,
     #[prost(string, tag="4")]
     pub status_code: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetHealthResponse {
+    #[prost(oneof="get_health_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<get_health_response::Outcome>,
+}
+/// Nested message and enum types in `GetHealthResponse`.
+pub mod get_health_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Health(super::GetHealthResult),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemSnapshot {
+    /// bootstrap.authority_epoch must equal the frame cursor authority_epoch.
+    #[prost(message, optional, tag="1")]
+    pub bootstrap: ::core::option::Option<BootstrapSnapshot>,
+    #[prost(bytes="vec", tag="2")]
+    pub snapshot_fingerprint: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemSelectionUpdate {
+    /// Presence distinguishes no change from explicitly clearing a selection.
+    #[prost(string, optional, tag="1")]
+    pub active_project_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag="2")]
+    pub active_session_id: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemHealthUpdate {
+    #[prost(enumeration="HealthState", tag="1")]
+    pub node_state: i32,
+    #[prost(string, tag="2")]
+    pub status_code: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub observed_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemMutation {
+    #[prost(oneof="system_mutation::Mutation", tags="1, 2, 3, 4, 5, 6, 7")]
+    pub mutation: ::core::option::Option<system_mutation::Mutation>,
+}
+/// Nested message and enum types in `SystemMutation`.
+pub mod system_mutation {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Mutation {
+        #[prost(message, tag="1")]
+        UpsertProject(super::ProjectSummary),
+        #[prost(string, tag="2")]
+        RemoveProjectId(::prost::alloc::string::String),
+        #[prost(message, tag="3")]
+        UpsertSession(super::SessionSummary),
+        #[prost(string, tag="4")]
+        RemoveSessionId(::prost::alloc::string::String),
+        #[prost(message, tag="5")]
+        UpdateSelection(super::SystemSelectionUpdate),
+        #[prost(message, tag="6")]
+        UpdateHealth(super::SystemHealthUpdate),
+        #[prost(message, tag="7")]
+        FinishCommand(super::super::super::common::v1::CommandTerminal),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemDelta {
+    #[prost(uint64, tag="1")]
+    pub base_revision: u64,
+    #[prost(uint64, tag="2")]
+    pub new_revision: u64,
+    /// Mutations apply in listed order as one authoritative revision transition.
+    #[prost(message, repeated, tag="3")]
+    pub mutations: ::prost::alloc::vec::Vec<SystemMutation>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemWatchFrame {
+    /// The first domain frame is a snapshot. A cursor epoch mismatch makes all
+    /// cached system/session/project summaries stale and requires a new bootstrap.
+    #[prost(message, optional, tag="1")]
+    pub cursor: ::core::option::Option<super::super::sync::v1::WatchCursor>,
+    #[prost(oneof="system_watch_frame::Frame", tags="2, 3, 4, 5, 6")]
+    pub frame: ::core::option::Option<system_watch_frame::Frame>,
+}
+/// Nested message and enum types in `SystemWatchFrame`.
+pub mod system_watch_frame {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Frame {
+        #[prost(message, tag="2")]
+        Snapshot(super::SystemSnapshot),
+        #[prost(message, tag="3")]
+        Delta(super::SystemDelta),
+        #[prost(message, tag="4")]
+        Heartbeat(super::super::super::sync::v1::WatchHeartbeat),
+        #[prost(message, tag="5")]
+        ResyncRequired(super::super::super::sync::v1::ResyncRequired),
+        #[prost(message, tag="6")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WatchRequest {
+    #[prost(string, tag="1")]
+    pub client_session_id: ::prost::alloc::string::String,
+    /// A value is a freshness hint only; every stream still starts with a snapshot.
+    #[prost(uint64, optional, tag="2")]
+    pub known_revision: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WatchResponse {
+    #[prost(message, optional, tag="1")]
+    pub frame: ::core::option::Option<SystemWatchFrame>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

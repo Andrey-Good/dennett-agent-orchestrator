@@ -5,10 +5,14 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { CommandTerminal, ErrorEnvelope } from "../../common/v1/common_pb";
+import { file_dennett_common_v1_common } from "../../common/v1/common_pb";
 import type { ProjectSummary } from "./project_pb";
 import { file_dennett_control_v1_project } from "./project_pb";
 import type { SessionSummary } from "./session_pb";
 import { file_dennett_control_v1_session } from "./session_pb";
+import type { ResyncRequired, WatchCursor, WatchHeartbeat } from "../../sync/v1/watch_pb";
+import { file_dennett_sync_v1_watch } from "../../sync/v1/watch_pb";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
@@ -17,7 +21,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/control/v1/system.proto.
  */
 export const file_dennett_control_v1_system: GenFile = /*@__PURE__*/
-  fileDesc("Ch9kZW5uZXR0L2NvbnRyb2wvdjEvc3lzdGVtLnByb3RvEhJkZW5uZXR0LmNvbnRyb2wudjEiwAEKC0NsaWVudEhlbGxvEhgKEGNsaWVudF9jb21wb25lbnQYASABKAkSGQoRY29tcG9uZW50X3ZlcnNpb24YAiABKAkSGQoRcHJvdG9jb2xfdmVyc2lvbnMYAyADKA0SFwoPaW5zdGFsbGF0aW9uX2lkGAQgASgJEhEKCWRldmljZV9pZBgFIAEoCRIZChFzZXNzaW9uX2NoYWxsZW5nZRgGIAEoDBIaChJyZXF1ZXN0ZWRfZmVhdHVyZXMYByADKAkihQIKDVNlcnZlcldlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIUCgxub2RlX3ZlcnNpb24YAiABKAkSHAoUYXV0aG9yaXR5X2Vwb2NoX3NlZW4YAyABKAQSGAoQZW5hYmxlZF9mZWF0dXJlcxgEIAMoCRIVCg1zZXNzaW9uX3Byb29mGAUgASgMEhcKD3Jlc3luY19yZXF1aXJlZBgGIAEoCBJBChJjb21wYXRpYmlsaXR5X21vZGUYByABKA4yJS5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcGF0aWJpbGl0eU1vZGUSGQoRbWF4X21lc3NhZ2VfYnl0ZXMYCCABKAQiQgoQSGFuZHNoYWtlUmVxdWVzdBIuCgVoZWxsbxgBIAEoCzIfLmRlbm5ldHQuY29udHJvbC52MS5DbGllbnRIZWxsbyJHChFIYW5kc2hha2VSZXNwb25zZRIyCgd3ZWxjb21lGAEgASgLMiEuZGVubmV0dC5jb250cm9sLnYxLlNlcnZlcldlbGNvbWUiWQoQQm9vdHN0cmFwUmVxdWVzdBIVCg1zZXNzaW9uX3Byb29mGAEgASgMEhsKDmtub3duX3JldmlzaW9uGAIgASgESACIAQFCEQoPX2tub3duX3JldmlzaW9uIs0CChFCb290c3RyYXBTbmFwc2hvdBIQCghyZXZpc2lvbhgBIAEoBBIXCg9hdXRob3JpdHlfZXBvY2gYAiABKAQSLwoLb2JzZXJ2ZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjQKCHByb2plY3RzGAQgAygLMiIuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3RTdW1tYXJ5EjsKD3JlY2VudF9zZXNzaW9ucxgFIAMoCzIiLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uU3VtbWFyeRIZChFhY3RpdmVfcHJvamVjdF9pZBgGIAEoCRIZChFhY3RpdmVfc2Vzc2lvbl9pZBgHIAEoCRIzCgpub2RlX3N0YXRlGAggASgOMh8uZGVubmV0dC5jb250cm9sLnYxLkhlYWx0aFN0YXRlIkwKEUJvb3RzdHJhcFJlc3BvbnNlEjcKCHNuYXBzaG90GAEgASgLMiUuZGVubmV0dC5jb250cm9sLnYxLkJvb3RzdHJhcFNuYXBzaG90IhIKEEdldEhlYWx0aFJlcXVlc3QinwEKEUdldEhlYWx0aFJlc3BvbnNlEi4KBXN0YXRlGAEgASgOMh8uZGVubmV0dC5jb250cm9sLnYxLkhlYWx0aFN0YXRlEhQKDG5vZGVfdmVyc2lvbhgCIAEoCRIvCgtvYnNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoLc3RhdHVzX2NvZGUYBCABKAkq8AEKEUNvbXBhdGliaWxpdHlNb2RlEiIKHkNPTVBBVElCSUxJVFlfTU9ERV9VTlNQRUNJRklFRBAAEhsKF0NPTVBBVElCSUxJVFlfTU9ERV9GVUxMEAESIAocQ09NUEFUSUJJTElUWV9NT0RFX1JFQURfT05MWRACEicKI0NPTVBBVElCSUxJVFlfTU9ERV9GRUFUVVJFX0RFR1JBREVEEAMSJgoiQ09NUEFUSUJJTElUWV9NT0RFX1VQREFURV9SRVFVSVJFRBAEEicKI0NPTVBBVElCSUxJVFlfTU9ERV9CTE9DS0VEX1NFQ1VSSVRZEAUqnQEKC0hlYWx0aFN0YXRlEhwKGEhFQUxUSF9TVEFURV9VTlNQRUNJRklFRBAAEhkKFUhFQUxUSF9TVEFURV9TVEFSVElORxABEhYKEkhFQUxUSF9TVEFURV9SRUFEWRACEhkKFUhFQUxUSF9TVEFURV9ERUdSQURFRBADEiIKHkhFQUxUSF9TVEFURV9SRUNPVkVSWV9SRVFVSVJFRBAEMp0CCg1TeXN0ZW1TZXJ2aWNlElgKCUhhbmRzaGFrZRIkLmRlbm5ldHQuY29udHJvbC52MS5IYW5kc2hha2VSZXF1ZXN0GiUuZGVubmV0dC5jb250cm9sLnYxLkhhbmRzaGFrZVJlc3BvbnNlElgKCUJvb3RzdHJhcBIkLmRlbm5ldHQuY29udHJvbC52MS5Cb290c3RyYXBSZXF1ZXN0GiUuZGVubmV0dC5jb250cm9sLnYxLkJvb3RzdHJhcFJlc3BvbnNlElgKCUdldEhlYWx0aBIkLmRlbm5ldHQuY29udHJvbC52MS5HZXRIZWFsdGhSZXF1ZXN0GiUuZGVubmV0dC5jb250cm9sLnYxLkdldEhlYWx0aFJlc3BvbnNlYgZwcm90bzM", [file_dennett_control_v1_project, file_dennett_control_v1_session, file_google_protobuf_timestamp]);
+  fileDesc("Ch9kZW5uZXR0L2NvbnRyb2wvdjEvc3lzdGVtLnByb3RvEhJkZW5uZXR0LmNvbnRyb2wudjEiwAEKC0NsaWVudEhlbGxvEhgKEGNsaWVudF9jb21wb25lbnQYASABKAkSGQoRY29tcG9uZW50X3ZlcnNpb24YAiABKAkSGQoRcHJvdG9jb2xfdmVyc2lvbnMYAyADKA0SFwoPaW5zdGFsbGF0aW9uX2lkGAQgASgJEhEKCWRldmljZV9pZBgFIAEoCRIZChFzZXNzaW9uX2NoYWxsZW5nZRgGIAEoDBIaChJyZXF1ZXN0ZWRfZmVhdHVyZXMYByADKAkioAIKDVNlcnZlcldlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIUCgxub2RlX3ZlcnNpb24YAiABKAkSHAoUYXV0aG9yaXR5X2Vwb2NoX3NlZW4YAyABKAQSGAoQZW5hYmxlZF9mZWF0dXJlcxgEIAMoCRIVCg1zZXNzaW9uX3Byb29mGAUgASgMEhcKD3Jlc3luY19yZXF1aXJlZBgGIAEoCBJBChJjb21wYXRpYmlsaXR5X21vZGUYByABKA4yJS5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcGF0aWJpbGl0eU1vZGUSGQoRbWF4X21lc3NhZ2VfYnl0ZXMYCCABKAQSGQoRY2xpZW50X3Nlc3Npb25faWQYCSABKAkiQgoQSGFuZHNoYWtlUmVxdWVzdBIuCgVoZWxsbxgBIAEoCzIfLmRlbm5ldHQuY29udHJvbC52MS5DbGllbnRIZWxsbyKHAQoRSGFuZHNoYWtlUmVzcG9uc2USNAoHd2VsY29tZRgBIAEoCzIhLmRlbm5ldHQuY29udHJvbC52MS5TZXJ2ZXJXZWxjb21lSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSJ0ChBCb290c3RyYXBSZXF1ZXN0EhUKDXNlc3Npb25fcHJvb2YYASABKAwSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBARIZChFjbGllbnRfc2Vzc2lvbl9pZBgDIAEoCUIRCg9fa25vd25fcmV2aXNpb24izQIKEUJvb3RzdHJhcFNuYXBzaG90EhAKCHJldmlzaW9uGAEgASgEEhcKD2F1dGhvcml0eV9lcG9jaBgCIAEoBBIvCgtvYnNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASNAoIcHJvamVjdHMYBCADKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN1bW1hcnkSOwoPcmVjZW50X3Nlc3Npb25zGAUgAygLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5EhkKEWFjdGl2ZV9wcm9qZWN0X2lkGAYgASgJEhkKEWFjdGl2ZV9zZXNzaW9uX2lkGAcgASgJEjMKCm5vZGVfc3RhdGUYCCABKA4yHy5kZW5uZXR0LmNvbnRyb2wudjEuSGVhbHRoU3RhdGUijAEKEUJvb3RzdHJhcFJlc3BvbnNlEjkKCHNuYXBzaG90GAEgASgLMiUuZGVubmV0dC5jb250cm9sLnYxLkJvb3RzdHJhcFNuYXBzaG90SAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSISChBHZXRIZWFsdGhSZXF1ZXN0Ip0BCg9HZXRIZWFsdGhSZXN1bHQSLgoFc3RhdGUYASABKA4yHy5kZW5uZXR0LmNvbnRyb2wudjEuSGVhbHRoU3RhdGUSFAoMbm9kZV92ZXJzaW9uGAIgASgJEi8KC29ic2VydmVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgtzdGF0dXNfY29kZRgEIAEoCSKIAQoRR2V0SGVhbHRoUmVzcG9uc2USNQoGaGVhbHRoGAEgASgLMiMuZGVubmV0dC5jb250cm9sLnYxLkdldEhlYWx0aFJlc3VsdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUiaAoOU3lzdGVtU25hcHNob3QSOAoJYm9vdHN0cmFwGAEgASgLMiUuZGVubmV0dC5jb250cm9sLnYxLkJvb3RzdHJhcFNuYXBzaG90EhwKFHNuYXBzaG90X2ZpbmdlcnByaW50GAIgASgMIoMBChVTeXN0ZW1TZWxlY3Rpb25VcGRhdGUSHgoRYWN0aXZlX3Byb2plY3RfaWQYASABKAlIAIgBARIeChFhY3RpdmVfc2Vzc2lvbl9pZBgCIAEoCUgBiAEBQhQKEl9hY3RpdmVfcHJvamVjdF9pZEIUChJfYWN0aXZlX3Nlc3Npb25faWQijwEKElN5c3RlbUhlYWx0aFVwZGF0ZRIzCgpub2RlX3N0YXRlGAEgASgOMh8uZGVubmV0dC5jb250cm9sLnYxLkhlYWx0aFN0YXRlEhMKC3N0YXR1c19jb2RlGAIgASgJEi8KC29ic2VydmVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKYAwoOU3lzdGVtTXV0YXRpb24SPAoOdXBzZXJ0X3Byb2plY3QYASABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN1bW1hcnlIABIbChFyZW1vdmVfcHJvamVjdF9pZBgCIAEoCUgAEjwKDnVwc2VydF9zZXNzaW9uGAMgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5SAASGwoRcmVtb3ZlX3Nlc3Npb25faWQYBCABKAlIABJFChB1cGRhdGVfc2VsZWN0aW9uGAUgASgLMikuZGVubmV0dC5jb250cm9sLnYxLlN5c3RlbVNlbGVjdGlvblVwZGF0ZUgAEj8KDXVwZGF0ZV9oZWFsdGgYBiABKAsyJi5kZW5uZXR0LmNvbnRyb2wudjEuU3lzdGVtSGVhbHRoVXBkYXRlSAASPAoOZmluaXNoX2NvbW1hbmQYByABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kVGVybWluYWxIAEIKCghtdXRhdGlvbiJxCgtTeXN0ZW1EZWx0YRIVCg1iYXNlX3JldmlzaW9uGAEgASgEEhQKDG5ld19yZXZpc2lvbhgCIAEoBBI1CgltdXRhdGlvbnMYAyADKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuU3lzdGVtTXV0YXRpb24i2AIKEFN5c3RlbVdhdGNoRnJhbWUSLAoGY3Vyc29yGAEgASgLMhwuZGVubmV0dC5zeW5jLnYxLldhdGNoQ3Vyc29yEjYKCHNuYXBzaG90GAIgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlN5c3RlbVNuYXBzaG90SAASMAoFZGVsdGEYAyABKAsyHy5kZW5uZXR0LmNvbnRyb2wudjEuU3lzdGVtRGVsdGFIABI0CgloZWFydGJlYXQYBCABKAsyHy5kZW5uZXR0LnN5bmMudjEuV2F0Y2hIZWFydGJlYXRIABI6Cg9yZXN5bmNfcmVxdWlyZWQYBSABKAsyHy5kZW5uZXR0LnN5bmMudjEuUmVzeW5jUmVxdWlyZWRIABIxCgVlcnJvchgGIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIHCgVmcmFtZSJZCgxXYXRjaFJlcXVlc3QSGQoRY2xpZW50X3Nlc3Npb25faWQYASABKAkSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBAUIRCg9fa25vd25fcmV2aXNpb24iRAoNV2F0Y2hSZXNwb25zZRIzCgVmcmFtZRgBIAEoCzIkLmRlbm5ldHQuY29udHJvbC52MS5TeXN0ZW1XYXRjaEZyYW1lKvABChFDb21wYXRpYmlsaXR5TW9kZRIiCh5DT01QQVRJQklMSVRZX01PREVfVU5TUEVDSUZJRUQQABIbChdDT01QQVRJQklMSVRZX01PREVfRlVMTBABEiAKHENPTVBBVElCSUxJVFlfTU9ERV9SRUFEX09OTFkQAhInCiNDT01QQVRJQklMSVRZX01PREVfRkVBVFVSRV9ERUdSQURFRBADEiYKIkNPTVBBVElCSUxJVFlfTU9ERV9VUERBVEVfUkVRVUlSRUQQBBInCiNDT01QQVRJQklMSVRZX01PREVfQkxPQ0tFRF9TRUNVUklUWRAFKp0BCgtIZWFsdGhTdGF0ZRIcChhIRUFMVEhfU1RBVEVfVU5TUEVDSUZJRUQQABIZChVIRUFMVEhfU1RBVEVfU1RBUlRJTkcQARIWChJIRUFMVEhfU1RBVEVfUkVBRFkQAhIZChVIRUFMVEhfU1RBVEVfREVHUkFERUQQAxIiCh5IRUFMVEhfU1RBVEVfUkVDT1ZFUllfUkVRVUlSRUQQBDLtAgoNU3lzdGVtU2VydmljZRJYCglIYW5kc2hha2USJC5kZW5uZXR0LmNvbnRyb2wudjEuSGFuZHNoYWtlUmVxdWVzdBolLmRlbm5ldHQuY29udHJvbC52MS5IYW5kc2hha2VSZXNwb25zZRJYCglCb290c3RyYXASJC5kZW5uZXR0LmNvbnRyb2wudjEuQm9vdHN0cmFwUmVxdWVzdBolLmRlbm5ldHQuY29udHJvbC52MS5Cb290c3RyYXBSZXNwb25zZRJOCgVXYXRjaBIgLmRlbm5ldHQuY29udHJvbC52MS5XYXRjaFJlcXVlc3QaIS5kZW5uZXR0LmNvbnRyb2wudjEuV2F0Y2hSZXNwb25zZTABElgKCUdldEhlYWx0aBIkLmRlbm5ldHQuY29udHJvbC52MS5HZXRIZWFsdGhSZXF1ZXN0GiUuZGVubmV0dC5jb250cm9sLnYxLkdldEhlYWx0aFJlc3BvbnNlYgZwcm90bzM", [file_dennett_common_v1_common, file_dennett_control_v1_project, file_dennett_control_v1_session, file_dennett_sync_v1_watch, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message dennett.control.v1.ClientHello
@@ -109,6 +113,13 @@ export type ServerWelcome = Message<"dennett.control.v1.ServerWelcome"> & {
    * @generated from field: uint64 max_message_bytes = 8;
    */
   maxMessageBytes: bigint;
+
+  /**
+   * Opaque short-lived identity for the trusted bridge, never the renderer.
+   *
+   * @generated from field: string client_session_id = 9;
+   */
+  clientSessionId: string;
 };
 
 /**
@@ -140,9 +151,21 @@ export const HandshakeRequestSchema: GenMessage<HandshakeRequest> = /*@__PURE__*
  */
 export type HandshakeResponse = Message<"dennett.control.v1.HandshakeResponse"> & {
   /**
-   * @generated from field: dennett.control.v1.ServerWelcome welcome = 1;
+   * @generated from oneof dennett.control.v1.HandshakeResponse.outcome
    */
-  welcome?: ServerWelcome | undefined;
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.ServerWelcome welcome = 1;
+     */
+    value: ServerWelcome;
+    case: "welcome";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
 };
 
 /**
@@ -169,6 +192,11 @@ export type BootstrapRequest = Message<"dennett.control.v1.BootstrapRequest"> & 
    * @generated from field: optional uint64 known_revision = 2;
    */
   knownRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: string client_session_id = 3;
+   */
+  clientSessionId: string;
 };
 
 /**
@@ -235,9 +263,21 @@ export const BootstrapSnapshotSchema: GenMessage<BootstrapSnapshot> = /*@__PURE_
  */
 export type BootstrapResponse = Message<"dennett.control.v1.BootstrapResponse"> & {
   /**
-   * @generated from field: dennett.control.v1.BootstrapSnapshot snapshot = 1;
+   * @generated from oneof dennett.control.v1.BootstrapResponse.outcome
    */
-  snapshot?: BootstrapSnapshot | undefined;
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.BootstrapSnapshot snapshot = 1;
+     */
+    value: BootstrapSnapshot;
+    case: "snapshot";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
 };
 
 /**
@@ -248,6 +288,8 @@ export const BootstrapResponseSchema: GenMessage<BootstrapResponse> = /*@__PURE_
   messageDesc(file_dennett_control_v1_system, 6);
 
 /**
+ * GetHealth is a bounded pre-auth liveness query and exposes no user state.
+ *
  * @generated from message dennett.control.v1.GetHealthRequest
  */
 export type GetHealthRequest = Message<"dennett.control.v1.GetHealthRequest"> & {
@@ -261,9 +303,9 @@ export const GetHealthRequestSchema: GenMessage<GetHealthRequest> = /*@__PURE__*
   messageDesc(file_dennett_control_v1_system, 7);
 
 /**
- * @generated from message dennett.control.v1.GetHealthResponse
+ * @generated from message dennett.control.v1.GetHealthResult
  */
-export type GetHealthResponse = Message<"dennett.control.v1.GetHealthResponse"> & {
+export type GetHealthResult = Message<"dennett.control.v1.GetHealthResult"> & {
   /**
    * @generated from field: dennett.control.v1.HealthState state = 1;
    */
@@ -286,11 +328,299 @@ export type GetHealthResponse = Message<"dennett.control.v1.GetHealthResponse"> 
 };
 
 /**
+ * Describes the message dennett.control.v1.GetHealthResult.
+ * Use `create(GetHealthResultSchema)` to create a new message.
+ */
+export const GetHealthResultSchema: GenMessage<GetHealthResult> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 8);
+
+/**
+ * @generated from message dennett.control.v1.GetHealthResponse
+ */
+export type GetHealthResponse = Message<"dennett.control.v1.GetHealthResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.GetHealthResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.GetHealthResult health = 1;
+     */
+    value: GetHealthResult;
+    case: "health";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
  * Describes the message dennett.control.v1.GetHealthResponse.
  * Use `create(GetHealthResponseSchema)` to create a new message.
  */
 export const GetHealthResponseSchema: GenMessage<GetHealthResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 8);
+  messageDesc(file_dennett_control_v1_system, 9);
+
+/**
+ * @generated from message dennett.control.v1.SystemSnapshot
+ */
+export type SystemSnapshot = Message<"dennett.control.v1.SystemSnapshot"> & {
+  /**
+   * bootstrap.authority_epoch must equal the frame cursor authority_epoch.
+   *
+   * @generated from field: dennett.control.v1.BootstrapSnapshot bootstrap = 1;
+   */
+  bootstrap?: BootstrapSnapshot | undefined;
+
+  /**
+   * @generated from field: bytes snapshot_fingerprint = 2;
+   */
+  snapshotFingerprint: Uint8Array;
+};
+
+/**
+ * Describes the message dennett.control.v1.SystemSnapshot.
+ * Use `create(SystemSnapshotSchema)` to create a new message.
+ */
+export const SystemSnapshotSchema: GenMessage<SystemSnapshot> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 10);
+
+/**
+ * @generated from message dennett.control.v1.SystemSelectionUpdate
+ */
+export type SystemSelectionUpdate = Message<"dennett.control.v1.SystemSelectionUpdate"> & {
+  /**
+   * Presence distinguishes no change from explicitly clearing a selection.
+   *
+   * @generated from field: optional string active_project_id = 1;
+   */
+  activeProjectId?: string | undefined;
+
+  /**
+   * @generated from field: optional string active_session_id = 2;
+   */
+  activeSessionId?: string | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.SystemSelectionUpdate.
+ * Use `create(SystemSelectionUpdateSchema)` to create a new message.
+ */
+export const SystemSelectionUpdateSchema: GenMessage<SystemSelectionUpdate> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 11);
+
+/**
+ * @generated from message dennett.control.v1.SystemHealthUpdate
+ */
+export type SystemHealthUpdate = Message<"dennett.control.v1.SystemHealthUpdate"> & {
+  /**
+   * @generated from field: dennett.control.v1.HealthState node_state = 1;
+   */
+  nodeState: HealthState;
+
+  /**
+   * @generated from field: string status_code = 2;
+   */
+  statusCode: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp observed_at = 3;
+   */
+  observedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.SystemHealthUpdate.
+ * Use `create(SystemHealthUpdateSchema)` to create a new message.
+ */
+export const SystemHealthUpdateSchema: GenMessage<SystemHealthUpdate> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 12);
+
+/**
+ * @generated from message dennett.control.v1.SystemMutation
+ */
+export type SystemMutation = Message<"dennett.control.v1.SystemMutation"> & {
+  /**
+   * @generated from oneof dennett.control.v1.SystemMutation.mutation
+   */
+  mutation: {
+    /**
+     * @generated from field: dennett.control.v1.ProjectSummary upsert_project = 1;
+     */
+    value: ProjectSummary;
+    case: "upsertProject";
+  } | {
+    /**
+     * @generated from field: string remove_project_id = 2;
+     */
+    value: string;
+    case: "removeProjectId";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.SessionSummary upsert_session = 3;
+     */
+    value: SessionSummary;
+    case: "upsertSession";
+  } | {
+    /**
+     * @generated from field: string remove_session_id = 4;
+     */
+    value: string;
+    case: "removeSessionId";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.SystemSelectionUpdate update_selection = 5;
+     */
+    value: SystemSelectionUpdate;
+    case: "updateSelection";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.SystemHealthUpdate update_health = 6;
+     */
+    value: SystemHealthUpdate;
+    case: "updateHealth";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.CommandTerminal finish_command = 7;
+     */
+    value: CommandTerminal;
+    case: "finishCommand";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.SystemMutation.
+ * Use `create(SystemMutationSchema)` to create a new message.
+ */
+export const SystemMutationSchema: GenMessage<SystemMutation> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 13);
+
+/**
+ * @generated from message dennett.control.v1.SystemDelta
+ */
+export type SystemDelta = Message<"dennett.control.v1.SystemDelta"> & {
+  /**
+   * @generated from field: uint64 base_revision = 1;
+   */
+  baseRevision: bigint;
+
+  /**
+   * @generated from field: uint64 new_revision = 2;
+   */
+  newRevision: bigint;
+
+  /**
+   * Mutations apply in listed order as one authoritative revision transition.
+   *
+   * @generated from field: repeated dennett.control.v1.SystemMutation mutations = 3;
+   */
+  mutations: SystemMutation[];
+};
+
+/**
+ * Describes the message dennett.control.v1.SystemDelta.
+ * Use `create(SystemDeltaSchema)` to create a new message.
+ */
+export const SystemDeltaSchema: GenMessage<SystemDelta> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 14);
+
+/**
+ * @generated from message dennett.control.v1.SystemWatchFrame
+ */
+export type SystemWatchFrame = Message<"dennett.control.v1.SystemWatchFrame"> & {
+  /**
+   * The first domain frame is a snapshot. A cursor epoch mismatch makes all
+   * cached system/session/project summaries stale and requires a new bootstrap.
+   *
+   * @generated from field: dennett.sync.v1.WatchCursor cursor = 1;
+   */
+  cursor?: WatchCursor | undefined;
+
+  /**
+   * @generated from oneof dennett.control.v1.SystemWatchFrame.frame
+   */
+  frame: {
+    /**
+     * @generated from field: dennett.control.v1.SystemSnapshot snapshot = 2;
+     */
+    value: SystemSnapshot;
+    case: "snapshot";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.SystemDelta delta = 3;
+     */
+    value: SystemDelta;
+    case: "delta";
+  } | {
+    /**
+     * @generated from field: dennett.sync.v1.WatchHeartbeat heartbeat = 4;
+     */
+    value: WatchHeartbeat;
+    case: "heartbeat";
+  } | {
+    /**
+     * @generated from field: dennett.sync.v1.ResyncRequired resync_required = 5;
+     */
+    value: ResyncRequired;
+    case: "resyncRequired";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 6;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.SystemWatchFrame.
+ * Use `create(SystemWatchFrameSchema)` to create a new message.
+ */
+export const SystemWatchFrameSchema: GenMessage<SystemWatchFrame> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 15);
+
+/**
+ * @generated from message dennett.control.v1.WatchRequest
+ */
+export type WatchRequest = Message<"dennett.control.v1.WatchRequest"> & {
+  /**
+   * @generated from field: string client_session_id = 1;
+   */
+  clientSessionId: string;
+
+  /**
+   * A value is a freshness hint only; every stream still starts with a snapshot.
+   *
+   * @generated from field: optional uint64 known_revision = 2;
+   */
+  knownRevision?: bigint | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.WatchRequest.
+ * Use `create(WatchRequestSchema)` to create a new message.
+ */
+export const WatchRequestSchema: GenMessage<WatchRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 16);
+
+/**
+ * @generated from message dennett.control.v1.WatchResponse
+ */
+export type WatchResponse = Message<"dennett.control.v1.WatchResponse"> & {
+  /**
+   * @generated from field: dennett.control.v1.SystemWatchFrame frame = 1;
+   */
+  frame?: SystemWatchFrame | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.WatchResponse.
+ * Use `create(WatchResponseSchema)` to create a new message.
+ */
+export const WatchResponseSchema: GenMessage<WatchResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 17);
 
 /**
  * @generated from enum dennett.control.v1.CompatibilityMode
@@ -388,6 +718,14 @@ export const SystemService: GenService<{
     methodKind: "unary";
     input: typeof BootstrapRequestSchema;
     output: typeof BootstrapResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.SystemService.Watch
+   */
+  watch: {
+    methodKind: "server_streaming";
+    input: typeof WatchRequestSchema;
+    output: typeof WatchResponseSchema;
   },
   /**
    * @generated from rpc dennett.control.v1.SystemService.GetHealth

@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11559,
-      "sha256": "7613c03651bfeba59f4d44fe56d32cf149954df647b2f32a48900796fb098433"
+      "sha256": "ae9c80964e5004bdf5ca43c01f17370172ac19bb13e07896157ceb29cea63987"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -570,8 +570,8 @@
     },
     {
       "path": "docs/decisions/ADR-006-m01-protocol-epoch.md",
-      "bytes": 3446,
-      "sha256": "e513503843d43661890913449e5cf6d19300483030c07fd6c5a2188a05818f88"
+      "bytes": 4950,
+      "sha256": "03b02e3651740bd757ca6bef18bb99dc4f9e90478eb54f424280741981ffb054"
     },
     {
       "path": "docs/decisions/README.md",
@@ -915,53 +915,53 @@
     },
     {
       "path": "generated/README.md",
-      "bytes": 1084,
-      "sha256": "7bf88a2b561fbde7e07ab2008aacfc40c1452367d58c58db7ca26007e0c9fe6c"
+      "bytes": 1135,
+      "sha256": "bad347a9eb2a0abb9ba30515da00b729174eb86dbb80d9ac9e0bbce579cd39ca"
     },
     {
       "path": "generated/rust/dennett/common/v1/dennett.common.v1.rs",
-      "bytes": 2493,
-      "sha256": "a067bba7d97d38295a47487f41b30b4b6cc120ba8b5ebe65e8e7a5bda996d4ab"
+      "bytes": 4031,
+      "sha256": "925fe17a7915392f48790f31059fe7428f797801e8d379d3c6dd6b4abecb09a8"
     },
     {
       "path": "generated/rust/dennett/control/v1/dennett.control.v1.rs",
-      "bytes": 24903,
-      "sha256": "e7de2a0c291dc02e9fef390fb4f9820902a0b66a7bec4dc63c54f183c3f23ee6"
+      "bytes": 34320,
+      "sha256": "959ec693da0fe7ca9832147677c924cb78b7d796bb409525cda5f1f3b0a8219b"
     },
     {
       "path": "generated/rust/dennett/control/v1/dennett.control.v1.tonic.rs",
-      "bytes": 62012,
-      "sha256": "4643d564c5b61e7bee5fe27006d2c19c68d350c742c4b0a1ddfb780fa29e1d1d"
+      "bytes": 65887,
+      "sha256": "96dbe41c07c58fcc235e7238bed5ea46bf6685006f775a4d078cad857fc78b2a"
     },
     {
       "path": "generated/rust/dennett/sync/v1/dennett.sync.v1.rs",
-      "bytes": 1145,
-      "sha256": "fe33c473d64d8b5339248377e6a62e0d4db6523975de776d1d44dba1da2686de"
+      "bytes": 3069,
+      "sha256": "e619821958c0d5fe25da22e010c31b0f21832baac8140f970844a0aa7fe8d39a"
     },
     {
       "path": "generated/ts/dennett/common/v1/common_pb.ts",
-      "bytes": 5449,
-      "sha256": "52b9ecaa6e223778933e170f62094930f322c90cf364562497000bdff177dd95"
+      "bytes": 8202,
+      "sha256": "5887f47ea28034ea1269081dee53b858b966b34f330413791e2f1c5fe6bdc563"
     },
     {
       "path": "generated/ts/dennett/control/v1/project_pb.ts",
-      "bytes": 10612,
-      "sha256": "3245eeb1053a071a96ed19f39bdd8b844c86cc5dbbb58b58826e374b3223c52e"
+      "bytes": 13473,
+      "sha256": "1f38d54dc24dbd95e7271f42285ae60ca9464efdf8cc392a18762f58f8a53627"
     },
     {
       "path": "generated/ts/dennett/control/v1/session_pb.ts",
-      "bytes": 26513,
-      "sha256": "d90e033df0b979c76ddeacb6198b5f90ea4e1b80526d31913dbbf5dd090cd9c3"
+      "bytes": 29249,
+      "sha256": "37b290d96e013a4bb460ee8c297a99971eb60ff65bc5d9055ff1920f36df8824"
     },
     {
       "path": "generated/ts/dennett/control/v1/system_pb.ts",
-      "bytes": 13606,
-      "sha256": "438d0a9fbf861e55e492e4d28391f99d4ebbc9c240f5a7225fc68b044aaa2d1f"
+      "bytes": 25933,
+      "sha256": "f438a0e1b93b71230c9ab4918e82e517ed00aa978de13411658917db6063bda9"
     },
     {
       "path": "generated/ts/dennett/sync/v1/watch_pb.ts",
-      "bytes": 3189,
-      "sha256": "b786395046dad37f52a17a58cee437dfa57b5affc08822d66028093ff01dd7a2"
+      "bytes": 4751,
+      "sha256": "e312e44b9538c886b56a415cd888930bc7cf45d14f7d739d96acd6e3d4b22c9b"
     },
     {
       "path": "mise.toml",
@@ -1035,8 +1035,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 30660,
-      "sha256": "8a5a3bc40ce6702feb8b4002655a66658aa17af4ad01fb4c404dfa1c47978c4f"
+      "bytes": 30845,
+      "sha256": "239a8c6036275cac9a6a8417792b0fda42fa9a12d05ea3add52cecb91dd963ab"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1135,33 +1135,33 @@
     },
     {
       "path": "protocols/epoch-migrations/m00-to-m01.json",
-      "bytes": 1336,
-      "sha256": "856dea516be7e8a36825b5934f07fd97e7f32417ee84b11a3a600225b132563f"
+      "bytes": 1510,
+      "sha256": "211f06392875667913d7dcccda8ef2dce3b25774788e0682621844874f4d9546"
     },
     {
       "path": "protocols/proto/dennett/common/v1/common.proto",
-      "bytes": 1210,
-      "sha256": "0537ec5b516836a5bd3629af5f2b6c3c0955cf5dd4a8b4766b43da4094386ed9"
+      "bytes": 1938,
+      "sha256": "8e771df8349c5e261a4c7451622b370753cbd2b3e3041d81ba311c848fb1ac55"
     },
     {
       "path": "protocols/proto/dennett/control/v1/project.proto",
-      "bytes": 1706,
-      "sha256": "a68a0d788b62771dceb5361714f507768135b0bf7f601a3d363b9eb30476cd93"
+      "bytes": 2205,
+      "sha256": "0f030fe1fad7cf35e9adb13f8084f73c76e9c1a2787543600ea0bc6f906e4c5d"
     },
     {
       "path": "protocols/proto/dennett/control/v1/session.proto",
-      "bytes": 4279,
-      "sha256": "d033508840f997e3fe055d59b71281419f730963a43526e9a8ddb07b77c3955a"
+      "bytes": 4805,
+      "sha256": "b192e152c115a97bdd8a7d8ffbc997da029d00e2bb6f5141c5b68501f259053b"
     },
     {
       "path": "protocols/proto/dennett/control/v1/system.proto",
-      "bytes": 2286,
-      "sha256": "14ae09fa9d62d06966ec44082b2472e274b4ff8c9b9d5d7752689c6182b11775"
+      "bytes": 4655,
+      "sha256": "96969781becf5dc64c6a41d8f0d1071936776061d6b9d84eda91e4521baa42a2"
     },
     {
       "path": "protocols/proto/dennett/sync/v1/watch.proto",
-      "bytes": 600,
-      "sha256": "5ae85dfbc147be820360d88b8b50c5c7503a04927f0ef053fbfb669e9e27585e"
+      "bytes": 1042,
+      "sha256": "da6a599489005d2490fdbdc83bcc8f0d197db2746ed8b81b002d725a988c1aba"
     },
     {
       "path": "pyproject.toml",
@@ -1425,13 +1425,13 @@
     },
     {
       "path": "tests/catalog/foundations.seed.json",
-      "bytes": 14904,
-      "sha256": "e5ed2396f0cebaa5ebca22aeb93b70e9b9a5540b22e57df7dd0e4430dcd28683"
+      "bytes": 15004,
+      "sha256": "38df73d6c3081c3b05766bd4fb2142c9ecbb4e5b1d6ccdae9dd8b946ea8e418e"
     },
     {
       "path": "tests/catalog/m01.seed.json",
-      "bytes": 20182,
-      "sha256": "434b80b8ef62e4404213bc8058eb0fe339bbc33e43d9b31c348b0016559520f3"
+      "bytes": 20624,
+      "sha256": "5a0cdb2e4a05c557a0708184fd5546fd80bfb175934bd42fefc0d4cc70db9e3b"
     },
     {
       "path": "tests/contracts/README.md",
@@ -1525,8 +1525,8 @@
     },
     {
       "path": "tools/protocol_codegen.py",
-      "bytes": 23940,
-      "sha256": "5b2ec7cc941147ea20dc621c3d9926cad164ccf4a35cfb956d2c73884163d80a"
+      "bytes": 56393,
+      "sha256": "f476793e6c0675c6b66253f9c3e5fde8d062d0f276e446d32e5fc1a6516c7aa4"
     },
     {
       "path": "tools/run_in_toolchain.py",
@@ -1550,8 +1550,8 @@
     },
     {
       "path": "tools/tests/test_protocol_codegen.py",
-      "bytes": 12192,
-      "sha256": "5e717eb83ca1ef5e8ad11964cf4d17cae02594613a7546bbb8b32a089d699376"
+      "bytes": 12318,
+      "sha256": "7d7c10ad55a17a26a72b79b1b09caefd9f3b8dca488b2abec541861dfe146ef9"
     },
     {
       "path": "tools/tests/test_verify_ci.py",

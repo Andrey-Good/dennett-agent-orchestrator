@@ -16,7 +16,7 @@ public shape without protecting user data or a deployed client.
 
 M01 needs only the local desktop conversation boundary: authenticated handshake,
 bootstrap and health, typed project/session commands, turn cancellation, safe
-errors, and a revisioned session snapshot/delta stream.
+errors, and revisioned system/session snapshot-delta streams.
 
 ## Decision
 
@@ -26,17 +26,41 @@ Perform one atomic pre-production protocol epoch:
 - introduce `dennett.common.v1`, `dennett.control.v1`, and `dennett.sync.v1`;
 - use typed `SystemService`, `ProjectService`, and `SessionService` RPCs;
 - acknowledge command admission separately from authoritative completion;
-- deliver session state as an initial snapshot followed by monotonic deltas;
-- stop delta application on sequence/revision gaps and require resynchronization;
+- return only allocated stable identity with create admission; publish completion
+  as a typed command terminal plus state mutation through the authoritative
+  system watch and subsequent query;
+- deliver system and session state as an initial snapshot followed by monotonic
+  deltas;
+- include the authenticated Authority Epoch in every watch cursor;
+- stop delta application on sequence, revision, or epoch mismatch and require a
+  typed resync reason plus fresh handshake/bootstrap before accepting a
+  different epoch;
 - keep provider payloads, credentials, hidden reasoning, database records, memory,
   voice, mobile, and external-effect contracts outside this epoch;
 - require Buf STANDARD lint with no ignores;
 - generate Rust and TypeScript artifacts only from canonical Protobuf sources.
 
-Unary RPC failures use the stable `dennett.common.v1.ErrorEnvelope` as their typed
-error detail. Watch failures use the same envelope inside `SessionWatchFrame`.
-Short-lived handshake proof bytes are consumed by the trusted Tauri/Node bridge
-and must never be exposed to the React renderer or logs.
+Every unary response has an explicit result-or-error `oneof`. Domain failures
+occupy the typed `dennett.common.v1.ErrorEnvelope` arm; a non-OK gRPC status is
+reserved for transport/protocol failure that prevents delivery of a decodable
+Dennett response. This avoids language-specific status-detail conventions and
+`google.protobuf.Any`. Watch failures use the same envelope inside the typed
+system or session frame. A frame-level error is a stream failure; domain command
+and turn failures use `CommandTerminal.error` and `TurnTerminal.error`.
+
+The handshake returns a short-lived proof and opaque `client_session_id` to the
+trusted Tauri/Node bridge. Bootstrap consumes both; later commands, authenticated
+queries, and watches carry the session ID, which remains bound to the validated
+OS peer, installation and Authority Epoch. Neither value reaches the React
+renderer or logs. Reconnect or channel replacement repeats handshake/bootstrap;
+client sessions cannot be transferred between peers or pooled connections.
+
+An accepted create command returns only its allocated project/session ID. That
+identity is not proof of completed domain mutation. `SystemService.Watch`
+delivers the correlated `CommandTerminal` success/error and the authoritative
+summary mutation in one ordered revision transition; full project state is then
+read through `GetProject`. Turn completion remains authoritative through
+`SessionService.WatchSession`.
 
 ## Compatibility and migration evidence
 

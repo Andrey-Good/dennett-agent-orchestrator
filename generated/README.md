@@ -8,7 +8,8 @@ the canonical Protobuf schemas in `protocols/proto`.
 - Every generated source carries a `DO NOT EDIT` header.
 - Run `just generate` after an approved schema change.
 - Run `just test-contracts` to lint and format schemas, compare output byte for
-  byte, check compatibility with `main`, and exercise a negative breaking probe.
+  byte, check exact descriptor services/fields/oneofs, compare compatibility
+  with `main`, and exercise a negative breaking probe.
 - Compatibility snapshots use a checker-owned `WIRE_JSON` configuration, and
   the one-time M00-to-M01 epoch is limited by a hash-pinned migration manifest.
 - The M01 package roots are `dennett.common.v1`, `dennett.control.v1`, and

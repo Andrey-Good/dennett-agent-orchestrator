@@ -109,6 +109,7 @@
       "work_package_refs": ["WP-M00-002", "WP-M01-002"],
       "expected": [
         "Buf lint and format checks pass",
+        "The M01 descriptor contract pins exact service modes, field numbers, presence and oneofs",
         "Pinned plugins generate Rust and TypeScript clients",
         "A second generation produces no tracked diff"
       ],

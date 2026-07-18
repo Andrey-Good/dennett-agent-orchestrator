@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 from pathlib import Path
 import re
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
+
+import yaml
 
 from tools import protocol_codegen
 
@@ -163,11 +166,30 @@ class ProtocolCodegenTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "protocol-compatibility.yml"
         ).read_text(encoding="utf-8")
+        document = yaml.safe_load(workflow)
         action_refs = re.findall(r"uses: [^@\s]+@([0-9a-f]+)", workflow)
 
         self.assertEqual(len(action_refs), 3)
         self.assertTrue(all(len(reference) == 40 for reference in action_refs))
-        self.assertIn("github_token: ${{ github.token }}", workflow)
+        self.assertEqual(document["permissions"], {"contents": "read"})
+        buf_steps = [
+            step
+            for step in document["jobs"]["buf"]["steps"]
+            if step.get("uses", "").startswith("bufbuild/buf-setup-action@")
+        ]
+        self.assertEqual(
+            buf_steps,
+            [
+                {
+                    "uses": "bufbuild/buf-setup-action@"
+                    "a47c93e0b1648d5651a065437926377d060baa99",
+                    "with": {
+                        "version": "1.71.0",
+                        "github_token": "${{ github.token }}",
+                    },
+                }
+            ],
+        )
         self.assertIn("if: github.event_name == 'pull_request'", workflow)
         self.assertIn('--base-ref "${{ github.event.pull_request.base.sha }}"', workflow)
         self.assertIn("if: github.event_name == 'push'", workflow)
@@ -188,64 +210,62 @@ class ProtocolCodegenTests(unittest.TestCase):
                 path.relative_to(ROOT).as_posix(),
             )
 
-    def test_m01_protocol_epoch_exposes_only_the_bounded_typed_surface(self) -> None:
-        sources = {
-            path.relative_to(protocol_codegen.PROTOCOLS).as_posix(): path.read_text(
-                encoding="utf-8"
-            )
-            for path in protocol_codegen.proto_files()
-        }
+    def test_m01_protocol_epoch_matches_exact_descriptor_contract(self) -> None:
+        descriptor = protocol_codegen.build_descriptor_set()
 
-        self.assertEqual(
-            set(sources),
-            {
-                "proto/dennett/common/v1/common.proto",
-                "proto/dennett/control/v1/project.proto",
-                "proto/dennett/control/v1/session.proto",
-                "proto/dennett/control/v1/system.proto",
-                "proto/dennett/sync/v1/watch.proto",
-            },
+        self.assertEqual(protocol_codegen.descriptor_contract_differences(descriptor), [])
+
+        broken = deepcopy(descriptor)
+        watch_file = next(
+            file
+            for file in broken["file"]
+            if file.get("name") == "dennett/sync/v1/watch.proto"
         )
-        combined = "\n".join(sources.values())
-        self.assertNotIn("package dennett.v1;", combined)
-        self.assertNotIn("google.protobuf.Any", combined)
-        self.assertNotRegex(combined, r"bytes\s+payload\s*=")
-        self.assertNotIn("MemoryService", combined)
-        self.assertNotIn("VoiceService", combined)
+        watch_cursor = next(
+            message
+            for message in watch_file["messageType"]
+            if message.get("name") == "WatchCursor"
+        )
+        authority_epoch = next(
+            field
+            for field in watch_cursor["field"]
+            if field.get("name") == "authority_epoch"
+        )
+        authority_epoch["number"] = 99
 
-        system = sources["proto/dennett/control/v1/system.proto"]
-        for method in ("Handshake", "Bootstrap", "GetHealth"):
-            self.assertRegex(system, rf"rpc {method}\({method}Request\)")
+        self.assertTrue(
+            any(
+                "WatchCursor fields" in difference
+                for difference in protocol_codegen.descriptor_contract_differences(broken)
+            )
+        )
 
-        project = sources["proto/dennett/control/v1/project.proto"]
-        for method in ("CreateProject", "ListProjects", "GetProject"):
-            self.assertRegex(project, rf"rpc {method}\({method}Request\)")
+        non_streaming = deepcopy(descriptor)
+        system_file = next(
+            file
+            for file in non_streaming["file"]
+            if file.get("name") == "dennett/control/v1/system.proto"
+        )
+        system_service = next(
+            service
+            for service in system_file["service"]
+            if service.get("name") == "SystemService"
+        )
+        watch_method = next(
+            method
+            for method in system_service["method"]
+            if method.get("name") == "Watch"
+        )
+        watch_method.pop("serverStreaming")
 
-        session = sources["proto/dennett/control/v1/session.proto"]
-        for method in ("CreateSession", "SendTurn", "CancelTurn", "WatchSession"):
-            self.assertRegex(session, rf"rpc {method}\({method}Request\)")
-        for contract in (
-            "message SessionSnapshot",
-            "message SessionDelta",
-            "uint64 base_revision",
-            "uint64 new_revision",
-            "oneof frame",
-            "ResyncRequired resync_required",
-            "ErrorEnvelope error",
-        ):
-            self.assertIn(contract, session)
-
-        common = sources["proto/dennett/common/v1/common.proto"]
-        for field in (
-            "string command_id",
-            "string idempotency_key",
-            "string correlation_id",
-            "string message_key",
-            "bool retryable",
-            "bool user_action_required",
-            "optional uint64 current_revision",
-        ):
-            self.assertIn(field, common)
+        self.assertTrue(
+            any(
+                "SystemService methods" in difference
+                for difference in protocol_codegen.descriptor_contract_differences(
+                    non_streaming
+                )
+            )
+        )
 
     def test_header_application_is_idempotent(self) -> None:
         with TemporaryDirectory() as directory:

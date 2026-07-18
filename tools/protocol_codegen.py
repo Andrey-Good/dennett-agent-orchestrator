@@ -25,7 +25,7 @@ GENERATED_LANGUAGES = ("rust", "ts")
 APPROVED_BUF_CONFIG_SHA256 = "c6c396e445f7d4296c2bec35ceee630878767fad405d656eacc7c3f270302609"
 EPOCH_MIGRATION_MANIFEST = PROTOCOLS / "epoch-migrations" / "m00-to-m01.json"
 APPROVED_EPOCH_MIGRATION_SHA256 = (
-    "856dea516be7e8a36825b5934f07fd97e7f32417ee84b11a3a600225b132563f"
+    "211f06392875667913d7dcccda8ef2dce3b25774788e0682621844874f4d9546"
 )
 COMPARISON_BUF_CONFIG = """version: v2
 modules:
@@ -34,6 +34,743 @@ breaking:
   use: [WIRE_JSON]
 """
 LintViolation = tuple[str, str, str]
+FieldContract = tuple[str, int, str, str, str | None, int | None, bool]
+MethodContract = tuple[str, str, str, bool, bool]
+
+
+def _field(
+    name: str,
+    number: int,
+    field_type: str,
+    *,
+    label: str = "LABEL_OPTIONAL",
+    type_name: str | None = None,
+    oneof_index: int | None = None,
+    proto3_optional: bool = False,
+) -> FieldContract:
+    return (
+        name,
+        number,
+        label,
+        field_type,
+        type_name,
+        oneof_index,
+        proto3_optional,
+    )
+
+
+EXPECTED_DESCRIPTOR_FILES = {
+    "dennett/common/v1/common.proto",
+    "dennett/control/v1/project.proto",
+    "dennett/control/v1/session.proto",
+    "dennett/control/v1/system.proto",
+    "dennett/sync/v1/watch.proto",
+}
+EXPECTED_ENUM_VALUES: dict[str, tuple[tuple[str, int], ...]] = {
+    ".dennett.sync.v1.ResyncReason": (
+        ("RESYNC_REASON_UNSPECIFIED", 0),
+        ("RESYNC_REASON_SEQUENCE_GAP", 1),
+        ("RESYNC_REASON_REVISION_GAP", 2),
+        ("RESYNC_REASON_AUTHORITY_EPOCH_CHANGED", 3),
+        ("RESYNC_REASON_STREAM_REPLACED", 4),
+        ("RESYNC_REASON_SNAPSHOT_INVALID", 5),
+    )
+}
+EXPECTED_SERVICE_METHODS: dict[str, tuple[MethodContract, ...]] = {
+    ".dennett.control.v1.SystemService": (
+        (
+            "Handshake",
+            ".dennett.control.v1.HandshakeRequest",
+            ".dennett.control.v1.HandshakeResponse",
+            False,
+            False,
+        ),
+        (
+            "Bootstrap",
+            ".dennett.control.v1.BootstrapRequest",
+            ".dennett.control.v1.BootstrapResponse",
+            False,
+            False,
+        ),
+        (
+            "Watch",
+            ".dennett.control.v1.WatchRequest",
+            ".dennett.control.v1.WatchResponse",
+            False,
+            True,
+        ),
+        (
+            "GetHealth",
+            ".dennett.control.v1.GetHealthRequest",
+            ".dennett.control.v1.GetHealthResponse",
+            False,
+            False,
+        ),
+    ),
+    ".dennett.control.v1.ProjectService": (
+        (
+            "CreateProject",
+            ".dennett.control.v1.CreateProjectRequest",
+            ".dennett.control.v1.CreateProjectResponse",
+            False,
+            False,
+        ),
+        (
+            "ListProjects",
+            ".dennett.control.v1.ListProjectsRequest",
+            ".dennett.control.v1.ListProjectsResponse",
+            False,
+            False,
+        ),
+        (
+            "GetProject",
+            ".dennett.control.v1.GetProjectRequest",
+            ".dennett.control.v1.GetProjectResponse",
+            False,
+            False,
+        ),
+    ),
+    ".dennett.control.v1.SessionService": (
+        (
+            "CreateSession",
+            ".dennett.control.v1.CreateSessionRequest",
+            ".dennett.control.v1.CreateSessionResponse",
+            False,
+            False,
+        ),
+        (
+            "SendTurn",
+            ".dennett.control.v1.SendTurnRequest",
+            ".dennett.control.v1.SendTurnResponse",
+            False,
+            False,
+        ),
+        (
+            "CancelTurn",
+            ".dennett.control.v1.CancelTurnRequest",
+            ".dennett.control.v1.CancelTurnResponse",
+            False,
+            False,
+        ),
+        (
+            "WatchSession",
+            ".dennett.control.v1.WatchSessionRequest",
+            ".dennett.control.v1.WatchSessionResponse",
+            False,
+            True,
+        ),
+    ),
+}
+EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
+    ".dennett.common.v1.CommandMetadata": (
+        _field("command_id", 1, "TYPE_STRING"),
+        _field("idempotency_key", 2, "TYPE_STRING"),
+        _field("correlation_id", 3, "TYPE_STRING"),
+        _field("authority_epoch_seen", 4, "TYPE_UINT64"),
+        _field("created_at", 5, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field(
+            "expected_revision",
+            6,
+            "TYPE_UINT64",
+            oneof_index=0,
+            proto3_optional=True,
+        ),
+        _field("client_session_id", 7, "TYPE_STRING"),
+    ),
+    ".dennett.common.v1.CommandAccepted": (
+        _field("command_id", 1, "TYPE_STRING"),
+        _field("correlation_id", 2, "TYPE_STRING"),
+        _field("operation_id", 3, "TYPE_STRING"),
+        _field("accepted_revision", 4, "TYPE_UINT64"),
+    ),
+    ".dennett.common.v1.ErrorEnvelope": (
+        _field("code", 1, "TYPE_STRING"),
+        _field("message_key", 2, "TYPE_STRING"),
+        _field("correlation_id", 3, "TYPE_STRING"),
+        _field("retryable", 4, "TYPE_BOOL"),
+        _field("user_action_required", 5, "TYPE_BOOL"),
+        _field("details_handle", 6, "TYPE_STRING"),
+        _field(
+            "current_revision",
+            7,
+            "TYPE_UINT64",
+            oneof_index=0,
+            proto3_optional=True,
+        ),
+    ),
+    ".dennett.common.v1.CommandResult": (
+        _field("completed_revision", 1, "TYPE_UINT64"),
+        _field(
+            "canonical_refs",
+            2,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+        _field("message_key", 3, "TYPE_STRING"),
+        _field("partial", 4, "TYPE_BOOL"),
+    ),
+    ".dennett.common.v1.CommandTerminal": (
+        _field("command_id", 1, "TYPE_STRING"),
+        _field("operation_id", 2, "TYPE_STRING"),
+        _field(
+            "result",
+            3,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandResult",
+            oneof_index=0,
+        ),
+        _field(
+            "error",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.ErrorEnvelope",
+            oneof_index=0,
+        ),
+    ),
+    ".dennett.sync.v1.WatchCursor": (
+        _field("stream_id", 1, "TYPE_STRING"),
+        _field("sequence", 2, "TYPE_UINT64"),
+        _field("authority_epoch", 3, "TYPE_UINT64"),
+    ),
+    ".dennett.sync.v1.ResyncRequired": (
+        _field(
+            "reason",
+            1,
+            "TYPE_ENUM",
+            type_name=".dennett.sync.v1.ResyncReason",
+        ),
+        _field("current_revision", 2, "TYPE_UINT64"),
+        _field("snapshot_required", 3, "TYPE_BOOL"),
+    ),
+    ".dennett.control.v1.CreateProjectAccepted": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandAccepted",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.ListProjectsRequest": (
+        _field("page_size", 1, "TYPE_UINT32"),
+        _field("page_token", 2, "TYPE_STRING"),
+        _field("client_session_id", 3, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.GetProjectRequest": (
+        _field("project_id", 1, "TYPE_STRING"),
+        _field("client_session_id", 2, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.CreateSessionAccepted": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandAccepted",
+        ),
+        _field("session_id", 2, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.SendTurnAccepted": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandAccepted",
+        ),
+        _field("turn_id", 2, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.WatchSessionRequest": (
+        _field("session_id", 1, "TYPE_STRING"),
+        _field(
+            "known_revision",
+            2,
+            "TYPE_UINT64",
+            oneof_index=0,
+            proto3_optional=True,
+        ),
+        _field("client_session_id", 3, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.SessionDelta": (
+        _field("base_revision", 1, "TYPE_UINT64"),
+        _field("new_revision", 2, "TYPE_UINT64"),
+        _field(
+            "mutations",
+            3,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.SessionMutation",
+        ),
+    ),
+    ".dennett.control.v1.SessionSnapshot": (
+        _field(
+            "session",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.SessionSummary",
+        ),
+        _field("snapshot_fingerprint", 2, "TYPE_BYTES"),
+        _field(
+            "turns",
+            3,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.TurnSnapshot",
+        ),
+    ),
+    ".dennett.control.v1.ServerWelcome": (
+        _field("protocol_version", 1, "TYPE_UINT32"),
+        _field("node_version", 2, "TYPE_STRING"),
+        _field("authority_epoch_seen", 3, "TYPE_UINT64"),
+        _field("enabled_features", 4, "TYPE_STRING", label="LABEL_REPEATED"),
+        _field("session_proof", 5, "TYPE_BYTES"),
+        _field("resync_required", 6, "TYPE_BOOL"),
+        _field(
+            "compatibility_mode",
+            7,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.CompatibilityMode",
+        ),
+        _field("max_message_bytes", 8, "TYPE_UINT64"),
+        _field("client_session_id", 9, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.BootstrapRequest": (
+        _field("session_proof", 1, "TYPE_BYTES"),
+        _field(
+            "known_revision",
+            2,
+            "TYPE_UINT64",
+            oneof_index=0,
+            proto3_optional=True,
+        ),
+        _field("client_session_id", 3, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.BootstrapSnapshot": (
+        _field("revision", 1, "TYPE_UINT64"),
+        _field("authority_epoch", 2, "TYPE_UINT64"),
+        _field("observed_at", 3, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field(
+            "projects",
+            4,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.ProjectSummary",
+        ),
+        _field(
+            "recent_sessions",
+            5,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.SessionSummary",
+        ),
+        _field("active_project_id", 6, "TYPE_STRING"),
+        _field("active_session_id", 7, "TYPE_STRING"),
+        _field(
+            "node_state",
+            8,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.HealthState",
+        ),
+    ),
+    ".dennett.control.v1.SystemSnapshot": (
+        _field(
+            "bootstrap",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.BootstrapSnapshot",
+        ),
+        _field("snapshot_fingerprint", 2, "TYPE_BYTES"),
+    ),
+    ".dennett.control.v1.SystemDelta": (
+        _field("base_revision", 1, "TYPE_UINT64"),
+        _field("new_revision", 2, "TYPE_UINT64"),
+        _field(
+            "mutations",
+            3,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.SystemMutation",
+        ),
+    ),
+    ".dennett.control.v1.WatchRequest": (
+        _field("client_session_id", 1, "TYPE_STRING"),
+        _field(
+            "known_revision",
+            2,
+            "TYPE_UINT64",
+            oneof_index=0,
+            proto3_optional=True,
+        ),
+    ),
+}
+EXPECTED_ONEOFS: dict[str, dict[str, tuple[FieldContract, ...]]] = {
+    ".dennett.common.v1.CommandTerminal": {
+        "outcome": (
+            _field(
+                "result",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.CommandResult",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                4,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.HandshakeResponse": {
+        "outcome": (
+            _field(
+                "welcome",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ServerWelcome",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.BootstrapResponse": {
+        "outcome": (
+            _field(
+                "snapshot",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.BootstrapSnapshot",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.GetHealthResponse": {
+        "outcome": (
+            _field(
+                "health",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.GetHealthResult",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.CreateProjectResponse": {
+        "outcome": (
+            _field(
+                "accepted",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.CreateProjectAccepted",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.ListProjectsResponse": {
+        "outcome": (
+            _field(
+                "result",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ListProjectsResult",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.GetProjectResponse": {
+        "outcome": (
+            _field(
+                "project",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.Project",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.CreateSessionResponse": {
+        "outcome": (
+            _field(
+                "accepted",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.CreateSessionAccepted",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.SendTurnResponse": {
+        "outcome": (
+            _field(
+                "accepted",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SendTurnAccepted",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.CancelTurnResponse": {
+        "outcome": (
+            _field(
+                "accepted",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.CommandAccepted",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.TurnSnapshot": {
+        "outcome": (
+            _field(
+                "result",
+                6,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ResultEnvelope",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                7,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.TurnTerminal": {
+        "outcome": (
+            _field(
+                "result",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ResultEnvelope",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                4,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.SessionMutation": {
+        "mutation": (
+            _field(
+                "upsert_turn",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.TurnSnapshot",
+                oneof_index=0,
+            ),
+            _field(
+                "append_turn_text",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.TurnTextAppend",
+                oneof_index=0,
+            ),
+            _field(
+                "finish_turn",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.TurnTerminal",
+                oneof_index=0,
+            ),
+            _field(
+                "update_session",
+                4,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SessionMetadataUpdate",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.SessionWatchFrame": {
+        "frame": (
+            _field(
+                "snapshot",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SessionSnapshot",
+                oneof_index=0,
+            ),
+            _field(
+                "delta",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SessionDelta",
+                oneof_index=0,
+            ),
+            _field(
+                "heartbeat",
+                4,
+                "TYPE_MESSAGE",
+                type_name=".dennett.sync.v1.WatchHeartbeat",
+                oneof_index=0,
+            ),
+            _field(
+                "resync_required",
+                5,
+                "TYPE_MESSAGE",
+                type_name=".dennett.sync.v1.ResyncRequired",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                6,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.SystemMutation": {
+        "mutation": (
+            _field(
+                "upsert_project",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ProjectSummary",
+                oneof_index=0,
+            ),
+            _field("remove_project_id", 2, "TYPE_STRING", oneof_index=0),
+            _field(
+                "upsert_session",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SessionSummary",
+                oneof_index=0,
+            ),
+            _field("remove_session_id", 4, "TYPE_STRING", oneof_index=0),
+            _field(
+                "update_selection",
+                5,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SystemSelectionUpdate",
+                oneof_index=0,
+            ),
+            _field(
+                "update_health",
+                6,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SystemHealthUpdate",
+                oneof_index=0,
+            ),
+            _field(
+                "finish_command",
+                7,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.CommandTerminal",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.SystemWatchFrame": {
+        "frame": (
+            _field(
+                "snapshot",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SystemSnapshot",
+                oneof_index=0,
+            ),
+            _field(
+                "delta",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.SystemDelta",
+                oneof_index=0,
+            ),
+            _field(
+                "heartbeat",
+                4,
+                "TYPE_MESSAGE",
+                type_name=".dennett.sync.v1.WatchHeartbeat",
+                oneof_index=0,
+            ),
+            _field(
+                "resync_required",
+                5,
+                "TYPE_MESSAGE",
+                type_name=".dennett.sync.v1.ResyncRequired",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                6,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -256,6 +993,266 @@ def protocol_packages(module: Path) -> tuple[str, ...]:
 
 def protocol_epoch_changed(baseline: Path, candidate: Path) -> bool:
     return protocol_packages(baseline) != protocol_packages(candidate)
+
+
+def build_descriptor_set(module: Path = PROTOCOLS) -> dict[str, object]:
+    with TemporaryDirectory(prefix="dennett-protocol-descriptor-") as directory:
+        output = Path(directory) / "descriptor.json"
+        run(
+            [
+                "buf",
+                "build",
+                str(module),
+                "--as-file-descriptor-set",
+                "--exclude-source-info",
+                "-o",
+                str(output),
+            ]
+        )
+        try:
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ProtocolCheckError(f"Buf descriptor set is unreadable: {error}") from error
+    if not isinstance(payload, dict):
+        raise ProtocolCheckError("Buf descriptor set root is not a mapping")
+    return payload
+
+
+def _descriptor_field_contract(field: Mapping[str, object]) -> FieldContract:
+    number = field.get("number")
+    oneof_index = field.get("oneofIndex")
+    return (
+        str(field.get("name", "")),
+        number if isinstance(number, int) and not isinstance(number, bool) else -1,
+        str(field.get("label", "")),
+        str(field.get("type", "")),
+        str(field["typeName"]) if isinstance(field.get("typeName"), str) else None,
+        (
+            oneof_index
+            if isinstance(oneof_index, int) and not isinstance(oneof_index, bool)
+            else None
+        ),
+        field.get("proto3Optional") is True,
+    )
+
+
+def descriptor_contract_differences(payload: Mapping[str, object]) -> list[str]:
+    raw_files = payload.get("file")
+    if not isinstance(raw_files, list):
+        return ["descriptor set has no file list"]
+
+    differences: list[str] = []
+    files: dict[str, Mapping[str, object]] = {}
+    messages: dict[str, Mapping[str, object]] = {}
+    enums: dict[str, Mapping[str, object]] = {}
+    services: dict[str, Mapping[str, object]] = {}
+    for raw_file in raw_files:
+        if not isinstance(raw_file, dict):
+            differences.append("descriptor set contains a non-mapping file record")
+            continue
+        package = raw_file.get("package")
+        name = raw_file.get("name")
+        if not isinstance(package, str) or not package.startswith("dennett."):
+            continue
+        if not isinstance(name, str):
+            differences.append(f"descriptor package {package} has no source name")
+            continue
+        files[name] = raw_file
+        for raw_message in raw_file.get("messageType", []):
+            if not isinstance(raw_message, dict) or not isinstance(
+                raw_message.get("name"), str
+            ):
+                differences.append(f"{name}: malformed message descriptor")
+                continue
+            messages[f".{package}.{raw_message['name']}"] = raw_message
+        for raw_enum in raw_file.get("enumType", []):
+            if not isinstance(raw_enum, dict) or not isinstance(
+                raw_enum.get("name"), str
+            ):
+                differences.append(f"{name}: malformed enum descriptor")
+                continue
+            enums[f".{package}.{raw_enum['name']}"] = raw_enum
+        for raw_service in raw_file.get("service", []):
+            if not isinstance(raw_service, dict) or not isinstance(
+                raw_service.get("name"), str
+            ):
+                differences.append(f"{name}: malformed service descriptor")
+                continue
+            services[f".{package}.{raw_service['name']}"] = raw_service
+
+    if set(files) != EXPECTED_DESCRIPTOR_FILES:
+        differences.append(
+            f"Dennett descriptor files are {sorted(files)}, "
+            f"expected {sorted(EXPECTED_DESCRIPTOR_FILES)}"
+        )
+    packages = {str(file.get("package")) for file in files.values()}
+    expected_packages = {"dennett.common.v1", "dennett.control.v1", "dennett.sync.v1"}
+    if packages != expected_packages:
+        differences.append(
+            f"Dennett descriptor packages are {sorted(packages)}, "
+            f"expected {sorted(expected_packages)}"
+        )
+
+    for enum_name, expected in EXPECTED_ENUM_VALUES.items():
+        enum = enums.get(enum_name)
+        if enum is None:
+            differences.append(f"missing critical enum {enum_name}")
+            continue
+        raw_values = enum.get("value", [])
+        if not isinstance(raw_values, list):
+            differences.append(f"{enum_name} has no value list")
+            continue
+        actual = tuple(
+            (
+                str(value.get("name", "")),
+                value.get("number")
+                if isinstance(value.get("number"), int)
+                and not isinstance(value.get("number"), bool)
+                else -1,
+            )
+            for value in raw_values
+            if isinstance(value, dict)
+        )
+        if actual != expected:
+            differences.append(f"{enum_name} values are {actual}, expected {expected}")
+
+    if set(services) != set(EXPECTED_SERVICE_METHODS):
+        differences.append(
+            f"services are {sorted(services)}, expected {sorted(EXPECTED_SERVICE_METHODS)}"
+        )
+    for service_name, expected in EXPECTED_SERVICE_METHODS.items():
+        service = services.get(service_name)
+        if service is None:
+            continue
+        raw_methods = service.get("method", [])
+        if not isinstance(raw_methods, list):
+            differences.append(f"{service_name} has no method list")
+            continue
+        actual: tuple[MethodContract, ...] = tuple(
+            (
+                str(method.get("name", "")),
+                str(method.get("inputType", "")),
+                str(method.get("outputType", "")),
+                method.get("clientStreaming") is True,
+                method.get("serverStreaming") is True,
+            )
+            for method in raw_methods
+            if isinstance(method, dict)
+        )
+        if actual != expected:
+            differences.append(f"{service_name} methods are {actual}, expected {expected}")
+
+    for message_name, expected in EXPECTED_MESSAGE_FIELDS.items():
+        message = messages.get(message_name)
+        if message is None:
+            differences.append(f"missing critical message {message_name}")
+            continue
+        raw_fields = message.get("field", [])
+        if not isinstance(raw_fields, list):
+            differences.append(f"{message_name} has no field list")
+            continue
+        actual = tuple(
+            _descriptor_field_contract(field)
+            for field in raw_fields
+            if isinstance(field, dict)
+        )
+        if actual != expected:
+            differences.append(f"{message_name} fields are {actual}, expected {expected}")
+
+    for message_name, expected_oneofs in EXPECTED_ONEOFS.items():
+        message = messages.get(message_name)
+        if message is None:
+            differences.append(f"missing oneof-bearing message {message_name}")
+            continue
+        raw_oneofs = message.get("oneofDecl", [])
+        raw_fields = message.get("field", [])
+        if not isinstance(raw_oneofs, list) or not isinstance(raw_fields, list):
+            differences.append(f"{message_name} has malformed oneof descriptors")
+            continue
+        oneof_names = [
+            oneof.get("name") if isinstance(oneof, dict) else None
+            for oneof in raw_oneofs
+        ]
+        for oneof_name, expected_fields in expected_oneofs.items():
+            if oneof_name not in oneof_names:
+                differences.append(f"{message_name} is missing oneof {oneof_name}")
+                continue
+            oneof_index = oneof_names.index(oneof_name)
+            actual_fields = tuple(
+                _descriptor_field_contract(field)
+                for field in raw_fields
+                if isinstance(field, dict) and field.get("oneofIndex") == oneof_index
+            )
+            if actual_fields != expected_fields:
+                differences.append(
+                    f"{message_name}.{oneof_name} fields are {actual_fields}, "
+                    f"expected {expected_fields}"
+                )
+        if message_name.endswith(("Response", "Mutation")):
+            expected_all = tuple(
+                field
+                for expected_fields in expected_oneofs.values()
+                for field in expected_fields
+            )
+            actual_all = tuple(
+                _descriptor_field_contract(field)
+                for field in raw_fields
+                if isinstance(field, dict)
+            )
+            if actual_all != expected_all:
+                differences.append(
+                    f"{message_name} complete fields are {actual_all}, "
+                    f"expected {expected_all}"
+                )
+
+    for message_name in (
+        ".dennett.control.v1.SessionWatchFrame",
+        ".dennett.control.v1.SystemWatchFrame",
+    ):
+        message = messages.get(message_name)
+        if message is None:
+            continue
+        raw_fields = message.get("field", [])
+        actual_fields = tuple(
+            _descriptor_field_contract(field)
+            for field in raw_fields
+            if isinstance(field, dict)
+        )
+        expected_fields = (
+            _field(
+                "cursor",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.sync.v1.WatchCursor",
+            ),
+            *EXPECTED_ONEOFS[message_name]["frame"],
+        )
+        if actual_fields != expected_fields:
+            differences.append(
+                f"{message_name} complete fields are {actual_fields}, "
+                f"expected {expected_fields}"
+            )
+
+    for message_name, message in messages.items():
+        raw_fields = message.get("field", [])
+        if not isinstance(raw_fields, list):
+            continue
+        for field in raw_fields:
+            if not isinstance(field, dict):
+                continue
+            if field.get("typeName") == ".google.protobuf.Any":
+                differences.append(f"{message_name} uses forbidden google.protobuf.Any")
+            if field.get("name") == "payload" and field.get("type") == "TYPE_BYTES":
+                differences.append(f"{message_name} has a forbidden generic bytes payload")
+    return differences
+
+
+def check_descriptor_contract() -> None:
+    differences = descriptor_contract_differences(build_descriptor_set())
+    if differences:
+        details = "\n".join(f"- {difference}" for difference in differences)
+        raise ProtocolCheckError(f"M01 descriptor contract differs:\n{details}")
+    print("M01 descriptor contract matches exact services, fields, oneofs and streams.")
 
 
 def _manifest_string_list(payload: object, field: str) -> tuple[str, ...]:
@@ -613,6 +1610,7 @@ def check_negative_breaking_probe() -> None:
 def check(explicit_base_ref: str | None) -> None:
     check_approved_buf_configuration()
     check_strict_standard_lint()
+    check_descriptor_contract()
     check_negative_lint_probe()
     check_format()
     check_generated()
