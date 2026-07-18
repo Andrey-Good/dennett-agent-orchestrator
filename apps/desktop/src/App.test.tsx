@@ -76,7 +76,14 @@ describe("Project Chat workbench", () => {
     expect(within(projectDialog).getByRole("button", { name: /Create empty project/ })).toHaveFocus();
     expect(within(projectDialog).getByRole("button", { name: /Add existing folder/ })).toBeVisible();
 
-    await user.click(within(projectDialog).getByRole("button", { name: /Create empty project/ }));
+    await user.keyboard("[Escape]");
+    expect(screen.queryByRole("dialog", { name: "Create or add project" })).not.toBeInTheDocument();
+    await waitFor(() => expect(newProject).toHaveFocus());
+    await user.keyboard("[Enter]");
+
+    const reopenedProjectDialog = screen.getByRole("dialog", { name: "Create or add project" });
+    await user.click(within(reopenedProjectDialog).getByRole("button", { name: /Create empty project/ }));
+    await waitFor(() => expect(newProject).toHaveFocus());
     expect(within(sidebar).getByText("Untitled project 1")).toBeVisible();
     await user.hover(within(sidebar).getByText("Untitled project 1"));
     await user.click(within(sidebar).getByRole("button", { name: "New chat in Untitled project 1" }));
@@ -181,6 +188,22 @@ describe("Project Chat workbench", () => {
     await act(async () => { fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true }); });
     expect(await screen.findByText("Review the second owner checkpoint")).toBeVisible();
     expect(screen.getByText("Draft added to this local preview. No runtime command was sent.")).toBeInTheDocument();
+  });
+
+  it("creates a command-center chat in the currently selected scope", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    await act(async () => { fireEvent.keyDown(window, { key: "k", ctrlKey: true }); });
+    await user.click(screen.getByRole("button", { name: "New chat in current project" }));
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Projects/dennett-agent-orchestrator/Untitled chat");
+
+    const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
+    await user.click(within(sidebar).getByRole("button", { name: /Provider adapter notes/ }));
+    await act(async () => { fireEvent.keyDown(window, { key: "k", ctrlKey: true }); });
+    await user.click(screen.getByRole("button", { name: "New standalone chat" }));
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
   });
 
   it("provides working access and runtime presentation controls", async () => {

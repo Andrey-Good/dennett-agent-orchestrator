@@ -265,13 +265,13 @@
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
-      "bytes": 17308,
-      "sha256": "ec52920f4bd68f776a08ebd72978d2bdfc32ce7004b589b042d57a328172633d"
+      "bytes": 18757,
+      "sha256": "d2d446cda5663113c19f4faf47364557408afe369fa5d8b1f63e46d12694af16"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 40665,
-      "sha256": "4cf859b68f805749def1761bfb6c902ee50024e963fe0a81df1262a304305683"
+      "bytes": 41048,
+      "sha256": "19fe5dc36189b063e2c9a42609a28a29dfc04992ba595ca1e65c3c15478cc042"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -520,8 +520,8 @@
     },
     {
       "path": "design-qa.md",
-      "bytes": 11898,
-      "sha256": "77e1b4fb92cb92c1a48b6a99877f4a60e0aab599f4c990db82ad650c76db5d7a"
+      "bytes": 12988,
+      "sha256": "a1a935b778438e1ecc4173d8e29c9d7bf52ed16dfcdad777841dac9428c65f5f"
     },
     {
       "path": "docs/CHECKSUMS.sha256",
@@ -1160,8 +1160,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 33221,
-      "sha256": "820068a9868f993339c145726105e51957075c4a7663facb8f8333ecd30ea4b2"
+      "bytes": 33558,
+      "sha256": "9c9fe335b13f3965f0de8faa01be91eaca95effd9cc5f255c45f7fcd30b3ea2e"
     },
     {
       "path": "planning/results/WP-M00-001.json",

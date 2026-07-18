@@ -136,6 +136,7 @@ function IconButton({
   active = false,
   disabled = false,
   className = "",
+  buttonRef,
 }: {
   label: string;
   icon: Icon;
@@ -143,9 +144,11 @@ function IconButton({
   active?: boolean;
   disabled?: boolean;
   className?: string;
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }): React.JSX.Element {
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`icon-button${active ? " is-active" : ""}${className ? ` ${className}` : ""}`}
       aria-label={label}
@@ -510,6 +513,7 @@ export function App(): React.JSX.Element {
           <div ref={projectMenuRef} className="sidebar-heading">
             <button type="button" className="sidebar-title" aria-label="Projects list"><span>Projects</span><CaretDown size={14} aria-hidden="true" /></button>
             <IconButton
+              buttonRef={projectMenuTriggerRef}
               label="New project"
               icon={Plus}
               className="new-project-trigger"
@@ -798,7 +802,13 @@ export function App(): React.JSX.Element {
             <label><MagnifyingGlass size={18} aria-hidden="true" /><input ref={commandRef} placeholder="Search chats, settings or commands…" aria-label="Command Center search" /></label>
             <div className="command-results">
               <span>QUICK ACTIONS</span>
-              <button type="button" onClick={() => { closeCommandCenter(); startNewChat(); }}><Plus size={16} />New project chat<kbd>Enter</kbd></button>
+              <button
+                type="button"
+                aria-label={selectedProject ? "New chat in current project" : "New standalone chat"}
+                onClick={() => { closeCommandCenter(); startNewChat(selectedProject?.id); }}
+              >
+                <Plus size={16} />{selectedProject ? "New chat in current project" : "New standalone chat"}<kbd>Enter</kbd>
+              </button>
               <button type="button" onClick={() => { closeCommandCenter(); setResourcesOpen(true); }}><Browsers size={16} />Open workspace resources</button>
               <button type="button" onClick={() => { closeCommandCenter(); setResourcesOpen(true); openSurface({ kind: "browser", title: "Dennett", subtitle: "127.0.0.1:5173" }); }}><Globe size={16} />Open local preview</button>
             </div>

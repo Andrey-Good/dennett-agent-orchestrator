@@ -17,7 +17,7 @@ No additional focused crops were needed: two owner attachments are already dedic
 
 ## Findings
 
-No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint comparison. The previous detached R2 closure passed against implementation commit `b48520d`; a fresh detached review of the owner-correction commit is still required before the result below returns to `passed`.
+No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint comparison. Detached review of owner-correction commit `49f6ca2` found two behavioral P2 findings: the New Project trigger did not own its focus-restoration ref, and the Command Center created a standalone chat while a project was selected. Both are corrected locally with regression coverage; a detached closure review of the correction commit is still required before the result below returns to `passed`.
 
 - Typography: Segoe UI/system fallbacks, restrained 10-13 px metadata and 13 px conversation copy preserve the compact desktop hierarchy without clipped controls or broken wrapping at the reviewed sizes.
 - Layout and spacing: the title row, 52 px rail and 264 px project/chat sidebar read as one surface. The partial-height divider, centered conversation, anchored composer and 316 px resource workspace remain aligned. At 1100 px the workspace becomes a truthful closable overlay; at 900 px both side panes remain operable overlays with no document-level horizontal or vertical overflow.
@@ -64,11 +64,18 @@ No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint 
 - The first closure re-review found two remaining hard-coded resource-heading grays below AA contrast. All solid text foregrounds now route through contrast-tested semantic tokens, a regression test rejects literal text-color hex values, and the 1536 x 971 implementation was recaptured and compared with all three owner references. The brighter resource headings preserve the reference hierarchy without introducing a chromatic accent or a new visual mismatch.
 - The final detached R2 re-review at `b48520d` returned PASS. It verified the semantic-token correction and literal-color guard, reran all 14 desktop tests and found no remaining P0, P1 or P2 issue. This closes independent implementation review; the separate owner visual-approval gate remains open.
 
+### Owner-correction detached findings
+
+- Detached review at `49f6ca2` found that closing the Projects menu could not reliably restore keyboard focus because the trigger ref was not attached to the rendered button.
+- The same review found that the Command Center's chat-creation action ignored the currently selected project and always created a standalone Recent chat.
+- The project trigger now receives the focus-restoration ref, with tests covering Escape and action-completion return paths. The Command Center now labels and creates its chat in the selected project, or explicitly creates a standalone chat when a Recent session is selected.
+- A fresh detached closure review of the exact correction commit remains required.
+
 ## Primary Interactions Tested
 
-- Opened Command Center, verified initial focus, focus wrapping, Escape closure and focus restoration.
+- Opened Command Center, verified initial focus, focus wrapping, Escape closure, focus restoration and project-versus-standalone chat creation according to the selected scope.
 - Opened access and runtime controls, verified `aria-controls`, first-choice focus and Escape focus restoration, then switched `Full access` to `Auto-approve` and reasoning from High to Medium.
-- Opened the hover/focus-only Projects menu, exercised both creation choices as effect-free previews, and verified per-project and Recent New Chat placement in component and native interaction checks.
+- Opened the hover/focus-only Projects menu, exercised both creation choices as effect-free previews, verified focus restoration after Escape and action completion, and verified per-project and Recent New Chat placement in component and native interaction checks.
 - Submitted a local preview message, verified that it disappears in another session and returns only with its owning session, then created a distinct empty standalone chat.
 - Expanded and collapsed the current plan.
 - Collapsed and reopened workspace resources.
@@ -80,7 +87,7 @@ No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint 
 ## Verification
 
 - Desktop typecheck: passed.
-- Desktop tests: 15 passed, including all nine fixture states, per-session draft isolation, project and standalone chat creation, popover focus, deterministic WCAG contrast and a semantic text-color invariant.
+- Desktop tests: 16 passed, including all nine fixture states, per-session draft isolation, collection-scoped chat creation, project-menu focus restoration, popover focus, deterministic WCAG contrast and a semantic text-color invariant.
 - Desktop production build: passed.
 - Automated structural accessibility and deterministic WCAG token-contrast checks: passed.
 - Monochrome CSS token scan: passed.
