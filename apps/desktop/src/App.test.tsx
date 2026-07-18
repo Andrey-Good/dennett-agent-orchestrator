@@ -7,20 +7,37 @@ import { App } from "./App";
 import { createFixtureDennettClient, type DennettClient } from "./fixtures/projectChat";
 
 describe("Project Chat workbench", () => {
-  it("renders the approved workbench zones and truthful runtime state", async () => {
+  it("renders the owner-directed zones and truthful runtime state", async () => {
     render(<App />);
 
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Project navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Project and chat navigation" })).toBeInTheDocument();
     expect(screen.getByRole("main")).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Read-only context inspector" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Workspace resources" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Message composer" })).toBeInTheDocument();
     expect(await screen.findByText("Codex is checking the renderer. You can steer or stop this session.")).toBeVisible();
+
+    const location = screen.getByRole("navigation", { name: "Current location" });
+    expect(location).toHaveTextContent("Projects/dennett-agent-orchestrator/Project Chat owner checkpoint");
+    expect(screen.queryByText("Local node")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Scope: Project")).not.toBeInTheDocument();
 
     const messages = screen.getAllByRole("article");
     expect(messages.some((message) => message.classList.contains("message--user"))).toBe(true);
     expect(messages.some((message) => message.classList.contains("message--agent"))).toBe(true);
-    expect(screen.getByRole("tab", { name: "Changes" })).toBeDisabled();
+  });
+
+  it("groups project chats before standalone recent chats", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
+    expect(within(sidebar).getByText("dennett-agent-orchestrator")).toBeVisible();
+    expect(within(sidebar).getByRole("heading", { name: "Recent" })).toBeVisible();
+
+    await user.click(within(sidebar).getByRole("button", { name: /Provider adapter notes/ }));
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Provider adapter notes");
   });
 
   it("exposes every material fixture and changes state deterministically", async () => {
@@ -34,73 +51,95 @@ describe("Project Chat workbench", () => {
     expect(screen.getByText("Last synced 11 min ago")).toBeVisible();
 
     await user.selectOptions(selector, "empty");
-    expect(await screen.findByRole("heading", { name: "Start with the project itself" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Start with the project" })).toBeVisible();
   });
 
-  it("scopes Stop to the active session and preserves partial output", async () => {
+  it("scopes Stop to the selected session and preserves partial output", async () => {
     const user = userEvent.setup();
     render(<App />);
-    const stop = await screen.findByRole("button", {
-      name: 'Stop generation for session "First Project Chat screen"',
-    });
+    const stop = await screen.findByRole("button", { name: 'Stop generation for session "Project Chat owner checkpoint"' });
 
     await user.click(stop);
     expect(await screen.findByText("Generation stopped for this session. The partial response is preserved.")).toBeVisible();
     expect(screen.queryByRole("button", { name: /Stop generation for session/ })).not.toBeInTheDocument();
   });
 
-  it("supports keyboard composition and bounded live announcements", async () => {
+  it("supports keyboard composition and a focus-contained Command Center", async () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
     const composer = screen.getByRole("textbox", { name: "Message to project agent" });
 
     await user.click(composer);
-    await user.type(composer, "Review the owner checkpoint");
-    await act(async () => {
-      fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    });
+    await user.type(composer, "Review the second owner checkpoint");
+    await act(async () => { fireEvent.keyDown(window, { key: "k", ctrlKey: true }); });
+
     expect(screen.getByRole("dialog", { name: "Command Center" })).toBeVisible();
     const commandSearch = screen.getByRole("textbox", { name: "Command Center search" });
-    const lastCommand = screen.getByRole("button", { name: "Open context inspector" });
+    const lastCommand = screen.getByRole("button", { name: "Open local preview" });
     expect(commandSearch).toHaveFocus();
     fireEvent.keyDown(commandSearch, { key: "Tab", shiftKey: true });
     expect(lastCommand).toHaveFocus();
     fireEvent.keyDown(lastCommand, { key: "Tab" });
     expect(commandSearch).toHaveFocus();
-    await act(async () => {
-      fireEvent.keyDown(window, { key: "Escape" });
-    });
+    await act(async () => { fireEvent.keyDown(window, { key: "Escape" }); });
     expect(screen.queryByRole("dialog", { name: "Command Center" })).not.toBeInTheDocument();
     expect(composer).toHaveFocus();
 
-    await user.click(composer);
-    await act(async () => {
-      fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true });
-    });
-    expect(await screen.findByText("Review the owner checkpoint")).toBeVisible();
+    await act(async () => { fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true }); });
+    expect(await screen.findByText("Review the second owner checkpoint")).toBeVisible();
     expect(screen.getByText("Draft added to this local preview. No runtime command was sent.")).toBeInTheDocument();
+  });
+
+  it("provides working access and runtime presentation controls", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    await user.click(screen.getByRole("button", { name: "Full access" }));
+    const accessDialog = screen.getByRole("dialog", { name: "Agent access" });
+    await user.click(within(accessDialog).getByRole("button", { name: "Auto-approve" }));
+    expect(screen.getByRole("button", { name: "Auto-approve" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /CodexHigh/ }));
+    const runtimeDialog = screen.getByRole("dialog", { name: "Agent runtime" });
+    expect(within(runtimeDialog).getByText("Codex SDK")).toBeVisible();
+    await user.click(within(runtimeDialog).getByRole("button", { name: "Medium" }));
+    expect(screen.getByRole("button", { name: /CodexMedium/ })).toBeVisible();
+    await user.click(screen.getByRole("textbox", { name: "Message to project agent" }));
+    expect(screen.queryByRole("dialog", { name: "Agent runtime" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add context" }));
+    expect(screen.getByRole("dialog", { name: "Add context" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Files or folders/ })).toBeDisabled();
+  });
+
+  it("expands the plan and opens resources in the central workspace", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    await user.click(screen.getByRole("button", { name: /Current plan step/ }));
+    expect(screen.getByText("Run visual and interaction QA")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /DennettLocal preview/ }));
+    expect(screen.getByRole("region", { name: "Dennett viewer" })).toBeVisible();
+    expect(screen.getByTitle("Dennett local preview")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Close viewer and return to chat" }));
+    expect(screen.getByRole("region", { name: "Conversation" })).toBeVisible();
   });
 
   it("has no automated accessibility violations in the default state", async () => {
     const { container } = render(<App />);
     await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
 
-    const result = await axe.run(container, {
-      rules: {
-        "color-contrast": { enabled: false },
-      },
-    });
+    const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
     expect(result.violations, result.violations.map((violation) => violation.help).join("\n")).toEqual([]);
   });
 
   it("keeps focus stable when a fixture update arrives", async () => {
     const user = userEvent.setup();
     render(<App />);
-    const composer = screen.getByRole("textbox", { name: "Message to project agent" });
-    await user.click(composer);
-    expect(composer).toHaveFocus();
-
     const selector = screen.getByRole("combobox", { name: "Preview state" });
     selector.focus();
     await user.selectOptions(selector, "resyncing");
@@ -108,28 +147,30 @@ describe("Project Chat workbench", () => {
     expect(selector).toHaveFocus();
   });
 
-  it("keeps unavailable preview affordances disabled and working layout controls truthful", async () => {
+  it("keeps deferred affordances disabled and collapse controls truthful", async () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
 
-    expect(screen.getByRole("button", { name: "Voice capture — available in a later milestone" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Add context — available after IPC" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "More session actions — unavailable in this preview" })).toBeDisabled();
-    expect(screen.getByLabelText("Scope: Project")).not.toHaveAttribute("role", "button");
+    expect(screen.getByRole("button", { name: "Minimize — available in desktop shell" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Tasks — available in a later milestone" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Voice mode — available in a later milestone" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Hide context inspector" }));
-    expect(screen.queryByRole("complementary", { name: "Read-only context inspector" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Show context inspector" }));
-    expect(screen.getByRole("complementary", { name: "Read-only context inspector" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Collapse workspace resources" }));
+    expect(screen.getByRole("navigation", { name: "Collapsed workspace resources" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show workspace resources" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Show workspace resources" }));
+    expect(screen.getByRole("heading", { name: "Workspace" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Hide project navigation" }));
+    expect(screen.queryByRole("complementary", { name: "Project and chat navigation" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show project navigation" }));
+    expect(screen.getByRole("complementary", { name: "Project and chat navigation" })).toBeVisible();
   });
 
   it("keeps fixture selection outside the transport-neutral client request", async () => {
     const client: DennettClient = createFixtureDennettClient("cached");
-    const snapshot = await client.readProjectChat({
-      projectId: "dennett-agent-orchestrator",
-      sessionId: "session-1",
-    });
+    const snapshot = await client.readProjectChat({ projectId: "dennett-agent-orchestrator", sessionId: "session-1" });
 
     expect(snapshot.state).toBe("cached");
     expect(snapshot.notice).toContain("local snapshot");

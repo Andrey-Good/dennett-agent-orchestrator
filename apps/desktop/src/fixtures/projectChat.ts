@@ -53,7 +53,7 @@ const baseMessages: ChatMessage[] = [
     id: "message-1",
     author: "user",
     paragraphs: [
-      "Build the first Project Chat slice from the approved workbench direction. Keep the provider boundary replaceable.",
+      "Rework the checkpoint into a monochrome glass workbench. Keep projects and their chats together, then show standalone chats below them.",
     ],
     timestamp: "10:32",
   },
@@ -61,13 +61,13 @@ const baseMessages: ChatMessage[] = [
     id: "message-2",
     author: "agent",
     paragraphs: [
-      "I mapped the screen to the M01 contract and kept the renderer on a transport-neutral client.",
-      "The first slice concentrates on one direct conversation and makes uncertain runtime state visible without exposing technical logs by default.",
+      "I mapped the corrections to the M01 presentation boundary and kept the renderer on a transport-neutral client.",
+      "The shell now removes browser-like navigation, redundant project controls and persistent infrastructure noise.",
     ],
     bullets: [
-      "Project and session context stay visible",
-      "The auxiliary pane is read-only until M02",
-      "Composer actions affect presentation state only",
+      "Breadcrumbs include the selected chat",
+      "The right workspace opens fixtures without external effects",
+      "Provider and access controls stay truthful to the Codex-only constraint",
     ],
     timestamp: "10:34",
   },
@@ -75,7 +75,7 @@ const baseMessages: ChatMessage[] = [
     id: "message-3",
     author: "user",
     paragraphs: [
-      "Good. Keep the controls under the prompt compact and make the sidebar feel like one surface with the title row.",
+      "Keep it minimal: gray user messages, unboxed model replies, rounder surfaces and no color accents.",
     ],
     timestamp: "10:35",
   },
@@ -85,9 +85,9 @@ const activeMessage: ChatMessage = {
   id: "message-4",
   author: "agent",
   paragraphs: [
-    "The workbench shell is now assembled. I am checking keyboard paths, bounded status announcements and the responsive inspector before the owner checkpoint.",
+    "The second workbench pass is assembled. I am checking keyboard paths, the collapsible resource workspace and the compact composer before the owner checkpoint.",
   ],
-  bullets: ["Renderer fixture connected", "Visual tokens applied", "Accessibility pass running"],
+  bullets: ["Monochrome tokens applied", "Resource viewer connected", "Accessibility pass running"],
   timestamp: "now",
 };
 
