@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M01-002",
+    "status": "completed",
+    "summary": "Replaced the unused M00 protocol scaffold with the provider-neutral M01 System, Project and Session epoch, generated deterministic Rust and TypeScript clients, fenced authoritative watches by Authority Epoch, and closed the explicit breaking-change gate with owner approval and detached R3 review.",
+    "commits": [
+      "aa9d82c",
+      "308e446",
+      "1a5d084edf1424bc0e2c5806a8a6fd573122560b"
+    ],
+    "merge_ready_at": "2026-07-18",
+    "changed_files": [
+      ".github/workflows/protocol-compatibility.yml",
+      "docs/decisions/ADR-006-m01-protocol-epoch.md",
+      "generated/README.md",
+      "generated/rust/dennett/**/*.rs",
+      "generated/ts/dennett/**/*.ts",
+      "planning/decisions/DEC-0004.json",
+      "planning/milestones/M01_local_desktop_conversation.json",
+      "planning/results/WP-M01-002.json",
+      "protocols/buf.yaml",
+      "protocols/epoch-migrations/m00-to-m01.json",
+      "protocols/proto/dennett/**/*.proto",
+      "tests/catalog/*.seed.json",
+      "tools/protocol_codegen.py",
+      "tools/tests/test_protocol_codegen.py",
+      "tools/tests/test_verify_planning.py",
+      "docs/testing/generated/*.md",
+      "docs/CHECKSUMS.sha256",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "ARCH-81:ProtocolPackages",
+      "ARCH-83:GeneratedClients",
+      "ARCH-83:LocalDesktopIPC",
+      "DEBT-0001",
+      "DEBT-0002",
+      "TEST-M01-PROTOCOL-EPOCH-001",
+      "TEST-PROTOCOL-GENERATION-001",
+      "TEST-PROTOCOL-BREAKING-001"
+    ],
+    "tests": {
+      "passed": [
+        "13 focused protocol/codegen tests cover exact descriptors, migration hashes, pinned CI actions and negative contract mutations",
+        "protocol_codegen.py check passed strict Buf STANDARD lint, exact descriptor contracts, deterministic Rust/TypeScript generation, the hash-pinned epoch boundary and negative lint/breaking probes",
+        "mise exec -- just check passed repository, documentation, planning, Rust, Python, TypeScript and protocol gates",
+        "GitHub Fast Gate and Protocol Compatibility workflows passed for commit 1a5d084edf1424bc0e2c5806a8a6fd573122560b",
+        "git diff --check passed and the gross 9322-line change remained within the explicit 10000-line package budget"
+      ],
+      "not_run": [
+        "runtime IPC behavior is implemented and scenario-tested by later M01 work packages",
+        "no persisted-data migration rehearsal exists because this epoch removes only unused generated APIs"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Detached adversarial R3 protocol review followed by closure re-review of commit 1a5d084edf1424bc0e2c5806a8a6fd573122560b; the final verdict was PASS.",
+      "findings_closed": [
+        "Added Authority Epoch fencing and typed resync reasons to both system and session watch contracts",
+        "Added the canonical SystemService.Watch snapshot and delta stream",
+        "Separated durable command admission and stable identity allocation from authoritative completion",
+        "Made every unary response an explicit typed result-or-error envelope",
+        "Replaced source-text assertions with exact descriptor-level service, field, presence, oneof and streaming checks",
+        "Parsed the protocol workflow structurally and pinned its read-only token, action and version configuration",
+        "Bound handshake proof and client session identity to the trusted bridge, validated OS peer, installation, Authority Epoch and reconnect lifecycle"
+      ],
+      "findings_open": []
+    },
+    "migrations": [
+      "M00-SCAFFOLD-TO-M01 retires package dennett.v1 and introduces dennett.common.v1, dennett.control.v1 and dennett.sync.v1 under exact old/new module hashes",
+      "DEBT-0001 and DEBT-0002 are retired; no persisted user data changes"
+    ],
+    "observability_changes": [
+      "protocol diagnostics identify exact service modes, field numbers, presence, oneof membership and epoch-manifest drift",
+      "wire errors expose safe message keys, correlation IDs and opaque details handles without provider payloads or credentials"
+    ],
+    "known_limitations": [
+      "This package defines and generates the M01 wire contract but does not implement the desktop, Node bridge or Head services",
+      "Only the local desktop conversation surface is included; memory, voice, mobile, external effects and multi-device protocols remain with later owners",
+      "The one-time breaking exception applies only to the unused M00 scaffold; later protocol changes return to additive WIRE_JSON compatibility"
+    ],
+    "follow_up_candidates": [
+      "WP-M01-003",
+      "WP-M01-004"
+    ],
+    "owner_decision_required": false
+  }
+}

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package dennett.sync.v1;
+
+import "google/protobuf/timestamp.proto";
+
+enum ResyncReason {
+  RESYNC_REASON_UNSPECIFIED = 0;
+  RESYNC_REASON_SEQUENCE_GAP = 1;
+  RESYNC_REASON_REVISION_GAP = 2;
+  RESYNC_REASON_AUTHORITY_EPOCH_CHANGED = 3;
+  RESYNC_REASON_STREAM_REPLACED = 4;
+  RESYNC_REASON_SNAPSHOT_INVALID = 5;
+}
+
+// WatchCursor orders every frame within one authenticated authority epoch.
+message WatchCursor {
+  string stream_id = 1;
+  uint64 sequence = 2;
+  // Clients reject a lower epoch. Any higher epoch stops delta application and
+  // requires a new handshake/bootstrap before a replacement snapshot applies.
+  uint64 authority_epoch = 3;
+}
+
+// WatchHeartbeat updates freshness without changing domain state.
+message WatchHeartbeat {
+  google.protobuf.Timestamp observed_at = 1;
+  uint64 current_revision = 2;
+}
+
+// ResyncRequired forbids the client from applying later deltas until a new snapshot.
+message ResyncRequired {
+  ResyncReason reason = 1;
+  uint64 current_revision = 2;
+  bool snapshot_required = 3;
+}

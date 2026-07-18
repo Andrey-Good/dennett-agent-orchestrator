@@ -8,7 +8,7 @@
 
 ## Summary
 
-- Status: `automated` 14, `manual` 1, `specified` 19
+- Status: `automated` 15, `manual` 1, `specified` 18
 - Risk: `R1` 8, `R2` 21, `R3` 5
 - Domain: `accessibility` 1, `adapters` 1, `agents` 10, `architecture` 1, `authentication` 1, `ci` 1, `compatibility` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 11, `devices` 2, `documentation` 2, `effects` 1, `head` 3, `ipc` 1, `lifecycle` 1, `memory` 5, `node` 4, `observability` 1, `planning` 4, `project-chat` 2, `protocol` 3, `providers` 6, `recovery` 4, `reliability` 1, `repository` 8, `rust` 1, `security` 1, `sessions` 4, `streaming` 2, `sync` 3, `tauri` 1, `testing` 4, `tooling` 1, `trust` 1, `ux` 1
 
@@ -39,7 +39,7 @@
 | `TEST-MILESTONE-CURRENT-LABEL-001` | Generated milestone plan reports the actual current lifecycle state | `planning`, `testing` | `R1` | `automated` | `high` | `quality` | `automated` |
 | `TEST-MILESTONE-QUALIFYING-001` | Current milestone test views support the qualification lifecycle | `planning`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
 | `TEST-PLANNING-VALIDATION-001` | Planning validator rejects invalid graph and unsafe ready work | `planning`, `repository` | `R1` | `automated` | `critical` | `planning` | `automated` |
-| `TEST-M01-PROTOCOL-EPOCH-001` | M01 protocol epoch replaces the scaffold before production consumers | `compatibility`, `desktop`, `node`, `protocol` | `R3` | `specified` | `critical` | `protocol` | `planned` |
+| `TEST-M01-PROTOCOL-EPOCH-001` | M01 protocol epoch replaces the scaffold before production consumers | `compatibility`, `desktop`, `node`, `protocol` | `R3` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-BREAKING-001` | Protocol compatibility gate rejects breaking changes | `compatibility`, `protocol` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-GENERATION-001` | Protocol clients regenerate deterministically from canonical schemas | `protocol`, `repository` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PR-FAST-GATE-001` | Pull request fast gate covers every M00 required check | `ci`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |

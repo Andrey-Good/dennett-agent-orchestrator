@@ -10,7 +10,6 @@ Quarantined, waived, retired-without-replacement and not-yet-automated cases.
 | --- | --- | --- | --- | --- |
 | `TEST-EFFECT-UNKNOWN-001` | `R3` | `effects` | missing automation | `tests/scenarios/effect-timeout-no-duplicate.yaml` |
 | `TEST-HEAD-OPTIN-001` | `R3` | `trust` | missing automation | `tests/scenarios/head-promotion-opt-in.yaml` |
-| `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `protocol` | missing automation | `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `memory` | missing automation | `tests/scenarios/offline-client-memory-not-canonical.yaml` |
 | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `memory` | missing automation | — |
 | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `agents` | missing automation | `crates/dennett-agent-core/src/lib.rs` |

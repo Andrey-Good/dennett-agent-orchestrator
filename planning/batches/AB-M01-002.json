@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "AB-M01-002",
+  "title": "Establish the reviewed M01 protocol epoch",
+  "status": "RUNNING",
+  "packages": [
+    "WP-M01-002"
+  ],
+  "execution": {
+    "order": "dependency",
+    "max_parallel": 1,
+    "stop_after_packages": 1,
+    "merge_after_each": false,
+    "require_green_main": true
+  },
+  "limits": {
+    "max_risk": "R3",
+    "new_production_dependencies": "forbidden",
+    "architecture_changes": "allow only the canonical M01 protocol epoch and generated-client layout defined by WP-M01-002",
+    "external_effects": "forbidden",
+    "public_breaking_changes": "allow exactly one reviewed break from the non-production M00 dennett.v1 scaffold; no production consumer exists"
+  },
+  "stop_conditions": [
+    "owner approval is required before merge",
+    "a production or external generated-client consumer is discovered",
+    "protocol semantics conflict across canonical documents",
+    "detached adversarial review leaves a blocker or high finding open",
+    "required test fails after two bounded repair attempts",
+    "scope expands beyond handshake, bootstrap, project/session commands, cancellation, typed errors or revisioned session watch frames",
+    "main becomes red",
+    "merge conflict"
+  ],
+  "reporting": {
+    "on_package_start": true,
+    "on_package_end": true,
+    "on_decision": true,
+    "periodic_noise": false
+  }
+}

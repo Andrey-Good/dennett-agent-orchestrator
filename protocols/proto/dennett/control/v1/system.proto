@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package dennett.control.v1;
+
+import "dennett/common/v1/common.proto";
+import "dennett/control/v1/project.proto";
+import "dennett/control/v1/session.proto";
+import "dennett/sync/v1/watch.proto";
+import "google/protobuf/timestamp.proto";
+
+enum CompatibilityMode {
+  COMPATIBILITY_MODE_UNSPECIFIED = 0;
+  COMPATIBILITY_MODE_FULL = 1;
+  COMPATIBILITY_MODE_READ_ONLY = 2;
+  COMPATIBILITY_MODE_FEATURE_DEGRADED = 3;
+  COMPATIBILITY_MODE_UPDATE_REQUIRED = 4;
+  COMPATIBILITY_MODE_BLOCKED_SECURITY = 5;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_STARTING = 1;
+  HEALTH_STATE_READY = 2;
+  HEALTH_STATE_DEGRADED = 3;
+  HEALTH_STATE_RECOVERY_REQUIRED = 4;
+}
+
+message ClientHello {
+  string client_component = 1;
+  string component_version = 2;
+  repeated uint32 protocol_versions = 3;
+  string installation_id = 4;
+  string device_id = 5;
+  bytes session_challenge = 6;
+  repeated string requested_features = 7;
+}
+
+message ServerWelcome {
+  uint32 protocol_version = 1;
+  string node_version = 2;
+  uint64 authority_epoch_seen = 3;
+  repeated string enabled_features = 4;
+  bytes session_proof = 5;
+  bool resync_required = 6;
+  CompatibilityMode compatibility_mode = 7;
+  uint64 max_message_bytes = 8;
+  // Opaque short-lived identity for the trusted bridge, never the renderer.
+  string client_session_id = 9;
+}
+
+message HandshakeRequest {
+  ClientHello hello = 1;
+}
+
+message HandshakeResponse {
+  oneof outcome {
+    ServerWelcome welcome = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
+message BootstrapRequest {
+  // The short-lived proof is consumed by the trusted bridge, never the renderer.
+  bytes session_proof = 1;
+  // Absence requests a full canonical bootstrap snapshot.
+  optional uint64 known_revision = 2;
+  string client_session_id = 3;
+}
+
+message BootstrapSnapshot {
+  uint64 revision = 1;
+  uint64 authority_epoch = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  repeated ProjectSummary projects = 4;
+  repeated SessionSummary recent_sessions = 5;
+  string active_project_id = 6;
+  string active_session_id = 7;
+  HealthState node_state = 8;
+}
+
+message BootstrapResponse {
+  oneof outcome {
+    BootstrapSnapshot snapshot = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
+// GetHealth is a bounded pre-auth liveness query and exposes no user state.
+message GetHealthRequest {}
+
+message GetHealthResult {
+  HealthState state = 1;
+  string node_version = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  string status_code = 4;
+}
+
+message GetHealthResponse {
+  oneof outcome {
+    GetHealthResult health = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
+message SystemSnapshot {
+  // bootstrap.authority_epoch must equal the frame cursor authority_epoch.
+  BootstrapSnapshot bootstrap = 1;
+  bytes snapshot_fingerprint = 2;
+}
+
+message SystemSelectionUpdate {
+  // Presence distinguishes no change from explicitly clearing a selection.
+  optional string active_project_id = 1;
+  optional string active_session_id = 2;
+}
+
+message SystemHealthUpdate {
+  HealthState node_state = 1;
+  string status_code = 2;
+  google.protobuf.Timestamp observed_at = 3;
+}
+
+message SystemMutation {
+  oneof mutation {
+    ProjectSummary upsert_project = 1;
+    string remove_project_id = 2;
+    SessionSummary upsert_session = 3;
+    string remove_session_id = 4;
+    SystemSelectionUpdate update_selection = 5;
+    SystemHealthUpdate update_health = 6;
+    dennett.common.v1.CommandTerminal finish_command = 7;
+  }
+}
+
+message SystemDelta {
+  uint64 base_revision = 1;
+  uint64 new_revision = 2;
+  // Mutations apply in listed order as one authoritative revision transition.
+  repeated SystemMutation mutations = 3;
+}
+
+message SystemWatchFrame {
+  // The first domain frame is a snapshot. A cursor epoch mismatch makes all
+  // cached system/session/project summaries stale and requires a new bootstrap.
+  dennett.sync.v1.WatchCursor cursor = 1;
+  oneof frame {
+    SystemSnapshot snapshot = 2;
+    SystemDelta delta = 3;
+    dennett.sync.v1.WatchHeartbeat heartbeat = 4;
+    dennett.sync.v1.ResyncRequired resync_required = 5;
+    dennett.common.v1.ErrorEnvelope error = 6;
+  }
+}
+
+message WatchRequest {
+  string client_session_id = 1;
+  // A value is a freshness hint only; every stream still starts with a snapshot.
+  optional uint64 known_revision = 2;
+}
+
+message WatchResponse {
+  SystemWatchFrame frame = 1;
+}
+
+service SystemService {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Bootstrap(BootstrapRequest) returns (BootstrapResponse);
+  rpc Watch(WatchRequest) returns (stream WatchResponse);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+}

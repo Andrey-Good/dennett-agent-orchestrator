@@ -4,7 +4,7 @@
     {
       "id": "TEST-M01-PROTOCOL-EPOCH-001",
       "title": "M01 protocol epoch replaces the scaffold before production consumers",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R3",
       "domains": ["protocol", "compatibility", "desktop", "node"],
@@ -13,18 +13,28 @@
       "work_package_refs": ["WP-M01-002"],
       "expected": [
         "Canonical subsystem packages replace the non-production dennett.v1 scaffold as one explicit epoch",
-        "Handshake, bootstrap, project, session, cancel, typed error and revisioned watch contracts generate for Rust and TypeScript",
+        "Handshake, authenticated bridge session, bootstrap, project, session, cancel and explicit result-or-error contracts generate for Rust and TypeScript",
+        "System and session watches start with snapshots, carry Authority Epoch in every cursor and expose monotonic deltas plus resync",
+        "Create admission allocates stable identity without claiming completion; System watch publishes a correlated terminal result and authoritative state mutation",
+        "Descriptor checks pin exact services, streaming modes, field numbers, presence and oneof membership",
         "Buf STANDARD lint passes with no grandfathered file exceptions and negative lint probes still fail",
         "The checker-owned compatibility baseline changes only through reviewed epoch evidence and still rejects field-number reuse",
         "DEBT-0001 and DEBT-0002 are retired only after generated clients and migration checks pass"
       ],
       "implementation": {
         "target_suite": "protocol epoch",
-        "status": "planned",
+        "status": "automated",
         "test_paths": [
+          "protocols/proto/dennett/common/v1/common.proto",
+          "protocols/proto/dennett/control/v1/project.proto",
+          "protocols/proto/dennett/control/v1/session.proto",
+          "protocols/proto/dennett/control/v1/system.proto",
+          "protocols/proto/dennett/sync/v1/watch.proto",
           "protocols/buf.yaml",
+          "protocols/epoch-migrations/m00-to-m01.json",
           "tools/protocol_codegen.py",
-          "tools/tests/test_protocol_codegen.py"
+          "tools/tests/test_protocol_codegen.py",
+          "docs/decisions/ADR-006-m01-protocol-epoch.md"
         ]
       },
       "owner": "protocol"

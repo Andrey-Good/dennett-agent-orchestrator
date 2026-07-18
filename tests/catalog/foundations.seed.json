@@ -106,9 +106,10 @@
       "domains": ["protocol", "repository"],
       "levels": ["contract", "static"],
       "requirement_refs": ["ARCH-81:ProtocolPackages", "ARCH-83:GeneratedClients"],
-      "work_package_refs": ["WP-M00-002"],
+      "work_package_refs": ["WP-M00-002", "WP-M01-002"],
       "expected": [
         "Buf lint and format checks pass",
+        "The M01 descriptor contract pins exact service modes, field numbers, presence and oneofs",
         "Pinned plugins generate Rust and TypeScript clients",
         "A second generation produces no tracked diff"
       ],
@@ -134,11 +135,12 @@
       "domains": ["protocol", "compatibility"],
       "levels": ["contract"],
       "requirement_refs": ["ARCH-83:ProtocolCompatibility", "M00:ProtocolBreakingGate"],
-      "work_package_refs": ["WP-M00-002"],
+      "work_package_refs": ["WP-M00-002", "WP-M01-002"],
       "expected": [
         "Buf breaking check compares the protocol module with main",
         "PR checks use the pull-request base SHA and push checks use the pushed parent SHA",
         "Candidate configuration cannot weaken the checker-owned WIRE_JSON comparison",
+        "A package-set change requires an exact hash-pinned epoch manifest even when WIRE_JSON considers it compatible",
         "An incompatible field removal or reuse fails the gate"
       ],
       "implementation": {

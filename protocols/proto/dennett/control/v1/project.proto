@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package dennett.control.v1;
+
+import "dennett/common/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+enum ProjectState {
+  PROJECT_STATE_UNSPECIFIED = 0;
+  PROJECT_STATE_READY = 1;
+  PROJECT_STATE_MISSING = 2;
+  PROJECT_STATE_DETACHED = 3;
+  PROJECT_STATE_READ_ONLY = 4;
+}
+
+message ProjectSummary {
+  string project_id = 1;
+  string display_name = 2;
+  ProjectState state = 3;
+  uint64 revision = 4;
+  google.protobuf.Timestamp last_activity_at = 5;
+}
+
+message Project {
+  string project_id = 1;
+  string display_name = 2;
+  // root_uri is local-sensitive and must not be copied into telemetry labels.
+  string root_uri = 3;
+  ProjectState state = 4;
+  uint64 revision = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message CreateProjectRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string display_name = 2;
+  string root_uri = 3;
+}
+
+// CreateProjectAccepted allocates identity but does not claim project completion.
+message CreateProjectAccepted {
+  dennett.common.v1.CommandAccepted command = 1;
+  string project_id = 2;
+}
+
+message CreateProjectResponse {
+  oneof outcome {
+    CreateProjectAccepted accepted = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
+message ListProjectsRequest {
+  // Zero asks the server to apply its bounded default page size.
+  uint32 page_size = 1;
+  // Empty means the first page.
+  string page_token = 2;
+  string client_session_id = 3;
+}
+
+message ListProjectsResult {
+  repeated ProjectSummary projects = 1;
+  string next_page_token = 2;
+  uint64 snapshot_revision = 3;
+}
+
+message ListProjectsResponse {
+  oneof outcome {
+    ListProjectsResult result = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
+message GetProjectRequest {
+  string project_id = 1;
+  string client_session_id = 2;
+}
+
+message GetProjectResponse {
+  oneof outcome {
+    Project project = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
+service ProjectService {
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+  rpc GetProject(GetProjectRequest) returns (GetProjectResponse);
+}

@@ -10,7 +10,9 @@
     "shipping local-model or second-provider adapters before their credentials and runtimes are available",
     "production installers, remote-device sync, voice, ambient interaction or external connectors"
   ],
-  "owner_decisions": [],
+  "owner_decisions": [
+    "DEC-0004"
+  ],
   "vertical_slices": [
     {
       "id": "VS-M01-01",
@@ -136,7 +138,7 @@
       "version": 1,
       "id": "WP-M01-002",
       "title": "Establish the M01 protocol epoch and generated clients",
-      "status": "REFINED",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R3",
@@ -166,8 +168,10 @@
       "allowed_roots": [
         "protocols",
         "generated",
+        ".github/workflows/protocol-compatibility.yml",
         "tools/protocol_codegen.py",
         "tools/tests/test_protocol_codegen.py",
+        "tools/tests/test_verify_planning.py",
         "tests/catalog",
         "docs/decisions",
         "docs/testing/generated",
@@ -208,13 +212,14 @@
         "TEST-PROTOCOL-BREAKING-001"
       ],
       "required_commands": [
-        "uv run --project . --frozen python -m unittest tools.tests.test_protocol_codegen",
-        "uv run --project . --frozen python tools/protocol_codegen.py check",
-        "just check"
+        "mise exec -- uv run --project . --frozen python -m unittest tools.tests.test_protocol_codegen",
+        "mise exec -- uv run --project . --frozen python tools/protocol_codegen.py check",
+        "mise exec -- just check"
       ],
       "observability": [
         "migration evidence lists every retired package and generated public symbol family without user data",
-        "compatibility diagnostics identify source file, field or method and the approved epoch boundary"
+        "compatibility diagnostics identify source file, field or method and the approved epoch boundary",
+        "descriptor diagnostics identify exact service modes, field numbers, presence and oneof drift"
       ],
       "rollback": [
         "revert the complete protocol epoch before a production consumer merges; never mix old and new generated packages",
@@ -222,16 +227,23 @@
       ],
       "owner_decision": {
         "required_before_start": false,
-        "required_before_merge": true
+        "required_before_merge": false,
+        "resolved_by": [
+          "DEC-0004"
+        ]
       },
       "estimate": {
         "target_agent_hours": 5,
-        "max_diff_lines": 2600
+        "max_diff_lines": 10000
       },
       "notes": [
         "This package is the mandatory repayment trigger recorded by DEBT-0001 and DEBT-0002.",
         "The change is intentionally breaking only for the non-production M00 scaffold and requires detached adversarial protocol review plus owner approval before merge.",
-        "The full M01 wire surface is bounded to handshake, bootstrap, project/session commands, cancellation, typed errors and revisioned session watch frames."
+        "The full M01 wire surface is bounded to handshake, bootstrap, system/project/session commands, cancellation, typed result-or-error responses and revisioned system/session watch frames.",
+        "Retiring DEBT-0001 exposed a planning-validator unit test coupled to that live debt record; WP-M01-002 also replaces it with an isolated synthetic fixture.",
+        "The gross diff budget was corrected from 2600 to 10000 after deterministic replacement of checked-in Rust and TypeScript clients accounted for about 6575 changed lines; the handwritten/source change remains below the original budget and was not simplified to optimize the counter.",
+        "The first remote protocol run exposed anonymous GitHub API rate limiting in buf-setup-action before any repository code ran; the bounded workflow repair passes the read-only job token to the action and is protected by the protocol workflow test.",
+        "The owner accepted ADR-006 and authorized merge on 2026-07-18 after the detached R3 closure review returned PASS."
       ]
     },
     {
