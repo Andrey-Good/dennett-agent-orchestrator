@@ -1055,8 +1055,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 32162,
-      "sha256": "d90d532853ca83cf9f1c2ad4bc1e5a5cf684fac51eda2e5792abce384e8151d3"
+      "bytes": 32187,
+      "sha256": "ad3471255e8dab05f82f7ff63d67d741da9b2b93c7d31b5028fbaecb59375eef"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1260,8 +1260,8 @@
     },
     {
       "path": "services/adapter-host-node/README.md",
-      "bytes": 2461,
-      "sha256": "ce71636831727389178eb5f87a1982b0d44fb985610f5d251fc39c6fcdc3b105"
+      "bytes": 2594,
+      "sha256": "39c56ed9779c9b1af8da382c6777562bcbea8659bf4fe5fb985913d8ef447077"
     },
     {
       "path": "services/adapter-host-node/package.json",
@@ -1300,13 +1300,13 @@
     },
     {
       "path": "services/adapter-host-node/src/codex-runtime-adapter.test.ts",
-      "bytes": 15970,
-      "sha256": "aa282bf0780249115bd6b5fe19646c9b5632a2619aca29ce9bd3faa23b145a73"
+      "bytes": 18467,
+      "sha256": "41bd7532b2a991348deb018f2e5f1577184d27857142765443daf1a94671ecab"
     },
     {
       "path": "services/adapter-host-node/src/codex-runtime-adapter.ts",
-      "bytes": 18518,
-      "sha256": "f4c2279fb69030e70559b965a228b67412f3be27bf8d3174d101c2951996bbd4"
+      "bytes": 20732,
+      "sha256": "e9608269dd7f7267305b3ebe69b20fa361c6b1479cbd08e14d3db43bb1325b26"
     },
     {
       "path": "services/adapter-host-node/src/codex-runtime-canary.ts",

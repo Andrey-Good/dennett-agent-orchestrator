@@ -43,7 +43,8 @@ and latency are printed. Prompts, responses and credential values are omitted.
 and raw events stay in this host. Callers receive ordered provider-neutral
 events, opaque continuation identity, explicit completion/cancellation/timeout
 outcomes and idempotent cancellation acknowledgements scoped to one session
-and runtime turn.
+and runtime turn. In the absence of an explicit trusted policy binding, Codex
+starts read-only with approvals, network access and web search disabled.
 
 The deterministic Node tests and the Rust scripted fake consume the same
 fixture at `tests/contracts/agent_runtime_conformance.json`. The live canary is

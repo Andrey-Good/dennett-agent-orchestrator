@@ -24,6 +24,14 @@ import {
 } from "./runtime-contract.js";
 
 export const CODEX_RUNTIME_ADAPTER_ID = "openai.codex.sdk";
+export const DEFAULT_CODEX_THREAD_OPTIONS: Readonly<
+  Omit<ThreadOptions, "workingDirectory">
+> = {
+  approvalPolicy: "never",
+  networkAccessEnabled: false,
+  sandboxMode: "read-only",
+  webSearchMode: "disabled",
+};
 const CODEX_NATIVE_EXTENSION_SCHEMA = "openai.codex.item-status@0.144.5";
 const MAX_TERMINAL_HISTORY = 256;
 const ITERATOR_CLOSE_TIMEOUT_MS = 1_000;
@@ -50,7 +58,58 @@ type StopReason = "cancelled" | "timed_out";
 
 interface ActiveTurn {
   controller: AbortController;
+  deadlineTimer?: ReturnType<typeof setTimeout>;
   stopReason?: StopReason;
+}
+
+class ManagedRuntimeEventStream
+  implements AsyncGenerator<RuntimeEvent, void, unknown>
+{
+  #closed = false;
+  #started = false;
+
+  constructor(
+    private readonly source: AsyncGenerator<RuntimeEvent, void, unknown>,
+    private readonly disposeUnstarted: () => void,
+  ) {}
+
+  async next(...args: [] | [unknown]): Promise<IteratorResult<RuntimeEvent, void>> {
+    if (this.#closed) {
+      return { done: true, value: undefined };
+    }
+    this.#started = true;
+    const result = await this.source.next(...args);
+    this.#closed = result.done ?? false;
+    return result;
+  }
+
+  async return(
+    value: void | PromiseLike<void>,
+  ): Promise<IteratorResult<RuntimeEvent, void>> {
+    if (this.#closed) {
+      return { done: true, value: await value };
+    }
+    this.#closed = true;
+    if (!this.#started) {
+      this.disposeUnstarted();
+      return { done: true, value: await value };
+    }
+    return this.source.return(value);
+  }
+
+  async throw(error: unknown): Promise<IteratorResult<RuntimeEvent, void>> {
+    if (!this.#started) {
+      this.#closed = true;
+      this.disposeUnstarted();
+      throw error;
+    }
+    this.#closed = true;
+    return this.source.throw(error);
+  }
+
+  [Symbol.asyncIterator](): AsyncGenerator<RuntimeEvent, void, unknown> {
+    return this;
+  }
 }
 
 function turnKey(sessionId: string, turnId: string): string {
@@ -210,6 +269,7 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     }
 
     const threadOptions: ThreadOptions = {
+      ...DEFAULT_CODEX_THREAD_OPTIONS,
       ...this.options.threadOptions,
       workingDirectory: request.workspacePath,
     };
@@ -233,7 +293,19 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
 
     const active: ActiveTurn = { controller: new AbortController() };
     this.#activeTurns.set(key, active);
-    return { events: this.streamTurn(key, request, thread, active) };
+    active.deadlineTimer = setTimeout(() => {
+      if (this.#activeTurns.get(key) !== active) {
+        return;
+      }
+      active.stopReason ??= "timed_out";
+      active.controller.abort();
+      this.rememberTerminal(key, active.stopReason);
+    }, request.timeoutMs);
+    const events = new ManagedRuntimeEventStream(
+      this.streamTurn(key, request, thread, active),
+      () => this.disposeUnstarted(key, active),
+    );
+    return { events };
   }
 
   async cancelTurn(
@@ -265,6 +337,11 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   private rememberTerminal(key: string, terminal: RuntimeTerminalKind): void {
+    const active = this.#activeTurns.get(key);
+    if (active?.deadlineTimer !== undefined) {
+      clearTimeout(active.deadlineTimer);
+      active.deadlineTimer = undefined;
+    }
     this.#activeTurns.delete(key);
     this.#terminalTurns.set(key, terminal);
     while (this.#terminalTurns.size > this.#terminalHistoryLimit) {
@@ -274,6 +351,22 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       }
       this.#terminalTurns.delete(oldest);
     }
+  }
+
+  private disposeUnstarted(key: string, active: ActiveTurn): void {
+    if (this.#activeTurns.get(key) !== active) {
+      return;
+    }
+    active.controller.abort();
+    if (active.stopReason) {
+      this.rememberTerminal(key, active.stopReason);
+      return;
+    }
+    if (active.deadlineTimer !== undefined) {
+      clearTimeout(active.deadlineTimer);
+      active.deadlineTimer = undefined;
+    }
+    this.#activeTurns.delete(key);
   }
 
   private async *streamTurn(
@@ -292,7 +385,6 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     let iterator: AsyncIterator<ThreadEvent> | undefined;
     let exhausted = false;
     const itemText = new Map<string, string>();
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const event = (
       kind: RuntimeEventKind,
@@ -309,10 +401,6 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     const claimTerminal = (kind: RuntimeTerminalKind): void => {
       terminalKind = kind;
       lifecycle.phase = "terminal";
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
       this.rememberTerminal(key, kind);
     };
     const stopped = (reason: StopReason): RuntimeEvent => {
@@ -343,13 +431,6 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     };
 
     try {
-      timer = setTimeout(() => {
-        if (lifecycle.phase !== "terminal") {
-          active.stopReason = "timed_out";
-          active.controller.abort();
-        }
-      }, request.timeoutMs);
-
       if (active.stopReason) {
         const startEvent = started();
         const terminalEvent = stopped(active.stopReason);
@@ -564,15 +645,12 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
         yield terminalEvent;
       }
     } finally {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
       if (!exhausted && iterator !== undefined) {
         await closeIterator(iterator);
       }
       if (terminalKind === undefined) {
         active.controller.abort();
-        terminalKind = "failed";
+        terminalKind = active.stopReason ?? "failed";
       }
       this.rememberTerminal(key, terminalKind);
     }

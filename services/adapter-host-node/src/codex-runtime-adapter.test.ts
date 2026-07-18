@@ -12,6 +12,7 @@ import type {
 import {
   CODEX_RUNTIME_ADAPTER_ID,
   CodexRuntimeAdapter,
+  DEFAULT_CODEX_THREAD_OPTIONS,
   type CodexClientLike,
   type CodexThreadLike,
 } from "./codex-runtime-adapter.js";
@@ -237,6 +238,12 @@ test("TEST-AGENT-RUNTIME-STREAM-001 normalizes an ordered Codex stream", async (
     ),
   );
   assert.equal(client.startOptions[0]?.workingDirectory, "C:/synthetic/project");
+  assert.equal(
+    client.startOptions[0]?.sandboxMode,
+    DEFAULT_CODEX_THREAD_OPTIONS.sandboxMode,
+  );
+  assert.equal(client.startOptions[0]?.approvalPolicy, "never");
+  assert.equal(client.startOptions[0]?.networkAccessEnabled, false);
   assert.equal(thread.closed, true);
 
   const serialized = JSON.stringify(events);
@@ -320,6 +327,77 @@ test("TEST-AGENT-RUNTIME-CANCEL-001 scopes and acknowledges Stop", async () => {
     { type: "already_terminal", terminal: "cancelled" },
   );
   assert.equal(threadA.closed, true);
+});
+
+test("an unconsumed stream can be closed or stopped without leaking active scope", async () => {
+  const abandoned = new ScriptedThread(completedScript("thread-unused", "unused"));
+  const replacement = new ScriptedThread(
+    completedScript("thread-replacement", "replacement"),
+  );
+  const stopped = new ScriptedThread(completedScript("thread-stopped", "late"));
+  const dropped = new ScriptedThread(completedScript("thread-dropped", "late"));
+  const adapter = new CodexRuntimeAdapter(
+    new ScriptedClient([abandoned, replacement, stopped, dropped]),
+  );
+  const scope = request("session-dispose", "turn-dispose");
+
+  const abandonedTurn = await adapter.startTurn(scope);
+  await abandonedTurn.events.return(undefined);
+  assert.equal(abandoned.inputs.length, 0);
+  assert.deepEqual(
+    (
+      await adapter.cancelTurn({
+        sessionId: scope.sessionId,
+        turnId: scope.turnId,
+      })
+    ).disposition,
+    { type: "not_found" },
+  );
+  assert.deepEqual(eventLabels(await collect(await adapter.startTurn(scope))), [
+    "started",
+    "text_delta",
+    "usage",
+    "completed",
+  ]);
+
+  const stoppedScope = request("session-dispose", "turn-stopped");
+  const stoppedTurn = await adapter.startTurn(stoppedScope);
+  assert.deepEqual(
+    (
+      await adapter.cancelTurn({
+        sessionId: stoppedScope.sessionId,
+        turnId: stoppedScope.turnId,
+      })
+    ).disposition,
+    { type: "requested" },
+  );
+  await stoppedTurn.events.return(undefined);
+  assert.deepEqual(
+    (
+      await adapter.cancelTurn({
+        sessionId: stoppedScope.sessionId,
+        turnId: stoppedScope.turnId,
+      })
+    ).disposition,
+    { type: "already_terminal", terminal: "cancelled" },
+  );
+  assert.equal(stopped.inputs.length, 0);
+
+  const droppedScope = request("session-dispose", "turn-dropped", {
+    timeoutMs: 20,
+  });
+  await adapter.startTurn(droppedScope);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(
+    (
+      await adapter.cancelTurn({
+        sessionId: droppedScope.sessionId,
+        turnId: droppedScope.turnId,
+      })
+    ).disposition,
+    { type: "already_terminal", terminal: "timed_out" },
+  );
+  assert.equal(dropped.inputs.length, 0);
 });
 
 test("TEST-AGENT-RUNTIME-TIMEOUT-001 preserves partial output and drops late completion", async () => {
