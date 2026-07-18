@@ -1,6 +1,6 @@
 # ADR-006: M01 replaces the non-production protocol scaffold as one epoch
 
-**Status:** Proposed; owner approval is required before merge
+**Status:** Accepted
 
 **Date:** 2026-07-18
 
@@ -90,6 +90,6 @@ coexist in one build.
 
 ## Owner gate
 
-Before merge, the owner must accept the breaking pre-production epoch and the
-bounded M01 wire surface. Until then `WP-M01-002` may reach review but not
-`MERGE_READY` or `MERGED`.
+The owner accepted the breaking pre-production epoch and the bounded M01 wire
+surface on 2026-07-18 after the detached R3 closure review passed. The decision
+is recorded as `DEC-0004`.

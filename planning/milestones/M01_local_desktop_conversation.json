@@ -10,7 +10,9 @@
     "shipping local-model or second-provider adapters before their credentials and runtimes are available",
     "production installers, remote-device sync, voice, ambient interaction or external connectors"
   ],
-  "owner_decisions": [],
+  "owner_decisions": [
+    "DEC-0004"
+  ],
   "vertical_slices": [
     {
       "id": "VS-M01-01",
@@ -136,7 +138,7 @@
       "version": 1,
       "id": "WP-M01-002",
       "title": "Establish the M01 protocol epoch and generated clients",
-      "status": "REVIEW",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R3",
@@ -225,7 +227,10 @@
       ],
       "owner_decision": {
         "required_before_start": false,
-        "required_before_merge": true
+        "required_before_merge": false,
+        "resolved_by": [
+          "DEC-0004"
+        ]
       },
       "estimate": {
         "target_agent_hours": 5,
@@ -237,7 +242,8 @@
         "The full M01 wire surface is bounded to handshake, bootstrap, system/project/session commands, cancellation, typed result-or-error responses and revisioned system/session watch frames.",
         "Retiring DEBT-0001 exposed a planning-validator unit test coupled to that live debt record; WP-M01-002 also replaces it with an isolated synthetic fixture.",
         "The gross diff budget was corrected from 2600 to 10000 after deterministic replacement of checked-in Rust and TypeScript clients accounted for about 6575 changed lines; the handwritten/source change remains below the original budget and was not simplified to optimize the counter.",
-        "The first remote protocol run exposed anonymous GitHub API rate limiting in buf-setup-action before any repository code ran; the bounded workflow repair passes the read-only job token to the action and is protected by the protocol workflow test."
+        "The first remote protocol run exposed anonymous GitHub API rate limiting in buf-setup-action before any repository code ran; the bounded workflow repair passes the read-only job token to the action and is protected by the protocol workflow test.",
+        "The owner accepted ADR-006 and authorized merge on 2026-07-18 after the detached R3 closure review returned PASS."
       ]
     },
     {

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "DEC-0004",
+  "work_package": "WP-M01-002",
+  "severity": "red",
+  "question": "Should Dennett accept the breaking pre-production M01 protocol epoch defined by ADR-006?",
+  "context": "WP-M01-002 replaces the unused M00 dennett.v1 scaffold with the provider-neutral M01 System, Project and Session contracts. The change breaks only generated pre-production APIs, migrates no user data, passed the full local and GitHub gates, and passed detached R3 closure review.",
+  "options": [
+    {
+      "id": "A",
+      "description": "Reject the M01 epoch and restore the M00 scaffold",
+      "benefits": [
+        "avoids the intentional compile-time break of the M00 generated API"
+      ],
+      "costs": [
+        "blocks desktop and runtime implementation on the canonical subsystem contracts",
+        "restores the protocol and lint debt retired by this package"
+      ],
+      "risks": [
+        "a production client may begin depending on the known-placeholder protocol shape"
+      ]
+    },
+    {
+      "id": "B",
+      "description": "Accept ADR-006 and merge the bounded M01 protocol epoch",
+      "benefits": [
+        "gives Rust and TypeScript clients one typed provider-neutral contract",
+        "fences stale watch streams by Authority Epoch and separates admission from completion",
+        "retires the pre-production protocol and lint debt before production consumers exist"
+      ],
+      "costs": [
+        "all unused M00 generated imports and RPC names stop compiling"
+      ],
+      "risks": [
+        "later corrections must follow ordinary additive compatibility or a new explicit owner-gated epoch"
+      ]
+    }
+  ],
+  "recommendation": "B",
+  "reason": "The epoch is bounded to M01 desktop conversation, carries no persisted-data migration, passed exact descriptor and compatibility checks, and closed every detached R3 finding.",
+  "default_if_deferred": "stop",
+  "needed_by": "WP-M01-002",
+  "status": "resolved",
+  "resolution": {
+    "selected_option": "B",
+    "decided_by": "owner",
+    "decided_at": "2026-07-18",
+    "note": "Owner accepted ADR-006 and authorized the WP-M01-002 merge after reviewing a plain-language summary of the breaking pre-production epoch and its evidence."
+  }
+}

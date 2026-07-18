@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 319,
+  "file_count": 321,
   "files": [
     {
       "path": ".editorconfig",
@@ -441,7 +441,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11559,
-      "sha256": "ae9c80964e5004bdf5ca43c01f17370172ac19bb13e07896157ceb29cea63987"
+      "sha256": "7170287d22529a13194db5dbdab2034bb1f3e2c01feeddccdde3eba0cc5fdb03"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -570,8 +570,8 @@
     },
     {
       "path": "docs/decisions/ADR-006-m01-protocol-epoch.md",
-      "bytes": 4950,
-      "sha256": "03b02e3651740bd757ca6bef18bb99dc4f9e90478eb54f424280741981ffb054"
+      "bytes": 4914,
+      "sha256": "459b15701a7449c261eb59320458545545ec927dc7250f0b25cfd50c382a5d29"
     },
     {
       "path": "docs/decisions/README.md",
@@ -895,8 +895,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 2472,
-      "sha256": "54cb9eb883a43a3f9b84d8fcbeec2b56f8c7168d866fb0dd90417e2fdb13e1ef"
+      "bytes": 2492,
+      "sha256": "67cbd9b9f79e5a013a9367d213e6a02617f8c6217e35dc60ca22ead9c5f37c0c"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1029,14 +1029,19 @@
       "sha256": "1fc1908458ddefda1b51796b297fe21e7b8d03e619d32081738764eb51037865"
     },
     {
+      "path": "planning/decisions/DEC-0004.json",
+      "bytes": 2246,
+      "sha256": "27362988cf65f92c0491ed65b3c938ed6c587262d3104bac32e8f6f259bdf9a5"
+    },
+    {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 29928,
       "sha256": "c4373263457a7bff9bcd94c5cff5ad8d2c7bc922c159ce5f525223fa6e4fd9b9"
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 30845,
-      "sha256": "239a8c6036275cac9a6a8417792b0fda42fa9a12d05ea3add52cecb91dd963ab"
+      "bytes": 31051,
+      "sha256": "a9c0735ca93889faffd6f1aa00f0ed69f27837810fd7695cf1bd56cb521110f4"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1092,6 +1097,11 @@
       "path": "planning/results/WP-M01-001.json",
       "bytes": 4975,
       "sha256": "a4f900223f843bff13acad91851fc89a65cf2245b8d89c575d9e3d4f44a84190"
+    },
+    {
+      "path": "planning/results/WP-M01-002.json",
+      "bytes": 4845,
+      "sha256": "cc8d864f778004889bde8c8c506796b2f41b9bea1e8b2cf7e4fd2b9c43b04b36"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
