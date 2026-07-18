@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 329,
+  "file_count": 341,
   "files": [
     {
       "path": ".editorconfig",
@@ -194,14 +194,64 @@
       "sha256": "1be1b3dbc9a00af0da34a9cbb6cb1815c2e12d19c5720ce700924422639bf378"
     },
     {
+      "path": "apps/desktop/src-tauri/.gitignore",
+      "bytes": 23,
+      "sha256": "d01c5d48a9c488f2cb7ce6d13703e9f9de71d920d135ce8589bf2fcf6fc62863"
+    },
+    {
+      "path": "apps/desktop/src-tauri/Cargo.lock",
+      "bytes": 106970,
+      "sha256": "b98227674f941c10d3d5894383f93c7b0fb6e5269ab0646ff640a9b3277913e5"
+    },
+    {
       "path": "apps/desktop/src-tauri/Cargo.toml",
-      "bytes": 268,
-      "sha256": "335a5bba1aaa7023864d76ff334c088794b27fcf90a51369d2014893bebcb90b"
+      "bytes": 438,
+      "sha256": "2c9a8bd0d60348de4f7bbb6d8a79aa0ce4420437a07316e0cb157fb73c7f6221"
     },
     {
       "path": "apps/desktop/src-tauri/build.rs",
       "bytes": 36,
       "sha256": "cd0ac1f2fb0555a110a0298f504469b11502fe59744a2c7e6b1b2aa4aac425df"
+    },
+    {
+      "path": "apps/desktop/src-tauri/capabilities/default.json",
+      "bytes": 379,
+      "sha256": "98d50b39b39a4012206cfbf90219b2a7cdf55d29aee94dab0586d8cb0dc4711a"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/128x128.png",
+      "bytes": 8490,
+      "sha256": "1d3f91850baf8c0d4d5aa80ffb9799c013e6417aaa070d717068b2cb376a9df2"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/128x128@2x.png",
+      "bytes": 45075,
+      "sha256": "e91eff904e8cef589ebc4aaf9c1123f8c99a645c7b3fa15b326b1ee76f940d1e"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/32x32.png",
+      "bytes": 1064,
+      "sha256": "23ff92b59ac1574b094e521136a8a83b48cbf4595dd5ca2b7afdfe2bda5ee7ef"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/dennett-icon-source.png",
+      "bytes": 879838,
+      "sha256": "63f084eafd40f4a8b63a6fc2c467fa68b76a813b58d2487add686c86c80d8275"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.icns",
+      "bytes": 1156632,
+      "sha256": "f4e6b70c2987f8aaec94ffd3d40dafe7f84f3e2668da3b7f66ec78b88f1d6c3d"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.ico",
+      "bytes": 52681,
+      "sha256": "82f1d71a00b90459e85e4e048abe0e0ef860875ac69f3568a78d5a7cb7b7b297"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.png",
+      "bytes": 199753,
+      "sha256": "88be31e4783756120917b9d850cd64308a5337cc2137881d56e087ae708cebb2"
     },
     {
       "path": "apps/desktop/src-tauri/src/main.rs",
@@ -210,23 +260,23 @@
     },
     {
       "path": "apps/desktop/src-tauri/tauri.conf.json",
-      "bytes": 372,
-      "sha256": "59a598a87f8bfb21ca6ffd70902d7af9fed6b24f7153e4a126ba3184cb4e0449"
+      "bytes": 768,
+      "sha256": "2635ddfb0480155a6077817d0c4b3353825a60dad31b6b29281902aa0a258ccf"
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
-      "bytes": 6829,
-      "sha256": "ca60b0433e8b0a06a26f7f59a2b9d2c46f5a7a1e1e616934967312cfa225f95b"
+      "bytes": 10096,
+      "sha256": "8ca9f572e9cf7e2f421ffc6e6769f6ad457d19ddf776314b9364d2afd83bdea4"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 22372,
-      "sha256": "75f1949b7a9d1b649282f8829cfdd66bf4ead380e35802a03400e15194591101"
+      "bytes": 33711,
+      "sha256": "ba4f971eeabb6fcae316dfafdbf2cadd7b7c3968033ab7d7473b910906fae2e5"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
-      "bytes": 5224,
-      "sha256": "098aea8e6915a497e91f217ee2c55ec519516c5cfa9a0fd1811f3c00949f020d"
+      "bytes": 5266,
+      "sha256": "fc5b4763dcbcbb96c944cc8f74a4eeb9ab9b99847593bb11b5569900b0c86aa0"
     },
     {
       "path": "apps/desktop/src/lib/commands.ts",
@@ -240,8 +290,8 @@
     },
     {
       "path": "apps/desktop/src/styles.css",
-      "bytes": 22445,
-      "sha256": "ae468b274a9692fc634652408cfe022b5f942c58f638c30af1c4cf864e409e7c"
+      "bytes": 27552,
+      "sha256": "a62b20fc3087411c413dbb8ce6f6d3fc063962327e0243bb98c5824e9a7b7aa2"
     },
     {
       "path": "apps/desktop/src/test/setup.ts",
@@ -465,13 +515,13 @@
     },
     {
       "path": "design-qa.md",
-      "bytes": 6337,
-      "sha256": "206d78134e6f37ab64fa027a65766cb6ac512c2514d0f82e95c3e0ea9da5e66f"
+      "bytes": 6885,
+      "sha256": "aa109cde89a7c00a032651535bc9b5b02539df22155a00352650148da83289b0"
     },
     {
       "path": "docs/CHECKSUMS.sha256",
-      "bytes": 11684,
-      "sha256": "cb51552fda29ee7df22a9ddabdad19a01f24b5323e795f3d5cfbaeb843003eff"
+      "bytes": 11924,
+      "sha256": "f480244a7deb5a5c09f6c24ae1317523104a4dc4bc79e3086236d44672421d3a"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -607,6 +657,16 @@
       "path": "docs/decisions/README.md",
       "bytes": 946,
       "sha256": "3a81b7ca43d5cc8d1b1ab7b41c7ed1b2b19854e0e8daa0c2441a4d7f4ee69fc1"
+    },
+    {
+      "path": "docs/design/WP-M01-003/owner-direction-v2.md",
+      "bytes": 4132,
+      "sha256": "f2979cf898e5a67d381b7101e896ad74cba29157ab359d0b444116adca2d10c1"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-monochrome-v2-1536x971.png",
+      "bytes": 96159,
+      "sha256": "574be78580fdf03870b70a80cdc933c4534e4ac97f1275656846b17d4a9cd9a1"
     },
     {
       "path": "docs/design/WP-M01-003/project-chat-streaming-1280x720.png",
@@ -1080,8 +1140,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 31361,
-      "sha256": "19102197e07fc54dcb9116e287d43ddb361ca2c589a00517e2b561eedd82db63"
+      "bytes": 32418,
+      "sha256": "93cb568e7caa5d0251006a0f7c8cf07d0adc9e2d457ccc7c08185f982bb67c2c"
     },
     {
       "path": "planning/results/WP-M00-001.json",
