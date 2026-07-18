@@ -53,10 +53,38 @@ describe("Project Chat workbench", () => {
     expect(location).toHaveTextContent("Projects/dennett-agent-orchestrator/Project Chat owner checkpoint");
     expect(screen.queryByText("Local node")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Scope: Project")).not.toBeInTheDocument();
+    const primaryNavigation = screen.getByRole("navigation", { name: "Primary navigation" });
+    expect(within(primaryNavigation).getByRole("button", { name: "Chats" })).toBeVisible();
+    expect(within(primaryNavigation).queryByRole("button", { name: "New chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Install available update" })).not.toBeInTheDocument();
 
     const messages = screen.getAllByRole("article");
     expect(messages.some((message) => message.classList.contains("message--user"))).toBe(true);
     expect(messages.some((message) => message.classList.contains("message--agent"))).toBe(true);
+  });
+
+  it("places project and chat creation controls beside the collection they affect", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
+    const newProject = within(sidebar).getByRole("button", { name: "New project" });
+    newProject.focus();
+    await user.keyboard("[Enter]");
+    const projectDialog = screen.getByRole("dialog", { name: "Create or add project" });
+    expect(within(projectDialog).getByRole("button", { name: /Create empty project/ })).toHaveFocus();
+    expect(within(projectDialog).getByRole("button", { name: /Add existing folder/ })).toBeVisible();
+
+    await user.click(within(projectDialog).getByRole("button", { name: /Create empty project/ }));
+    expect(within(sidebar).getByText("Untitled project 1")).toBeVisible();
+    await user.hover(within(sidebar).getByText("Untitled project 1"));
+    await user.click(within(sidebar).getByRole("button", { name: "New chat in Untitled project 1" }));
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Projects/Untitled project 1/Untitled chat");
+
+    await user.hover(within(sidebar).getByRole("heading", { name: "Recent" }));
+    await user.click(within(sidebar).getByRole("button", { name: "New recent chat" }));
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
   });
 
   it("groups project chats before standalone recent chats", async () => {
@@ -85,6 +113,8 @@ describe("Project Chat workbench", () => {
 
     expect(screen.getByText("No messages yet")).toBeVisible();
     expect(await screen.findByRole("heading", { name: "Start with the project" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Задай мне вопросы о моей идее" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Изучи этот репозиторий" })).toBeVisible();
 
     await user.selectOptions(selector, "loading");
     expect(await screen.findByRole("status", { name: "Loading conversation content" })).toBeVisible();
@@ -108,7 +138,8 @@ describe("Project Chat workbench", () => {
     await user.click(within(sidebar).getByRole("button", { name: /Project Chat owner checkpoint/ }));
     expect(await screen.findByText("Only visible in the owner checkpoint")).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await user.hover(within(sidebar).getByRole("heading", { name: "Recent" }));
+    await user.click(within(sidebar).getByRole("button", { name: "New recent chat" }));
     expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
     expect(await screen.findByRole("heading", { name: "Start with the project" })).toBeVisible();
     expect(screen.queryByText("Only visible in the owner checkpoint")).not.toBeInTheDocument();

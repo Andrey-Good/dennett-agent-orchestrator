@@ -2,22 +2,22 @@
 
 ## Evidence
 
-- Visual sources: the owner's three private attachments from the second checkpoint. They are intentionally not tracked because they contain private workspace content.
-- Owner contract: `docs/design/WP-M01-003/owner-direction-v2.md`.
-- Implementation screenshot: `docs/design/WP-M01-003/project-chat-monochrome-v2-1536x971.png`.
+- Visual sources: the owner's three private attachments from the second checkpoint and the annotated full-window correction from the third checkpoint. They are intentionally not tracked because they contain private workspace content.
+- Owner contracts: `docs/design/WP-M01-003/owner-direction-v2.md` and `docs/design/WP-M01-003/owner-direction-v3.md`.
+- Implementation screenshots: `docs/design/WP-M01-003/project-chat-owner-v3-2048x1280.png` (`streaming`) and `docs/design/WP-M01-003/project-chat-owner-v3-empty-2048x1280.png` (`empty`).
 - Browser URL during review: `http://127.0.0.1:5173/`.
-- Browser viewport and state: 1536 x 971, dark theme, `streaming` fixture, project/chat navigation open, workspace resources open, full plan collapsed.
+- Browser viewport and state: 2048 x 1280, dark theme, `streaming` and `empty` fixtures, project/chat navigation open, workspace resources open, full plan collapsed.
 - Responsive checks: 1100 x 800 and 900 x 800.
-- Native check: the official Tauri release pipeline embedded the production frontend, and the resulting standalone executable opened on Windows at its configured 1280 x 800 size without a dev server. The transparent custom chrome, Acrylic window material and custom close control were observed in the native window.
-- Implementation commits: `542078a` (review corrections), `0d5997e` (reproducible standalone Tauri build) and `eed2138` (resource-contrast closure) on `codex/wp-m01-003-project-chat-screen`.
+- Native check: the official Tauri release pipeline embedded the production frontend, and the resulting standalone executable opened on Windows at its configured 1280 x 800 size. The transparent custom chrome, Acrylic material, system window controls, hover-only creation actions and open/collapsed workspace-panel icons were observed in the native window.
+- Previous implementation closure: `eed2138` (resource-contrast correction) and `b48520d` (detached R2 closure) on `codex/wp-m01-003-project-chat-screen`. The third-checkpoint commit and detached closure are recorded after review below.
 
-The three private references and the implementation capture were inspected together in one comparison input. The full-window source establishes the quiet Codex-like density and unified chrome; the project-list crop establishes projects with nested chats followed by standalone recent chats; the results-pane crop establishes the resource grouping and compact rounded surface.
+The annotated third-checkpoint reference and the 2048 x 1280 implementation capture were inspected together in one comparison input. The earlier full-window source establishes the quiet Codex-like density and unified chrome; the project-list crop establishes projects with nested chats followed by standalone recent chats; the results-pane crop establishes the resource grouping and compact rounded surface.
 
 No additional focused crops were needed: two owner attachments are already dedicated, legible crops of the project/chat navigation and resource workspace, while the full implementation capture keeps typography, composer controls and all persistent boundaries readable. Browser DOM inspection supplied exact labels and interaction states that are too small to read reliably in the scaled full-window preview.
 
 ## Findings
 
-No actionable visual P0, P1 or P2 findings remain. The required detached R2 closure re-review passed against implementation commit `b48520d`; it independently reran the desktop suite (14/14) and confirmed that all prior findings are closed without introducing a new visual, interaction or accessibility regression.
+No actionable visual P0, P1 or P2 findings remain in the local third-checkpoint comparison. The previous detached R2 closure passed against implementation commit `b48520d`; a fresh detached review of the owner-correction commit is still required before the result below returns to `passed`.
 
 - Typography: Segoe UI/system fallbacks, restrained 10-13 px metadata and 13 px conversation copy preserve the compact desktop hierarchy without clipped controls or broken wrapping at the reviewed sizes.
 - Layout and spacing: the title row, 52 px rail and 264 px project/chat sidebar read as one surface. The partial-height divider, centered conversation, anchored composer and 316 px resource workspace remain aligned. At 1100 px the workspace becomes a truthful closable overlay; at 900 px both side panes remain operable overlays with no document-level horizontal or vertical overflow.
@@ -44,6 +44,16 @@ No actionable visual P0, P1 or P2 findings remain. The required detached R2 clos
 - Replaced composer scope clutter with context, plugin, access and truthful Codex runtime controls.
 - Added native Acrylic configuration, generated app resources and a standalone desktop-shell Cargo boundary so the release executable can be built and opened.
 
+### Owner-corrected workbench v3
+
+- Integrated account, optional update and voice controls into the full left material with only a quiet separator; the update action is absent when no update exists.
+- Made the Projects action hover/focus-only and connected it to a compact truthful menu for an empty preview project or an existing-folder preview. Real directory creation and the system folder picker remain M02 effects.
+- Added hover/focus New Chat actions to each project and Recent, removed New Chat from the activity rail and renamed the rail destination to Chats.
+- Reduced selected-chat height, joined the top and left materials without a full-width seam and added the rounded inner transition into the conversation canvas.
+- Enlarged the composer access/runtime labels, narrowed both popovers, left-aligned Auto-approve and replaced generic empty prompts with the owner-requested project-idea and repository-inspection starters.
+- Removed the duplicate titlebar resource toggle. The workspace header now owns a window-panel icon and the collapsed rail exposes the corresponding reopen icon.
+- Lowered blur and opacity on the titlebar and resource workspace relative to the central canvas while preserving the achromatic palette and native Acrylic fallback.
+
 ### Detached R2 findings and corrections
 
 - Raised all faint metadata to an achromatic token that remains at or above 4.5:1 on the lightest supported dark surface, removed the lower-contrast timestamp and heading overrides, and added a deterministic WCAG contrast test.
@@ -58,6 +68,7 @@ No actionable visual P0, P1 or P2 findings remain. The required detached R2 clos
 
 - Opened Command Center, verified initial focus, focus wrapping, Escape closure and focus restoration.
 - Opened access and runtime controls, verified `aria-controls`, first-choice focus and Escape focus restoration, then switched `Full access` to `Auto-approve` and reasoning from High to Medium.
+- Opened the hover/focus-only Projects menu, exercised both creation choices as effect-free previews, and verified per-project and Recent New Chat placement in component and native interaction checks.
 - Submitted a local preview message, verified that it disappears in another session and returns only with its owning session, then created a distinct empty standalone chat.
 - Expanded and collapsed the current plan.
 - Collapsed and reopened workspace resources.
@@ -69,7 +80,7 @@ No actionable visual P0, P1 or P2 findings remain. The required detached R2 clos
 ## Verification
 
 - Desktop typecheck: passed.
-- Desktop tests: 14 passed, including all nine fixture states, per-session draft isolation, distinct new-chat creation, popover focus, deterministic WCAG contrast and a semantic text-color invariant.
+- Desktop tests: 15 passed, including all nine fixture states, per-session draft isolation, project and standalone chat creation, popover focus, deterministic WCAG contrast and a semantic text-color invariant.
 - Desktop production build: passed.
 - Automated structural accessibility and deterministic WCAG token-contrast checks: passed.
 - Monochrome CSS token scan: passed.
@@ -83,6 +94,6 @@ No actionable visual P0, P1 or P2 findings remain. The required detached R2 clos
 
 ## Owner Gate
 
-Do not merge WP-M01-003 until the owner accepts this second visual checkpoint. Approval covers the visual direction and presentation interactions only; it does not approve real provider, browser, file, PDF or Git effects.
+Do not merge WP-M01-003 until the owner accepts this third visual checkpoint. Approval covers the visual direction and presentation interactions only; it does not approve real provider, browser, file, PDF, project-folder or Git effects.
 
-final result: passed
+final result: pending detached review

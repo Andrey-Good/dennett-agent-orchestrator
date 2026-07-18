@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 342,
+  "file_count": 345,
   "files": [
     {
       "path": ".editorconfig",
@@ -265,13 +265,13 @@
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
-      "bytes": 15016,
-      "sha256": "62dbda3a6c74505f7a372d93eac5a7af38c41fe80fc0516bf42091e0dc76dc87"
+      "bytes": 17308,
+      "sha256": "ec52920f4bd68f776a08ebd72978d2bdfc32ce7004b589b042d57a328172633d"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 36547,
-      "sha256": "b7c4946816f3d6e7ce76a1ff8a5a029b7c7447714cc71d4a3374f7424d8f2069"
+      "bytes": 40665,
+      "sha256": "4cf859b68f805749def1761bfb6c902ee50024e963fe0a81df1262a304305683"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -290,8 +290,8 @@
     },
     {
       "path": "apps/desktop/src/styles.css",
-      "bytes": 27868,
-      "sha256": "7f14fc45baab60c33d1187137e5f7d9544907f3d94fb8a34978964f0f4d48fbd"
+      "bytes": 30739,
+      "sha256": "93e91ce56e256ddcbbbd9b3c10ef8363e6827a57c9f7cdcfeaba9770e65a6640"
     },
     {
       "path": "apps/desktop/src/test/setup.ts",
@@ -520,13 +520,13 @@
     },
     {
       "path": "design-qa.md",
-      "bytes": 10071,
-      "sha256": "9c34d7782584a4220a9e91c9b6734228dfd21c0b10719bbe45df5f42ac8aa262"
+      "bytes": 11898,
+      "sha256": "77e1b4fb92cb92c1a48b6a99877f4a60e0aab599f4c990db82ad650c76db5d7a"
     },
     {
       "path": "docs/CHECKSUMS.sha256",
-      "bytes": 11924,
-      "sha256": "1ec43f05f15adba3edbb013ac987459bc63463234899778b4460d5eea67b92d0"
+      "bytes": 12291,
+      "sha256": "323e6f844ecfa088b7511cac60d742da3418854f7696f76e014b688328273bef"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -669,9 +669,24 @@
       "sha256": "f2979cf898e5a67d381b7101e896ad74cba29157ab359d0b444116adca2d10c1"
     },
     {
+      "path": "docs/design/WP-M01-003/owner-direction-v3.md",
+      "bytes": 3027,
+      "sha256": "a88f9d8ff6988964fc8594e36da6824e3dc35fea5f5f3704fe5298ab29b4a1be"
+    },
+    {
       "path": "docs/design/WP-M01-003/project-chat-monochrome-v2-1536x971.png",
       "bytes": 97341,
       "sha256": "7545f81880f73ee7aefeea15ac6123dd95b5c689b25d035cbe6fc28e9527552f"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-owner-v3-2048x1280.png",
+      "bytes": 108197,
+      "sha256": "d162b630a21267523a26ae8eee4403e8b2694123c94c7e16d8a119090cafcade"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-owner-v3-empty-2048x1280.png",
+      "bytes": 69178,
+      "sha256": "39164a524e198462b13f13374ff1d3449d7cfc43c47a2b9495d403417442d5ce"
     },
     {
       "path": "docs/design/WP-M01-003/project-chat-streaming-1280x720.png",
@@ -1145,8 +1160,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 32792,
-      "sha256": "04d248cb863daa150cf54a4224ab3d95df5c9af33ffc12a73be515a669436556"
+      "bytes": 33221,
+      "sha256": "820068a9868f993339c145726105e51957075c4a7663facb8f8333ecd30ea4b2"
     },
     {
       "path": "planning/results/WP-M00-001.json",

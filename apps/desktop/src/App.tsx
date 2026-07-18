@@ -7,13 +7,15 @@ import {
   Browsers,
   CaretDown,
   ChatCircleDots,
+  ChatsCircle,
   CheckCircle,
   CircleNotch,
   Command,
-  DotsThree,
   DownloadSimple,
   FileCode,
   FileText,
+  FolderOpen,
+  FolderPlus,
   FolderSimple,
   Gauge,
   GitBranch,
@@ -30,6 +32,7 @@ import {
   Plus,
   Robot,
   ShieldCheck,
+  Sidebar,
   SidebarSimple,
   Square,
   Stop,
@@ -49,6 +52,7 @@ import "./styles.css";
 
 type Icon = React.ComponentType<IconProps>;
 type ComposerPopover = "context" | "plugins" | "access" | "runtime" | null;
+type ProjectCreationKind = "empty" | "existing";
 type AccessMode = "full" | "auto";
 type ReasoningLevel = "medium" | "high";
 type WorkspaceSurface =
@@ -90,6 +94,8 @@ const recentChats: SessionItem[] = [
   { id: "recent-ux", title: "Desktop UX review", meta: "5d" },
   { id: "recent-voice", title: "Voice interaction sketch", meta: "1w" },
 ];
+
+const updateAvailable = false;
 
 const browserPreviewDocument = `<!doctype html>
 <html lang="en">
@@ -186,8 +192,8 @@ function EmptyConversation({ onSuggestion }: { onSuggestion: (prompt: string) =>
       <h2>Start with the project</h2>
       <p>Ask the direct agent to inspect, explain or change the selected workspace.</p>
       <div className="prompt-suggestions" role="group" aria-label="Prompt suggestions">
-        <button type="button" onClick={() => onSuggestion("Summarize the current milestone")}>Summarize the milestone</button>
-        <button type="button" onClick={() => onSuggestion("Find the next eligible package")}>Find the next package</button>
+        <button type="button" onClick={() => onSuggestion("Задай мне вопросы, чтобы лучше понять мою идею проекта")}>Задай мне вопросы о моей идее</button>
+        <button type="button" onClick={() => onSuggestion("Изучи этот репозиторий и расскажи, что это")}>Изучи этот репозиторий</button>
       </div>
     </div>
   );
@@ -235,7 +241,9 @@ export function App(): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [resourcesOpen, setResourcesOpen] = React.useState(true);
   const [selectedSession, setSelectedSession] = React.useState("screen");
+  const [localProjects, setLocalProjects] = React.useState<ProjectGroup[]>([]);
   const [localSessions, setLocalSessions] = React.useState<Array<SessionItem & { projectId?: string }>>([]);
+  const [newProjectMenuOpen, setNewProjectMenuOpen] = React.useState(false);
   const [surface, setSurface] = React.useState<WorkspaceSurface>({ kind: "chat" });
   const [draft, setDraft] = React.useState("");
   const [localMessages, setLocalMessages] = React.useState<Record<string, ChatMessage[]>>({});
@@ -257,11 +265,15 @@ export function App(): React.JSX.Element {
   const accessFirstRef = React.useRef<HTMLButtonElement>(null);
   const runtimeTriggerRef = React.useRef<HTMLButtonElement>(null);
   const runtimeFirstRef = React.useRef<HTMLButtonElement>(null);
+  const projectMenuRef = React.useRef<HTMLDivElement>(null);
+  const projectMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const projectMenuFirstRef = React.useRef<HTMLButtonElement>(null);
+  const nextLocalProjectIdRef = React.useRef(1);
   const nextLocalSessionIdRef = React.useRef(1);
   const nextLocalMessageIdRef = React.useRef(1);
   const nativeShell = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-  const visibleProjectGroups = projectGroups.map((project) => ({
+  const visibleProjectGroups = [...projectGroups, ...localProjects].map((project) => ({
     ...project,
     sessions: [...project.sessions, ...localSessions.filter((session) => session.projectId === project.id)],
   }));
@@ -305,18 +317,23 @@ export function App(): React.JSX.Element {
       }
       if (event.key === "Escape") {
         closeCommandCenter();
+        const projectMenuWasOpen = newProjectMenuOpen;
         const returnTarget = composerPopover === "access"
           ? accessTriggerRef.current
           : composerPopover === "runtime"
             ? runtimeTriggerRef.current
             : null;
         setComposerPopover(null);
-        requestAnimationFrame(() => returnTarget?.focus());
+        setNewProjectMenuOpen(false);
+        requestAnimationFrame(() => {
+          if (returnTarget) returnTarget.focus();
+          else if (projectMenuWasOpen) projectMenuTriggerRef.current?.focus();
+        });
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeCommandCenter, composerPopover, openCommandCenter]);
+  }, [closeCommandCenter, composerPopover, newProjectMenuOpen, openCommandCenter]);
 
   React.useEffect(() => {
     if (!composerPopover) return;
@@ -333,6 +350,16 @@ export function App(): React.JSX.Element {
   }, [composerPopover]);
 
   React.useEffect(() => {
+    if (!newProjectMenuOpen) return;
+    projectMenuFirstRef.current?.focus();
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!projectMenuRef.current?.contains(event.target as Node)) setNewProjectMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [newProjectMenuOpen]);
+
+  React.useEffect(() => {
     if (commandOpen) commandRef.current?.focus();
     else if (commandWasOpenRef.current) returnFocusRef.current?.focus();
     commandWasOpenRef.current = commandOpen;
@@ -347,6 +374,21 @@ export function App(): React.JSX.Element {
     setSelectedSession(sessionId);
     setSurface({ kind: "chat" });
     setAnnouncement(`Opened ${allSessions.find((item) => item.id === sessionId)?.title ?? "chat"}.`);
+  };
+
+  const createProjectPreview = (kind: ProjectCreationKind) => {
+    const projectNumber = nextLocalProjectIdRef.current++;
+    const project: ProjectGroup = {
+      id: `local-project-${projectNumber}`,
+      title: kind === "empty" ? `Untitled project ${projectNumber}` : `Existing folder ${projectNumber}`,
+      sessions: [],
+    };
+    setLocalProjects((projects) => [...projects, project]);
+    setNewProjectMenuOpen(false);
+    setAnnouncement(kind === "empty"
+      ? "Empty project added to this local preview. No folder was created."
+      : "Existing-folder project added to this local preview. No folder picker was opened.");
+    requestAnimationFrame(() => projectMenuTriggerRef.current?.focus());
   };
 
   const startNewChat = (projectId?: string) => {
@@ -446,12 +488,6 @@ export function App(): React.JSX.Element {
         </button>
 
         <div className="titlebar__right">
-          <IconButton
-            label={resourcesOpen ? "Hide workspace resources" : "Show workspace resources"}
-            icon={Browsers}
-            active={resourcesOpen}
-            onClick={() => setResourcesOpen((open) => !open)}
-          />
           <div className="window-controls" role="group" aria-label="Window controls">
             <IconButton label={nativeShell ? "Minimize window" : "Minimize — available in desktop shell"} icon={Minus} onClick={() => void runWindowAction("minimize")} disabled={!nativeShell} />
             <IconButton label={nativeShell ? "Maximize or restore window" : "Maximize — available in desktop shell"} icon={Square} onClick={() => void runWindowAction("maximize")} disabled={!nativeShell} />
@@ -463,8 +499,7 @@ export function App(): React.JSX.Element {
       <nav className="activity-rail" aria-label="Primary navigation">
         <div className="rail-main">
           <div className="rail-brand" role="img" aria-label="Dennett"><BracketsCurly size={19} weight="bold" aria-hidden="true" /></div>
-          <IconButton label="New chat" icon={PencilSimpleLine} onClick={() => startNewChat()} />
-          <IconButton label="Projects" icon={FolderSimple} active onClick={() => setSidebarOpen(true)} />
+          <IconButton label="Chats" icon={ChatsCircle} active onClick={() => setSidebarOpen(true)} />
           <IconButton label="Tasks — available in a later milestone" icon={ListChecks} disabled />
           <IconButton label="Plugins — available in a later milestone" icon={Plug} disabled />
         </div>
@@ -472,19 +507,55 @@ export function App(): React.JSX.Element {
 
       {sidebarOpen && (
         <aside className="project-sidebar" aria-label="Project and chat navigation">
-          <div className="sidebar-heading">
+          <div ref={projectMenuRef} className="sidebar-heading">
             <button type="button" className="sidebar-title" aria-label="Projects list"><span>Projects</span><CaretDown size={14} aria-hidden="true" /></button>
-            <div>
-              <IconButton label="Project options — available in a later milestone" icon={DotsThree} disabled />
-              <IconButton label="New project chat" icon={Plus} onClick={() => startNewChat(selectedProject?.id ?? projectGroups[0].id)} />
-            </div>
+            <IconButton
+              label="New project"
+              icon={Plus}
+              className="new-project-trigger"
+              active={newProjectMenuOpen}
+              onClick={() => {
+                setComposerPopover(null);
+                setNewProjectMenuOpen((open) => !open);
+              }}
+            />
+            {newProjectMenuOpen && (
+              <div className="project-create-menu" role="dialog" aria-label="Create or add project">
+                <strong>New project</strong>
+                <button ref={projectMenuFirstRef} type="button" onClick={() => createProjectPreview("empty")}>
+                  <FolderPlus size={17} aria-hidden="true" />
+                  <span><strong>Create empty project</strong><small>Use the default projects folder</small></span>
+                </button>
+                <button type="button" onClick={() => createProjectPreview("existing")}>
+                  <FolderOpen size={17} aria-hidden="true" />
+                  <span><strong>Add existing folder</strong><small>Choose a folder as the project</small></span>
+                </button>
+                <p>Folder changes arrive with the real workspace in M02. This checkpoint previews the flow locally.</p>
+              </div>
+            )}
           </div>
 
           <div className="sidebar-scroll">
             <div className="project-groups">
               {visibleProjectGroups.map((project) => (
-                <details key={project.id} open>
-                  <summary><FolderSimple size={17} aria-hidden="true" /><span>{project.title}</span></summary>
+                <section key={project.id} className="project-group" aria-label={`${project.title} project`}>
+                  <div className="project-heading">
+                    <FolderSimple size={17} aria-hidden="true" />
+                    <span>{project.title}</span>
+                    <button
+                      type="button"
+                      className="new-chat-trigger"
+                      aria-label={`New chat in ${project.title}`}
+                      title={`New chat in ${project.title}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        startNewChat(project.id);
+                      }}
+                    >
+                      <PencilSimpleLine size={15} aria-hidden="true" />
+                    </button>
+                  </div>
                   <div className="nested-chats">
                     {project.sessions.map((session) => (
                       <button
@@ -497,12 +568,17 @@ export function App(): React.JSX.Element {
                       </button>
                     ))}
                   </div>
-                </details>
+                </section>
               ))}
             </div>
 
             <section className="recent-chats" aria-labelledby="recent-chats-heading">
-              <h2 id="recent-chats-heading">Recent</h2>
+              <div className="recent-heading">
+                <h2 id="recent-chats-heading">Recent</h2>
+                <button type="button" className="new-chat-trigger" aria-label="New recent chat" title="New recent chat" onClick={() => startNewChat()}>
+                  <PencilSimpleLine size={15} aria-hidden="true" />
+                </button>
+              </div>
               {standaloneSessions.map((session) => (
                 <button
                   type="button"
@@ -521,7 +597,7 @@ export function App(): React.JSX.Element {
       <div className="account-dock" role="group" aria-label="Account and device controls">
         <div className="account-identity" role="group" aria-label="Account: User"><span>U</span><strong>User</strong></div>
         <div>
-          <IconButton label="Updates — none available" icon={DownloadSimple} disabled />
+          {updateAvailable && <IconButton label="Install available update" icon={DownloadSimple} onClick={() => setAnnouncement("Update flow is not connected in this checkpoint.")} />}
           <IconButton label="Voice mode — available in a later milestone" icon={Microphone} disabled />
         </div>
       </div>
@@ -646,7 +722,7 @@ export function App(): React.JSX.Element {
       <aside className="resource-area" aria-label="Workspace resources">
         {resourcesOpen ? (
           <div className="resource-panel">
-            <header className="resource-header"><h2>Workspace</h2><IconButton label="Collapse workspace resources" icon={X} onClick={() => setResourcesOpen(false)} /></header>
+            <header className="resource-header"><h2>Workspace</h2><IconButton label="Collapse workspace resources" icon={SidebarSimple} className="resource-panel-toggle is-open" onClick={() => setResourcesOpen(false)} /></header>
 
             <section
               className={`plan-card${planExpanded ? " is-expanded" : ""}`}
@@ -693,7 +769,7 @@ export function App(): React.JSX.Element {
               <section className="resource-section" aria-labelledby="sources-heading">
                 <h3 id="sources-heading">Sources <span>3</span></h3>
                 <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Desktop specification", subtitle: "docs/specifications/60_…" })}><FileCode size={17} aria-hidden="true" /><span><strong>Desktop specification</strong><small>Project Workspace and Chat</small></span></button>
-                <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Owner direction v2", subtitle: "docs/design/WP-M01-003/…" })}><LinkSimple size={17} aria-hidden="true" /><span><strong>Owner direction v2</strong><small>Current visual contract</small></span></button>
+                <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Owner direction v3", subtitle: "docs/design/WP-M01-003/…" })}><LinkSimple size={17} aria-hidden="true" /><span><strong>Owner direction v3</strong><small>Current visual contract</small></span></button>
                 <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Draft pull request", subtitle: "github.com/Andrey-Good/…/pull/12" })}><GithubLogo size={17} aria-hidden="true" /><span><strong>Draft pull request</strong><small>PR #12</small></span></button>
               </section>
             </div>
@@ -705,6 +781,7 @@ export function App(): React.JSX.Element {
           </div>
         ) : (
           <nav className="resource-dock" aria-label="Collapsed workspace resources">
+            <IconButton label="Show workspace resources" icon={Sidebar} className="resource-panel-toggle is-closed" onClick={() => setResourcesOpen(true)} />
             <IconButton label="Open results" icon={FileText} onClick={() => { setResourcesOpen(true); openSurface({ kind: "report", title: "Project Chat checkpoint", subtitle: "WP-M01-003 · owner review" }); }} />
             <IconButton label="Open subagents" icon={Robot} onClick={() => setResourcesOpen(true)} />
             <IconButton label="Open browser" icon={Globe} onClick={() => { setResourcesOpen(true); openSurface({ kind: "browser", title: "Dennett", subtitle: "127.0.0.1:5173" }); }} />
