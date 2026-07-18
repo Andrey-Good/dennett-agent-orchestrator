@@ -214,6 +214,13 @@ describe("Project Chat workbench", () => {
       expect(contrastRatio(foreground, lightestSurface), `${foreground} on ${lightestSurface}`).toBeGreaterThanOrEqual(4.5);
     }
     expect(contrastRatio(colorToken("text-faint"), colorToken("message-user"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colorToken("text-inverse"), colorToken("surface-inverse"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("routes every solid text foreground through a contrast-tested semantic token", () => {
+    const literalTextColors = [...stylesCss.matchAll(/(?:^|[;{])\s*color:\s*#[0-9a-f]{6}/gim)].map((match) => match[0].trim());
+
+    expect(literalTextColors).toEqual([]);
   });
 
   it("keeps focus stable when a fixture update arrives", async () => {
