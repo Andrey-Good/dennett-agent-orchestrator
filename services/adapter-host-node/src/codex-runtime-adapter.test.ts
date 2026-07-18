@@ -400,6 +400,51 @@ test("an unconsumed stream can be closed or stopped without leaking active scope
   assert.equal(dropped.inputs.length, 0);
 });
 
+test("a stale stream cannot terminalize a reused scope after history eviction", async () => {
+  const oldThread = new ScriptedThread(completedScript("thread-old", "old"));
+  const evictionThread = new ScriptedThread(
+    completedScript("thread-eviction", "eviction"),
+  );
+  const replacementThread = new ScriptedThread(
+    completedScript("thread-new", "new"),
+  );
+  const adapter = new CodexRuntimeAdapter(
+    new ScriptedClient([oldThread, evictionThread, replacementThread]),
+    { terminalHistoryLimit: 1 },
+  );
+  const reusedScope = request("session-reused", "turn-reused", {
+    timeoutMs: 20,
+  });
+  const oldTurn = await adapter.startTurn(reusedScope);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await collect(
+    await adapter.startTurn(request("session-eviction", "turn-eviction")),
+  );
+
+  const replacement = await adapter.startTurn({
+    ...reusedScope,
+    timeoutMs: 5_000,
+  });
+  assert.deepEqual(eventLabels(await collect(oldTurn)), [
+    "started",
+    "timed_out",
+  ]);
+  assert.deepEqual(
+    (
+      await adapter.cancelTurn({
+        sessionId: reusedScope.sessionId,
+        turnId: reusedScope.turnId,
+      })
+    ).disposition,
+    { type: "requested" },
+  );
+  assert.deepEqual(eventLabels(await collect(replacement)), [
+    "started",
+    "cancelled",
+  ]);
+  assert.equal(oldThread.inputs.length, 0);
+});
+
 test("TEST-AGENT-RUNTIME-TIMEOUT-001 preserves partial output and drops late completion", async () => {
   const contract = conformanceCase("partial_timeout");
   const thread = new ScriptedThread([

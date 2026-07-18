@@ -299,7 +299,7 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       }
       active.stopReason ??= "timed_out";
       active.controller.abort();
-      this.rememberTerminal(key, active.stopReason);
+      this.rememberTerminal(key, active.stopReason, active);
     }, request.timeoutMs);
     const events = new ManagedRuntimeEventStream(
       this.streamTurn(key, request, thread, active),
@@ -336,11 +336,17 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     };
   }
 
-  private rememberTerminal(key: string, terminal: RuntimeTerminalKind): void {
-    const active = this.#activeTurns.get(key);
-    if (active?.deadlineTimer !== undefined) {
-      clearTimeout(active.deadlineTimer);
-      active.deadlineTimer = undefined;
+  private rememberTerminal(
+    key: string,
+    terminal: RuntimeTerminalKind,
+    owner: ActiveTurn,
+  ): void {
+    if (this.#activeTurns.get(key) !== owner) {
+      return;
+    }
+    if (owner.deadlineTimer !== undefined) {
+      clearTimeout(owner.deadlineTimer);
+      owner.deadlineTimer = undefined;
     }
     this.#activeTurns.delete(key);
     this.#terminalTurns.set(key, terminal);
@@ -359,7 +365,7 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     }
     active.controller.abort();
     if (active.stopReason) {
-      this.rememberTerminal(key, active.stopReason);
+      this.rememberTerminal(key, active.stopReason, active);
       return;
     }
     if (active.deadlineTimer !== undefined) {
@@ -401,7 +407,7 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     const claimTerminal = (kind: RuntimeTerminalKind): void => {
       terminalKind = kind;
       lifecycle.phase = "terminal";
-      this.rememberTerminal(key, kind);
+      this.rememberTerminal(key, kind, active);
     };
     const stopped = (reason: StopReason): RuntimeEvent => {
       claimTerminal(reason);
@@ -652,7 +658,7 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
         active.controller.abort();
         terminalKind = active.stopReason ?? "failed";
       }
-      this.rememberTerminal(key, terminalKind);
+      this.rememberTerminal(key, terminalKind, active);
     }
   }
 }
