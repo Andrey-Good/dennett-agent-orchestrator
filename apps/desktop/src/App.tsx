@@ -37,7 +37,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import {
-  fixtureClient,
+  createFixtureDennettClient,
   fixtureIds,
   fixtureLabels,
   type ChatMessage,
@@ -84,7 +84,7 @@ function IconButton({
       aria-label={label}
       title={label}
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || !onClick}
     >
       <IconComponent size={18} weight={active ? "fill" : "regular"} aria-hidden="true" />
     </button>
@@ -129,15 +129,15 @@ function Message({ message }: { message: ChatMessage }): React.JSX.Element {
   );
 }
 
-function EmptyConversation(): React.JSX.Element {
+function EmptyConversation({ onSuggestion }: { onSuggestion: (prompt: string) => void }): React.JSX.Element {
   return (
     <div className="empty-state">
       <div className="empty-state__icon"><ChatCircleDots size={26} aria-hidden="true" /></div>
       <h2>Start with the project itself</h2>
       <p>Ask the agent to inspect, explain or change this workspace. Project context stays attached.</p>
       <div className="prompt-suggestions" aria-label="Prompt suggestions">
-        <button type="button">Summarize the current milestone</button>
-        <button type="button">Find the next eligible package</button>
+        <button type="button" onClick={() => onSuggestion("Summarize the current milestone")}>Summarize the current milestone</button>
+        <button type="button" onClick={() => onSuggestion("Find the next eligible package")}>Find the next eligible package</button>
       </div>
     </div>
   );
@@ -157,12 +157,28 @@ export function App(): React.JSX.Element {
   const [commandOpen, setCommandOpen] = React.useState(false);
   const searchRef = React.useRef<HTMLInputElement>(null);
   const commandRef = React.useRef<HTMLInputElement>(null);
+  const commandDialogRef = React.useRef<HTMLDivElement>(null);
+  const returnFocusRef = React.useRef<HTMLElement | null>(null);
+  const commandWasOpenRef = React.useRef(false);
+  const composerRef = React.useRef<HTMLTextAreaElement>(null);
   const conversationRef = React.useRef<HTMLElement>(null);
+
+  const openCommandCenter = React.useCallback(() => {
+    setCommandOpen((open) => {
+      if (!open && document.activeElement instanceof HTMLElement) {
+        returnFocusRef.current = document.activeElement;
+      }
+      return true;
+    });
+  }, []);
+
+  const closeCommandCenter = React.useCallback(() => setCommandOpen(false), []);
 
   React.useEffect(() => {
     let current = true;
     setSnapshot(null);
-    fixtureClient.readProjectChat(fixture).then((next) => {
+    const client = createFixtureDennettClient(fixture);
+    client.readProjectChat({ projectId: "dennett-agent-orchestrator", sessionId: selectedSession }).then((next) => {
       if (!current) return;
       setSnapshot(next);
       setAnnouncement(`${next.stateLabel}. ${next.phase}.`);
@@ -170,22 +186,27 @@ export function App(): React.JSX.Element {
     return () => {
       current = false;
     };
-  }, [fixture]);
+  }, [fixture, selectedSession]);
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setCommandOpen(true);
+        openCommandCenter();
       }
-      if (event.key === "Escape") setCommandOpen(false);
+      if (event.key === "Escape") closeCommandCenter();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [closeCommandCenter, openCommandCenter]);
 
   React.useEffect(() => {
-    if (commandOpen) commandRef.current?.focus();
+    if (commandOpen) {
+      commandRef.current?.focus();
+    } else if (commandWasOpenRef.current) {
+      returnFocusRef.current?.focus();
+    }
+    commandWasOpenRef.current = commandOpen;
   }, [commandOpen]);
 
   React.useEffect(() => {
@@ -209,6 +230,34 @@ export function App(): React.JSX.Element {
     setAnnouncement('Stop requested for session "First Project Chat screen".');
   };
 
+  const useSuggestion = (prompt: string) => {
+    setDraft(prompt);
+    composerRef.current?.focus();
+    setAnnouncement("Prompt suggestion added to the local draft.");
+  };
+
+  const trapCommandFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeCommandCenter();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(
+      commandDialogRef.current?.querySelectorAll<HTMLElement>("input, button:not([disabled])") ?? [],
+    );
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   const messages = [...(snapshot?.messages ?? []), ...localMessages];
   const selectedTitle = sessions.find((session) => session.id === selectedSession)?.title ?? sessions[0].title;
 
@@ -226,22 +275,22 @@ export function App(): React.JSX.Element {
             <span>Projects</span><span>/</span><strong>dennett-agent-orchestrator</strong>
           </button>
         </div>
-        <button type="button" className="command-button" onClick={() => setCommandOpen(true)}>
+        <button type="button" className="command-button" onClick={openCommandCenter}>
           <MagnifyingGlass size={15} aria-hidden="true" />
           <span>Search or run a command</span>
           <kbd>Ctrl K</kbd>
         </button>
         <div className="titlebar__status">
           <span className="node-status"><span className="status-dot" />Local node</span>
-          <IconButton label="Voice capture" icon={Microphone} />
-          <IconButton label="Notifications, 2 unread" icon={Bell} />
-          <button type="button" className="profile-button" aria-label="Open profile">AG</button>
+          <IconButton label="Voice capture — available in a later milestone" icon={Microphone} />
+          <IconButton label="Notifications — available in a later milestone" icon={Bell} />
+          <button type="button" className="profile-button" aria-label="Profile — available in a later milestone" title="Available in a later milestone" disabled>AG</button>
         </div>
       </header>
 
       <nav className="activity-rail" aria-label="Primary navigation">
         <div className="rail-main">
-          <IconButton label="Application menu" icon={SquaresFour} />
+          <IconButton label="Application menu — available in a later milestone" icon={SquaresFour} />
           <div className="rail-rule" />
           {railItems.map((item) => (
             <div className="rail-item" key={item.label}>
@@ -250,13 +299,14 @@ export function App(): React.JSX.Element {
                 icon={item.icon}
                 active={item.label === "Projects"}
                 disabled={!item.enabled}
+                onClick={item.enabled ? () => setAnnouncement("Projects is the current location.") : undefined}
               />
               {!!item.badge && <span className="rail-badge" aria-hidden="true">{item.badge}</span>}
             </div>
           ))}
         </div>
         <div className="rail-bottom">
-          <IconButton label="System status" icon={HardDrives} />
+          <IconButton label="System status — available in a later milestone" icon={HardDrives} />
           <IconButton label="Settings" icon={GearSix} disabled />
         </div>
       </nav>
@@ -277,7 +327,7 @@ export function App(): React.JSX.Element {
         </label>
         {sidebarTab === "sessions" ? (
           <div className="session-list">
-            <div className="list-heading"><span>RECENT</span><button type="button" aria-label="Create new session"><Plus size={15} /></button></div>
+            <div className="list-heading"><span>RECENT</span><button type="button" aria-label="Create new session — available after IPC" title="Available after IPC" disabled><Plus size={15} /></button></div>
             {sessions.map((session) => (
               <button
                 type="button"
@@ -293,9 +343,9 @@ export function App(): React.JSX.Element {
           </div>
         ) : (
           <div className="project-sections">
-            <button type="button"><FileCode size={16} /><span><strong>Files</strong><small>Workspace context</small></span></button>
-            <button type="button"><Robot size={16} /><span><strong>Agent</strong><small>Direct · Codex</small></span></button>
-            <button type="button"><GitBranch size={16} /><span><strong>Branch</strong><small>codex/wp-m01-003</small></span></button>
+            <div className="project-row"><FileCode size={16} /><span><strong>Files</strong><small>Workspace context</small></span></div>
+            <div className="project-row"><Robot size={16} /><span><strong>Agent</strong><small>Direct · Codex</small></span></div>
+            <div className="project-row"><GitBranch size={16} /><span><strong>Branch</strong><small>codex/wp-m01-003</small></span></div>
           </div>
         )}
         <div className="sidebar-footer">
@@ -325,7 +375,7 @@ export function App(): React.JSX.Element {
               <CaretDown size={13} aria-hidden="true" />
             </label>
             <IconButton label={inspectorOpen ? "Hide context inspector" : "Show context inspector"} icon={Code} active={inspectorOpen} onClick={() => setInspectorOpen((open) => !open)} />
-            <IconButton label="More session actions" icon={DotsThree} />
+            <IconButton label="More session actions — unavailable in this preview" icon={DotsThree} />
           </div>
         </header>
 
@@ -338,8 +388,8 @@ export function App(): React.JSX.Element {
                   <div><strong>{snapshot.stateLabel}</strong><span>{snapshot.notice}</span></div>
                   <span className="state-freshness">{snapshot.freshness}</span>
                 </div>
-                {messages.length ? messages.map((message) => <Message key={message.id} message={message} />) : <EmptyConversation />}
-                {snapshot.fixture === "loading" && <div className="loading-lines" aria-hidden="true"><span /><span /><span /></div>}
+                {messages.length ? messages.map((message) => <Message key={message.id} message={message} />) : <EmptyConversation onSuggestion={useSuggestion} />}
+                {snapshot.state === "loading" && <div className="loading-lines" aria-hidden="true"><span /><span /><span /></div>}
               </>
             ) : (
               <div className="loading-lines" aria-label="Loading Project Chat"><span /><span /><span /></div>
@@ -350,6 +400,7 @@ export function App(): React.JSX.Element {
         <section className="composer-region" aria-label="Message composer">
           <div className="composer">
             <textarea
+              ref={composerRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -361,13 +412,13 @@ export function App(): React.JSX.Element {
             />
             <div className="composer-toolbar">
               <div className="composer-tools">
-                <IconButton label="Add context" icon={Paperclip} />
-                <IconButton label="Mention project context" icon={At} />
-                <button type="button" className="compact-setting"><FolderSimple size={14} />Project<CaretDown size={11} /></button>
+                <IconButton label="Add context — available after IPC" icon={Paperclip} />
+                <IconButton label="Mention project context — available after IPC" icon={At} />
+                <span className="compact-setting" aria-label="Scope: Project"><FolderSimple size={14} />Project</span>
               </div>
               <div className="composer-send">
-                <button type="button" className="model-setting">Codex<CaretDown size={11} /></button>
-                <IconButton label="Voice input" icon={Microphone} />
+                <span className="model-setting" aria-label="Runtime: Codex">Codex</span>
+                <IconButton label="Voice input — available in a later milestone" icon={Microphone} />
                 {snapshot?.canStop ? (
                   <button type="button" className="send-button stop-button" onClick={stopGeneration} aria-label={`Stop generation for session "${selectedTitle}"`} title="Stop generation">
                     <Stop size={15} weight="fill" />
@@ -427,10 +478,10 @@ export function App(): React.JSX.Element {
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
 
       {commandOpen && (
-        <div className="dialog-backdrop" onMouseDown={() => setCommandOpen(false)}>
-          <div className="command-dialog" role="dialog" aria-modal="true" aria-label="Command Center" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="dialog-backdrop" onMouseDown={closeCommandCenter}>
+          <div ref={commandDialogRef} className="command-dialog" role="dialog" aria-modal="true" aria-label="Command Center" onKeyDown={trapCommandFocus} onMouseDown={(event) => event.stopPropagation()}>
             <label><MagnifyingGlass size={18} /><input ref={commandRef} placeholder="Type a command or search…" aria-label="Command Center search" /></label>
-            <div className="command-results"><span>QUICK ACTIONS</span><button type="button" onClick={() => { setCommandOpen(false); setFixture("empty"); }}><Plus size={16} />New project chat<kbd>Enter</kbd></button><button type="button" onClick={() => { setCommandOpen(false); setInspectorOpen(true); }}><Code size={16} />Open context inspector</button></div>
+            <div className="command-results"><span>QUICK ACTIONS</span><button type="button" onClick={() => { closeCommandCenter(); setFixture("empty"); }}><Plus size={16} />New project chat<kbd>Enter</kbd></button><button type="button" onClick={() => { closeCommandCenter(); setInspectorOpen(true); }}><Code size={16} />Open context inspector</button></div>
           </div>
         </div>
       )}

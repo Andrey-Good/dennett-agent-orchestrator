@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { App } from "./App";
+import { createFixtureDennettClient, type DennettClient } from "./fixtures/projectChat";
 
 describe("Project Chat workbench", () => {
   it("renders the approved workbench zones and truthful runtime state", async () => {
@@ -60,11 +61,18 @@ describe("Project Chat workbench", () => {
       fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     });
     expect(screen.getByRole("dialog", { name: "Command Center" })).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "Command Center search" })).toHaveFocus();
+    const commandSearch = screen.getByRole("textbox", { name: "Command Center search" });
+    const lastCommand = screen.getByRole("button", { name: "Open context inspector" });
+    expect(commandSearch).toHaveFocus();
+    fireEvent.keyDown(commandSearch, { key: "Tab", shiftKey: true });
+    expect(lastCommand).toHaveFocus();
+    fireEvent.keyDown(lastCommand, { key: "Tab" });
+    expect(commandSearch).toHaveFocus();
     await act(async () => {
       fireEvent.keyDown(window, { key: "Escape" });
     });
     expect(screen.queryByRole("dialog", { name: "Command Center" })).not.toBeInTheDocument();
+    expect(composer).toHaveFocus();
 
     await user.click(composer);
     await act(async () => {
@@ -98,5 +106,32 @@ describe("Project Chat workbench", () => {
     await user.selectOptions(selector, "resyncing");
     await waitFor(() => expect(screen.getByText("Refreshing the session snapshot after a revision gap.")).toBeVisible());
     expect(selector).toHaveFocus();
+  });
+
+  it("keeps unavailable preview affordances disabled and working layout controls truthful", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    expect(screen.getByRole("button", { name: "Voice capture — available in a later milestone" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add context — available after IPC" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "More session actions — unavailable in this preview" })).toBeDisabled();
+    expect(screen.getByLabelText("Scope: Project")).not.toHaveAttribute("role", "button");
+
+    await user.click(screen.getByRole("button", { name: "Hide context inspector" }));
+    expect(screen.queryByRole("complementary", { name: "Read-only context inspector" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show context inspector" }));
+    expect(screen.getByRole("complementary", { name: "Read-only context inspector" })).toBeVisible();
+  });
+
+  it("keeps fixture selection outside the transport-neutral client request", async () => {
+    const client: DennettClient = createFixtureDennettClient("cached");
+    const snapshot = await client.readProjectChat({
+      projectId: "dennett-agent-orchestrator",
+      sessionId: "session-1",
+    });
+
+    expect(snapshot.state).toBe("cached");
+    expect(snapshot.notice).toContain("local snapshot");
   });
 });

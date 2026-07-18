@@ -22,7 +22,7 @@ export interface ChatMessage {
 }
 
 export interface ProjectChatSnapshot {
-  fixture: FixtureId;
+  state: FixtureId;
   stateLabel: string;
   stateTone: FixtureTone;
   notice: string;
@@ -33,7 +33,7 @@ export interface ProjectChatSnapshot {
 }
 
 export interface DennettClient {
-  readProjectChat(fixture: FixtureId): Promise<ProjectChatSnapshot>;
+  readProjectChat(request: { projectId: string; sessionId: string }): Promise<ProjectChatSnapshot>;
 }
 
 export const fixtureLabels: Record<FixtureId, string> = {
@@ -93,7 +93,7 @@ const activeMessage: ChatMessage = {
 
 const stateData: Record<
   FixtureId,
-  Omit<ProjectChatSnapshot, "fixture" | "messages"> & { messages?: ChatMessage[] }
+  Omit<ProjectChatSnapshot, "state" | "messages"> & { messages?: ChatMessage[] }
 > = {
   streaming: {
     stateLabel: "Working",
@@ -171,15 +171,17 @@ const stateData: Record<
   },
 };
 
-export const fixtureClient: DennettClient = {
-  async readProjectChat(fixture) {
-    const state = stateData[fixture];
-    const messages = state.messages ?? [
-      ...baseMessages,
-      ...(fixture === "streaming" || fixture === "stopped" || fixture === "timed-out"
-        ? [activeMessage]
-        : []),
-    ];
-    return structuredClone({ fixture, ...state, messages });
-  },
-};
+export function createFixtureDennettClient(fixture: FixtureId): DennettClient {
+  return {
+    async readProjectChat(_request) {
+      const fixtureState = stateData[fixture];
+      const messages = fixtureState.messages ?? [
+        ...baseMessages,
+        ...(fixture === "streaming" || fixture === "stopped" || fixture === "timed-out"
+          ? [activeMessage]
+          : []),
+      ];
+      return structuredClone({ state: fixture, ...fixtureState, messages });
+    },
+  };
+}
