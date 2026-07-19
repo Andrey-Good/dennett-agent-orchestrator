@@ -576,7 +576,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "955182c163a8043454ecea3ac74a5dc0c46851948cf93a6d046218953efe616d"
+      "sha256": "539e637fc183f7e2c7302a418c346fbf0e967ae692a5aa7f01d8c314c6ea9bc5"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1190,8 +1190,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 2574,
-      "sha256": "bfff601463659f6541df3a2b49fb61cf541a09f1f755c80e8f367e6c94a187d7"
+      "bytes": 2547,
+      "sha256": "05a83a4f4af7a443a2546b123e3c2d190a81b1215fd96e63486dbae1ceaf3268"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1310,8 +1310,8 @@
     },
     {
       "path": "planning/batches/AB-M01-003.json",
-      "bytes": 1204,
-      "sha256": "cc34a3a97b4c14115bd6f38b1a187ebe5aaf0ab16cada6812ad2f64c31c2902b"
+      "bytes": 1206,
+      "sha256": "251d1b59e66af1cf106d9d681e46c55936a4d0f719038eaa4dcf517ec190abd3"
     },
     {
       "path": "planning/decisions/DEC-0001.json",
@@ -1345,8 +1345,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 38503,
-      "sha256": "9a68ca3e935fd4b22af57463e9445fdc4c64a55618993c97e69597a6b4f852ba"
+      "bytes": 38498,
+      "sha256": "a38c69b2454bb22f82685308bee690ee7a29a90f64acf752e9085045ea45fa11"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1410,8 +1410,8 @@
     },
     {
       "path": "planning/results/WP-M01-003.json",
-      "bytes": 6028,
-      "sha256": "ba634497bb6c0d245931a81e4f1428084f5bb7aeb7cf37de7c994562bfd7aa12"
+      "bytes": 6327,
+      "sha256": "d758d877b2aeac476940e59f76bf24a53b271b73e01e0d557f1e465c87112632"
     },
     {
       "path": "planning/results/WP-M01-004.json",

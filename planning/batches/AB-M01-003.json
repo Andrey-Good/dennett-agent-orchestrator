@@ -2,7 +2,7 @@
   "version": 1,
   "id": "AB-M01-003",
   "title": "Build the owner-reviewable Project Chat screen",
-  "status": "RUNNING",
+  "status": "COMPLETED",
   "packages": [
     "WP-M01-003"
   ],

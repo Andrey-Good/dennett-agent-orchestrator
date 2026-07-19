@@ -25,9 +25,12 @@
       "19e553a1bf287fba6cedafc4d9306345cd6d4be1",
       "f09151d095f100587958991a523246928d0ecef8",
       "511da3312cbe714510560a20ff484ba7e12ed9a1",
-      "3de0196cb1849f0467d2b9b7af91f729ea561ede"
+      "3de0196cb1849f0467d2b9b7af91f729ea561ede",
+      "9e1cd7f51e42768d490261536ef7f5069a92f0c3",
+      "9e0db1d5a866611bdf5fb1c03fc4e8266f8825a2"
     ],
     "merge_ready_at": "2026-07-19",
+    "merged_at": "2026-07-19",
     "changed_files": [
       "apps/desktop/**",
       "docs/design/WP-M01-003/**",
@@ -58,7 +61,8 @@
         "Tauri shell unit test covers the Windows 11 Mica build boundary; capability-probe tests cover pending, unavailable, rejected and available states with a fail-closed opaque startup",
         "official Tauri release build without installer bundling passed and produced apps/desktop/src-tauri/target/release/dennett-desktop-shell.exe",
         "mise exec -- just check passed repository, documentation, planning, generated metadata, Rust, Python, TypeScript and protocol gates at exact repair commit 511da3312cbe714510560a20ff484ba7e12ed9a1",
-        "owner reviewed the native release window live and accepted the screen on 2026-07-19"
+        "owner reviewed the native release window live and accepted the screen on 2026-07-19",
+        "GitHub Fast Gate run 71 passed at merge-ready head 9e1cd7f51e42768d490261536ef7f5069a92f0c3 before PR #12 merged as 9e0db1d5a866611bdf5fb1c03fc4e8266f8825a2"
       ],
       "not_run": [
         "real dennett-node, authenticated IPC, durable session restoration and provider streaming are intentionally deferred to WP-M01-006 and WP-M01-007",
