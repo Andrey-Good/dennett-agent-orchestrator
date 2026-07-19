@@ -19,6 +19,8 @@
   --surface-inverse: #ededed;
   --message-user: #2b2b2b;
   --focus: #dedede;
+  --shell-glass: rgba(27, 27, 27, 0.64);
+  --workspace-glass: rgba(15, 15, 15, 0.94);
   background: #0b0b0b;
 }
 
@@ -49,28 +51,41 @@ button:disabled { cursor: not-allowed; opacity: 0.34; }
 .workbench {
   --left-shell-width: 316px;
   position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: 52px 264px minmax(480px, 1fr) 316px;
   grid-template-rows: 48px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: rgba(15, 15, 15, 0.95);
+  background: #111111;
 }
+.workbench::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background: var(--shell-glass);
+  backdrop-filter: blur(18px) saturate(0%);
+  -webkit-backdrop-filter: blur(18px) saturate(0%);
+  content: "";
+  pointer-events: none;
+}
+.workbench > * { position: relative; z-index: 1; }
 .workbench.sidebar-collapsed { --left-shell-width: 52px; grid-template-columns: 52px 0 minmax(480px, 1fr) 316px; }
 .workbench.resources-collapsed { grid-template-columns: 52px 264px minmax(480px, 1fr) 54px; }
 .workbench.sidebar-collapsed.resources-collapsed { grid-template-columns: 52px 0 minmax(480px, 1fr) 54px; }
 
 /* The browser preview stays opaque for faithful screenshots. The native shell
    exposes the Windows Acrylic material through these translucent layers. */
-html.native-shell .workbench { background: rgba(15, 15, 15, 0.68); }
-html.native-shell .main-workspace,
-html.native-shell .resource-area { background: rgba(15, 15, 15, 0.72); }
+html.native-shell .workbench { background: transparent; }
+html.native-shell .workbench::before { background: rgba(27, 27, 27, 0.38); }
+html.native-shell .main-workspace { background: rgba(15, 15, 15, 0.76); }
+html.native-shell .resource-area { background: transparent; }
 html.native-shell .titlebar,
 html.native-shell .activity-rail,
-html.native-shell .project-sidebar { background: rgba(28, 28, 28, 0.46); }
+html.native-shell .project-sidebar { background: transparent; }
 html.native-shell .composer,
-html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
+html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
 
 .titlebar {
   position: relative;
@@ -82,23 +97,8 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
   align-items: center;
   min-width: 0;
   padding: 0 7px 0 8px;
-  background: var(--glass);
-  backdrop-filter: blur(18px) saturate(0%);
-  -webkit-backdrop-filter: blur(18px) saturate(0%);
+  background: transparent;
   user-select: none;
-}
-.titlebar::after {
-  position: absolute;
-  z-index: 0;
-  right: 0;
-  bottom: 0;
-  left: var(--left-shell-width);
-  height: 18px;
-  border-bottom: 1px solid var(--line);
-  border-left: 1px solid var(--line);
-  border-bottom-left-radius: 18px;
-  content: "";
-  pointer-events: none;
 }
 .titlebar > * { position: relative; z-index: 1; }
 .titlebar__left, .titlebar__right { display: flex; align-items: center; min-width: 0; }
@@ -162,9 +162,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
   display: flex;
   justify-content: center;
   padding: 9px 0 62px;
-  background: var(--glass);
-  backdrop-filter: blur(18px) saturate(0%);
-  -webkit-backdrop-filter: blur(18px) saturate(0%);
+  background: transparent;
 }
 .activity-rail::after {
   position: absolute;
@@ -196,10 +194,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
   min-width: 0;
   flex-direction: column;
   overflow: hidden;
-  border-top-right-radius: 18px;
-  background: var(--glass);
-  backdrop-filter: blur(18px) saturate(0%);
-  -webkit-backdrop-filter: blur(18px) saturate(0%);
+  background: transparent;
   box-shadow: inset -1px 0 var(--line);
 }
 .sidebar-heading {
@@ -365,11 +360,17 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
   position: relative;
   grid-column: 3;
   grid-row: 2;
+  z-index: 3;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
-  background: rgba(15, 15, 15, 0.96);
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  border-top-left-radius: 22px;
+  background: var(--workspace-glass);
+  box-shadow: -12px -8px 30px rgba(0, 0, 0, 0.08);
 }
 .conversation { min-height: 0; overflow-y: auto; scrollbar-color: #3b3b3b transparent; }
 .conversation-inner { width: min(760px, calc(100% - 46px)); min-height: 100%; margin: 0 auto; padding: 28px 0 30px; }
@@ -526,7 +527,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
 .document-block > span { display: block; padding: 10px 13px; border-bottom: 1px solid var(--line); color: var(--text-faint); font-size: 10px; }
 .document-block pre { margin: 0; padding: 15px; color: var(--text-muted); font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; line-height: 1.75; }
 
-.resource-area { grid-column: 4; grid-row: 2; min-width: 0; min-height: 0; padding: 11px 11px 12px 0; background: rgba(15, 15, 15, 0.34); }
+.resource-area { grid-column: 4; grid-row: 2; z-index: 2; min-width: 0; min-height: 0; padding: 11px 11px 12px 0; background: transparent; }
 .resource-panel {
   position: relative;
   display: grid;
@@ -627,7 +628,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
 @media (max-width: 960px) {
   .workbench, .workbench.resources-collapsed, .workbench.sidebar-collapsed, .workbench.sidebar-collapsed.resources-collapsed { grid-template-columns: 52px 0 minmax(0, 1fr) 0; }
   .workbench:not(.sidebar-collapsed) { --left-shell-width: 316px; }
-  .project-sidebar { position: fixed; z-index: 17; top: 48px; bottom: 0; left: 52px; display: flex; width: 264px; box-shadow: 20px 0 48px rgba(0, 0, 0, 0.36); }
+  .project-sidebar { position: fixed; z-index: 17; top: 48px; bottom: 0; left: 52px; display: flex; width: 264px; border-top-right-radius: 18px; background: var(--glass-strong); backdrop-filter: blur(18px) saturate(0%); -webkit-backdrop-filter: blur(18px) saturate(0%); box-shadow: 20px 0 48px rgba(0, 0, 0, 0.36); }
   .account-dock { position: fixed; z-index: 19; right: auto; bottom: 0; left: 0; width: 316px; }
   .sidebar-collapsed .account-dock { width: 52px; }
   .titlebar { grid-template-columns: minmax(190px, 1fr) minmax(230px, 330px) minmax(150px, 1fr); }
@@ -644,6 +645,9 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.5); }
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .titlebar, .activity-rail, .project-sidebar, .composer, .resource-panel, .resource-dock, .command-dialog, .composer-popover { backdrop-filter: none; -webkit-backdrop-filter: none; background: #232323; }
+  .workbench::before { backdrop-filter: none; -webkit-backdrop-filter: none; background: #232323; }
+  .titlebar, .activity-rail, .project-sidebar { backdrop-filter: none; -webkit-backdrop-filter: none; background: transparent; }
+  .main-workspace { background: #111111; }
+  .composer, .resource-panel, .resource-dock, .command-dialog, .composer-popover { backdrop-filter: none; -webkit-backdrop-filter: none; background: #232323; }
   .account-dock { backdrop-filter: none; -webkit-backdrop-filter: none; background: transparent; }
 }
