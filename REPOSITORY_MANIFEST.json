@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 330,
+  "file_count": 341,
   "files": [
     {
       "path": ".editorconfig",
@@ -65,13 +65,13 @@
     },
     {
       "path": "Cargo.lock",
-      "bytes": 14990,
-      "sha256": "f8974208edecbe81b8637d94bcae18ada194281e69f2e460c513edd4aca990a6"
+      "bytes": 43010,
+      "sha256": "513649252a6f786017b169103dd96db7b627dc3901b678c59e2ff99e146d27d9"
     },
     {
       "path": "Cargo.toml",
-      "bytes": 867,
-      "sha256": "e65e5c03164df06f717a3be09ade78db18f88bff2620a9221c453da022c35beb"
+      "bytes": 1039,
+      "sha256": "918ff37bb1a6eab2ea322eb3e44bf679e01912afdfca8cc69c13aaa10df5e36a"
     },
     {
       "path": "GOVERNANCE.md",
@@ -162,6 +162,26 @@
       "path": "adapters/storage/README.md",
       "bytes": 113,
       "sha256": "84d72d1b12f639e446716f4cc2c7bca5ce7bb1d7e61b573d4268b5a52ba2df48"
+    },
+    {
+      "path": "adapters/storage/sqlite/Cargo.toml",
+      "bytes": 561,
+      "sha256": "cc086ec67f596902752d8f5ef71c0acbf393726101816fb56d92c005418694b1"
+    },
+    {
+      "path": "adapters/storage/sqlite/README.md",
+      "bytes": 550,
+      "sha256": "99b36ddb8123b2f8a2949f85953f646e2e9fbdc18d12f2460b0b6b16bad1bbf3"
+    },
+    {
+      "path": "adapters/storage/sqlite/migrations/0001_control_store.sql",
+      "bytes": 997,
+      "sha256": "0bc4f9ac502bc200f01826829d0a4ab673c071b9c6dce8747c719613129c9ee5"
+    },
+    {
+      "path": "adapters/storage/sqlite/src/lib.rs",
+      "bytes": 39755,
+      "sha256": "55c234befab27225ee60b2279b4d25eddbccd562d2795528759244aa961c648e"
     },
     {
       "path": "adapters/transport/README.md",
@@ -325,8 +345,8 @@
     },
     {
       "path": "crates/dennett-contracts/src/lib.rs",
-      "bytes": 1909,
-      "sha256": "72cefe3cec158a7c852482807f37c13f8c4082a7ce27edf5daf26767aa0852d2"
+      "bytes": 1953,
+      "sha256": "eab7ccb2e959166b8cfc59f444d65c5ccff0b811dfe3cc50a43f864988e972b5"
     },
     {
       "path": "crates/dennett-effect-core/AGENTS.md",
@@ -375,18 +395,23 @@
     },
     {
       "path": "crates/dennett-memory-core/Cargo.toml",
-      "bytes": 337,
-      "sha256": "7750c9554cebf983497964a83d3ceac518fa81a95dcbbf2c4194a1b9199859dd"
+      "bytes": 414,
+      "sha256": "ce46d0e7451955983b166ebcf9a9d75a6c6b45ed9d17502595076b0e1c08350f"
     },
     {
       "path": "crates/dennett-memory-core/README.md",
-      "bytes": 541,
-      "sha256": "e603a596fffcfb802702ee3b7c3f18f5e5c3ea6f58bfbbb5104db85a7c3757bb"
+      "bytes": 1016,
+      "sha256": "d523648ec114cc1ee4853eb0bd3643feaa56280cd83d516cff64fc50ac33fbd7"
     },
     {
       "path": "crates/dennett-memory-core/src/lib.rs",
-      "bytes": 1451,
-      "sha256": "8bc657a72b09f109b650b3c8123ac8b14b1e57eaf3e9ddeec5387d600301b5eb"
+      "bytes": 1469,
+      "sha256": "51fa6e808dc92a7b3db64dab6ade2a095b6fae4a89e2f8fcd4b79f05cc4778af"
+    },
+    {
+      "path": "crates/dennett-memory-core/src/session.rs",
+      "bytes": 26573,
+      "sha256": "a30ee4dd3bfdbb745168f5289ef7d215c7aaa1008531ff2e413f667eb2d4b3ad"
     },
     {
       "path": "crates/dennett-observability/AGENTS.md",
@@ -415,18 +440,28 @@
     },
     {
       "path": "crates/dennett-sync-core/Cargo.toml",
-      "bytes": 263,
-      "sha256": "d820666ea5fbd5bd695c2b088b9066517776cbede4feaa0a2db07c2014a3945c"
+      "bytes": 342,
+      "sha256": "d52642f98bcfdb2a983efae20bf985bc9afb46bb02821b044e820f6572348f69"
     },
     {
       "path": "crates/dennett-sync-core/README.md",
-      "bytes": 340,
-      "sha256": "34cee0a66463d798253a4c805511bda3916e6eb69099020508742e4d50c99a5c"
+      "bytes": 818,
+      "sha256": "834c7d23dc58a2b77630ce414a0113b145f3185258f5cc24a444dae81cfee478"
+    },
+    {
+      "path": "crates/dennett-sync-core/src/draft.rs",
+      "bytes": 3514,
+      "sha256": "7f9b74dd1300df983a2d75c5d19d37a21bab3945a5689e08733e7254d50c2a5b"
     },
     {
       "path": "crates/dennett-sync-core/src/lib.rs",
-      "bytes": 958,
-      "sha256": "2431dd8897e20568a7d5313ac58322853ac37e08fe3e476a8cb9fe09c17623ee"
+      "bytes": 989,
+      "sha256": "fa8e9b1b3ba667952b130631cc6cec3e2c6c655009773f6521ca3507b2ce33d8"
+    },
+    {
+      "path": "crates/dennett-sync-core/src/watch.rs",
+      "bytes": 12859,
+      "sha256": "f2a213190ade780bddd94ca3acbf167579cce3e99355e29e77cf1046f8d8373b"
     },
     {
       "path": "crates/dennett-trust-core/AGENTS.md",
@@ -456,7 +491,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11559,
-      "sha256": "4ce400c76d2c782b9da4f8e6049ed8f27be64a9349310381e6fbbc9eb09568c2"
+      "sha256": "b49cbf31b61da42740e4940b8cd95f2920acada0e2e11770d8d7716966710059"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -905,28 +940,28 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 13723,
-      "sha256": "ac53e9d9992a12509b47beacfa3a211e8ae6efdcce6ced60e23c8f72115bc42d"
+      "bytes": 14465,
+      "sha256": "c7b253e5d8703ec82beed3f11b2d8d5a6738eb0581f0ec8ff9177569253f8122"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 2456,
-      "sha256": "602724e8e2a838de68b577e9f45fef88cd14ed40ba4c7b0ed4b25ca409626588"
+      "bytes": 2606,
+      "sha256": "e1988e787d978bf8ed3c209e51b18af92de474addcebd3a056c3921911184e9e"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 3439,
-      "sha256": "201a984608d467f8cc50b12f9b83f248ece2d0334128ef351cee3be4b321a34f"
+      "bytes": 3447,
+      "sha256": "1e86e60aa310a4b39ea34d9a0a2216aaa54b3f25f21c766080a562d514654dc5"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 7456,
-      "sha256": "6abae5d9f504773efc8c18ba8c9ae1ee1f5154f7ec646c179651e8414d571816"
+      "bytes": 7684,
+      "sha256": "a5b3277c37eaeaf1a5230122de04788ef4e26f238cd5597ff6a1dde167c91bb8"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 1677,
-      "sha256": "bdb640bd0c4086e3f91b0bc686bb79f526edb680528cd5b98040305121019ccd"
+      "bytes": 1484,
+      "sha256": "649e7e0e6483537e4fea3443b2e2cdb9cf302400efaedb93e4ffb9da922b4caf"
     },
     {
       "path": "generated/README.md",
@@ -1049,14 +1084,19 @@
       "sha256": "27362988cf65f92c0491ed65b3c938ed6c587262d3104bac32e8f6f259bdf9a5"
     },
     {
+      "path": "planning/decisions/DEC-0005.json",
+      "bytes": 2620,
+      "sha256": "783221eff850c86ca8014bdabfe54c8fac3f19f9986152e59a8ed3f8884f7aeb"
+    },
+    {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 29928,
       "sha256": "c4373263457a7bff9bcd94c5cff5ad8d2c7bc922c159ce5f525223fa6e4fd9b9"
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 32423,
-      "sha256": "2811cee42cc93cc763c98452db17e04f03e4043f4dfc2a30bd2da3bb6065feab"
+      "bytes": 34823,
+      "sha256": "a7a3aa1f80c87eadc73173a2a145252e5438cae5ef6c0d338d62c644650987b0"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1122,6 +1162,11 @@
       "path": "planning/results/WP-M01-004.json",
       "bytes": 5047,
       "sha256": "46f76e5ee88dc28ba2a4d57f242b366a7f45d165c3a134fa7b49fc293f77cff7"
+    },
+    {
+      "path": "planning/results/WP-M01-005.json",
+      "bytes": 4838,
+      "sha256": "b471446669c0bdb58149f662769fd78085f1337bb751ddafa68b05ec75e4de8b"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
@@ -1380,18 +1425,18 @@
     },
     {
       "path": "services/head/Cargo.toml",
-      "bytes": 559,
-      "sha256": "da64af579c1e597cde219089ebc2a78f5f0ea7bdc58aa505a8930e3a5b76a77a"
+      "bytes": 737,
+      "sha256": "ff54b8df292a7222ecb36e40dbf4ee53d25d8d42fcd8e7852bf68efc557042dc"
     },
     {
       "path": "services/head/README.md",
-      "bytes": 501,
-      "sha256": "659317390ed82c7038a315df0367189319f2cd95fcf2679c58c05423d53c17e3"
+      "bytes": 955,
+      "sha256": "ec98e2b6cce99d8598fdd09e243ab2b3bd8f2ed2ff8a665fc522af9ba5aca6b1"
     },
     {
       "path": "services/head/src/lib.rs",
-      "bytes": 1547,
-      "sha256": "601d1260a7ce5f4cd25b5ced2286ebb618eaeae07b27c082d21065d77e915a93"
+      "bytes": 1565,
+      "sha256": "72c3ab913dd4af2903e3decb00d02b0c82afc26e60867157daf47c8c875e2873"
     },
     {
       "path": "services/head/src/main.rs",
@@ -1399,9 +1444,19 @@
       "sha256": "aa8bc721f7e9abcc29652dcdeaa4ff892710b86b7fca5a90d8409e1a4cb43287"
     },
     {
+      "path": "services/head/src/session.rs",
+      "bytes": 16099,
+      "sha256": "cc85e5911d774e3bb1c091b75d795ddd1593b099aafca39496bd6aa770a2c65b"
+    },
+    {
       "path": "services/head/tests/fake_chat.rs",
       "bytes": 1615,
       "sha256": "92014b732636a5d8fa5f654fc3f7d10d989a3119c53f886741fcf9872f428526"
+    },
+    {
+      "path": "services/head/tests/session_restore.rs",
+      "bytes": 4077,
+      "sha256": "1e87e9a35024e71b8d609284e30de41184cfadd2d8d9690f640a4b2266ab586c"
     },
     {
       "path": "services/memoryd/AGENTS.md",
@@ -1480,8 +1535,8 @@
     },
     {
       "path": "tests/catalog/m01.seed.json",
-      "bytes": 21486,
-      "sha256": "85b45046f36a9631bf9b11371e00461882415f3e98d2f11457480df2cb1b9d3a"
+      "bytes": 22927,
+      "sha256": "397efccf07d4a9e6988d40bf49641f827e0833ed3a713d5d8805cf7114c9750e"
     },
     {
       "path": "tests/contracts/README.md",

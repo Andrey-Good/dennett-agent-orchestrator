@@ -11,7 +11,8 @@
     "production installers, remote-device sync, voice, ambient interaction or external connectors"
   ],
   "owner_decisions": [
-    "DEC-0004"
+    "DEC-0004",
+    "DEC-0005"
   ],
   "vertical_slices": [
     {
@@ -250,7 +251,7 @@
       "version": 1,
       "id": "WP-M01-003",
       "title": "Approve the first Project Chat workbench screen",
-      "status": "REFINED",
+      "status": "IN_PROGRESS",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
@@ -454,7 +455,7 @@
       "version": 1,
       "id": "WP-M01-005",
       "title": "Persist local project sessions and revisioned watch state",
-      "status": "REFINED",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R3",
@@ -509,12 +510,13 @@
           "canonical local project-session events and client watch cursor"
         ],
         "writes": [
-          "versioned embedded-Head session journal, snapshots and monotonic revisions"
+          "versioned embedded-Head session journal, snapshots and monotonic revisions",
+          "separate non-canonical client draft cache records"
         ]
       },
       "contract_changes": {
         "public_api": true,
-        "protocol": true,
+        "protocol": false,
         "persistent_schema": true,
         "migration": true
       },
@@ -526,7 +528,7 @@
       "acceptance": [
         "TEST-PROJECT-SESSION-RESTORE-001",
         "TEST-WATCH-GAP-RESYNC-001",
-        "TEST-DESKTOP-DRAFT-RECOVERY-001"
+        "TEST-DRAFT-CACHE-RECOVERY-001"
       ],
       "required_commands": [
         "cargo test -p dennett-memory-core -p dennett-sync-core -p dennett-head",
@@ -542,15 +544,26 @@
       ],
       "owner_decision": {
         "required_before_start": false,
-        "required_before_merge": true
+        "required_before_merge": false,
+        "resolved_by": [
+          "DEC-0005"
+        ]
       },
       "estimate": {
         "target_agent_hours": 6,
-        "max_diff_lines": 2800
+        "max_diff_lines": 5200
       },
       "notes": [
         "This is the first durable schema in active development and therefore requires owner review before merge plus detached technical review.",
-        "Ordinary UI caches remain non-canonical; this package writes only through the embedded Head's Memory and session ports."
+        "Ordinary UI caches remain non-canonical; this package writes only through the embedded Head's Memory and session ports.",
+        "Implementation starts from green main 812cd63 in isolated worktree C:/Dev/dennett-agent-orchestrator-wp-m01-005 on branch codex/wp-m01-005-session-journal.",
+        "The embedded Head is the sole canonical project-session writer. The narrow implementation path is a provider-neutral append-only session port with an in-memory fake, a WAL-backed SQLite control-store adapter, deterministic snapshot folding and a revision-aware watch reducer; client drafts remain explicitly non-canonical.",
+        "WP-M01-002 already generated the bounded M01 SessionService snapshot/delta wire contract. This package implements that contract behind domain ports and keeps protocols/generated artifacts unchanged; protocol compatibility is still checked.",
+        "The original draft acceptance mixed a storage contract with visible desktop behavior while apps are forbidden in this package. TEST-DRAFT-CACHE-RECOVERY-001 now qualifies the separate DraftCachePort here; TEST-DESKTOP-DRAFT-RECOVERY-001 remains a specified WP-M01-007 UI/E2E obligation. Draft rows never enter the canonical session event journal.",
+        "The gross diff budget was raised from 2800 to 5200 after the SQLite/SQLx dependency lock accounted for about 1148 generated lines and the real R3 persistence, integrity, migration, watch and restart tests exceeded the original estimate. Detached and self-review hardening added a versioned exact-byte event checksum plus retry and watch-boundary regression tests; recovery behavior and negative tests are not compressed to optimize the counter.",
+        "Canonical SQLite acknowledgements use WAL plus synchronous FULL; process-exit recovery, transaction rollback, corruption, future-schema and migration-checksum failures are exercised without deleting or reinterpreting history.",
+        "Full repository checks and GitHub Fast Gate run 63 passed, and an independent read-only R3 closure review returned PASS for exact executable-code commit f0c8c932212e4e177db4362c78f64edf313a9123 against base 812cd6323d94abaa577761eb9026dc743c7c011d.",
+        "The owner reviewed the storage behavior, test boundary and known limitations, then explicitly approved WP-M01-005 for merge on 2026-07-19."
       ]
     },
     {
@@ -738,7 +751,8 @@
       "acceptance": [
         "TEST-M01-DESKTOP-CONVERSATION-E2E-001",
         "TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001",
-        "TEST-M01-TRACE-CORRELATION-001"
+        "TEST-M01-TRACE-CORRELATION-001",
+        "TEST-DESKTOP-DRAFT-RECOVERY-001"
       ],
       "required_commands": [
         "just check",
