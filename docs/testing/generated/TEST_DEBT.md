@@ -12,10 +12,6 @@ Quarantined, waived, retired-without-replacement and not-yet-automated cases.
 | `TEST-HEAD-OPTIN-001` | `R3` | `trust` | missing automation | `tests/scenarios/head-promotion-opt-in.yaml` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `memory` | missing automation | `tests/scenarios/offline-client-memory-not-canonical.yaml` |
 | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `memory` | missing automation | — |
-| `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `agents` | missing automation | `crates/dennett-agent-core/src/lib.rs` |
-| `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `agents` | missing automation | `crates/dennett-agent-core/src/lib.rs` |
-| `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `agents` | missing automation | `crates/dennett-agent-core/src/lib.rs` |
-| `TEST-CODEX-SDK-CONTINUATION-001` | `R2` | `agents` | missing automation | — |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `desktop` | missing automation | — |
 | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `desktop` | missing automation | — |
 | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `desktop` | missing automation | — |

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "ordered_stream",
+      "expected_events": ["started", "text_delta", "progress", "usage", "completed"]
+    },
+    {
+      "id": "scoped_cancellation",
+      "expected_events": ["started", "cancelled"]
+    },
+    {
+      "id": "partial_timeout",
+      "expected_events": ["started", "text_delta", "timed_out"]
+    },
+    {
+      "id": "opaque_continuation",
+      "expected_events": ["started", "text_delta", "usage", "completed"]
+    },
+    {
+      "id": "provider_failure",
+      "expected_events": ["started", "failed"],
+      "expected_terminal_code": "rate_limit",
+      "expected_retryable": true,
+      "expected_recoverable": true
+    },
+    {
+      "id": "malformed_late_event",
+      "expected_error": "protocol_violation"
+    }
+  ]
+}

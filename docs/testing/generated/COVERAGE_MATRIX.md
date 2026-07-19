@@ -49,23 +49,23 @@ Each row links one requirement to its catalogue evidence.
 | `M01:ExitGate` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `WP-M01-007` | `quality` | — | `release` |
 | `M01:ExitGate` | `TEST-M01-TRACE-CORRELATION-001` | `WP-M01-007` | `observability` | — | — |
 | `M01:NodeSurvivesWindow` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | — | `release` |
-| `M01:OneRealRuntime` | `TEST-CODEX-SDK-CONTINUATION-001` | `WP-M01-004` | `agents` | — | — |
+| `M01:OneRealRuntime` | `TEST-CODEX-SDK-CONTINUATION-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `services/adapter-host-node/src/codex-runtime-canary.ts`, `tests/contracts/agent_runtime_conformance.json` | — |
 | `M01:OneRealRuntime` | `TEST-CODEX-SDK-CONTRACT-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary-lib.test.ts`, `services/adapter-host-node/src/codex-cli.test.ts`, `services/adapter-host-node/src/codex-workspace.test.ts` | `release` |
 | `M01:OwnerUxGate` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | — | `release` |
 | `M01:SessionRestore` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `WP-M01-005` | `desktop` | — | — |
 | `M01:SessionRestore` | `TEST-PROJECT-SESSION-RESTORE-001` | `WP-M01-005` | `memory` | — | `release` |
 | `M01:StreamResync` | `TEST-WATCH-GAP-RESYNC-001` | `WP-M01-005` | `sync` | `crates/dennett-sync-core/src/lib.rs` | `release` |
-| `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-CANCEL-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/src/lib.rs` | `release` |
-| `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-STREAM-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/src/lib.rs` | `release` |
-| `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/src/lib.rs` | `release` |
+| `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-CANCEL-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
+| `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-STREAM-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
+| `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
 | `OWNER:CanonicalNameDennett` | `TEST-PRODUCT-IDENTITY-001` | `WP-M00-006` | `repository` | `tools/generate_repository_metadata.py`, `tools/verify_repo.py` | `release` |
 | `OWNER:NoLicenseSelected` | `TEST-PRODUCT-IDENTITY-001` | `WP-M00-006` | `repository` | `tools/generate_repository_metadata.py`, `tools/verify_repo.py` | `release` |
 | `OWNER:UseChatGPTSubscriptionBeforeApiBilling` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-login.ts` | `release` |
-| `SPEC-20:StopSemantics` | `TEST-AGENT-RUNTIME-CANCEL-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/src/lib.rs` | `release` |
-| `SPEC-41:ProviderAdapter` | `TEST-AGENT-RUNTIME-STREAM-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/src/lib.rs` | `release` |
+| `SPEC-20:StopSemantics` | `TEST-AGENT-RUNTIME-CANCEL-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
+| `SPEC-41:ProviderAdapter` | `TEST-AGENT-RUNTIME-STREAM-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
 | `SPEC-41:ProviderAdapter` | `TEST-CODEX-SDK-CONTRACT-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary-lib.test.ts`, `services/adapter-host-node/src/codex-cli.test.ts`, `services/adapter-host-node/src/codex-workspace.test.ts` | `release` |
-| `SPEC-41:ProviderContinuation` | `TEST-CODEX-SDK-CONTINUATION-001` | `WP-M01-004` | `agents` | — | — |
-| `SPEC-41:ProviderFailure` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/src/lib.rs` | `release` |
+| `SPEC-41:ProviderContinuation` | `TEST-CODEX-SDK-CONTINUATION-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `services/adapter-host-node/src/codex-runtime-canary.ts`, `tests/contracts/agent_runtime_conformance.json` | — |
+| `SPEC-41:ProviderFailure` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
 | `SPEC-50:HeadEligibility` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
 | `SPEC-50:OperationLog` | `TEST-PROJECT-SESSION-RESTORE-001` | `WP-M01-005` | `memory` | — | `release` |
 | `SPEC-60:Accessibility` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `WP-M01-003` | `desktop` | — | `release` |

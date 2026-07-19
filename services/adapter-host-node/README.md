@@ -36,3 +36,17 @@ canary login.
 
 Only normalized versions, event kinds, completion state, continuation identity
 and latency are printed. Prompts, responses and credential values are omitted.
+
+## Normalized runtime adapter
+
+`CodexRuntimeAdapter` is the only real M01 runtime. Codex SDK types, thread IDs
+and raw events stay in this host. Callers receive ordered provider-neutral
+events, opaque continuation identity, explicit completion/cancellation/timeout
+outcomes and idempotent cancellation acknowledgements scoped to one session
+and runtime turn. In the absence of an explicit trusted policy binding, Codex
+starts read-only with approvals, network access and web search disabled.
+
+The deterministic Node tests and the Rust scripted fake consume the same
+fixture at `tests/contracts/agent_runtime_conformance.json`. The live canary is
+also routed through `CodexRuntimeAdapter`, so it exercises the production
+normalization path rather than a parallel connectivity-only implementation.

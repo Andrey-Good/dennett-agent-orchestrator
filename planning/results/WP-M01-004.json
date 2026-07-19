@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M01-004",
+    "status": "completed",
+    "summary": "Added the provider-neutral M01 streaming runtime lifecycle, a deterministic scripted Rust fake and a Codex SDK 0.144.5 adapter with opaque continuation, scoped idempotent Stop, deadlines, safe failure normalization and bounded stale-stream cleanup.",
+    "commits": [
+      "5e459b58c94e556eb18dbbed1c1169aaa0b960cb",
+      "800b159",
+      "d8536b9c08315f678e5bf584b96ae1db245223cd"
+    ],
+    "merge_ready_at": "2026-07-18",
+    "changed_files": [
+      "crates/dennett-agent-core/src/runtime.rs",
+      "crates/dennett-agent-core/src/fake.rs",
+      "crates/dennett-agent-core/tests/runtime_conformance.rs",
+      "services/adapter-host-node/src/runtime-contract.ts",
+      "services/adapter-host-node/src/codex-runtime-adapter.ts",
+      "services/adapter-host-node/src/codex-runtime-adapter.test.ts",
+      "services/adapter-host-node/src/codex-runtime-canary.ts",
+      "services/adapter-host-node/src/codex-canary.ts",
+      "tests/contracts/agent_runtime_conformance.json",
+      "tests/catalog/m01.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M01_local_desktop_conversation.json",
+      "planning/results/WP-M01-004.json",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "SPEC-20:DirectProjectAgent",
+      "SPEC-20:StopSemantics",
+      "SPEC-41:ProviderAdapter",
+      "SPEC-41:ProviderContinuation",
+      "SPEC-41:ProviderFailure",
+      "M01:OneRealRuntime",
+      "M01:StreamingCancelTimeout",
+      "TEST-AGENT-RUNTIME-STREAM-001",
+      "TEST-AGENT-RUNTIME-CANCEL-001",
+      "TEST-AGENT-RUNTIME-TIMEOUT-001",
+      "TEST-CODEX-SDK-CONTINUATION-001"
+    ],
+    "tests": {
+      "passed": [
+        "6 Rust conformance tests cover ordered events, scoped Stop, virtual deadlines, opaque continuation, provider failure and malformed late events",
+        "29 Node tests cover the same shared fixture plus Codex normalization, safe defaults, unconsumed disposal, bounded dropped turns and stale-generation isolation",
+        "live exact-head canary: ChatGPT auth with SDK and CLI 0.144.5, first turn completed in 17453 ms and continuation completed in 12014 ms with sameThread true",
+        "mise exec -- just check passed repository, documentation, planning, Rust, Python, TypeScript and protocol gates at d8536b9",
+        "GitHub Fast Gate run 56 passed at d8536b9c08315f678e5bf584b96ae1db245223cd",
+        "protocol compatibility remained unchanged against origin/main and gross diff stayed within the explicit 3600-line budget"
+      ],
+      "not_run": [
+        "real Codex cancellation, timeout and malformed-event injection remain deterministic contract tests; the live canary intentionally exercises safe successful continuation only",
+        "durable session persistence, process crash recovery, desktop IPC and UI integration belong to WP-M01-005 through WP-M01-007"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Detached read-only R2 review of the exact cumulative diff; two repair rounds closed all findings and the final closure review of d8536b9c08315f678e5bf584b96ae1db245223cd returned PASS.",
+      "findings_closed": [
+        "Made unconsumed streams explicitly disposable and independently deadline-bounded so they cannot remain permanently active",
+        "Restored WP-M01-002 protocol accounting and marked WP-M01-004 correctly as a public port change without a Protobuf epoch change",
+        "Bound terminal writes to the exact ActiveTurn generation so stale streams cannot overwrite replacement turns after terminal-history eviction",
+        "Defaulted Codex to read-only with approvals, network access and web search disabled until a trusted policy binding explicitly overrides it"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "normalized events expose session, runtime-turn, sequence, safe progress, usage, terminal outcome and bounded provider correlation without prompt or raw provider errors",
+      "live canary reports only auth mode, exact versions, normalized event kinds, completion, same-thread evidence and latency"
+    ],
+    "known_limitations": [
+      "Codex is the only real M01 runtime; later providers and local models must implement the same descriptor and conformance boundary",
+      "terminal history and active generation state are bounded and process-local until WP-M01-005 persists authoritative project sessions",
+      "this package does not expose desktop IPC, persist conversation turns, route providers or execute trusted project mutations"
+    ],
+    "follow_up_candidates": [
+      "WP-M01-005",
+      "WP-M01-006",
+      "WP-M01-007"
+    ],
+    "owner_decision_required": false
+  }
+}
