@@ -251,7 +251,7 @@
       "version": 1,
       "id": "WP-M01-003",
       "title": "Approve the first Project Chat workbench screen",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
