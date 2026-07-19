@@ -31,6 +31,14 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { min-width: 900px; color: var(--text); background: #0b0b0b; }
 html.native-shell, html.native-shell body, html.native-shell #root { background: transparent; }
+html.native-shell {
+  /* Windows renders the wallpaper-derived Mica below the WebView. These two
+     neutral tints set the intended density without adding a white veil. */
+  --native-workspace-tint: rgba(24, 24, 24, 0.36);
+  /* Raised surfaces sit above the 36% workspace tint. A 24% local tint leaves
+     about 49% of the native Mica contribution visible after both layers. */
+  --native-raised-surface: rgba(45, 45, 45, 0.24);
+}
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex="0"]:focus-visible {
@@ -84,23 +92,26 @@ button:disabled { cursor: not-allowed; opacity: 0.34; }
    achromatic density layers that establish the visual hierarchy. */
 html.native-shell .workbench { background: transparent; }
 html.native-shell .workbench::before {
-  background: rgba(255, 255, 255, 0.015);
+  background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
 html.native-shell .main-workspace {
-  background: rgba(58, 58, 58, 0.28);
+  border-color: rgba(255, 255, 255, 0.14);
+  border-top-left-radius: 18px;
+  background: var(--native-workspace-tint);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  box-shadow: none;
 }
 html.native-shell .main-workspace::after {
-  background: linear-gradient(to bottom, rgba(58, 58, 58, 0.74), rgba(58, 58, 58, 0.2) 58%, transparent 100%);
+  background: linear-gradient(to bottom, rgba(24, 24, 24, 0.36), rgba(24, 24, 24, 0.14) 58%, transparent 100%);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
 html.native-shell .chat-row.is-active,
 html.native-shell .recent-row.is-active {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.14);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -108,9 +119,17 @@ html.native-shell .resource-area { background: transparent; }
 html.native-shell .titlebar,
 html.native-shell .activity-rail,
 html.native-shell .project-sidebar { background: transparent; }
-html.native-shell .composer { background: var(--message-user-glass); }
+html.native-shell .message--user .message-copy,
+html.native-shell .composer,
 html.native-shell .resource-panel {
-  background: var(--message-user-glass);
+  background: var(--native-raised-surface);
+}
+html.native-shell .composer,
+html.native-shell .resource-panel {
+  /* Native Mica already owns diffusion. A second WebView blur flattened the
+     material and made these translucent layers look opaque. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .titlebar {
@@ -269,7 +288,7 @@ html.native-shell .resource-panel {
   -webkit-backdrop-filter: blur(18px) saturate(0%);
   box-shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
 }
-.project-create-menu > strong { display: block; padding: 4px 7px 7px; font-size: 11px; }
+.project-create-menu > strong { display: block; padding: 4px 7px 7px; font-size: 13px; }
 .project-create-menu > button {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -287,9 +306,9 @@ html.native-shell .resource-panel {
 }
 .project-create-menu > button:hover, .project-create-menu > button:focus-visible { color: var(--text); background: rgba(255, 255, 255, 0.06); }
 .project-create-menu > button > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.project-create-menu > button strong { font-size: 11px; font-weight: 610; }
-.project-create-menu > button small { color: var(--text-faint); font-size: 9px; line-height: 1.35; }
-.project-create-menu > p { margin: 7px 7px 3px; color: var(--text-faint); font-size: 9px; line-height: 1.45; }
+.project-create-menu > button strong { font-size: 13px; font-weight: 610; }
+.project-create-menu > button small { color: var(--text-faint); font-size: 11px; line-height: 1.35; }
+.project-create-menu > p { margin: 7px 7px 3px; color: var(--text-faint); font-size: 11px; line-height: 1.45; }
 .sidebar-title {
   display: flex;
   align-items: center;
@@ -300,7 +319,7 @@ html.native-shell .resource-panel {
   border-radius: 9px;
   color: var(--text-muted);
   background: transparent;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
   cursor: pointer;
 }
@@ -316,7 +335,7 @@ html.native-shell .resource-panel {
   padding: 7px 10px;
   border-radius: 10px;
   color: var(--text-primary-glass);
-  font-size: 12px;
+  font-size: 14px;
   cursor: default;
 }
 .project-heading:hover { background: rgba(255, 255, 255, 0.045); }
@@ -348,17 +367,17 @@ html.native-shell .resource-panel {
   border-radius: 11px;
   color: var(--text-primary-glass);
   background: transparent;
-  font-size: 11px;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
 .chat-row:hover, .recent-row:hover { color: var(--text); background: rgba(255, 255, 255, 0.045); }
 .chat-row.is-active, .recent-row.is-active { color: var(--text); background: rgba(255, 255, 255, 0.18); }
 .chat-row span, .recent-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-row small, .recent-row small { color: var(--text-faint); font-size: 9px; white-space: nowrap; }
+.chat-row small, .recent-row small { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
 .recent-chats { margin-top: 20px; }
 .recent-heading { display: flex; align-items: center; min-height: 37px; padding: 2px 2px 2px 0; }
-.recent-chats h2 { margin: 0; padding: 7px 10px 8px; color: var(--text-faint); font-size: 11px; font-weight: 700; }
+.recent-chats h2 { margin: 0; padding: 7px 10px 8px; color: var(--text-faint); font-size: 13px; font-weight: 700; }
 
 .account-dock {
   position: relative;
@@ -387,8 +406,8 @@ html.native-shell .resource-panel {
 }
 .account-dock > div { display: flex; align-items: center; gap: 1px; }
 .account-identity { min-width: 0; gap: 8px !important; }
-.account-identity > span { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 10px; color: var(--text-inverse); background: var(--surface-inverse); font-size: 10px; font-weight: 800; }
-.account-identity strong { overflow: hidden; color: var(--text-primary-glass); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.account-identity > span { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 10px; color: var(--text-inverse); background: var(--surface-inverse); font-size: 12px; font-weight: 800; }
+.account-identity strong { overflow: hidden; color: var(--text-primary-glass); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .account-dock .icon-button { width: 30px; height: 30px; }
 .sidebar-collapsed .account-dock { width: 52px; padding: 9px 9px 5px 12px; }
 .sidebar-collapsed .account-identity strong, .sidebar-collapsed .account-dock > div:last-child { display: none; }
@@ -452,7 +471,7 @@ html.native-shell .resource-panel {
 
 .message { position: relative; display: flex; margin: 0 0 30px; }
 .message--user { justify-content: flex-end; }
-.message-copy { width: min(100%, 690px); font-size: 13px; line-height: 1.68; }
+.message-copy { width: min(100%, 690px); font-size: 14px; line-height: 1.68; }
 .message-copy p { margin: 0 0 11px; }
 .message-copy ul { margin: 13px 0 8px; padding-left: 19px; color: var(--text-primary-glass); }
 .message-copy li { margin: 6px 0; padding-left: 2px; }
@@ -460,7 +479,7 @@ html.native-shell .resource-panel {
   width: fit-content;
   max-width: min(76%, 600px);
   padding: 11px 14px 10px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: 19px;
   background: var(--message-user);
 }
@@ -487,15 +506,14 @@ html.native-shell .resource-panel {
 .composer-shell { position: relative; width: min(780px, 100%); margin: 0 auto; }
 .composer {
   overflow: hidden;
-  border: 1px solid var(--line-strong);
+  border: 0;
   border-radius: 24px;
   background: rgba(39, 39, 39, 0.92);
   backdrop-filter: blur(22px) saturate(0%);
   -webkit-backdrop-filter: blur(22px) saturate(0%);
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.28);
 }
-.composer:focus-within { border-color: rgba(255, 255, 255, 0.28); }
-.composer textarea { display: block; width: 100%; min-height: 64px; max-height: 170px; resize: vertical; padding: 14px 16px 5px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 13px; line-height: 1.55; }
+.composer textarea { display: block; width: 100%; min-height: 64px; max-height: 170px; resize: vertical; padding: 14px 16px 5px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 14px; line-height: 1.55; }
 .composer textarea::placeholder { color: var(--text-faint); }
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 8px; }
 .composer-tools, .composer-send { display: flex; align-items: center; gap: 3px; }
@@ -593,7 +611,7 @@ html.native-shell .resource-panel {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: 24px;
   background: rgba(43, 43, 43, 0.52);
   backdrop-filter: blur(14px) saturate(0%);
@@ -601,19 +619,19 @@ html.native-shell .resource-panel {
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
 }
 .resource-header { display: flex; align-items: center; justify-content: space-between; padding: 5px 7px 0 16px; }
-.resource-header h2 { margin: 0; color: var(--text-muted); font-size: 12px; font-weight: 620; }
+.resource-header h2 { margin: 0; color: var(--text-muted); font-size: 14px; font-weight: 620; }
 .resource-panel-toggle svg { transform-origin: center; }
 .resource-panel-toggle.is-open svg { transform: scaleX(-1); }
 .plan-card { position: relative; z-index: 8; margin: 3px 11px 10px; border: 1px solid var(--line); border-radius: 16px; background: rgba(24, 24, 24, 0.72); }
 .plan-card > button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; width: 100%; min-height: 48px; gap: 9px; padding: 7px 10px; border: 0; border-radius: 15px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .plan-card > button:hover { background: rgba(255, 255, 255, 0.035); }
-.plan-index { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--icon-primary-glass); font-size: 10px; }
+.plan-index { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--icon-primary-glass); font-size: 12px; }
 .plan-card > button > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.plan-card small { color: var(--text-faint); font-size: 8px; text-transform: uppercase; letter-spacing: 0.08em; }
-.plan-card strong { overflow: hidden; color: var(--text-primary-glass); font-size: 10px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
+.plan-card small { color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+.plan-card strong { overflow: hidden; color: var(--text-primary-glass); font-size: 12px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
 .plan-card.is-expanded > button > svg { transform: rotate(180deg); }
 .plan-details { position: absolute; top: calc(100% + 6px); right: 0; left: 0; display: flex; margin: 0; padding: 9px; border: 1px solid var(--line-strong); border-radius: 15px; flex-direction: column; gap: 2px; background: rgba(38, 38, 38, 0.99); box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42); list-style: none; }
-.plan-details li { position: relative; min-height: 29px; padding: 7px 8px 6px 28px; border-radius: 9px; color: var(--text-faint); font-size: 9px; }
+.plan-details li { position: relative; min-height: 29px; padding: 7px 8px 6px 28px; border-radius: 9px; color: var(--text-faint); font-size: 11px; }
 .plan-details li::before { position: absolute; top: 10px; left: 10px; width: 7px; height: 7px; border: 1px solid #6f6f6f; border-radius: 50%; content: ""; }
 .plan-details li.is-done::before { background: #8c8c8c; }
 .plan-details li.is-current { color: var(--text); background: rgba(255, 255, 255, 0.055); }
@@ -621,7 +639,7 @@ html.native-shell .resource-panel {
 .resource-scroll { min-height: 0; padding: 0 11px; overflow-y: auto; scrollbar-color: #4a4a4a transparent; }
 .resource-section { padding: 12px 1px 13px; border-top: 1px solid var(--line); }
 .resource-section:first-child { border-top: 0; }
-.resource-section h3 { display: flex; align-items: center; margin: 0 0 7px; padding: 0 7px; color: var(--text-faint); font-size: 11px; font-weight: 570; }
+.resource-section h3 { display: flex; align-items: center; margin: 0 0 7px; padding: 0 7px; color: var(--text-faint); font-size: 13px; font-weight: 570; }
 .resource-section h3 span { margin-left: 5px; color: var(--text-faint); }
 .resource-row {
   display: grid;
@@ -640,17 +658,17 @@ html.native-shell .resource-panel {
 }
 .resource-row:hover:not(.is-static) { color: var(--text); background: rgba(255, 255, 255, 0.055); }
 .resource-row > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.resource-row strong { overflow: hidden; color: var(--text-primary-glass); font-size: 10px; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
-.resource-row small { overflow: hidden; color: var(--text-faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.resource-row em { color: var(--text-faint); font-size: 8px; font-style: normal; }
+.resource-row strong { overflow: hidden; color: var(--text-primary-glass); font-size: 12px; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
+.resource-row small { overflow: hidden; color: var(--text-faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-row em { color: var(--text-faint); font-size: 10px; font-style: normal; }
 .resource-row.is-static { color: var(--icon-primary-glass); cursor: default; }
 .resource-footer { display: flex; min-width: 0; flex-direction: column; gap: 7px; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
 .fixture-select { position: relative; display: flex; align-items: center; height: 30px; gap: 7px; color: var(--text-faint); }
-.fixture-select > span { font-size: 9px; }
-.fixture-select select { min-width: 0; height: 28px; margin-left: auto; padding: 0 24px 0 8px; border: 1px solid var(--line); border-radius: 9px; outline: 0; appearance: none; color: var(--text-muted); background: #242424; font-size: 9px; cursor: pointer; }
+.fixture-select > span { font-size: 11px; }
+.fixture-select select { min-width: 0; height: 28px; margin-left: auto; padding: 0 24px 0 8px; border: 1px solid var(--line); border-radius: 9px; outline: 0; appearance: none; color: var(--text-muted); background: #242424; font-size: 11px; cursor: pointer; }
 .fixture-select > svg { position: absolute; right: 7px; pointer-events: none; }
 .fixture-select option { background: #242424; }
-.git-status { display: flex; align-items: center; min-width: 0; gap: 6px; color: var(--text-faint); font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-status { display: flex; align-items: center; min-width: 0; gap: 6px; color: var(--text-faint); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resource-dock { display: flex; width: 43px; height: max-content; margin: 0 0 0 auto; padding: 5px; border: 1px solid var(--line); border-radius: 17px; flex-direction: column; gap: 3px; background: rgba(43, 43, 43, 0.48); backdrop-filter: blur(14px) saturate(0%); -webkit-backdrop-filter: blur(14px) saturate(0%); }
 .resource-dock .icon-button { width: 31px; height: 31px; }
 

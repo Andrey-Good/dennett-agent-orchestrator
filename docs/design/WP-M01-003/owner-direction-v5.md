@@ -13,10 +13,10 @@ This note records the owner's current native-material and contrast direction for
 ## Surface hierarchy
 
 - The central workspace starts at the rounded top-left boundary and extends continuously to the physical bottom and right edges of the window.
-- The central workspace uses the same Mica foundation with a neutral light-gray density layer above it. The layer should make the center less transparent without making it look darker than the prior approved center.
+- The central workspace uses the same Mica foundation with a translucent `#181818` density layer above it. Static layer inspection found no additional opaque central surface. The current review opacity is `36%` (64% transparency, twice the previous 32%) so the wallpaper-derived Mica remains visibly present.
 - The Workspace/resource panel is inset above the central workspace near the right edge. It is not a peer background column.
 - The conversation scrollbar remains at the physical right edge. The inset resource panel stays slightly left of it.
-- The composer and Workspace panel use the lighter gray material family of sent user messages and remain visibly distinct from the central surface.
+- The composer, Workspace panel and sent user messages use a borderless translucent `#2d2d2d` raised-surface tint at `24%` local opacity, without a white veil, glow or edge outline. Because it sits above the `36%` opaque central tint, the combined surface retains about `49%` of the native Mica contribution: denser than the `64%` center while still visibly translucent. Composer and Workspace do not apply a second CSS backdrop blur; native Mica already owns diffusion, and the redundant WebView blur made the material read as an opaque slab.
 
 ## Contrast and selection
 
@@ -24,6 +24,7 @@ This note records the owner's current native-material and contrast direction for
 - Section headings, metadata, timestamps and secondary descriptions remain gray so hierarchy is still clear.
 - White symbols are normal translucent glyphs with restrained bloom. Mica is a window material and must not be simulated inside icon strokes or text.
 - The selected chat uses a light, transparent white highlight. It must be lighter than the surrounding left shell, not an opaque gray pill.
+- Conversation text and composer input are one pixel larger than the prior checkpoint. Project/chat navigation and Workspace/resource typography are two pixels larger while preserving white primary labels and gray secondary hierarchy.
 
 ## Conversation top edge
 
@@ -34,4 +35,11 @@ This note records the owner's current native-material and contrast direction for
 
 ## Owner gate
 
-Review this direction in the release Tauri window, not only in the browser renderer. The checkpoint is not accepted until the owner confirms visible Mica, the absence of the displaced empty layer, the lighter text hierarchy and the full-width top transition.
+The owner reviewed this direction in the release Tauri window on 2026-07-19 and accepted the checkpoint. The remaining desire for general polish is deferred and does not reopen this bounded screen approval.
+
+## Future visual workflow
+
+- Before the next substantial screen, material or layout implementation, prepare an editable Figma prototype rather than iterating primarily through code builds.
+- The owner tunes colors, material opacity, blur impression and UX in Figma and explicitly approves the selected frame.
+- Implement the approved frame in the native application as closely as the platform permits, then use the release application only for native-material and behavior verification that Figma cannot prove.
+- Technical composition, accessibility, performance and platform constraints remain engineering responsibilities; the Figma approval owns the intended visual and UX result.

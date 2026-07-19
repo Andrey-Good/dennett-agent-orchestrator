@@ -49,6 +49,13 @@ describe("Project Chat workbench", () => {
       windowEffects: { effects: ["mica"] },
     });
     expect(mainWindow).not.toHaveProperty("backgroundColor");
+    expect(stylesCss).toContain("--native-workspace-tint: rgba(24, 24, 24, 0.36);");
+    expect(stylesCss).toContain("--native-raised-surface: rgba(45, 45, 45, 0.24);");
+    expect(stylesCss).toMatch(/html\.native-shell \.composer,[\s\S]*?html\.native-shell \.resource-panel \{[\s\S]*?backdrop-filter: none;/);
+    expect(stylesCss).toContain(".message-copy { width: min(100%, 690px); font-size: 14px;");
+    expect(stylesCss).toMatch(/\.message--user \.message-copy \{[\s\S]*?border: 0;/);
+    expect(stylesCss).toMatch(/\.composer \{[\s\S]*?border: 0;/);
+    expect(stylesCss).toMatch(/\.resource-panel \{[\s\S]*?border: 0;/);
 
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
     const view = render(<App />);
