@@ -32,7 +32,7 @@ impl SqliteControlStore {
             .create_if_missing(true)
             .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
+            .synchronous(SqliteSynchronous::Full)
             .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -704,6 +704,13 @@ mod tests {
         let store = SqliteControlStore::open(&path).await.expect("open store");
         assert_eq!(store.schema_version().await.expect("schema version"), 1);
         assert_eq!(store.journal_mode().await.expect("journal mode"), "wal");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA synchronous")
+                .fetch_one(&store.pool)
+                .await
+                .expect("synchronous mode"),
+            2
+        );
         let journal = SessionJournal::new(Arc::new(store.clone()));
         let states = [
             SessionTurnState::Completed,

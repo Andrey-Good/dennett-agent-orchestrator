@@ -180,8 +180,8 @@
     },
     {
       "path": "adapters/storage/sqlite/src/lib.rs",
-      "bytes": 39541,
-      "sha256": "b87f70b6b36da02708b9bd65bd551a9141baeda8b6cfec3c8d061ce1f901a487"
+      "bytes": 39755,
+      "sha256": "55c234befab27225ee60b2279b4d25eddbccd562d2795528759244aa961c648e"
     },
     {
       "path": "adapters/transport/README.md",
