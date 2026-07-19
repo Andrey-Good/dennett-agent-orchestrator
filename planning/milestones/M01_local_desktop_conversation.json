@@ -455,7 +455,7 @@
       "version": 1,
       "id": "WP-M01-005",
       "title": "Persist local project sessions and revisioned watch state",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R3",

@@ -7,9 +7,12 @@
     "commits": [
       "33c2abbda3b618b58c0898cd5507cd73adde66df",
       "4345e29bdbba6ea7301b1d3a63eec1df0018cec5",
-      "f0c8c932212e4e177db4362c78f64edf313a9123"
+      "f0c8c932212e4e177db4362c78f64edf313a9123",
+      "07b5f811e0518a9aa93e8f198766a2362ac5bc73",
+      "57ef3b5bb291a63c06d153c39e0d6552473132d7"
     ],
     "merge_ready_at": "2026-07-19",
+    "merged_at": "2026-07-19",
     "changed_files": [
       "adapters/storage/sqlite/**",
       "crates/dennett-contracts/src/lib.rs",
