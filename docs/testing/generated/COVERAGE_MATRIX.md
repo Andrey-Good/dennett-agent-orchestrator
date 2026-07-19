@@ -52,7 +52,7 @@ Each row links one requirement to its catalogue evidence.
 | `M01:NodeSurvivesWindow` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | — | `release` |
 | `M01:OneRealRuntime` | `TEST-CODEX-SDK-CONTINUATION-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `services/adapter-host-node/src/codex-runtime-canary.ts`, `tests/contracts/agent_runtime_conformance.json` | — |
 | `M01:OneRealRuntime` | `TEST-CODEX-SDK-CONTRACT-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary-lib.test.ts`, `services/adapter-host-node/src/codex-cli.test.ts`, `services/adapter-host-node/src/codex-workspace.test.ts` | `release` |
-| `M01:OwnerUxGate` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | — | `release` |
+| `M01:OwnerUxGate` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
 | `M01:SessionRestore` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `WP-M01-007` | `desktop` | — | — |
 | `M01:SessionRestore` | `TEST-DRAFT-CACHE-RECOVERY-001` | `WP-M01-005` | `desktop` | `adapters/storage/sqlite/src/lib.rs`, `crates/dennett-sync-core/src/draft.rs`, `services/head/tests/session_restore.rs` | — |
 | `M01:SessionRestore` | `TEST-PROJECT-SESSION-RESTORE-001` | `WP-M01-005` | `memory` | `adapters/storage/sqlite/src/lib.rs`, `crates/dennett-memory-core/src/session.rs`, `services/head/tests/session_restore.rs` | `release` |
@@ -70,11 +70,11 @@ Each row links one requirement to its catalogue evidence.
 | `SPEC-41:ProviderFailure` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
 | `SPEC-50:HeadEligibility` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
 | `SPEC-50:OperationLog` | `TEST-PROJECT-SESSION-RESTORE-001` | `WP-M01-005` | `memory` | `adapters/storage/sqlite/src/lib.rs`, `crates/dennett-memory-core/src/session.rs`, `services/head/tests/session_restore.rs` | `release` |
-| `SPEC-60:Accessibility` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `WP-M01-003` | `desktop` | — | `release` |
-| `SPEC-60:ProjectChat` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `WP-M01-003` | `desktop` | — | `release` |
-| `SPEC-60:ProjectChat` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | — | `release` |
+| `SPEC-60:Accessibility` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
+| `SPEC-60:ProjectChat` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
+| `SPEC-60:ProjectChat` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
 | `SPEC-60:ProjectChatFailure` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `WP-M01-007` | `quality` | — | `release` |
-| `SPEC-60:ProjectWorkspace` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | — | `release` |
+| `SPEC-60:ProjectWorkspace` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
 | `SPEC-B:UnknownEffect` | `TEST-EFFECT-UNKNOWN-001` | — | `effects` | `tests/scenarios/effect-timeout-no-duplicate.yaml` | `release` |
 | `TEST-STRATEGY:GeneratedViews` | `TEST-CATALOGUE-VIEWS-001` | `WP-M00-005` | `quality` | `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | `release` |
 | `TEST-STRATEGY:PRFastGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | `.github/branch-protection.main.json`, `.github/workflows/ci.yml`, `Justfile`, `tools/tests/test_verify_ci.py`, `tools/verify_ci.py`, `tools/verify_worktree_clean.py` | `release` |

@@ -5,6 +5,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# The desktop shell is intentionally built outside the server/domain workspace.
+# Its native dependency graph and release cadence are owned by apps/desktop.
+[workspace]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

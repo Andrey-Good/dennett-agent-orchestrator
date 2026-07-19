@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 341,
+  "file_count": 392,
   "files": [
     {
       "path": ".editorconfig",
@@ -210,33 +210,93 @@
     },
     {
       "path": "apps/desktop/package.json",
-      "bytes": 615,
-      "sha256": "06f63b33c0fee55d73a997a4a97903cb5fb67c3dd8314a35a49f1deb6fc4906d"
+      "bytes": 841,
+      "sha256": "1be1b3dbc9a00af0da34a9cbb6cb1815c2e12d19c5720ce700924422639bf378"
+    },
+    {
+      "path": "apps/desktop/src-tauri/.gitignore",
+      "bytes": 23,
+      "sha256": "d01c5d48a9c488f2cb7ce6d13703e9f9de71d920d135ce8589bf2fcf6fc62863"
+    },
+    {
+      "path": "apps/desktop/src-tauri/Cargo.lock",
+      "bytes": 106970,
+      "sha256": "b98227674f941c10d3d5894383f93c7b0fb6e5269ab0646ff640a9b3277913e5"
     },
     {
       "path": "apps/desktop/src-tauri/Cargo.toml",
-      "bytes": 268,
-      "sha256": "335a5bba1aaa7023864d76ff334c088794b27fcf90a51369d2014893bebcb90b"
+      "bytes": 438,
+      "sha256": "2c9a8bd0d60348de4f7bbb6d8a79aa0ce4420437a07316e0cb157fb73c7f6221"
     },
     {
       "path": "apps/desktop/src-tauri/build.rs",
-      "bytes": 36,
-      "sha256": "cd0ac1f2fb0555a110a0298f504469b11502fe59744a2c7e6b1b2aa4aac425df"
+      "bytes": 40,
+      "sha256": "6aeeab41bc35efde4e3c2b644a6248f7fc06d24ae30b75c0d33491cbb0c1fa31"
+    },
+    {
+      "path": "apps/desktop/src-tauri/capabilities/default.json",
+      "bytes": 379,
+      "sha256": "98d50b39b39a4012206cfbf90219b2a7cdf55d29aee94dab0586d8cb0dc4711a"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/128x128.png",
+      "bytes": 8490,
+      "sha256": "1d3f91850baf8c0d4d5aa80ffb9799c013e6417aaa070d717068b2cb376a9df2"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/128x128@2x.png",
+      "bytes": 45075,
+      "sha256": "e91eff904e8cef589ebc4aaf9c1123f8c99a645c7b3fa15b326b1ee76f940d1e"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/32x32.png",
+      "bytes": 1064,
+      "sha256": "23ff92b59ac1574b094e521136a8a83b48cbf4595dd5ca2b7afdfe2bda5ee7ef"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/dennett-icon-source.png",
+      "bytes": 879838,
+      "sha256": "63f084eafd40f4a8b63a6fc2c467fa68b76a813b58d2487add686c86c80d8275"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.icns",
+      "bytes": 1156632,
+      "sha256": "f4e6b70c2987f8aaec94ffd3d40dafe7f84f3e2668da3b7f66ec78b88f1d6c3d"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.ico",
+      "bytes": 52681,
+      "sha256": "82f1d71a00b90459e85e4e048abe0e0ef860875ac69f3568a78d5a7cb7b7b297"
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.png",
+      "bytes": 199753,
+      "sha256": "88be31e4783756120917b9d850cd64308a5337cc2137881d56e087ae708cebb2"
     },
     {
       "path": "apps/desktop/src-tauri/src/main.rs",
-      "bytes": 442,
-      "sha256": "33c8c86e774384adf2dd4855838eb456ab5fc6b7b980bfdc7180aa43e0d70d3f"
+      "bytes": 1944,
+      "sha256": "475c7fb910b2b90e4705d175c6a6468fd40323d5eb4f6cb339c111bc783a0fec"
     },
     {
       "path": "apps/desktop/src-tauri/tauri.conf.json",
-      "bytes": 372,
-      "sha256": "59a598a87f8bfb21ca6ffd70902d7af9fed6b24f7153e4a126ba3184cb4e0449"
+      "bytes": 759,
+      "sha256": "ba4e8cfe92b1e2c63126736427991fc8cfe3b220dd05ff1147979749989647d2"
+    },
+    {
+      "path": "apps/desktop/src/App.test.tsx",
+      "bytes": 25141,
+      "sha256": "b997298401c6e54989af6d76f2bf900ea119a610247a35e11b1a4ee27c0e1656"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 429,
-      "sha256": "2064169a3cb775c756891aea7b620438827617413a06451329706d8a96db7a2f"
+      "bytes": 43927,
+      "sha256": "081a68322721f5663a29025fc5903fd537e981c121e0c578ecd2eb508780a7d1"
+    },
+    {
+      "path": "apps/desktop/src/fixtures/projectChat.ts",
+      "bytes": 5266,
+      "sha256": "fc5b4763dcbcbb96c944cc8f74a4eeb9ab9b99847593bb11b5569900b0c86aa0"
     },
     {
       "path": "apps/desktop/src/lib/commands.ts",
@@ -249,9 +309,29 @@
       "sha256": "a5e69920fdbf0b6f5b811545a0f1c5d766a8858901d33a01c53b1d52219f39d7"
     },
     {
+      "path": "apps/desktop/src/styles.css",
+      "bytes": 35485,
+      "sha256": "6485e7801ed3e24aaa41ffb4d069a615d43745b6e10f03bda46bebc28d4c8505"
+    },
+    {
+      "path": "apps/desktop/src/test/setup.ts",
+      "bytes": 150,
+      "sha256": "c2ccf2417a8183a91935356b3d91c9aefc75b23abe2e72e335e671c12654f65d"
+    },
+    {
+      "path": "apps/desktop/src/vite-env.d.ts",
+      "bytes": 38,
+      "sha256": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5"
+    },
+    {
       "path": "apps/desktop/tsconfig.json",
       "bytes": 171,
       "sha256": "cf765963655a82b6287ef029e2b294e27835cdb5139b066627123d7bdaf730cb"
+    },
+    {
+      "path": "apps/desktop/vite.config.ts",
+      "bytes": 318,
+      "sha256": "f3bac94db80fc8b0bdbdab9879fca05660a2b66c87d52e908ea26ecb9e8418c3"
     },
     {
       "path": "apps/mobile/AGENTS.md",
@@ -489,9 +569,14 @@
       "sha256": "75eb30ca71cdd837e4c6fd805cc72c455c29765dcd03ffd50bda81c200445370"
     },
     {
+      "path": "design-qa.md",
+      "bytes": 6799,
+      "sha256": "317df0137d7fc9d4a8e2d782a520c18c5626aa87a12c02f557faf53ca3738369"
+    },
+    {
       "path": "docs/CHECKSUMS.sha256",
-      "bytes": 11559,
-      "sha256": "058f3eea0792fa9d3b4c5e46b6fa678a866ad65961d8a2f3f011ecb314820508"
+      "bytes": 15550,
+      "sha256": "539e637fc183f7e2c7302a418c346fbf0e967ae692a5aa7f01d8c314c6ea9bc5"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -627,6 +712,166 @@
       "path": "docs/decisions/README.md",
       "bytes": 946,
       "sha256": "3a81b7ca43d5cc8d1b1ab7b41c7ed1b2b19854e0e8daa0c2441a4d7f4ee69fc1"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v10-v11-mica-comparison.jpg",
+      "bytes": 248283,
+      "sha256": "3dc37c02533f50d20ffd5f195d9d688aa0e5df98e40c1a30b0c8e1a1d7af6ed4"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v10-v11-mica-focused-comparison.jpg",
+      "bytes": 120901,
+      "sha256": "45d597ad6b5504e33a52ce1231dfae5c05ce2b838cc530e8bea26e41cb68873e"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v4-comparison.jpg",
+      "bytes": 313137,
+      "sha256": "d20c6d8f7d1ae7659e57009574770055b27ded372228707269139c5ad9235e78"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v5-v6-comparison.jpg",
+      "bytes": 301007,
+      "sha256": "df52df9c601cbd9801f1abe6243103762e2d7261370b2c4596a45af48ea48077"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v5-v6-focused-comparison.jpg",
+      "bytes": 120822,
+      "sha256": "305981b7fce65e40144affb9587aca1f56c50e1375e14ed8ef9b48870674f954"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v6-v10-comparison.jpg",
+      "bytes": 347220,
+      "sha256": "de3b3fa145c0a74cb128537333682726bd0ff31699c67309d2193afdf181792e"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v6-v10-focused-comparison.jpg",
+      "bytes": 136405,
+      "sha256": "667e1220b6682725961bfd55052acc7ffc34f91797f974983975551aeec93c0c"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v6-v7-comparison.jpg",
+      "bytes": 335254,
+      "sha256": "2e32eacd35e9a7fa58cd5531316d2d8c85b79a51ac1a9aeaf811a15672aa1457"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v6-v7-focused-comparison.jpg",
+      "bytes": 106112,
+      "sha256": "6de98a01a3dabeb2894fa0f106c45a3acdd78612aa9590d125655e013eaf3a02"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v7-v8-comparison.jpg",
+      "bytes": 337074,
+      "sha256": "88910a76e86cbf97990c918c6c6bd8315b7991c5db07c46ea8dbc4fa88396e92"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v7-v8-focused-comparison.jpg",
+      "bytes": 105994,
+      "sha256": "3ddd4af18b1891a92683583ef0927ff40f2dd08d17bc948d2f3575a4f08cd75e"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v9-v10-comparison.jpg",
+      "bytes": 346923,
+      "sha256": "021441c055cdc51638bbb212abdf26ca1ed310dce3d04b796572556847e948bf"
+    },
+    {
+      "path": "docs/design/WP-M01-003/native-v9-v10-focused-comparison.jpg",
+      "bytes": 136116,
+      "sha256": "f4138c18c02806f1a0b8ad635b4c5618c7ffdc0f409076b235c493dd87c4b353"
+    },
+    {
+      "path": "docs/design/WP-M01-003/owner-direction-v2.md",
+      "bytes": 4132,
+      "sha256": "f2979cf898e5a67d381b7101e896ad74cba29157ab359d0b444116adca2d10c1"
+    },
+    {
+      "path": "docs/design/WP-M01-003/owner-direction-v3.md",
+      "bytes": 3027,
+      "sha256": "a88f9d8ff6988964fc8594e36da6824e3dc35fea5f5f3704fe5298ab29b4a1be"
+    },
+    {
+      "path": "docs/design/WP-M01-003/owner-direction-v4.md",
+      "bytes": 3215,
+      "sha256": "14bfe0c7128a739bfe9692ce0faca583ba724e456dc8e8149dd86d0a889fe3cc"
+    },
+    {
+      "path": "docs/design/WP-M01-003/owner-direction-v5.md",
+      "bytes": 4723,
+      "sha256": "0b74e2d63a8e7f40cc59173f407704f6c3f238e07ab650c14449c933f59195e2"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-monochrome-v2-1536x971.png",
+      "bytes": 97341,
+      "sha256": "7545f81880f73ee7aefeea15ac6123dd95b5c689b25d035cbe6fc28e9527552f"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v10-projection-retry-1280x800.jpg",
+      "bytes": 101239,
+      "sha256": "3b78c88d1bc599e5105137d67339ff1f0d000f1e9d43e0a1d9d3da4badbfbfae"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v11-mica-1280x800.jpg",
+      "bytes": 100040,
+      "sha256": "cbfa36a84a60fc15c01b5addaf9a41b9a2096052454e64d24ab1453feb3d02b1"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v4-1280x800.jpg",
+      "bytes": 99903,
+      "sha256": "88575c1dcc650fac4dd579189e76dd61a2e1246c7020775869794dc819e728ba"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v4-grayscale-1280x800.jpg",
+      "bytes": 99010,
+      "sha256": "3067d3cc1051516fdb7c424f28e503bd4ebb71958471b2d28955166837c19577"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v5-acrylic-1280x800.jpg",
+      "bytes": 95161,
+      "sha256": "cae620b7f54a6161c735dcec66ca56aae05e670800e2debd32561d8c3584ef9c"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v6-owner-tuning-1280x800.png",
+      "bytes": 98632,
+      "sha256": "9736639be5eecf366d79118b2b87c466ce736d0398eb564fcfee1209a07db842"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v7-mica-wallpaper-1280x800.jpg",
+      "bytes": 99389,
+      "sha256": "2f5de310ab36e76f8eb0759b54029cfd4d6165960b3732e64a52b68cf2b6ddc4"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v8-internal-wallpaper-1280x800.jpg",
+      "bytes": 100040,
+      "sha256": "19bd8205ff831d606300904b384663369e6e79f4a8aa8d8c4139bebea1d10a0b"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-native-v9-blur-missing-1280x800.jpg",
+      "bytes": 101515,
+      "sha256": "50df43a5f8fd7bcac1823813bb9feea16118d6b182328f27e102ceb1d62f832b"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-owner-v3-2048x1280.png",
+      "bytes": 108197,
+      "sha256": "d162b630a21267523a26ae8eee4403e8b2694123c94c7e16d8a119090cafcade"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-owner-v3-empty-2048x1280.png",
+      "bytes": 69178,
+      "sha256": "39164a524e198462b13f13374ff1d3449d7cfc43c47a2b9495d403417442d5ce"
+    },
+    {
+      "path": "docs/design/WP-M01-003/project-chat-streaming-1280x720.png",
+      "bytes": 79639,
+      "sha256": "78bc14b74dee7872c8c8fc07ed9579709e8e3996bb53247dba996f4a1a25c2fc"
+    },
+    {
+      "path": "docs/design/WP-M01-003/shell-layer-after-v1.png",
+      "bytes": 98392,
+      "sha256": "62cac655859b854e3c1958eb4628e719685fad850d678cc9bbdda910d5e76059"
+    },
+    {
+      "path": "docs/design/WP-M01-003/shell-layer-before.png",
+      "bytes": 103633,
+      "sha256": "3350ba2c248b459c21aa5a8af833eb3ab32bf0d4bd103da85c42946184cf8067"
     },
     {
       "path": "docs/implementation/00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md",
@@ -940,28 +1185,28 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 14465,
-      "sha256": "c7b253e5d8703ec82beed3f11b2d8d5a6738eb0581f0ec8ff9177569253f8122"
+      "bytes": 14605,
+      "sha256": "5bd025835d880420fef24eadee3c8e2c9337fbf4c87f230ccdc66623ac213e59"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 2574,
-      "sha256": "11bdaf821089f1bc2e35abfe881d4a31d8be45efd8d4dc8d96da027023bae2e4"
+      "bytes": 2547,
+      "sha256": "05a83a4f4af7a443a2546b123e3c2d190a81b1215fd96e63486dbae1ceaf3268"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 3447,
-      "sha256": "1e86e60aa310a4b39ea34d9a0a2216aaa54b3f25f21c766080a562d514654dc5"
+      "bytes": 3455,
+      "sha256": "e213ee62c65a05e7bc643eaf475e9486d522a9176c09d5434241d67f6da3b201"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 7684,
-      "sha256": "a5b3277c37eaeaf1a5230122de04788ef4e26f238cd5597ff6a1dde167c91bb8"
+      "bytes": 7688,
+      "sha256": "bc70bb240a18e19a62e1a39dce1e39efc2a8f5c1da4078beb9a6c61bcdfeb3be"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 1484,
-      "sha256": "649e7e0e6483537e4fea3443b2e2cdb9cf302400efaedb93e4ffb9da922b4caf"
+      "bytes": 1312,
+      "sha256": "dfc6833c76f15707eaaee154d9e959c17fdc13256e2fd6a4a1b85ce788c0e771"
     },
     {
       "path": "generated/README.md",
@@ -1064,6 +1309,11 @@
       "sha256": "894e047aa5764a3393ff934ef42bf976171d48e2eb98f4e590d99cf15039154d"
     },
     {
+      "path": "planning/batches/AB-M01-003.json",
+      "bytes": 1206,
+      "sha256": "251d1b59e66af1cf106d9d681e46c55936a4d0f719038eaa4dcf517ec190abd3"
+    },
+    {
       "path": "planning/decisions/DEC-0001.json",
       "bytes": 1405,
       "sha256": "60644221a94a586ba74c2cb28d968b884ae057237590069b9ca61fafdc541cf7"
@@ -1095,8 +1345,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 34818,
-      "sha256": "eff9b4c00dc2ebb3b7521236680713ebf599ea6a9021d1d29d5ed0089171f9a9"
+      "bytes": 38498,
+      "sha256": "a38c69b2454bb22f82685308bee690ee7a29a90f64acf752e9085045ea45fa11"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1159,6 +1409,11 @@
       "sha256": "6c4535201f8572d6da31a367bc3cd94eb76633242289fa66a4fd746b26b09c63"
     },
     {
+      "path": "planning/results/WP-M01-003.json",
+      "bytes": 6327,
+      "sha256": "d758d877b2aeac476940e59f76bf24a53b271b73e01e0d557f1e465c87112632"
+    },
+    {
       "path": "planning/results/WP-M01-004.json",
       "bytes": 5047,
       "sha256": "46f76e5ee88dc28ba2a4d57f242b366a7f45d165c3a134fa7b49fc293f77cff7"
@@ -1185,8 +1440,8 @@
     },
     {
       "path": "pnpm-lock.yaml",
-      "bytes": 120676,
-      "sha256": "ae120449c2cf921ed280a8fd59b5356711a507e89a5a52ca8f07975ed30e9993"
+      "bytes": 138679,
+      "sha256": "a8ea1e6c058dac0714685f655309274f409a9efa179ed57dfa9ed2bb57d6e2e4"
     },
     {
       "path": "pnpm-workspace.yaml",
@@ -1535,8 +1790,8 @@
     },
     {
       "path": "tests/catalog/m01.seed.json",
-      "bytes": 22927,
-      "sha256": "397efccf07d4a9e6988d40bf49641f827e0833ed3a713d5d8805cf7114c9750e"
+      "bytes": 22993,
+      "sha256": "4cfb11f639261fc43390b52c10d78ba02a6d1806b3d84c5bd0215c4f848fde61"
     },
     {
       "path": "tests/contracts/README.md",

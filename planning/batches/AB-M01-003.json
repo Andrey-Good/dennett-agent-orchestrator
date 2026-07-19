@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "AB-M01-003",
+  "title": "Build the owner-reviewable Project Chat screen",
+  "status": "COMPLETED",
+  "packages": [
+    "WP-M01-003"
+  ],
+  "execution": {
+    "order": "dependency",
+    "max_parallel": 1,
+    "stop_after_packages": 1,
+    "merge_after_each": false,
+    "require_green_main": true
+  },
+  "limits": {
+    "max_risk": "R2",
+    "new_production_dependencies": "allow one tree-shakeable icon library; test-only accessibility and DOM dependencies are allowed",
+    "architecture_changes": "forbid daemon, provider, protocol, persistence and IPC changes",
+    "external_effects": "forbidden",
+    "public_breaking_changes": "forbidden"
+  },
+  "stop_conditions": [
+    "owner approval is required before merge",
+    "the reference direction conflicts with a canonical UX invariant",
+    "the renderer implies working Git, diff approval or project mutation",
+    "required test fails after two bounded repair attempts",
+    "scope expands beyond the single Project Chat renderer screen",
+    "main becomes red",
+    "merge conflict"
+  ],
+  "reporting": {
+    "on_package_start": true,
+    "on_package_end": true,
+    "on_decision": true,
+    "periodic_noise": false
+  }
+}
