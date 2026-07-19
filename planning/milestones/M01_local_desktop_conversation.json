@@ -454,7 +454,7 @@
       "version": 1,
       "id": "WP-M01-005",
       "title": "Persist local project sessions and revisioned watch state",
-      "status": "REFINED",
+      "status": "REVIEW",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R3",
@@ -556,7 +556,9 @@
         "The embedded Head is the sole canonical project-session writer. The narrow implementation path is a provider-neutral append-only session port with an in-memory fake, a WAL-backed SQLite control-store adapter, deterministic snapshot folding and a revision-aware watch reducer; client drafts remain explicitly non-canonical.",
         "WP-M01-002 already generated the bounded M01 SessionService snapshot/delta wire contract. This package implements that contract behind domain ports and keeps protocols/generated artifacts unchanged; protocol compatibility is still checked.",
         "The original draft acceptance mixed a storage contract with visible desktop behavior while apps are forbidden in this package. TEST-DRAFT-CACHE-RECOVERY-001 now qualifies the separate DraftCachePort here; TEST-DESKTOP-DRAFT-RECOVERY-001 remains a specified WP-M01-007 UI/E2E obligation. Draft rows never enter the canonical session event journal.",
-        "The gross diff budget was raised from 2800 to 5200 after the SQLite/SQLx dependency lock accounted for about 1148 generated lines and the real R3 persistence, integrity, migration, watch and restart tests exceeded the original estimate. Detached and self-review hardening added a versioned exact-byte event checksum plus retry and watch-boundary regression tests; recovery behavior and negative tests are not compressed to optimize the counter."
+        "The gross diff budget was raised from 2800 to 5200 after the SQLite/SQLx dependency lock accounted for about 1148 generated lines and the real R3 persistence, integrity, migration, watch and restart tests exceeded the original estimate. Detached and self-review hardening added a versioned exact-byte event checksum plus retry and watch-boundary regression tests; recovery behavior and negative tests are not compressed to optimize the counter.",
+        "Canonical SQLite acknowledgements use WAL plus synchronous FULL; process-exit recovery, transaction rollback, corruption, future-schema and migration-checksum failures are exercised without deleting or reinterpreting history.",
+        "Full repository checks and GitHub Fast Gate run 63 passed, and an independent read-only R3 closure review returned PASS for exact executable-code commit f0c8c932212e4e177db4362c78f64edf313a9123 against base 812cd6323d94abaa577761eb9026dc743c7c011d. Owner approval remains mandatory before merge."
       ]
     },
     {
