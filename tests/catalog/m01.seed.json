@@ -359,7 +359,7 @@
     {
       "id": "TEST-LOCAL-IPC-HANDSHAKE-001",
       "title": "Desktop and Node establish a versioned authenticated local IPC session",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "node", "ipc", "security"],
@@ -374,15 +374,20 @@
       ],
       "implementation": {
         "target_suite": "desktop Node IPC",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "adapters/transport/local-ipc/src/auth.rs",
+          "adapters/transport/local-ipc/src/client.rs",
+          "adapters/transport/local-ipc/src/service.rs",
+          "adapters/transport/local-ipc/src/transport/windows.rs"
+        ]
       },
       "owner": "transport"
     },
     {
       "id": "TEST-DESKTOP-NODE-LIFECYCLE-001",
       "title": "Closing the desktop window leaves Node and active state alive",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "node", "lifecycle", "recovery"],
@@ -397,15 +402,18 @@
       ],
       "implementation": {
         "target_suite": "desktop lifecycle integration",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "services/node/tests/desktop_lifecycle.rs",
+          "apps/desktop/src-tauri/src/system_bridge/mod.rs"
+        ]
       },
       "owner": "desktop"
     },
     {
       "id": "TEST-TAURI-WATCH-BRIDGE-001",
       "title": "Tauri forwards typed watch frames without owning domain state",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "tauri", "sync"],
@@ -420,8 +428,12 @@
       ],
       "implementation": {
         "target_suite": "Tauri bridge and renderer client",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "apps/desktop/src-tauri/src/system_bridge/dto.rs",
+          "apps/desktop/src-tauri/src/system_bridge/mod.rs",
+          "apps/desktop/src/lib/systemBridge.test.ts"
+        ]
       },
       "owner": "desktop"
     },

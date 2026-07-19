@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-project-chat"
+description = "Enables the project_chat command without any pre-configured scope."
+commands.allow = ["project_chat"]
+
+[[permission]]
+identifier = "deny-project-chat"
+description = "Denies the project_chat command without any pre-configured scope."
+commands.deny = ["project_chat"]

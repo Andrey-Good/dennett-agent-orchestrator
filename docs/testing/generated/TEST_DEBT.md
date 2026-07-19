@@ -12,9 +12,6 @@ Quarantined, waived, retired-without-replacement and not-yet-automated cases.
 | `TEST-HEAD-OPTIN-001` | `R3` | `trust` | missing automation | `tests/scenarios/head-promotion-opt-in.yaml` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `memory` | missing automation | `tests/scenarios/offline-client-memory-not-canonical.yaml` |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `desktop` | missing automation | — |
-| `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `desktop` | missing automation | — |
-| `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `transport` | missing automation | — |
 | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `quality` | missing automation | — |
 | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `quality` | missing automation | — |
 | `TEST-M01-TRACE-CORRELATION-001` | `R2` | `observability` | missing automation | — |
-| `TEST-TAURI-WATCH-BRIDGE-001` | `R2` | `desktop` | missing automation | — |

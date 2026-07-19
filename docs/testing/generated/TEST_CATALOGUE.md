@@ -8,7 +8,7 @@
 
 ## Summary
 
-- Status: `automated` 24, `manual` 1, `specified` 10
+- Status: `automated` 27, `manual` 1, `specified` 7
 - Risk: `R1` 8, `R2` 22, `R3` 5
 - Domain: `accessibility` 1, `adapters` 1, `agents` 10, `architecture` 1, `authentication` 1, `ci` 1, `compatibility` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 12, `devices` 2, `documentation` 2, `effects` 1, `head` 3, `ipc` 1, `lifecycle` 1, `memory` 5, `node` 4, `observability` 1, `planning` 4, `project-chat` 2, `protocol` 3, `providers` 6, `recovery` 5, `reliability` 1, `repository` 8, `rust` 1, `security` 1, `sessions` 5, `storage` 1, `streaming` 2, `sync` 3, `tauri` 1, `testing` 4, `tooling` 1, `trust` 1, `ux` 1
 
@@ -23,15 +23,15 @@
 | `TEST-CODEX-SDK-CONTRACT-001` | Codex SDK adapter preserves the provider boundary | `adapters`, `agents`, `providers` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-FAKE-CHAT-001` | Credential-free fake conversation reaches result and memory | `agents`, `head`, `memory`, `repository` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | Codex SDK live canary uses ChatGPT subscription authentication | `agents`, `authentication`, `providers` | `R2` | `manual` | `critical` | `agents` | `manual` |
+| `TEST-DESKTOP-NODE-LIFECYCLE-001` | Closing the desktop window leaves Node and active state alive | `desktop`, `lifecycle`, `node`, `recovery` | `R2` | `automated` | `critical` | `desktop` | `automated` |
 | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | Project Chat remains operable by keyboard and assistive technology | `accessibility`, `desktop`, `project-chat` | `R2` | `automated` | `critical` | `desktop` | `automated` |
 | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | Project Chat renders the approved workbench states | `desktop`, `project-chat`, `ux` | `R2` | `automated` | `critical` | `desktop` | `automated` |
 | `TEST-DRAFT-CACHE-RECOVERY-001` | Local draft cache restores without entering canonical session history | `desktop`, `recovery`, `sessions`, `storage` | `R2` | `automated` | `high` | `desktop` | `automated` |
+| `TEST-LOCAL-IPC-HANDSHAKE-001` | Desktop and Node establish a versioned authenticated local IPC session | `desktop`, `ipc`, `node`, `security` | `R2` | `automated` | `critical` | `transport` | `automated` |
+| `TEST-TAURI-WATCH-BRIDGE-001` | Tauri forwards typed watch frames without owning domain state | `desktop`, `sync`, `tauri` | `R2` | `automated` | `critical` | `desktop` | `automated` |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | Unsent desktop draft survives UI restart without becoming canonical memory | `desktop`, `recovery`, `sessions` | `R2` | `specified` | `high` | `desktop` | `planned` |
-| `TEST-DESKTOP-NODE-LIFECYCLE-001` | Closing the desktop window leaves Node and active state alive | `desktop`, `lifecycle`, `node`, `recovery` | `R2` | `specified` | `critical` | `desktop` | `planned` |
-| `TEST-LOCAL-IPC-HANDSHAKE-001` | Desktop and Node establish a versioned authenticated local IPC session | `desktop`, `ipc`, `node`, `security` | `R2` | `specified` | `critical` | `transport` | `planned` |
 | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | Local desktop conversation completes and restores end to end | `agents`, `desktop`, `head`, `memory`, `node` | `R2` | `specified` | `critical` | `quality` | `planned` |
 | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | Provider timeout is visible recoverable and never shown as success | `agents`, `desktop`, `providers`, `recovery` | `R2` | `specified` | `critical` | `quality` | `planned` |
-| `TEST-TAURI-WATCH-BRIDGE-001` | Tauri forwards typed watch frames without owning domain state | `desktop`, `sync`, `tauri` | `R2` | `specified` | `critical` | `desktop` | `planned` |
 | `TEST-EFFECT-UNKNOWN-001` | Unknown external effect is reconciled instead of blindly retried | `connectors`, `effects` | `R3` | `specified` | `critical` | `effects` | `planned` |
 | `TEST-HEAD-OPTIN-001` | Unapproved device cannot promote itself to Head | `devices`, `head`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | Client cache cannot become a second canonical memory | `devices`, `memory`, `sync` | `R3` | `specified` | `critical` | `memory` | `planned` |

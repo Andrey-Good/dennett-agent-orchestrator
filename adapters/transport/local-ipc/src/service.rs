@@ -20,7 +20,9 @@ use crate::protocol::dennett::sync::v1::{
     ResyncReason as WireResyncReason, ResyncRequired, WatchCursor as WireWatchCursor,
     WatchHeartbeat,
 };
-use crate::{LocalEndpoint, PeerIdentity, SessionRegistry, TransportError};
+use crate::{
+    DEFAULT_MAX_MESSAGE_BYTES, LocalEndpoint, PeerIdentity, SessionRegistry, TransportError,
+};
 use dennett_head::system::{
     ProjectSummary, SessionSummary, SystemDelta, SystemHealth, SystemMutation, SystemSnapshot,
     SystemStateError, SystemStatePort, SystemWatchFrame as DomainWatchFrame,
@@ -175,7 +177,11 @@ where
 {
     let incoming = crate::transport::secure_incoming(endpoint)?;
     tonic::transport::Server::builder()
-        .add_service(SystemServiceServer::new(service))
+        .add_service(
+            SystemServiceServer::new(service)
+                .max_decoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize)
+                .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize),
+        )
         .serve_with_incoming_shutdown(incoming, shutdown)
         .await
         .map_err(TransportError::from)

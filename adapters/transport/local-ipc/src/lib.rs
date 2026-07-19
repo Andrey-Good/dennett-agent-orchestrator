@@ -13,7 +13,7 @@ mod transport;
 #[cfg(feature = "server")]
 pub use auth::{HandshakePolicy, SessionRegistry};
 #[cfg(feature = "client")]
-pub use client::{AuthenticatedSystemClient, ClientConfig, ClientError};
+pub use client::{AuthenticatedSystemClient, AuthenticatedSystemWatch, ClientConfig, ClientError};
 #[cfg(feature = "server")]
 pub use service::{SystemServiceAdapter, run_system_server};
 pub use transport::{LocalEndpoint, PeerIdentity, TransportError};
