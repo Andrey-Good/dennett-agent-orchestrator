@@ -6,10 +6,13 @@
     "summary": "Added the provider-neutral M01 streaming runtime lifecycle, a deterministic scripted Rust fake and a Codex SDK 0.144.5 adapter with opaque continuation, scoped idempotent Stop, deadlines, safe failure normalization and bounded stale-stream cleanup.",
     "commits": [
       "5e459b58c94e556eb18dbbed1c1169aaa0b960cb",
-      "800b159",
-      "d8536b9c08315f678e5bf584b96ae1db245223cd"
+      "800b159a18b788ca2065b945e86fae61d0bc4e2f",
+      "d8536b9c08315f678e5bf584b96ae1db245223cd",
+      "5a414a5b07e08694ea9f22e99eae525a86f8908b",
+      "ea23b543cc4c4868e26ef07f959036fdd235fab9"
     ],
     "merge_ready_at": "2026-07-18",
+    "merged_at": "2026-07-19",
     "changed_files": [
       "crates/dennett-agent-core/src/runtime.rs",
       "crates/dennett-agent-core/src/fake.rs",
