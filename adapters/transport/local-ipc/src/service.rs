@@ -1,12 +1,14 @@
+#[cfg(windows)]
+use crate::DEFAULT_MAX_MESSAGE_BYTES;
 use crate::auth::AuthError;
 use crate::protocol::dennett::common::v1::ErrorEnvelope;
 use crate::protocol::dennett::control::v1::bootstrap_response;
 use crate::protocol::dennett::control::v1::get_health_response;
 use crate::protocol::dennett::control::v1::handshake_response;
 use crate::protocol::dennett::control::v1::system_mutation;
-use crate::protocol::dennett::control::v1::system_service_server::{
-    SystemService, SystemServiceServer,
-};
+use crate::protocol::dennett::control::v1::system_service_server::SystemService;
+#[cfg(windows)]
+use crate::protocol::dennett::control::v1::system_service_server::SystemServiceServer;
 use crate::protocol::dennett::control::v1::system_watch_frame;
 use crate::protocol::dennett::control::v1::{
     BootstrapRequest, BootstrapResponse, BootstrapSnapshot, GetHealthRequest, GetHealthResponse,
@@ -20,9 +22,7 @@ use crate::protocol::dennett::sync::v1::{
     ResyncReason as WireResyncReason, ResyncRequired, WatchCursor as WireWatchCursor,
     WatchHeartbeat,
 };
-use crate::{
-    DEFAULT_MAX_MESSAGE_BYTES, LocalEndpoint, PeerIdentity, SessionRegistry, TransportError,
-};
+use crate::{LocalEndpoint, PeerIdentity, SessionRegistry, TransportError};
 use dennett_head::system::{
     ProjectSummary, SessionSummary, SystemDelta, SystemHealth, SystemMutation, SystemSnapshot,
     SystemStateError, SystemStatePort, SystemWatchFrame as DomainWatchFrame,

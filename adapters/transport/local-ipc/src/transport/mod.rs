@@ -38,6 +38,7 @@ impl LocalEndpoint {
         &self.installation_id
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn pipe_name(&self) -> &str {
         &self.pipe_name
     }

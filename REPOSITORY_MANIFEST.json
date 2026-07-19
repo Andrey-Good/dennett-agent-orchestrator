@@ -225,13 +225,13 @@
     },
     {
       "path": "adapters/transport/local-ipc/src/service.rs",
-      "bytes": 23188,
-      "sha256": "48253410e49c71f383461dcab6f6fe36b7be8449e2eb1985dafb3e60bf4d52ca"
+      "bytes": 23281,
+      "sha256": "30e35c622e8f50ae82b673249f709dca9373e0f04ce4459accbf7d905388145a"
     },
     {
       "path": "adapters/transport/local-ipc/src/transport/mod.rs",
-      "bytes": 3574,
-      "sha256": "b304cbbfd7160e10f4c0c14811c4f68ac23201028f32e3bf591f969d208e654e"
+      "bytes": 3605,
+      "sha256": "d17738b8ec30dc08b5b77b014c64dec3a6228c80bcfded695c36a8eb563412ca"
     },
     {
       "path": "adapters/transport/local-ipc/src/transport/windows.rs",
