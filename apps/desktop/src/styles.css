@@ -132,6 +132,18 @@ html.native-shell .resource-panel {
   -webkit-backdrop-filter: none;
 }
 
+/* Tauri silently ignores Mica on unsupported systems. The native bridge marks
+   that case so a transparent WebView can never turn into an unreadable window. */
+html.native-shell.native-mica-unavailable .workbench { background: #1c1c1c; }
+html.native-shell.native-mica-unavailable .main-workspace { background: #181818; }
+html.native-shell.native-mica-unavailable .message--user .message-copy,
+html.native-shell.native-mica-unavailable .composer,
+html.native-shell.native-mica-unavailable .resource-panel,
+html.native-shell.native-mica-unavailable .resource-dock,
+html.native-shell.native-mica-unavailable .command-dialog,
+html.native-shell.native-mica-unavailable .composer-popover { background: #2d2d2d; }
+html.native-shell.native-mica-unavailable .main-workspace::after { display: none; }
+
 .titlebar {
   position: relative;
   grid-column: 1 / -1;
@@ -727,4 +739,14 @@ html.native-shell .resource-panel {
   .composer, .resource-panel, .resource-dock, .command-dialog, .composer-popover { backdrop-filter: none; -webkit-backdrop-filter: none; background: #232323; }
   .account-dock { backdrop-filter: none; -webkit-backdrop-filter: none; background: transparent; }
   .main-workspace::after { display: none; }
+  html.native-shell .workbench { background: #1c1c1c; }
+  html.native-shell .workbench::before { background: transparent; }
+  html.native-shell .main-workspace { background: #181818; }
+  html.native-shell .message--user .message-copy,
+  html.native-shell .composer,
+  html.native-shell .resource-panel,
+  html.native-shell .resource-dock,
+  html.native-shell .command-dialog,
+  html.native-shell .composer-popover { background: #2d2d2d; }
+  html.native-shell .main-workspace::after { display: none; }
 }

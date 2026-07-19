@@ -9,6 +9,7 @@
 ## Current implementation evidence
 
 - `apps/desktop/src-tauri/tauri.conf.json` uses the native Tauri Windows boundary: `transparent: true` and `windowEffects.effects: ["mica"]`. It does not declare Acrylic or an explicit transparent `backgroundColor`.
+- The native bridge checks the real Windows build before claiming Mica support. Unsupported systems and reduced-transparency preferences receive an opaque neutral fallback instead of an unreadable transparent WebView.
 - `apps/desktop/src/styles.css` leaves the native roots and unified top/left shell transparent, applies a `36%` opaque / `64%` transparent `#181818` density layer to the full central workspace, keeps the resource panel inset above that workspace and reserves the physical right edge for the conversation scrollbar. Static inspection confirms no second full-size opaque central layer.
 - The composer, sent user messages and Workspace panel use a `24%` local-opacity `#2d2d2d` tint above the central layer. Sequential compositing leaves about `49%` of native Mica visible, versus `64%` in the center, so these surfaces remain denser without reading as solid slabs. The redundant composer/resource WebView backdrop blur is disabled in the native shell because it flattened the already-diffused Mica.
 - Conversation and composer text are one pixel larger; left navigation and Workspace/resource text are two pixels larger while preserving the primary/secondary contrast hierarchy.
@@ -16,6 +17,8 @@
 - The selected chat uses a translucent white fill. It no longer copies the dark central material.
 - The previous large top-edge `backdrop-filter` was removed. The compact transition extends beneath the resource panel to the right edge while stopping before the scrollbar, without creating a separate GPU blur rectangle.
 - `apps/desktop/src/App.test.tsx` guards the native Mica configuration and the absence of the retired internal wallpaper layer.
+- Fixture state, Stop state, sent local messages and unsent drafts are scoped by session; keyboard switching A→B→A is covered so one chat cannot change another.
+- Context and plugin popovers expose their dialog relationship, move focus on open, restore focus on Escape and pass automated accessibility checks in their open states.
 
 ## Visual evidence and history
 
@@ -27,12 +30,13 @@
 
 ## Automated verification
 
-- Desktop component suite: 17 tests passed.
+- Desktop component suite: 18 tests passed.
 - Coverage includes all material fixture states, per-session draft isolation, project-scoped creation, focus restoration, Command Center keyboard behavior, access/runtime controls, resource opening, structural accessibility and native Mica configuration.
 - Desktop typecheck: passed.
 - Desktop production build: passed.
 - Rust workspace tests: passed, including runtime conformance, persistence/restart, journal integrity, watch-gap/resync, draft recovery and Head eligibility coverage.
 - Official Tauri release build without installer bundling: passed. The executable is `apps/desktop/src-tauri/target/release/dennett-desktop-shell.exe`.
+- Native shell unit test covers the Windows 11 Mica build boundary and fail-closed unknown-platform behavior.
 - `git diff --check`: passed before the acceptance-record update and is rerun as part of package closure.
 
 ## Current findings

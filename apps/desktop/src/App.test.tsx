@@ -56,6 +56,8 @@ describe("Project Chat workbench", () => {
     expect(stylesCss).toMatch(/\.message--user \.message-copy \{[\s\S]*?border: 0;/);
     expect(stylesCss).toMatch(/\.composer \{[\s\S]*?border: 0;/);
     expect(stylesCss).toMatch(/\.resource-panel \{[\s\S]*?border: 0;/);
+    expect(stylesCss).toContain("html.native-shell.native-mica-unavailable .workbench { background: #1c1c1c; }");
+    expect(stylesCss).toMatch(/@media \(prefers-reduced-transparency: reduce\) \{[\s\S]*?html\.native-shell \.main-workspace \{ background: #181818; \}/);
 
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
     const view = render(<App />);
@@ -84,6 +86,7 @@ describe("Project Chat workbench", () => {
     expect(within(primaryNavigation).getByRole("button", { name: "Chats" })).toBeVisible();
     expect(within(primaryNavigation).queryByRole("button", { name: "New chat" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Install available update" })).not.toBeInTheDocument();
+    expect(screen.getByText("Owner direction v5")).toBeVisible();
 
     const messages = screen.getAllByRole("article");
     expect(messages.some((message) => message.classList.contains("message--user"))).toBe(true);
@@ -155,19 +158,28 @@ describe("Project Chat workbench", () => {
     expect(screen.queryByRole("heading", { name: "Start with the project" })).not.toBeInTheDocument();
   });
 
-  it("keeps local draft messages scoped to their session and creates a distinct chat", async () => {
+  it("keeps local messages and unsent drafts scoped to their session and creates a distinct chat", async () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
 
     const composer = screen.getByRole("textbox", { name: "Message to project agent" });
+    const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
+    await user.type(composer, "Unsent owner draft");
+    await user.click(within(sidebar).getByRole("button", { name: /M01 protocol epoch/ }));
+    expect(composer).toHaveValue("");
+    await user.type(composer, "Protocol-only draft");
+    await user.click(within(sidebar).getByRole("button", { name: /Project Chat owner checkpoint/ }));
+    expect(composer).toHaveValue("Unsent owner draft");
+
+    await user.clear(composer);
     await user.type(composer, "Only visible in the owner checkpoint");
     fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true });
     expect(await screen.findByText("Only visible in the owner checkpoint")).toBeVisible();
 
-    const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
     await user.click(within(sidebar).getByRole("button", { name: /M01 protocol epoch/ }));
     expect(screen.queryByText("Only visible in the owner checkpoint")).not.toBeInTheDocument();
+    expect(composer).toHaveValue("Protocol-only draft");
 
     await user.click(within(sidebar).getByRole("button", { name: /Project Chat owner checkpoint/ }));
     expect(await screen.findByText("Only visible in the owner checkpoint")).toBeVisible();
@@ -186,6 +198,15 @@ describe("Project Chat workbench", () => {
     const stop = await screen.findByRole("button", { name: 'Stop generation for session "Project Chat owner checkpoint"' });
 
     await user.click(stop);
+    expect(await screen.findByText("Generation stopped for this session. The partial response is preserved.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Stop generation for session/ })).not.toBeInTheDocument();
+
+    const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
+    await user.click(within(sidebar).getByRole("button", { name: /M01 protocol epoch/ }));
+    expect(await screen.findByText("Codex is checking the renderer. You can steer or stop this session.")).toBeVisible();
+    expect(screen.getByRole("button", { name: 'Stop generation for session "M01 protocol epoch"' })).toBeVisible();
+
+    await user.click(within(sidebar).getByRole("button", { name: /Project Chat owner checkpoint/ }));
     expect(await screen.findByText("Generation stopped for this session. The partial response is preserved.")).toBeVisible();
     expect(screen.queryByRole("button", { name: /Stop generation for session/ })).not.toBeInTheDocument();
   });
@@ -262,6 +283,38 @@ describe("Project Chat workbench", () => {
     await user.click(screen.getByRole("button", { name: "Add context" }));
     expect(screen.getByRole("dialog", { name: "Add context" })).toBeVisible();
     expect(screen.getByRole("button", { name: /Files or folders/ })).toBeDisabled();
+  });
+
+  it("announces and focuses the context and plugin dialogs", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    const contextTrigger = screen.getByRole("button", { name: "Add context" });
+    expect(contextTrigger).toHaveAttribute("aria-controls", "composer-context-popover");
+    expect(contextTrigger).toHaveAttribute("aria-haspopup", "dialog");
+    expect(contextTrigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(contextTrigger);
+    const contextDialog = screen.getByRole("dialog", { name: "Add context" });
+    expect(contextTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(contextDialog).toHaveFocus();
+    const contextResult = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+    expect(contextResult.violations, contextResult.violations.map((violation) => violation.help).join("\n")).toEqual([]);
+    await user.keyboard("[Escape]");
+    await waitFor(() => expect(contextTrigger).toHaveFocus());
+
+    const pluginsTrigger = screen.getByRole("button", { name: "Plugins" });
+    expect(pluginsTrigger).toHaveAttribute("aria-controls", "composer-plugins-popover");
+    expect(pluginsTrigger).toHaveAttribute("aria-haspopup", "dialog");
+    expect(pluginsTrigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(pluginsTrigger);
+    const pluginsDialog = screen.getByRole("dialog", { name: "Plugins" });
+    expect(pluginsTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(pluginsDialog).toHaveFocus();
+    const pluginsResult = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+    expect(pluginsResult.violations, pluginsResult.violations.map((violation) => violation.help).join("\n")).toEqual([]);
+    await user.keyboard("[Escape]");
+    await waitFor(() => expect(pluginsTrigger).toHaveFocus());
   });
 
   it("expands the plan and opens resources in the central workspace", async () => {

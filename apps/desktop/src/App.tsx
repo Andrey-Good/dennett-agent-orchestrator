@@ -137,6 +137,9 @@ function IconButton({
   disabled = false,
   className = "",
   buttonRef,
+  ariaControls,
+  ariaExpanded,
+  ariaHasPopup,
 }: {
   label: string;
   icon: Icon;
@@ -145,6 +148,9 @@ function IconButton({
   disabled?: boolean;
   className?: string;
   buttonRef?: React.Ref<HTMLButtonElement>;
+  ariaControls?: string;
+  ariaExpanded?: boolean;
+  ariaHasPopup?: "dialog";
 }): React.JSX.Element {
   return (
     <button
@@ -152,6 +158,9 @@ function IconButton({
       type="button"
       className={`icon-button${active ? " is-active" : ""}${className ? ` ${className}` : ""}`}
       aria-label={label}
+      aria-controls={ariaControls}
+      aria-expanded={ariaExpanded}
+      aria-haspopup={ariaHasPopup}
       title={label}
       onClick={onClick}
       disabled={disabled || !onClick}
@@ -239,7 +248,7 @@ function ArtifactViewer({ surface, onClose }: { surface: WorkspaceSurface; onClo
 }
 
 export function App(): React.JSX.Element {
-  const [fixture, setFixture] = React.useState<FixtureId>("streaming");
+  const [fixturesBySession, setFixturesBySession] = React.useState<Record<string, FixtureId>>({ screen: "streaming" });
   const [snapshot, setSnapshot] = React.useState<ProjectChatSnapshot | null>(null);
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [resourcesOpen, setResourcesOpen] = React.useState(true);
@@ -248,7 +257,7 @@ export function App(): React.JSX.Element {
   const [localSessions, setLocalSessions] = React.useState<Array<SessionItem & { projectId?: string }>>([]);
   const [newProjectMenuOpen, setNewProjectMenuOpen] = React.useState(false);
   const [surface, setSurface] = React.useState<WorkspaceSurface>({ kind: "chat" });
-  const [draft, setDraft] = React.useState("");
+  const [draftsBySession, setDraftsBySession] = React.useState<Record<string, string>>({});
   const [localMessages, setLocalMessages] = React.useState<Record<string, ChatMessage[]>>({});
   const [announcement, setAnnouncement] = React.useState("Project Chat opened");
   const [commandOpen, setCommandOpen] = React.useState(false);
@@ -268,6 +277,10 @@ export function App(): React.JSX.Element {
   const accessFirstRef = React.useRef<HTMLButtonElement>(null);
   const runtimeTriggerRef = React.useRef<HTMLButtonElement>(null);
   const runtimeFirstRef = React.useRef<HTMLButtonElement>(null);
+  const contextTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const contextDialogRef = React.useRef<HTMLDivElement>(null);
+  const pluginsTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const pluginsDialogRef = React.useRef<HTMLDivElement>(null);
   const projectMenuRef = React.useRef<HTMLDivElement>(null);
   const projectMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
   const projectMenuFirstRef = React.useRef<HTMLButtonElement>(null);
@@ -285,6 +298,16 @@ export function App(): React.JSX.Element {
   const selectedTitle = allSessions.find((session) => session.id === selectedSession)?.title ?? allSessions[0].title;
   const selectedProject = visibleProjectGroups.find((project) => project.sessions.some((session) => session.id === selectedSession));
   const selectedLocalMessages = localMessages[selectedSession] ?? [];
+  const fixture = fixturesBySession[selectedSession] ?? "streaming";
+  const draft = draftsBySession[selectedSession] ?? "";
+
+  const setSelectedFixture = React.useCallback((nextFixture: FixtureId) => {
+    setFixturesBySession((fixtures) => ({ ...fixtures, [selectedSession]: nextFixture }));
+  }, [selectedSession]);
+
+  const setDraft = React.useCallback((nextDraft: string) => {
+    setDraftsBySession((drafts) => ({ ...drafts, [selectedSession]: nextDraft }));
+  }, [selectedSession]);
 
   const openCommandCenter = React.useCallback(() => {
     setComposerPopover(null);
@@ -297,7 +320,22 @@ export function App(): React.JSX.Element {
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("native-shell", nativeShell);
-    return () => document.documentElement.classList.remove("native-shell");
+    document.documentElement.classList.remove("native-mica-unavailable");
+    let current = true;
+    if (nativeShell) {
+      void import("@tauri-apps/api/core")
+        .then(({ invoke }) => invoke<boolean>("native_mica_available"))
+        .then((available) => {
+          if (current) document.documentElement.classList.toggle("native-mica-unavailable", !available);
+        })
+        .catch(() => {
+          if (current) document.documentElement.classList.add("native-mica-unavailable");
+        });
+    }
+    return () => {
+      current = false;
+      document.documentElement.classList.remove("native-shell", "native-mica-unavailable");
+    };
   }, [nativeShell]);
 
   React.useEffect(() => {
@@ -325,7 +363,11 @@ export function App(): React.JSX.Element {
           ? accessTriggerRef.current
           : composerPopover === "runtime"
             ? runtimeTriggerRef.current
-            : null;
+            : composerPopover === "context"
+              ? contextTriggerRef.current
+              : composerPopover === "plugins"
+                ? pluginsTriggerRef.current
+                : null;
         setComposerPopover(null);
         setNewProjectMenuOpen(false);
         requestAnimationFrame(() => {
@@ -348,6 +390,8 @@ export function App(): React.JSX.Element {
   }, [composerPopover]);
 
   React.useEffect(() => {
+    if (composerPopover === "context") contextDialogRef.current?.focus();
+    if (composerPopover === "plugins") pluginsDialogRef.current?.focus();
     if (composerPopover === "access") accessFirstRef.current?.focus();
     if (composerPopover === "runtime") runtimeFirstRef.current?.focus();
   }, [composerPopover]);
@@ -397,8 +441,9 @@ export function App(): React.JSX.Element {
   const startNewChat = (projectId?: string) => {
     const sessionId = `local-chat-${nextLocalSessionIdRef.current++}`;
     setLocalSessions((sessions) => [...sessions, { id: sessionId, title: "Untitled chat", meta: "now", projectId }]);
+    setFixturesBySession((fixtures) => ({ ...fixtures, [sessionId]: "empty" }));
+    setDraftsBySession((drafts) => ({ ...drafts, [sessionId]: "" }));
     setSelectedSession(sessionId);
-    setFixture("empty");
     setSurface({ kind: "chat" });
     setComposerPopover(null);
     setAnnouncement(projectId ? "New project chat preview opened." : "New standalone chat preview opened.");
@@ -426,7 +471,7 @@ export function App(): React.JSX.Element {
   };
 
   const stopGeneration = () => {
-    setFixture("stopped");
+    setSelectedFixture("stopped");
     setAnnouncement(`Stop requested for session "${selectedTitle}".`);
   };
 
@@ -650,8 +695,26 @@ export function App(): React.JSX.Element {
                   />
                   <div className="composer-toolbar">
                     <div className="composer-tools">
-                      <IconButton label="Add context" icon={Plus} active={composerPopover === "context"} onClick={() => setComposerPopover((open) => open === "context" ? null : "context")} />
-                      <IconButton label="Plugins" icon={Plug} active={composerPopover === "plugins"} onClick={() => setComposerPopover((open) => open === "plugins" ? null : "plugins")} />
+                      <IconButton
+                        label="Add context"
+                        icon={Plus}
+                        active={composerPopover === "context"}
+                        buttonRef={contextTriggerRef}
+                        ariaControls="composer-context-popover"
+                        ariaExpanded={composerPopover === "context"}
+                        ariaHasPopup="dialog"
+                        onClick={() => setComposerPopover((open) => open === "context" ? null : "context")}
+                      />
+                      <IconButton
+                        label="Plugins"
+                        icon={Plug}
+                        active={composerPopover === "plugins"}
+                        buttonRef={pluginsTriggerRef}
+                        ariaControls="composer-plugins-popover"
+                        ariaExpanded={composerPopover === "plugins"}
+                        ariaHasPopup="dialog"
+                        onClick={() => setComposerPopover((open) => open === "plugins" ? null : "plugins")}
+                      />
                       <button
                         ref={accessTriggerRef}
                         type="button"
@@ -687,14 +750,14 @@ export function App(): React.JSX.Element {
                 </div>
 
                 {composerPopover === "context" && (
-                  <div className="composer-popover popover-left" role="dialog" aria-label="Add context">
+                  <div ref={contextDialogRef} id="composer-context-popover" className="composer-popover popover-left" role="dialog" aria-label="Add context" tabIndex={-1}>
                     <strong>Add context</strong><p>Context effects arrive with typed local IPC.</p>
                     <button type="button" disabled><Plus size={14} />Files or folders<span>Later</span></button>
                     <button type="button" disabled><LinkSimple size={14} />URL or artifact<span>Later</span></button>
                   </div>
                 )}
                 {composerPopover === "plugins" && (
-                  <div className="composer-popover popover-left popover-plugins" role="dialog" aria-label="Plugins">
+                  <div ref={pluginsDialogRef} id="composer-plugins-popover" className="composer-popover popover-left popover-plugins" role="dialog" aria-label="Plugins" tabIndex={-1}>
                     <strong>Plugins</strong><p>No plugins are attached to this session.</p>
                     <button type="button" disabled><Plug size={14} />Browse plugins<span>Later</span></button>
                   </div>
@@ -773,13 +836,13 @@ export function App(): React.JSX.Element {
               <section className="resource-section" aria-labelledby="sources-heading">
                 <h3 id="sources-heading">Sources <span>3</span></h3>
                 <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Desktop specification", subtitle: "docs/specifications/60_…" })}><FileCode size={17} aria-hidden="true" /><span><strong>Desktop specification</strong><small>Project Workspace and Chat</small></span></button>
-                <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Owner direction v3", subtitle: "docs/design/WP-M01-003/…" })}><LinkSimple size={17} aria-hidden="true" /><span><strong>Owner direction v3</strong><small>Current visual contract</small></span></button>
+                <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Owner direction v5", subtitle: "docs/design/WP-M01-003/…" })}><LinkSimple size={17} aria-hidden="true" /><span><strong>Owner direction v5</strong><small>Current visual contract</small></span></button>
                 <button type="button" className="resource-row" onClick={() => openSurface({ kind: "source", title: "Draft pull request", subtitle: "github.com/Andrey-Good/…/pull/12" })}><GithubLogo size={17} aria-hidden="true" /><span><strong>Draft pull request</strong><small>PR #12</small></span></button>
               </section>
             </div>
 
             <footer className="resource-footer">
-              <label className="fixture-select"><span>Preview</span><select value={fixture} onChange={(event) => setFixture(event.target.value as FixtureId)} aria-label="Preview state">{fixtureIds.map((id) => <option key={id} value={id}>{fixtureLabels[id]}</option>)}</select><CaretDown size={12} aria-hidden="true" /></label>
+              <label className="fixture-select"><span>Preview</span><select value={fixture} onChange={(event) => setSelectedFixture(event.target.value as FixtureId)} aria-label="Preview state">{fixtureIds.map((id) => <option key={id} value={id}>{fixtureLabels[id]}</option>)}</select><CaretDown size={12} aria-hidden="true" /></label>
               <span className="git-status"><GitBranch size={13} aria-hidden="true" />codex/wp-m01-003 · clean</span>
             </footer>
           </div>

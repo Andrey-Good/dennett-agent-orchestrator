@@ -230,8 +230,8 @@
     },
     {
       "path": "apps/desktop/src-tauri/build.rs",
-      "bytes": 36,
-      "sha256": "cd0ac1f2fb0555a110a0298f504469b11502fe59744a2c7e6b1b2aa4aac425df"
+      "bytes": 40,
+      "sha256": "6aeeab41bc35efde4e3c2b644a6248f7fc06d24ae30b75c0d33491cbb0c1fa31"
     },
     {
       "path": "apps/desktop/src-tauri/capabilities/default.json",
@@ -275,8 +275,8 @@
     },
     {
       "path": "apps/desktop/src-tauri/src/main.rs",
-      "bytes": 441,
-      "sha256": "f2e9eb76c37c54913533963f58a8e9149af8737546a66dcf9d60bcd4b5c25db5"
+      "bytes": 1944,
+      "sha256": "475c7fb910b2b90e4705d175c6a6468fd40323d5eb4f6cb339c111bc783a0fec"
     },
     {
       "path": "apps/desktop/src-tauri/tauri.conf.json",
@@ -285,13 +285,13 @@
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
-      "bytes": 19617,
-      "sha256": "136309cc008aa7733e7d3c688638f740cec2180e253c3427a1dee54600ef1045"
+      "bytes": 23822,
+      "sha256": "b75dfb43cb72a321cd1191d30965902f03b965e63e42ee9a916c7255815e6e13"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 41048,
-      "sha256": "19fe5dc36189b063e2c9a42609a28a29dfc04992ba595ca1e65c3c15478cc042"
+      "bytes": 44005,
+      "sha256": "e7bc0a92e4fd25b7dd216eedf5f65685da03c12dc42a417ad386e6abb3aedfc5"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -310,8 +310,8 @@
     },
     {
       "path": "apps/desktop/src/styles.css",
-      "bytes": 33520,
-      "sha256": "b137dc8cc3281a678d13165f4ee99b59bec27b8f73cc1591cb6ad8dfb9280593"
+      "bytes": 35485,
+      "sha256": "6485e7801ed3e24aaa41ffb4d069a615d43745b6e10f03bda46bebc28d4c8505"
     },
     {
       "path": "apps/desktop/src/test/setup.ts",
@@ -570,13 +570,13 @@
     },
     {
       "path": "design-qa.md",
-      "bytes": 5026,
-      "sha256": "f0427c5d54a4c4700037b62302e9a15456ed02dbcf8f0e34ed592a99c0da8403"
+      "bytes": 6703,
+      "sha256": "d3d41b99be93c35c14150a45cecf14addd77fd3eb8e3d29668a61155f26908bb"
     },
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "8500f69dc51717bfb82034c3afb1454239c9e572ef19f66e825dd8c686b07499"
+      "sha256": "e9e9d54a6a24787328e71ae3558e18909748621939ab231a241a8388831e4783"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -795,8 +795,8 @@
     },
     {
       "path": "docs/design/WP-M01-003/owner-direction-v5.md",
-      "bytes": 3366,
-      "sha256": "e209c86a252df07e9c2b0c182095c89ce94c7424b08d748fb7987d065f6b4958"
+      "bytes": 4723,
+      "sha256": "0b74e2d63a8e7f40cc59173f407704f6c3f238e07ab650c14449c933f59195e2"
     },
     {
       "path": "docs/design/WP-M01-003/project-chat-monochrome-v2-1536x971.png",
@@ -1345,8 +1345,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 37874,
-      "sha256": "0d9e5660efc9f6417bc9514841886ddbc4c8caa11f31f07f520e9a551d00dad7"
+      "bytes": 38177,
+      "sha256": "1b278ad4591e822b495a4a5d31a58d7a1ee432d92f4e272de90a1dcfd096ac9f"
     },
     {
       "path": "planning/results/WP-M00-001.json",
