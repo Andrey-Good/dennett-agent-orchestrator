@@ -15,3 +15,8 @@ dennett-contracts = { path = "../../crates/dennett-contracts" }
 dennett-kernel = { path = "../../crates/dennett-kernel" }
 dennett-memory-core = { path = "../../crates/dennett-memory-core" }
 dennett-observability = { path = "../../crates/dennett-observability" }
+dennett-sync-core = { path = "../../crates/dennett-sync-core" }
+
+[dev-dependencies]
+tempfile.workspace = true
+dennett-storage-sqlite = { path = "../../adapters/storage/sqlite" }

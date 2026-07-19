@@ -2,8 +2,10 @@ import { Codex } from "@openai/codex-sdk";
 
 import {
   CodexCanaryError,
-  runSubscriptionCanary,
+  CANARY_THREAD_OPTIONS,
 } from "./codex-canary-lib.js";
+import { CodexRuntimeAdapter } from "./codex-runtime-adapter.js";
+import { runRuntimeAdapterCanary } from "./codex-runtime-canary.js";
 import {
   assertNoApiKeyEnvironment,
   createSubscriptionCodexOptions,
@@ -36,7 +38,10 @@ async function main(): Promise<void> {
       codexOptions.env ?? {},
     );
     const codex = new Codex(codexOptions);
-    const report = await runSubscriptionCanary(codex, {
+    const adapter = new CodexRuntimeAdapter(codex, {
+      threadOptions: CANARY_THREAD_OPTIONS,
+    });
+    const report = await runRuntimeAdapterCanary(adapter, {
       workingDirectory: workspace.workingDirectory,
       firstPrompt: FIRST_PROMPT,
       continuationPrompt: CONTINUATION_PROMPT,

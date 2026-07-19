@@ -12,10 +12,10 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-HEAD-OPTIN-001` | `R3` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `automated` | `automated` | evidence available |
 | `release` | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `specified` | `planned` | missing evidence |
+| `release` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `automated` | `automated` | evidence available |
+| `release` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `automated` | `automated` | evidence available |
+| `release` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `automated` | `automated` | evidence available |
+| `release` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `R2` | `manual` | `manual` | evidence available |
 | `release` | `TEST-CODEX-SDK-CONTRACT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `specified` | `planned` | missing evidence |
@@ -30,7 +30,7 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-TAURI-WATCH-BRIDGE-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `specified` | `planned` | missing evidence |
+| `release` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-BOOTSTRAP-CLEAN-001` | `R1` | `automated` | `automated` | evidence available |
 | `release` | `TEST-CATALOGUE-VIEWS-001` | `R1` | `automated` | `automated` | evidence available |
 | `release` | `TEST-MILESTONE-ACCEPTED-HANDOFF-001` | `R1` | `automated` | `automated` | evidence available |

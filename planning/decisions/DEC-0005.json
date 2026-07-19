@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "DEC-0005",
+  "work_package": "WP-M01-005",
+  "severity": "red",
+  "question": "Should Dennett merge the first durable local project-session schema after reviewing its recovery evidence and bounded limitations?",
+  "context": "WP-M01-005 introduces the first active-development persistent schema. The embedded Head remains the sole canonical writer; SQLite uses WAL plus synchronous FULL, exact stored-event checksums and explicit payload versions. Automated tests cover terminal and partial recovery, transactional rollback, corruption refusal, schema and migration mismatch, watch resync and child-process restart. Production backup, encryption, physical power-loss and multi-process writer testing remain explicitly outside this package.",
+  "options": [
+    {
+      "id": "A",
+      "description": "Reject the schema and keep project sessions process-local",
+      "benefits": [
+        "avoids committing the first durable development schema"
+      ],
+      "costs": [
+        "blocks desktop restart recovery and WP-M01-006 through WP-M01-007",
+        "discards the reviewed append-only journal and fault-handling work"
+      ],
+      "risks": [
+        "later IPC work may invent persistence semantics without the tested Head-owned boundary"
+      ]
+    },
+    {
+      "id": "B",
+      "description": "Accept the bounded schema and merge WP-M01-005",
+      "benefits": [
+        "provides deterministic restart recovery for completed and interrupted turns",
+        "fails closed on corruption or unknown schema instead of silently losing history",
+        "unblocks authenticated desktop IPC and full M01 qualification"
+      ],
+      "costs": [
+        "future schema revisions must use explicit migrations and preserve recovery compatibility"
+      ],
+      "risks": [
+        "the bounded development profile does not yet prove production backup, encryption or hardware-fault behavior"
+      ]
+    }
+  ],
+  "recommendation": "B",
+  "reason": "The first durable schema is narrow, Head-owned, provider-neutral, independently reviewed and covered by normal, restart, rollback, corruption and stale-stream tests; its remaining production-hardening boundary is explicit.",
+  "default_if_deferred": "stop",
+  "needed_by": "WP-M01-005",
+  "status": "resolved",
+  "resolution": {
+    "selected_option": "B",
+    "decided_by": "owner",
+    "decided_at": "2026-07-19",
+    "note": "The owner reviewed the storage behavior, confirmed that the core realistic tests are present, requested deeper cross-project hardening before final release, and explicitly approved WP-M01-005 for merge."
+  }
+}

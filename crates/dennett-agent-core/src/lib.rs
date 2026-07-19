@@ -1,37 +1,13 @@
-//! Provider-neutral agent runtime port and a deterministic fake.
+//! Provider-neutral agent runtime contracts and deterministic fakes.
 
-use async_trait::async_trait;
-use dennett_kernel::DennettResult;
+mod fake;
+mod runtime;
 
-#[derive(Clone, Debug)]
-pub struct AgentRequest {
-    pub prompt: String,
-    pub context_handles: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct AgentResponse {
-    pub text: String,
-    pub evidence_handles: Vec<String>,
-}
-
-#[async_trait]
-pub trait AgentRuntimePort: Send + Sync {
-    async fn respond(&self, request: AgentRequest) -> DennettResult<AgentResponse>;
-    async fn cancel(&self) -> DennettResult<()> {
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-pub struct FakeAgentRuntime;
-
-#[async_trait]
-impl AgentRuntimePort for FakeAgentRuntime {
-    async fn respond(&self, request: AgentRequest) -> DennettResult<AgentResponse> {
-        Ok(AgentResponse {
-            text: format!("Dennett skeleton received: {}", request.prompt),
-            evidence_handles: request.context_handles,
-        })
-    }
-}
+pub use fake::{FakeAgentRuntime, FakeRuntimeStep, ScriptedFakeAgentRuntime};
+pub use runtime::{
+    AgentRequest, AgentResponse, AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest,
+    CancellationAcknowledgement, NativeExtension, OpaqueContinuation, RuntimeCapabilities,
+    RuntimeDeadline, RuntimeDescriptor, RuntimeError, RuntimeErrorCode, RuntimeEvent,
+    RuntimeEventKind, RuntimeEventStream, RuntimeEventValidator, RuntimeKind, RuntimeTerminal,
+    RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, RuntimeUsage,
+};
