@@ -347,7 +347,7 @@
       "version": 1,
       "id": "WP-M01-004",
       "title": "Normalize streaming runtime continuation and control",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R2",
