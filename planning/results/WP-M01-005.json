@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M01-005",
+    "status": "completed",
+    "summary": "Added the first durable local project-session journal: the embedded Head is the canonical writer, SQLite persists versioned append-only events with transactional revision checks, watch consumers receive snapshot plus monotonic deltas with explicit resync, and drafts remain a separate non-canonical cache.",
+    "commits": [
+      "33c2abbda3b618b58c0898cd5507cd73adde66df",
+      "4345e29bdbba6ea7301b1d3a63eec1df0018cec5",
+      "f0c8c932212e4e177db4362c78f64edf313a9123"
+    ],
+    "merge_ready_at": "2026-07-19",
+    "changed_files": [
+      "adapters/storage/sqlite/**",
+      "crates/dennett-contracts/src/lib.rs",
+      "crates/dennett-memory-core/**",
+      "crates/dennett-sync-core/**",
+      "services/head/**",
+      "tests/catalog/m01.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M01_local_desktop_conversation.json",
+      "planning/results/WP-M01-005.json",
+      "Cargo.toml",
+      "Cargo.lock",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "SPEC-50:OperationLog",
+      "SPEC-50:WatchSnapshotDelta",
+      "M01:SessionRestore",
+      "M01:StreamResync",
+      "TEST-PROJECT-SESSION-RESTORE-001",
+      "TEST-WATCH-GAP-RESYNC-001",
+      "TEST-DRAFT-CACHE-RECOVERY-001"
+    ],
+    "tests": {
+      "passed": [
+        "10 SQLite adapter checks cover terminal-state reopen, transaction rollback, exact-envelope corruption, unsupported payload versions, future schemas, migration checksum mismatch, committed WAL recovery through a child process and non-canonical draft recovery",
+        "7 sync-core tests cover ordered snapshots and deltas, gap blocking, epoch invalidation, unavailable and revoked state, bounded sequence rules and stable draft command identity",
+        "3 memory-core tests cover deterministic event folding, changed-content idempotency rejection and immutable terminal history",
+        "3 Head session tests plus the embedded restart integration cover admission idempotency, monotonic watch state, lagged-stream resync and one-time recovered-draft submission",
+        "mise exec -- just check passed at executable-code head f0c8c932212e4e177db4362c78f64edf313a9123",
+        "GitHub Fast Gate runs 63 and 64 passed for the reviewed code head and the planning-only review head"
+      ],
+      "not_run": [
+        "physical power-loss, disk-full, permission-loss, antivirus-locking, sustained-load and multi-process-writer fault injection remain release-hardening obligations rather than claims of this bounded development profile",
+        "visible desktop restart and draft restoration remain WP-M01-007; authenticated desktop-to-Node IPC remains WP-M01-006",
+        "production encryption, backup and multi-device replication are outside WP-M01-005"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Independent read-only R3 review of exact executable-code commit f0c8c932212e4e177db4362c78f64edf313a9123 against base 812cd6323d94abaa577761eb9026dc743c7c011d returned PASS; the owner then reviewed the behavior, test boundary and limitations and explicitly approved merge on 2026-07-19.",
+      "findings_closed": [
+        "Required exact-byte checksums and explicit payload versions so corrupted or future events cannot be silently reinterpreted",
+        "Rejected cross-project command retries and preserved atomic rollback between event append and session-head revision",
+        "Required new-epoch handshakes and sequence-one snapshots before deltas can resume",
+        "Raised SQLite durability to WAL plus synchronous FULL and verified committed recovery through a real child process"
+      ],
+      "findings_open": []
+    },
+    "migrations": [
+      "adapters/storage/sqlite/migrations/0001_control_store.sql creates the versioned development control store and records its checksum"
+    ],
+    "observability_changes": [
+      "session revision, watch epoch and sequence, command correlation and recovery failures are observable without placing message content in metric labels",
+      "migration, integrity, stale-cursor and unsupported-version failures remain distinct"
+    ],
+    "known_limitations": [
+      "this is the first bounded development schema, not the final production backup, encryption or hardware-fault profile",
+      "SQLite is owned by one embedded Head process; multi-process canonical writers are not supported",
+      "desktop UI and local IPC are intentionally not connected by this package"
+    ],
+    "follow_up_candidates": [
+      "WP-M01-006",
+      "WP-M01-007",
+      "release-wide adversarial persistence and fault-injection hardening"
+    ],
+    "owner_decision_required": false
+  }
+}

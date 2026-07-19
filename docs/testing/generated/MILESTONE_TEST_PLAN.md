@@ -6,7 +6,7 @@
 
 Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 
-- Package status: `IN_PROGRESS` 1, `MERGED` 3, `REFINED` 2, `REVIEW` 1
+- Package status: `IN_PROGRESS` 1, `MERGED` 3, `MERGE_READY` 1, `REFINED` 2
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -22,9 +22,9 @@ Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 | `WP-M01-004` | `MERGED` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `automated` | `agents` |
 | `WP-M01-004` | `MERGED` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `automated` | `agents` |
 | `WP-M01-004` | `MERGED` | `TEST-CODEX-SDK-CONTINUATION-001` | `R2` | `automated` | `agents` |
-| `WP-M01-005` | `REVIEW` | `TEST-DRAFT-CACHE-RECOVERY-001` | `R2` | `automated` | `desktop` |
-| `WP-M01-005` | `REVIEW` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `automated` | `memory` |
-| `WP-M01-005` | `REVIEW` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `automated` | `sync` |
+| `WP-M01-005` | `MERGE_READY` | `TEST-DRAFT-CACHE-RECOVERY-001` | `R2` | `automated` | `desktop` |
+| `WP-M01-005` | `MERGE_READY` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `automated` | `memory` |
+| `WP-M01-005` | `MERGE_READY` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `automated` | `sync` |
 | `WP-M01-006` | `REFINED` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-006` | `REFINED` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `specified` | `transport` |
 | `WP-M01-006` | `REFINED` | `TEST-TAURI-WATCH-BRIDGE-001` | `R2` | `specified` | `desktop` |

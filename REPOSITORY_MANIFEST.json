@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 339,
+  "file_count": 341,
   "files": [
     {
       "path": ".editorconfig",
@@ -491,7 +491,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 11559,
-      "sha256": "b378919b0e93350e4ab51849884aaa59dc6c41c7337621d456c015c845012a07"
+      "sha256": "b49cbf31b61da42740e4940b8cd95f2920acada0e2e11770d8d7716966710059"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -945,8 +945,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 2586,
-      "sha256": "41d05609f745928505ab7e4e36990c0a1b16544821618e7b27cdcacf05427bfc"
+      "bytes": 2606,
+      "sha256": "e1988e787d978bf8ed3c209e51b18af92de474addcebd3a056c3921911184e9e"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1084,14 +1084,19 @@
       "sha256": "27362988cf65f92c0491ed65b3c938ed6c587262d3104bac32e8f6f259bdf9a5"
     },
     {
+      "path": "planning/decisions/DEC-0005.json",
+      "bytes": 2620,
+      "sha256": "783221eff850c86ca8014bdabfe54c8fac3f19f9986152e59a8ed3f8884f7aeb"
+    },
+    {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 29928,
       "sha256": "c4373263457a7bff9bcd94c5cff5ad8d2c7bc922c159ce5f525223fa6e4fd9b9"
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 34641,
-      "sha256": "28e3a3183a24ce668acbecf968c024a214335abdb74e4010e76355922e33eaa7"
+      "bytes": 34823,
+      "sha256": "a7a3aa1f80c87eadc73173a2a145252e5438cae5ef6c0d338d62c644650987b0"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1157,6 +1162,11 @@
       "path": "planning/results/WP-M01-004.json",
       "bytes": 5047,
       "sha256": "46f76e5ee88dc28ba2a4d57f242b366a7f45d165c3a134fa7b49fc293f77cff7"
+    },
+    {
+      "path": "planning/results/WP-M01-005.json",
+      "bytes": 4838,
+      "sha256": "b471446669c0bdb58149f662769fd78085f1337bb751ddafa68b05ec75e4de8b"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
