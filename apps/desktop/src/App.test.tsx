@@ -2,11 +2,19 @@ import React from "react";
 import axe from "axe-core";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { createFixtureDennettClient, type DennettClient } from "./fixtures/projectChat";
 import stylesCss from "./styles.css?raw";
 import tauriConfigRaw from "../src-tauri/tauri.conf.json?raw";
+
+const invokeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+
+function enableNativeShell(): void {
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+}
 
 const fixtureExpectations = [
   ["streaming", "Codex is checking the renderer. You can steer or stop this session."],
@@ -40,7 +48,7 @@ function contrastRatio(foreground: string, background: string): number {
 }
 
 describe("Project Chat workbench", () => {
-  it("uses native Mica without projecting wallpaper inside React", () => {
+  it("uses native Mica without projecting wallpaper inside React", async () => {
     const tauriConfig = JSON.parse(tauriConfigRaw);
     const mainWindow = tauriConfig.app.windows.find((windowConfig: { label?: string }) => windowConfig.label === "main");
 
@@ -59,10 +67,37 @@ describe("Project Chat workbench", () => {
     expect(stylesCss).toContain("html.native-shell.native-mica-unavailable .workbench { background: #1c1c1c; }");
     expect(stylesCss).toMatch(/@media \(prefers-reduced-transparency: reduce\) \{[\s\S]*?html\.native-shell \.main-workspace \{ background: #181818; \}/);
 
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    invokeMock.mockResolvedValueOnce(true);
+    enableNativeShell();
     const view = render(<App />);
     expect(document.documentElement).toHaveClass("native-shell");
+    expect(document.documentElement).toHaveClass("native-mica-unavailable");
     expect(view.container.querySelector(".desktop-wallpaper")).not.toBeInTheDocument();
+    await waitFor(() => expect(document.documentElement).not.toHaveClass("native-mica-unavailable"));
+
+    view.unmount();
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  });
+
+  it.each([
+    ["unavailable", false],
+    ["rejected", new Error("probe failed")],
+  ])("keeps the opaque native fallback when Mica is %s", async (_label, outcome) => {
+    let settleProbe: (() => void) | undefined;
+    const probe = new Promise<boolean>((resolve, reject) => {
+      settleProbe = outcome instanceof Error ? () => reject(outcome) : () => resolve(outcome);
+    });
+    invokeMock.mockReturnValueOnce(probe);
+    enableNativeShell();
+    const view = render(<App />);
+
+    expect(document.documentElement).toHaveClass("native-shell", "native-mica-unavailable");
+    await act(async () => {
+      settleProbe?.();
+      await probe.catch(() => false);
+    });
+    expect(invokeMock).toHaveBeenCalledWith("native_mica_available");
+    expect(document.documentElement).toHaveClass("native-mica-unavailable");
 
     view.unmount();
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");

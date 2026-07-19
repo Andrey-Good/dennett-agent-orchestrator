@@ -320,17 +320,15 @@ export function App(): React.JSX.Element {
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("native-shell", nativeShell);
-    document.documentElement.classList.remove("native-mica-unavailable");
+    document.documentElement.classList.toggle("native-mica-unavailable", nativeShell);
     let current = true;
     if (nativeShell) {
       void import("@tauri-apps/api/core")
         .then(({ invoke }) => invoke<boolean>("native_mica_available"))
         .then((available) => {
-          if (current) document.documentElement.classList.toggle("native-mica-unavailable", !available);
+          if (current && available) document.documentElement.classList.remove("native-mica-unavailable");
         })
-        .catch(() => {
-          if (current) document.documentElement.classList.add("native-mica-unavailable");
-        });
+        .catch(() => undefined);
     }
     return () => {
       current = false;

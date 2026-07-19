@@ -285,13 +285,13 @@
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
-      "bytes": 23822,
-      "sha256": "b75dfb43cb72a321cd1191d30965902f03b965e63e42ee9a916c7255815e6e13"
+      "bytes": 25141,
+      "sha256": "b997298401c6e54989af6d76f2bf900ea119a610247a35e11b1a4ee27c0e1656"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 44005,
-      "sha256": "e7bc0a92e4fd25b7dd216eedf5f65685da03c12dc42a417ad386e6abb3aedfc5"
+      "bytes": 43927,
+      "sha256": "081a68322721f5663a29025fc5903fd537e981c121e0c578ecd2eb508780a7d1"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -570,8 +570,8 @@
     },
     {
       "path": "design-qa.md",
-      "bytes": 6703,
-      "sha256": "d3d41b99be93c35c14150a45cecf14addd77fd3eb8e3d29668a61155f26908bb"
+      "bytes": 6799,
+      "sha256": "317df0137d7fc9d4a8e2d782a520c18c5626aa87a12c02f557faf53ca3738369"
     },
     {
       "path": "docs/CHECKSUMS.sha256",

@@ -30,13 +30,13 @@
 
 ## Automated verification
 
-- Desktop component suite: 18 tests passed.
+- Desktop component suite: 20 tests passed.
 - Coverage includes all material fixture states, per-session draft isolation, project-scoped creation, focus restoration, Command Center keyboard behavior, access/runtime controls, resource opening, structural accessibility and native Mica configuration.
 - Desktop typecheck: passed.
 - Desktop production build: passed.
 - Rust workspace tests: passed, including runtime conformance, persistence/restart, journal integrity, watch-gap/resync, draft recovery and Head eligibility coverage.
 - Official Tauri release build without installer bundling: passed. The executable is `apps/desktop/src-tauri/target/release/dennett-desktop-shell.exe`.
-- Native shell unit test covers the Windows 11 Mica build boundary and fail-closed unknown-platform behavior.
+- Native shell tests cover the Windows 11 Mica build boundary plus pending, unavailable, rejected and available capability-probe states; the opaque fallback is present before the asynchronous probe begins.
 - `git diff --check`: passed before the acceptance-record update and is rerun as part of package closure.
 
 ## Current findings
