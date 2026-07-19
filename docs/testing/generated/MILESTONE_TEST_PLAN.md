@@ -6,7 +6,7 @@
 
 Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 
-- Package status: `IN_PROGRESS` 1, `MERGED` 2, `REFINED` 4
+- Package status: `MERGED` 2, `MERGE_READY` 1, `REFINED` 4
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -18,10 +18,10 @@ Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 | `WP-M01-002` | `MERGED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
 | `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `desktop` |
-| `WP-M01-004` | `IN_PROGRESS` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `automated` | `agents` |
-| `WP-M01-004` | `IN_PROGRESS` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `automated` | `agents` |
-| `WP-M01-004` | `IN_PROGRESS` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `automated` | `agents` |
-| `WP-M01-004` | `IN_PROGRESS` | `TEST-CODEX-SDK-CONTINUATION-001` | `R2` | `automated` | `agents` |
+| `WP-M01-004` | `MERGE_READY` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `automated` | `agents` |
+| `WP-M01-004` | `MERGE_READY` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `automated` | `agents` |
+| `WP-M01-004` | `MERGE_READY` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `automated` | `agents` |
+| `WP-M01-004` | `MERGE_READY` | `TEST-CODEX-SDK-CONTINUATION-001` | `R2` | `automated` | `agents` |
 | `WP-M01-005` | `REFINED` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-005` | `REFINED` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `specified` | `memory` |
 | `WP-M01-005` | `REFINED` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `specified` | `sync` |

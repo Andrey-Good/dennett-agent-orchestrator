@@ -347,7 +347,7 @@
       "version": 1,
       "id": "WP-M01-004",
       "title": "Normalize streaming runtime continuation and control",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-01",
       "risk": "R2",
@@ -446,7 +446,8 @@
         "Implementation starts from green main c555b6a in isolated worktree C:/Dev/dennett-agent-orchestrator-wp-m01-004 on branch codex/wp-m01-004-streaming-runtime.",
         "dennett-agent-core owns scoped ordered runtime lifecycle semantics; the Node adapter host owns Codex SDK types, thread mapping and subscription-authenticated execution. Cancellation is idempotent and scoped by session plus runtime turn; timeout, cancellation and provider failure are distinct terminal outcomes.",
         "ADR-006 intentionally fixes the bounded M01 desktop control wire surface and excludes provider payloads. WP-M01-004 therefore keeps the new runtime conformance contract at the stable Rust port and Node adapter boundary while the existing generated control protocol remains unchanged and compatibility-checked.",
-        "The gross diff budget was raised from 2400 to 3600 instead of compressing lifecycle code, detached-review repairs, cross-language conformance tests or generated evidence after the real subscription canary was routed through the same adapter and provider-failure/privacy cases were added to both implementations."
+        "The gross diff budget was raised from 2400 to 3600 instead of compressing lifecycle code, detached-review repairs, cross-language conformance tests or generated evidence after the real subscription canary was routed through the same adapter and provider-failure/privacy cases were added to both implementations.",
+        "Detached R2 review closed unconsumed-stream disposal, protocol-accounting and stale-generation races; exact commit d8536b9 passed closure review, full repository checks, GitHub Fast Gate and the ChatGPT-subscription Codex canary."
       ]
     },
     {
