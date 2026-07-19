@@ -24,6 +24,8 @@ macro_rules! id_type {
 
 id_type!(ProjectId);
 id_type!(SessionId);
+id_type!(TurnId);
+id_type!(SessionEventId);
 id_type!(TaskId);
 id_type!(RunId);
 id_type!(CommandId);

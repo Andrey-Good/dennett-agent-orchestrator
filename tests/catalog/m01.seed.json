@@ -256,7 +256,7 @@
     {
       "id": "TEST-PROJECT-SESSION-RESTORE-001",
       "title": "Project session restores authoritative turns after restart",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R3",
       "domains": ["sessions", "memory", "recovery"],
@@ -271,15 +271,19 @@
       ],
       "implementation": {
         "target_suite": "embedded Head persistence",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "crates/dennett-memory-core/src/session.rs",
+          "adapters/storage/sqlite/src/lib.rs",
+          "services/head/tests/session_restore.rs"
+        ]
       },
       "owner": "memory"
     },
     {
       "id": "TEST-WATCH-GAP-RESYNC-001",
       "title": "A watch sequence gap marks state stale and requires resync",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["sync", "desktop", "sessions"],
@@ -294,8 +298,11 @@
       ],
       "implementation": {
         "target_suite": "watch reducer and Head stream",
-        "status": "planned",
-        "test_paths": ["crates/dennett-sync-core/src/lib.rs"]
+        "status": "automated",
+        "test_paths": [
+          "crates/dennett-sync-core/src/watch.rs",
+          "services/head/src/session.rs"
+        ]
       },
       "owner": "sync"
     },
@@ -308,7 +315,7 @@
       "domains": ["desktop", "sessions", "recovery"],
       "levels": ["component", "process-integration"],
       "requirement_refs": ["ARCH-83:DraftPersistence", "M01:SessionRestore"],
-      "work_package_refs": ["WP-M01-005"],
+      "work_package_refs": ["WP-M01-007"],
       "expected": [
         "An unsent composer draft restores after UI restart",
         "The draft is visibly unsent and never appears as a canonical session turn",
@@ -319,6 +326,33 @@
         "target_suite": "desktop draft persistence",
         "status": "planned",
         "test_paths": []
+      },
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-DRAFT-CACHE-RECOVERY-001",
+      "title": "Local draft cache restores without entering canonical session history",
+      "status": "automated",
+      "priority": "high",
+      "risk": "R2",
+      "domains": ["desktop", "sessions", "recovery", "storage"],
+      "levels": ["repository", "process-integration"],
+      "requirement_refs": ["ARCH-81:DraftPersistence", "M01:SessionRestore"],
+      "work_package_refs": ["WP-M01-005"],
+      "expected": [
+        "A draft record and its stable command identifier restore after the control store reopens",
+        "Draft edits retain one command identifier and a conflicting replacement is rejected",
+        "Draft rows never appear in the canonical project-session event journal",
+        "Sending once is idempotent and discarding the draft does not mutate canonical history"
+      ],
+      "implementation": {
+        "target_suite": "draft cache port and embedded Head recovery",
+        "status": "automated",
+        "test_paths": [
+          "crates/dennett-sync-core/src/draft.rs",
+          "adapters/storage/sqlite/src/lib.rs",
+          "services/head/tests/session_restore.rs"
+        ]
       },
       "owner": "desktop"
     },

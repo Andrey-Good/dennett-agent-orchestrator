@@ -1,5 +1,8 @@
 //! Domain-level operation log shapes; transport and storage are adapters.
 
+pub mod draft;
+pub mod watch;
+
 use dennett_contracts::{CommandId, DeviceId};
 use serde::{Deserialize, Serialize};
 

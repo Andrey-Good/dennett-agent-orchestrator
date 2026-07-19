@@ -4,13 +4,13 @@
 
 > Source: `tests/catalog/*.json`. Regenerate with `uv run python tools/generate_test_catalogue.py`.
 
-34 cases from 2 structured source file(s).
+35 cases from 2 structured source file(s).
 
 ## Summary
 
-- Status: `automated` 19, `manual` 1, `specified` 14
-- Risk: `R1` 8, `R2` 21, `R3` 5
-- Domain: `accessibility` 1, `adapters` 1, `agents` 10, `architecture` 1, `authentication` 1, `ci` 1, `compatibility` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 11, `devices` 2, `documentation` 2, `effects` 1, `head` 3, `ipc` 1, `lifecycle` 1, `memory` 5, `node` 4, `observability` 1, `planning` 4, `project-chat` 2, `protocol` 3, `providers` 6, `recovery` 4, `reliability` 1, `repository` 8, `rust` 1, `security` 1, `sessions` 4, `streaming` 2, `sync` 3, `tauri` 1, `testing` 4, `tooling` 1, `trust` 1, `ux` 1
+- Status: `automated` 22, `manual` 1, `specified` 12
+- Risk: `R1` 8, `R2` 22, `R3` 5
+- Domain: `accessibility` 1, `adapters` 1, `agents` 10, `architecture` 1, `authentication` 1, `ci` 1, `compatibility` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 12, `devices` 2, `documentation` 2, `effects` 1, `head` 3, `ipc` 1, `lifecycle` 1, `memory` 5, `node` 4, `observability` 1, `planning` 4, `project-chat` 2, `protocol` 3, `providers` 6, `recovery` 5, `reliability` 1, `repository` 8, `rust` 1, `security` 1, `sessions` 5, `storage` 1, `streaming` 2, `sync` 3, `tauri` 1, `testing` 4, `tooling` 1, `trust` 1, `ux` 1
 
 ## Cases
 
@@ -23,6 +23,7 @@
 | `TEST-CODEX-SDK-CONTRACT-001` | Codex SDK adapter preserves the provider boundary | `adapters`, `agents`, `providers` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-FAKE-CHAT-001` | Credential-free fake conversation reaches result and memory | `agents`, `head`, `memory`, `repository` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | Codex SDK live canary uses ChatGPT subscription authentication | `agents`, `authentication`, `providers` | `R2` | `manual` | `critical` | `agents` | `manual` |
+| `TEST-DRAFT-CACHE-RECOVERY-001` | Local draft cache restores without entering canonical session history | `desktop`, `recovery`, `sessions`, `storage` | `R2` | `automated` | `high` | `desktop` | `automated` |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | Unsent desktop draft survives UI restart without becoming canonical memory | `desktop`, `recovery`, `sessions` | `R2` | `specified` | `high` | `desktop` | `planned` |
 | `TEST-DESKTOP-NODE-LIFECYCLE-001` | Closing the desktop window leaves Node and active state alive | `desktop`, `lifecycle`, `node`, `recovery` | `R2` | `specified` | `critical` | `desktop` | `planned` |
 | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | Project Chat remains operable by keyboard and assistive technology | `accessibility`, `desktop`, `project-chat` | `R2` | `specified` | `critical` | `desktop` | `planned` |
@@ -47,6 +48,6 @@
 | `TEST-BOOTSTRAP-CLEAN-001` | Clean checkout bootstrap installs pinned development dependencies | `repository`, `tooling` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-REPO-STRUCTURE-001` | Required repository boundaries and AGENTS files exist | `architecture`, `repository` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-RUST-WORKSPACE-001` | Pinned Rust workspace format lint and tests pass | `repository`, `rust` | `R1` | `automated` | `critical` | `repository` | `automated` |
-| `TEST-PROJECT-SESSION-RESTORE-001` | Project session restores authoritative turns after restart | `memory`, `recovery`, `sessions` | `R3` | `specified` | `critical` | `memory` | `planned` |
-| `TEST-WATCH-GAP-RESYNC-001` | A watch sequence gap marks state stale and requires resync | `desktop`, `sessions`, `sync` | `R2` | `specified` | `critical` | `sync` | `planned` |
+| `TEST-PROJECT-SESSION-RESTORE-001` | Project session restores authoritative turns after restart | `memory`, `recovery`, `sessions` | `R3` | `automated` | `critical` | `memory` | `automated` |
+| `TEST-WATCH-GAP-RESYNC-001` | A watch sequence gap marks state stale and requires resync | `desktop`, `sessions`, `sync` | `R2` | `automated` | `critical` | `sync` | `automated` |
 | `TEST-CATALOGUE-VIEWS-001` | Structured catalogue generates deterministic human views | `documentation`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |

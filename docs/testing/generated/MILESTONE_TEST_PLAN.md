@@ -6,7 +6,7 @@
 
 Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 
-- Package status: `MERGED` 3, `REFINED` 4
+- Package status: `IN_PROGRESS` 1, `MERGED` 3, `REFINED` 3
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -16,18 +16,19 @@ Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 | `WP-M01-002` | `MERGED` | `TEST-M01-PROTOCOL-EPOCH-001` | `R3` | `automated` | `protocol` |
 | `WP-M01-002` | `MERGED` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
 | `WP-M01-002` | `MERGED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
-| `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `desktop` |
-| `WP-M01-003` | `REFINED` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-003` | `IN_PROGRESS` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-003` | `IN_PROGRESS` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-004` | `MERGED` | `TEST-AGENT-RUNTIME-CANCEL-001` | `R2` | `automated` | `agents` |
 | `WP-M01-004` | `MERGED` | `TEST-AGENT-RUNTIME-STREAM-001` | `R2` | `automated` | `agents` |
 | `WP-M01-004` | `MERGED` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `R2` | `automated` | `agents` |
 | `WP-M01-004` | `MERGED` | `TEST-CODEX-SDK-CONTINUATION-001` | `R2` | `automated` | `agents` |
-| `WP-M01-005` | `REFINED` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `specified` | `desktop` |
-| `WP-M01-005` | `REFINED` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `specified` | `memory` |
-| `WP-M01-005` | `REFINED` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `specified` | `sync` |
+| `WP-M01-005` | `REFINED` | `TEST-DRAFT-CACHE-RECOVERY-001` | `R2` | `automated` | `desktop` |
+| `WP-M01-005` | `REFINED` | `TEST-PROJECT-SESSION-RESTORE-001` | `R3` | `automated` | `memory` |
+| `WP-M01-005` | `REFINED` | `TEST-WATCH-GAP-RESYNC-001` | `R2` | `automated` | `sync` |
 | `WP-M01-006` | `REFINED` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-006` | `REFINED` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `specified` | `transport` |
 | `WP-M01-006` | `REFINED` | `TEST-TAURI-WATCH-BRIDGE-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-007` | `REFINED` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `specified` | `desktop` |
 | `WP-M01-007` | `REFINED` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `specified` | `quality` |
 | `WP-M01-007` | `REFINED` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `specified` | `quality` |
 | `WP-M01-007` | `REFINED` | `TEST-M01-TRACE-CORRELATION-001` | `R2` | `specified` | `observability` |

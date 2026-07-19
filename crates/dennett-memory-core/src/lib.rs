@@ -1,5 +1,7 @@
 //! One logical Memory Fabric with replaceable embedded/service persistence adapters.
 
+pub mod session;
+
 use async_trait::async_trait;
 use dennett_contracts::{MemoryEventId, ProjectId, SessionId};
 use dennett_kernel::DennettResult;
