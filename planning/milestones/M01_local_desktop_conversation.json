@@ -251,7 +251,7 @@
       "version": 1,
       "id": "WP-M01-003",
       "title": "Approve the first Project Chat workbench screen",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
@@ -281,6 +281,7 @@
         "packages",
         "tests/catalog",
         "docs/design",
+        "design-qa.md",
         "docs/testing/generated",
         "planning",
         "pnpm-lock.yaml",
@@ -319,9 +320,9 @@
         "TEST-DESKTOP-PROJECT-CHAT-A11Y-001"
       ],
       "required_commands": [
-        "corepack pnpm --filter @dennett/desktop typecheck",
-        "corepack pnpm --filter @dennett/desktop test",
-        "corepack pnpm --filter @dennett/desktop build"
+        "mise exec -- corepack pnpm --filter @dennett/desktop typecheck",
+        "mise exec -- corepack pnpm --filter @dennett/desktop test",
+        "mise exec -- corepack pnpm --filter @dennett/desktop build"
       ],
       "observability": [
         "visual review artifact records viewport, state fixture and commit",
@@ -332,16 +333,28 @@
       ],
       "owner_decision": {
         "required_before_start": false,
-        "required_before_merge": true
+        "required_before_merge": false
       },
       "estimate": {
         "target_agent_hours": 4,
-        "max_diff_lines": 2200
+        "max_diff_lines": 8000
       },
       "notes": [
         "The owner chose the first generated visual direction, requested more minimal composer settings at the bottom and explicitly rejected generated UX semantics as authority.",
         "Canonical UX comes from specification 60 plus independent review; the image is visual reference only.",
-        "The auxiliary pane is read-only in M01; real review and Git actions remain M02."
+        "The auxiliary pane is read-only in M01; real review and Git actions remain M02.",
+        "The gross diff budget includes the generated pnpm lockfile expansion for the icon and accessibility-test dependencies; increasing it from 2200 to 3200 prevents visual quality or test depth from being traded against a mechanical line counter.",
+        "At the second checkpoint the owner rejected every chromatic tint and the first-pass navigation, inspector and composer semantics, while retaining the minimal visual direction.",
+        "The second checkpoint is strictly achromatic, groups projects with their chats before standalone recent chats, uses a resource workspace with embedded presentation viewers and keeps the full plan progressively disclosed.",
+        "The earlier Windows checkpoint added custom controls, a transparent window and Acrylic material; native Mica later superseded Acrylic, and the generated monochrome app icon remains provisional rather than branding approval.",
+        "Owner approval is still mandatory before merge; the second-checkpoint evidence is docs/design/WP-M01-003/project-chat-monochrome-v2-1536x971.png.",
+        "The gross diff budget was corrected from 3200 to 8000 because the standalone reproducible Tauri shell adds a generated 4382-line Cargo.lock and platform icon binaries; the handwritten/source change remains within the original budget and was not simplified to optimize the counter.",
+        "Detached R2 review at 0c65a7b found one final P2 contrast gap in resource headings and counts; eed2138 routed those foregrounds through tested semantic tokens and added a literal text-color regression guard, and the closure re-review at b48520d returned PASS after independently running all 14 desktop tests. Owner visual approval remains mandatory before merge.",
+        "At the third checkpoint the owner requested collection-scoped creation actions, an integrated account strip, a seamless rounded top-left material, larger compact composer controls, improved empty prompts and a single workspace-panel toggle. The corrected renderer and truthful M01/M02 project-folder boundary are recorded in docs/design/WP-M01-003/owner-direction-v3.md; owner approval remains mandatory before merge.",
+        "Detached review of the third-checkpoint commit 49f6ca2 found two behavioral P2 defects: project-menu focus was not restored because its trigger ref was unattached, and Command Center chat creation ignored the selected project. Both were corrected with regression tests, and detached closure re-review of exact commit 297eb20 returned PASS after desktop typecheck and all 16 desktop tests. Owner visual approval remains mandatory before merge.",
+        "The fifth owner-material direction replaces custom wallpaper projection and large CSS backdrop surfaces with Tauri's native Windows 11 Mica foundation, a bounded neutral central density layer and white-on-gray semantic hierarchy. The owner reviewed the corrected release window live and accepted the screen on 2026-07-19; remaining general polish is deferred and does not block this package.",
+        "For subsequent substantial visual changes, prepare an editable Figma prototype first, let the owner tune and approve visual and UX choices there, then transfer the accepted frame to native code and verify platform-only material and behavior in the release application.",
+        "The final detached R2 closure review returned PASS for exact commit 3de0196cb1849f0467d2b9b7af91f729ea561ede after session isolation, reduced-transparency and non-Mica fallback, popup accessibility, metadata and current-contract findings were closed; the full repository gate and native release build also passed."
       ]
     },
     {
