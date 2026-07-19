@@ -22,9 +22,7 @@
         "transparent": true,
         "shadow": true,
         "windowEffects": {
-          "effects": [
-            "acrylic"
-          ]
+          "effects": ["mica"]
         }
       }
     ],

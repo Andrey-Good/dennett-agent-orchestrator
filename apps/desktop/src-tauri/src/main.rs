@@ -1,4 +1,3 @@
-
 #[tauri::command]
 async fn project_chat(text: String) -> Result<String, String> {
     // Repository skeleton only. Production code must call dennett-node over typed local IPC.

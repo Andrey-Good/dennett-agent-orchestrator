@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { createFixtureDennettClient, type DennettClient } from "./fixtures/projectChat";
 import stylesCss from "./styles.css?raw";
+import tauriConfigRaw from "../src-tauri/tauri.conf.json?raw";
 
 const fixtureExpectations = [
   ["streaming", "Codex is checking the renderer. You can steer or stop this session."],
@@ -39,6 +40,25 @@ function contrastRatio(foreground: string, background: string): number {
 }
 
 describe("Project Chat workbench", () => {
+  it("uses native Mica without projecting wallpaper inside React", () => {
+    const tauriConfig = JSON.parse(tauriConfigRaw);
+    const mainWindow = tauriConfig.app.windows.find((windowConfig: { label?: string }) => windowConfig.label === "main");
+
+    expect(mainWindow).toMatchObject({
+      transparent: true,
+      windowEffects: { effects: ["mica"] },
+    });
+    expect(mainWindow).not.toHaveProperty("backgroundColor");
+
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    const view = render(<App />);
+    expect(document.documentElement).toHaveClass("native-shell");
+    expect(view.container.querySelector(".desktop-wallpaper")).not.toBeInTheDocument();
+
+    view.unmount();
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  });
+
   it("renders the owner-directed zones and truthful runtime state", async () => {
     render(<App />);
 

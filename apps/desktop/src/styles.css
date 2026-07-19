@@ -10,14 +10,17 @@
   --surface-raised: #242424;
   --surface-soft: #2d2d2d;
   --surface-active: #343434;
-  --line: rgba(255, 255, 255, 0.075);
-  --line-strong: rgba(255, 255, 255, 0.14);
+  --line: rgba(255, 255, 255, 0.105);
+  --line-strong: rgba(255, 255, 255, 0.18);
   --text: #f1f1f1;
   --text-muted: #adadad;
   --text-faint: #a0a0a0;
+  --text-primary-glass: rgba(255, 255, 255, 0.92);
+  --icon-primary-glass: rgba(255, 255, 255, 0.84);
   --text-inverse: #181818;
   --surface-inverse: #ededed;
   --message-user: #2b2b2b;
+  --message-user-glass: rgba(43, 43, 43, 0.78);
   --focus: #dedede;
   --shell-glass: rgba(27, 27, 27, 0.64);
   --workspace-glass: rgba(15, 15, 15, 0.94);
@@ -50,6 +53,7 @@ button:disabled { cursor: not-allowed; opacity: 0.34; }
 
 .workbench {
   --left-shell-width: 316px;
+  --resource-shell-width: 316px;
   position: relative;
   isolation: isolate;
   display: grid;
@@ -72,20 +76,42 @@ button:disabled { cursor: not-allowed; opacity: 0.34; }
 }
 .workbench > * { position: relative; z-index: 1; }
 .workbench.sidebar-collapsed { --left-shell-width: 52px; grid-template-columns: 52px 0 minmax(480px, 1fr) 316px; }
-.workbench.resources-collapsed { grid-template-columns: 52px 264px minmax(480px, 1fr) 54px; }
-.workbench.sidebar-collapsed.resources-collapsed { grid-template-columns: 52px 0 minmax(480px, 1fr) 54px; }
+.workbench.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 264px minmax(480px, 1fr) 54px; }
+.workbench.sidebar-collapsed.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 0 minmax(480px, 1fr) 54px; }
 
-/* The browser preview stays opaque for faithful screenshots. The native shell
-   exposes the Windows Acrylic material through these translucent layers. */
+/* The browser preview stays opaque for deterministic screenshots. In the native
+   shell Windows owns the wallpaper-derived Mica material; React only adds the
+   achromatic density layers that establish the visual hierarchy. */
 html.native-shell .workbench { background: transparent; }
-html.native-shell .workbench::before { background: rgba(27, 27, 27, 0.38); }
-html.native-shell .main-workspace { background: rgba(15, 15, 15, 0.76); }
+html.native-shell .workbench::before {
+  background: rgba(255, 255, 255, 0.015);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html.native-shell .main-workspace {
+  background: rgba(58, 58, 58, 0.28);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html.native-shell .main-workspace::after {
+  background: linear-gradient(to bottom, rgba(58, 58, 58, 0.74), rgba(58, 58, 58, 0.2) 58%, transparent 100%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html.native-shell .chat-row.is-active,
+html.native-shell .recent-row.is-active {
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 html.native-shell .resource-area { background: transparent; }
 html.native-shell .titlebar,
 html.native-shell .activity-rail,
 html.native-shell .project-sidebar { background: transparent; }
-html.native-shell .composer,
-html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
+html.native-shell .composer { background: var(--message-user-glass); }
+html.native-shell .resource-panel {
+  background: var(--message-user-glass);
+}
 
 .titlebar {
   position: relative;
@@ -135,7 +161,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
 }
 .breadcrumbs span, .breadcrumbs strong { overflow: hidden; text-overflow: ellipsis; }
 .breadcrumbs span:nth-last-of-type(1) { max-width: 165px; }
-.breadcrumbs strong { max-width: 210px; color: var(--text-muted); font-weight: 570; }
+.breadcrumbs strong { max-width: 210px; color: var(--text-primary-glass); font-weight: 570; }
 
 .command-button {
   display: flex;
@@ -172,6 +198,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   width: 1px;
   content: "";
   background: var(--line);
+  box-shadow: 0 0 7px rgba(255, 255, 255, 0.055);
 }
 .rail-main { display: flex; align-items: center; flex-direction: column; gap: 5px; }
 .rail-brand {
@@ -195,8 +222,17 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   flex-direction: column;
   overflow: hidden;
   background: transparent;
-  box-shadow: inset -1px 0 var(--line);
 }
+.project-sidebar,
+.activity-rail,
+.account-dock { text-shadow: 0 0 10px rgba(255, 255, 255, 0.09); }
+.project-sidebar svg,
+.activity-rail svg,
+.account-dock svg { filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.1)); }
+.activity-rail .icon-button,
+.account-dock .icon-button,
+.rail-brand { color: var(--icon-primary-glass); }
+.activity-rail .icon-button.is-active { color: var(--text-primary-glass); }
 .sidebar-heading {
   position: relative;
   display: flex;
@@ -279,7 +315,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   gap: 9px;
   padding: 7px 10px;
   border-radius: 10px;
-  color: var(--text);
+  color: var(--text-primary-glass);
   font-size: 12px;
   cursor: default;
 }
@@ -310,14 +346,14 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   padding: 4px 9px;
   border: 0;
   border-radius: 11px;
-  color: var(--text-muted);
+  color: var(--text-primary-glass);
   background: transparent;
   font-size: 11px;
   text-align: left;
   cursor: pointer;
 }
 .chat-row:hover, .recent-row:hover { color: var(--text); background: rgba(255, 255, 255, 0.045); }
-.chat-row.is-active, .recent-row.is-active { color: var(--text); background: var(--surface-active); }
+.chat-row.is-active, .recent-row.is-active { color: var(--text); background: rgba(255, 255, 255, 0.18); }
 .chat-row span, .recent-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-row small, .recent-row small { color: var(--text-faint); font-size: 9px; white-space: nowrap; }
 .recent-chats { margin-top: 20px; }
@@ -347,18 +383,19 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   height: 1px;
   content: "";
   background: var(--line);
+  box-shadow: 0 0 7px rgba(255, 255, 255, 0.045);
 }
 .account-dock > div { display: flex; align-items: center; gap: 1px; }
 .account-identity { min-width: 0; gap: 8px !important; }
 .account-identity > span { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 10px; color: var(--text-inverse); background: var(--surface-inverse); font-size: 10px; font-weight: 800; }
-.account-identity strong { overflow: hidden; color: var(--text-muted); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.account-identity strong { overflow: hidden; color: var(--text-primary-glass); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .account-dock .icon-button { width: 30px; height: 30px; }
 .sidebar-collapsed .account-dock { width: 52px; padding: 9px 9px 5px 12px; }
 .sidebar-collapsed .account-identity strong, .sidebar-collapsed .account-dock > div:last-child { display: none; }
 
 .main-workspace {
   position: relative;
-  grid-column: 3;
+  grid-column: 3 / -1;
   grid-row: 2;
   z-index: 3;
   display: grid;
@@ -370,9 +407,30 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   border-left: 1px solid var(--line);
   border-top-left-radius: 22px;
   background: var(--workspace-glass);
-  box-shadow: -12px -8px 30px rgba(0, 0, 0, 0.08);
+  box-shadow: -1px -1px 9px rgba(255, 255, 255, 0.025), -12px -8px 30px rgba(0, 0, 0, 0.08);
 }
-.conversation { min-height: 0; overflow-y: auto; scrollbar-color: #3b3b3b transparent; }
+.main-workspace::after {
+  position: absolute;
+  z-index: 7;
+  top: 0;
+  right: 12px;
+  left: 0;
+  height: 36px;
+  background: linear-gradient(to bottom, rgba(15, 15, 15, 0.9), rgba(15, 15, 15, 0.28) 58%, transparent 100%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  content: "";
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.72) 54%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.72) 54%, transparent 100%);
+}
+.conversation {
+  position: relative;
+  min-height: 0;
+  padding-right: var(--resource-shell-width);
+  overflow-y: auto;
+  scrollbar-color: #3b3b3b transparent;
+}
 .conversation-inner { width: min(760px, calc(100% - 46px)); min-height: 100%; margin: 0 auto; padding: 28px 0 30px; }
 .state-line {
   display: grid;
@@ -385,7 +443,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   color: var(--text-faint);
 }
 .state-line svg { color: var(--text-faint); }
-.state-line strong { color: var(--text-muted); font-size: 10px; font-weight: 650; }
+.state-line strong { color: var(--text-primary-glass); font-size: 10px; font-weight: 650; }
 .state-line span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .state-line small { font-size: 9px; white-space: nowrap; }
 .tone-danger { border-bottom-style: dashed; }
@@ -396,7 +454,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
 .message--user { justify-content: flex-end; }
 .message-copy { width: min(100%, 690px); font-size: 13px; line-height: 1.68; }
 .message-copy p { margin: 0 0 11px; }
-.message-copy ul { margin: 13px 0 8px; padding-left: 19px; color: var(--text-muted); }
+.message-copy ul { margin: 13px 0 8px; padding-left: 19px; color: var(--text-primary-glass); }
 .message-copy li { margin: 6px 0; padding-left: 2px; }
 .message--user .message-copy {
   width: fit-content;
@@ -425,7 +483,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
 .spin { animation: spin 1.2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.composer-region { padding: 0 20px 15px; }
+.composer-region { padding: 0 calc(var(--resource-shell-width) + 20px) 15px 20px; }
 .composer-shell { position: relative; width: min(780px, 100%); margin: 0 auto; }
 .composer {
   overflow: hidden;
@@ -527,7 +585,7 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
 .document-block > span { display: block; padding: 10px 13px; border-bottom: 1px solid var(--line); color: var(--text-faint); font-size: 10px; }
 .document-block pre { margin: 0; padding: 15px; color: var(--text-muted); font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; line-height: 1.75; }
 
-.resource-area { grid-column: 4; grid-row: 2; z-index: 2; min-width: 0; min-height: 0; padding: 11px 11px 12px 0; background: transparent; }
+.resource-area { grid-column: 4; grid-row: 2; z-index: 4; min-width: 0; min-height: 0; padding: 11px 18px 12px 0; background: transparent; }
 .resource-panel {
   position: relative;
   display: grid;
@@ -549,10 +607,10 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
 .plan-card { position: relative; z-index: 8; margin: 3px 11px 10px; border: 1px solid var(--line); border-radius: 16px; background: rgba(24, 24, 24, 0.72); }
 .plan-card > button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; width: 100%; min-height: 48px; gap: 9px; padding: 7px 10px; border: 0; border-radius: 15px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .plan-card > button:hover { background: rgba(255, 255, 255, 0.035); }
-.plan-index { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--text-muted); font-size: 10px; }
+.plan-index { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--icon-primary-glass); font-size: 10px; }
 .plan-card > button > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .plan-card small { color: var(--text-faint); font-size: 8px; text-transform: uppercase; letter-spacing: 0.08em; }
-.plan-card strong { overflow: hidden; color: var(--text-muted); font-size: 10px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
+.plan-card strong { overflow: hidden; color: var(--text-primary-glass); font-size: 10px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
 .plan-card.is-expanded > button > svg { transform: rotate(180deg); }
 .plan-details { position: absolute; top: calc(100% + 6px); right: 0; left: 0; display: flex; margin: 0; padding: 9px; border: 1px solid var(--line-strong); border-radius: 15px; flex-direction: column; gap: 2px; background: rgba(38, 38, 38, 0.99); box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42); list-style: none; }
 .plan-details li { position: relative; min-height: 29px; padding: 7px 8px 6px 28px; border-radius: 9px; color: var(--text-faint); font-size: 9px; }
@@ -575,17 +633,17 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   padding: 7px 8px;
   border: 0;
   border-radius: 12px;
-  color: var(--text-muted);
+  color: var(--icon-primary-glass);
   background: transparent;
   text-align: left;
   cursor: pointer;
 }
 .resource-row:hover:not(.is-static) { color: var(--text); background: rgba(255, 255, 255, 0.055); }
 .resource-row > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.resource-row strong { overflow: hidden; font-size: 10px; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
+.resource-row strong { overflow: hidden; color: var(--text-primary-glass); font-size: 10px; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
 .resource-row small { overflow: hidden; color: var(--text-faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .resource-row em { color: var(--text-faint); font-size: 8px; font-style: normal; }
-.resource-row.is-static { color: var(--text-muted); cursor: default; }
+.resource-row.is-static { color: var(--icon-primary-glass); cursor: default; }
 .resource-footer { display: flex; min-width: 0; flex-direction: column; gap: 7px; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
 .fixture-select { position: relative; display: flex; align-items: center; height: 30px; gap: 7px; color: var(--text-faint); }
 .fixture-select > span { font-size: 9px; }
@@ -607,17 +665,17 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
 .command-results kbd { margin-left: auto; color: var(--text-faint); font-size: 9px; }
 
 @media (max-width: 1260px) {
-  .workbench { --left-shell-width: 296px; grid-template-columns: 52px 244px minmax(470px, 1fr) 300px; }
+  .workbench { --left-shell-width: 296px; --resource-shell-width: 300px; grid-template-columns: 52px 244px minmax(470px, 1fr) 300px; }
   .workbench.sidebar-collapsed { grid-template-columns: 52px 0 minmax(470px, 1fr) 300px; }
-  .workbench.resources-collapsed { grid-template-columns: 52px 244px minmax(470px, 1fr) 54px; }
-  .workbench.sidebar-collapsed.resources-collapsed { grid-template-columns: 52px 0 minmax(470px, 1fr) 54px; }
+  .workbench.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 244px minmax(470px, 1fr) 54px; }
+  .workbench.sidebar-collapsed.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 0 minmax(470px, 1fr) 54px; }
   .breadcrumbs span:nth-last-of-type(1) { max-width: 125px; }
   .breadcrumbs strong { max-width: 150px; }
 }
 
 @media (max-width: 1100px) {
-  .workbench, .workbench.resources-collapsed { grid-template-columns: 52px 244px minmax(0, 1fr) 0; }
-  .workbench.sidebar-collapsed, .workbench.sidebar-collapsed.resources-collapsed { grid-template-columns: 52px 0 minmax(0, 1fr) 0; }
+  .workbench, .workbench.resources-collapsed { --resource-shell-width: 0px; grid-template-columns: 52px 244px minmax(0, 1fr) 0; }
+  .workbench.sidebar-collapsed, .workbench.sidebar-collapsed.resources-collapsed { --resource-shell-width: 0px; grid-template-columns: 52px 0 minmax(0, 1fr) 0; }
   .resource-area { position: fixed; z-index: 18; top: 48px; right: 0; bottom: 0; display: block; width: 312px; padding: 11px; background: transparent; pointer-events: none; }
   .resource-panel, .resource-dock { pointer-events: auto; }
   .resources-collapsed .resource-area { width: 65px; }
@@ -650,4 +708,5 @@ html.native-shell .resource-panel { background: rgba(38, 38, 38, 0.44); }
   .main-workspace { background: #111111; }
   .composer, .resource-panel, .resource-dock, .command-dialog, .composer-popover { backdrop-filter: none; -webkit-backdrop-filter: none; background: #232323; }
   .account-dock { backdrop-filter: none; -webkit-backdrop-filter: none; background: transparent; }
+  .main-workspace::after { display: none; }
 }
