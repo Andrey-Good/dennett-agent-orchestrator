@@ -3,10 +3,11 @@
 use async_trait::async_trait;
 use dennett_contracts::{CommandId, ProjectId, SessionEventId, SessionId};
 use dennett_memory_core::session::{
-    CommittedSessionEvent, PendingSessionEvent, SessionEventBody, SessionEventStore,
-    SessionJournalError, event_integrity_hash,
+    CommittedSessionEvent, PendingSessionEvent, SESSION_EVENT_PAYLOAD_VERSION, SessionEventBody,
+    SessionEventStore, SessionJournalError,
 };
 use dennett_sync_core::draft::{DraftCacheError, DraftCachePort, DraftRecord};
+use sha2::{Digest, Sha256};
 use sqlx::{
     Row, SqlitePool,
     migrate::Migrator,
@@ -149,6 +150,9 @@ fn parse_event(row: SqliteRow) -> Result<CommittedSessionEvent, SessionJournalEr
     let revision: i64 = row
         .try_get("revision")
         .map_err(|_| SessionJournalError::IntegrityFailure("revision is missing"))?;
+    let payload_version: i64 = row
+        .try_get("payload_version")
+        .map_err(|_| SessionJournalError::IntegrityFailure("event payload version is missing"))?;
     let command_id: Option<String> = row
         .try_get("command_id")
         .map_err(|_| SessionJournalError::IntegrityFailure("command id is malformed"))?;
@@ -156,17 +160,44 @@ fn parse_event(row: SqliteRow) -> Result<CommittedSessionEvent, SessionJournalEr
         .try_get("body_json")
         .map_err(|_| SessionJournalError::IntegrityFailure("event body is missing"))?;
     let stored_hash: Vec<u8> = row
-        .try_get("body_sha256")
+        .try_get("event_sha256")
         .map_err(|_| SessionJournalError::IntegrityFailure("event hash is missing"))?;
     let committed_at: i64 = row
         .try_get("committed_at_unix_ms")
         .map_err(|_| SessionJournalError::IntegrityFailure("event time is missing"))?;
 
-    let event = CommittedSessionEvent {
+    let revision = u64::try_from(revision)
+        .map_err(|_| SessionJournalError::IntegrityFailure("negative revision"))?;
+    let payload_version = u32::try_from(payload_version)
+        .map_err(|_| SessionJournalError::IntegrityFailure("invalid event payload version"))?;
+    let committed_at_unix_ms = u64::try_from(committed_at)
+        .map_err(|_| SessionJournalError::IntegrityFailure("negative event time"))?;
+    let expected_hash = stored_event_hash(
+        &event_id,
+        &session_id,
+        revision,
+        command_id.as_deref(),
+        payload_version,
+        &body_json,
+        committed_at_unix_ms,
+    )?;
+    if stored_hash.as_slice() != expected_hash {
+        return Err(SessionJournalError::IntegrityFailure(
+            "event checksum mismatch",
+        ));
+    }
+    if payload_version != SESSION_EVENT_PAYLOAD_VERSION {
+        return Err(SessionJournalError::UnsupportedEventPayloadVersion {
+            found: payload_version,
+            supported: SESSION_EVENT_PAYLOAD_VERSION,
+        });
+    }
+
+    Ok(CommittedSessionEvent {
         event_id: SessionEventId(parse_uuid(&event_id)?),
         session_id: SessionId(parse_uuid(&session_id)?),
-        revision: u64::try_from(revision)
-            .map_err(|_| SessionJournalError::IntegrityFailure("negative revision"))?,
+        revision,
+        payload_version,
         command_id: command_id
             .as_deref()
             .map(parse_uuid)
@@ -174,15 +205,43 @@ fn parse_event(row: SqliteRow) -> Result<CommittedSessionEvent, SessionJournalEr
             .map(CommandId),
         body: serde_json::from_str::<SessionEventBody>(&body_json)
             .map_err(|_| SessionJournalError::IntegrityFailure("event body is malformed"))?,
-        committed_at_unix_ms: u64::try_from(committed_at)
-            .map_err(|_| SessionJournalError::IntegrityFailure("negative event time"))?,
-    };
-    if stored_hash.as_slice() != event_integrity_hash(&event) {
-        return Err(SessionJournalError::IntegrityFailure(
-            "event checksum mismatch",
-        ));
+        committed_at_unix_ms,
+    })
+}
+
+fn stored_event_hash(
+    event_id: &str,
+    session_id: &str,
+    revision: u64,
+    command_id: Option<&str>,
+    payload_version: u32,
+    body_json: &str,
+    committed_at_unix_ms: u64,
+) -> Result<[u8; 32], SessionJournalError> {
+    fn field(hasher: &mut Sha256, value: &[u8]) -> Result<(), SessionJournalError> {
+        let length = u64::try_from(value.len())
+            .map_err(|_| SessionJournalError::IntegrityFailure("event field is too large"))?;
+        hasher.update(length.to_be_bytes());
+        hasher.update(value);
+        Ok(())
     }
-    Ok(event)
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"dennett.project-session-event.v1\0");
+    field(&mut hasher, event_id.as_bytes())?;
+    field(&mut hasher, session_id.as_bytes())?;
+    hasher.update(revision.to_be_bytes());
+    match command_id {
+        Some(command_id) => {
+            hasher.update([1]);
+            field(&mut hasher, command_id.as_bytes())?;
+        }
+        None => hasher.update([0]),
+    }
+    hasher.update(payload_version.to_be_bytes());
+    field(&mut hasher, body_json.as_bytes())?;
+    hasher.update(committed_at_unix_ms.to_be_bytes());
+    Ok(hasher.finalize().into())
 }
 
 #[async_trait]
@@ -199,7 +258,7 @@ impl SessionEventStore for SqliteControlStore {
             .map_err(|_| SessionJournalError::StorageUnavailable)?;
 
         let by_event = sqlx::query(
-            "SELECT event_id, session_id, revision, command_id, body_json, body_sha256, \
+            "SELECT event_id, session_id, revision, payload_version, command_id, body_json, event_sha256, \
                     committed_at_unix_ms \
              FROM session_events WHERE event_id = ?",
         )
@@ -218,7 +277,7 @@ impl SessionEventStore for SqliteControlStore {
 
         if let Some(command_id) = pending.command_id {
             let by_command = sqlx::query(
-                "SELECT event_id, session_id, revision, command_id, body_json, body_sha256, \
+                "SELECT event_id, session_id, revision, payload_version, command_id, body_json, event_sha256, \
                         committed_at_unix_ms \
                  FROM session_events WHERE command_id = ?",
             )
@@ -294,17 +353,26 @@ impl SessionEventStore for SqliteControlStore {
             event_id: pending.event_id,
             session_id: pending.session_id,
             revision,
+            payload_version: SESSION_EVENT_PAYLOAD_VERSION,
             command_id: pending.command_id,
             body: pending.body,
             committed_at_unix_ms: pending.committed_at_unix_ms,
         };
         let body_json = serde_json::to_string(&committed.body)
             .map_err(|_| SessionJournalError::IntegrityFailure("event serialization failed"))?;
-        let checksum = event_integrity_hash(&committed);
+        let checksum = stored_event_hash(
+            &committed.event_id.0.to_string(),
+            &session_key,
+            revision,
+            committed.command_id.map(|id| id.0.to_string()).as_deref(),
+            committed.payload_version,
+            &body_json,
+            committed.committed_at_unix_ms,
+        )?;
         sqlx::query(
             "INSERT INTO session_events(\
-                event_id, session_id, revision, command_id, body_json, body_sha256, committed_at_unix_ms\
-             ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                event_id, session_id, revision, payload_version, command_id, body_json, event_sha256, committed_at_unix_ms\
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(committed.event_id.0.to_string())
         .bind(&session_key)
@@ -312,6 +380,7 @@ impl SessionEventStore for SqliteControlStore {
             i64::try_from(revision)
                 .map_err(|_| SessionJournalError::IntegrityFailure("revision overflow"))?,
         )
+        .bind(i64::from(committed.payload_version))
         .bind(committed.command_id.map(|id| id.0.to_string()))
         .bind(body_json)
         .bind(checksum.as_slice())
@@ -333,7 +402,7 @@ impl SessionEventStore for SqliteControlStore {
         session_id: SessionId,
     ) -> Result<Vec<CommittedSessionEvent>, SessionJournalError> {
         let rows = sqlx::query(
-            "SELECT event_id, session_id, revision, command_id, body_json, body_sha256, \
+            "SELECT event_id, session_id, revision, payload_version, command_id, body_json, event_sha256, \
                     committed_at_unix_ms \
              FROM session_events WHERE session_id = ? ORDER BY revision",
         )
@@ -383,7 +452,7 @@ impl SessionEventStore for SqliteControlStore {
         command_id: CommandId,
     ) -> Result<Option<CommittedSessionEvent>, SessionJournalError> {
         sqlx::query(
-            "SELECT event_id, session_id, revision, command_id, body_json, body_sha256, \
+            "SELECT event_id, session_id, revision, payload_version, command_id, body_json, event_sha256, \
                     committed_at_unix_ms \
              FROM session_events WHERE command_id = ?",
         )
@@ -772,6 +841,58 @@ mod tests {
             reopened,
             Err(SessionJournalError::IntegrityFailure(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn unsupported_event_payload_version_is_not_silently_reinterpreted() {
+        let temp = TempDir::new().expect("temporary directory");
+        let store = SqliteControlStore::open(database_path(&temp))
+            .await
+            .expect("open store");
+        let journal = SessionJournal::new(Arc::new(store.clone()));
+        let session_id = SessionId::new();
+        let event = journal
+            .append(pending(
+                session_id,
+                Some(CommandId::new()),
+                SessionEventBody::SessionCreated {
+                    project_id: ProjectId::new(),
+                    title: "future payload".to_owned(),
+                },
+                1,
+            ))
+            .await
+            .expect("persist event")
+            .event;
+        let body_json = serde_json::to_string(&event.body).expect("serialize event");
+        let future_version = SESSION_EVENT_PAYLOAD_VERSION + 1;
+        let checksum = stored_event_hash(
+            &event.event_id.0.to_string(),
+            &session_id.0.to_string(),
+            event.revision,
+            event.command_id.map(|id| id.0.to_string()).as_deref(),
+            future_version,
+            &body_json,
+            event.committed_at_unix_ms,
+        )
+        .expect("hash future payload");
+        sqlx::query(
+            "UPDATE session_events SET payload_version = ?, event_sha256 = ? WHERE event_id = ?",
+        )
+        .bind(i64::from(future_version))
+        .bind(checksum.as_slice())
+        .bind(event.event_id.0.to_string())
+        .execute(&store.pool)
+        .await
+        .expect("inject future payload");
+
+        assert_eq!(
+            journal.restore(session_id).await,
+            Err(SessionJournalError::UnsupportedEventPayloadVersion {
+                found: future_version,
+                supported: SESSION_EVENT_PAYLOAD_VERSION,
+            })
+        );
     }
 
     #[tokio::test]

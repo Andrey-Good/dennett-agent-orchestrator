@@ -6,6 +6,8 @@ use std::{collections::HashSet, sync::Arc};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+pub const SESSION_EVENT_PAYLOAD_VERSION: u32 = 1;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectSessionState {
@@ -135,6 +137,7 @@ pub struct CommittedSessionEvent {
     pub event_id: SessionEventId,
     pub session_id: SessionId,
     pub revision: u64,
+    pub payload_version: u32,
     pub command_id: Option<CommandId>,
     pub body: SessionEventBody,
     pub committed_at_unix_ms: u64,
@@ -143,7 +146,8 @@ pub struct CommittedSessionEvent {
 impl CommittedSessionEvent {
     #[must_use]
     pub fn matches_pending(&self, pending: &PendingSessionEvent) -> bool {
-        self.event_id == pending.event_id
+        self.payload_version == SESSION_EVENT_PAYLOAD_VERSION
+            && self.event_id == pending.event_id
             && self.session_id == pending.session_id
             && self.command_id == pending.command_id
             && self.body == pending.body
@@ -165,6 +169,8 @@ pub enum SessionJournalError {
     IntegrityFailure(&'static str),
     #[error("unsupported session schema version {found}; supported version is {supported}")]
     UnsupportedSchemaVersion { found: u32, supported: u32 },
+    #[error("unsupported session event payload version {found}; supported version is {supported}")]
+    UnsupportedEventPayloadVersion { found: u32, supported: u32 },
     #[error("the session journal migration could not be applied safely")]
     MigrationFailure,
     #[error("the session journal storage is unavailable")]
@@ -225,6 +231,7 @@ impl SessionJournal {
             event_id: event.event_id,
             session_id: event.session_id,
             revision: expected_revision + 1,
+            payload_version: SESSION_EVENT_PAYLOAD_VERSION,
             command_id: event.command_id,
             body: event.body.clone(),
             committed_at_unix_ms: event.committed_at_unix_ms,
@@ -282,6 +289,12 @@ pub fn fold_session(
     let mut snapshot: Option<ProjectSessionSnapshot> = None;
 
     for (index, event) in history.iter().enumerate() {
+        if event.payload_version != SESSION_EVENT_PAYLOAD_VERSION {
+            return Err(SessionJournalError::UnsupportedEventPayloadVersion {
+                found: event.payload_version,
+                supported: SESSION_EVENT_PAYLOAD_VERSION,
+            });
+        }
         if event.session_id != session_id {
             return Err(SessionJournalError::IntegrityFailure(
                 "mixed session identities",
@@ -482,12 +495,6 @@ fn snapshot_fingerprint(
     Ok(Sha256::digest(bytes).into())
 }
 
-#[must_use]
-pub fn event_integrity_hash(event: &CommittedSessionEvent) -> [u8; 32] {
-    let bytes = serde_json::to_vec(event).expect("session event serialization is infallible");
-    Sha256::digest(bytes).into()
-}
-
 #[derive(Clone, Default)]
 pub struct InMemorySessionEventStore {
     events: Arc<RwLock<Vec<CommittedSessionEvent>>>,
@@ -535,6 +542,7 @@ impl SessionEventStore for InMemorySessionEventStore {
             event_id: event.event_id,
             session_id: event.session_id,
             revision: actual + 1,
+            payload_version: SESSION_EVENT_PAYLOAD_VERSION,
             command_id: event.command_id,
             body: event.body,
             committed_at_unix_ms: event.committed_at_unix_ms,

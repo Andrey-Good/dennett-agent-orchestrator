@@ -73,11 +73,15 @@ impl SessionCoordinator {
                     text: existing_text,
                     ..
                 } if existing.session_id == session_id && existing_text == text => {
+                    let snapshot = self.journal.restore(session_id).await?;
+                    if snapshot.session.project_id != project_id {
+                        return Err(SessionJournalError::IdempotencyConflict);
+                    }
                     Ok(AcceptedTurn {
                         user_turn_id,
                         agent_turn_id,
                         commit: SessionCommit {
-                            snapshot: self.journal.restore(session_id).await?,
+                            snapshot,
                             event: existing,
                         },
                     })
@@ -459,5 +463,17 @@ mod tests {
             .expect("retry accept");
         assert_eq!(first_turn.agent_turn_id, retry_turn.agent_turn_id);
         assert_eq!(retry_turn.commit.snapshot.session.revision, 2);
+        assert_eq!(
+            coordinator
+                .accept_turn(
+                    turn_command,
+                    ProjectId::new(),
+                    first.snapshot.session.session_id,
+                    "first".to_owned(),
+                    3,
+                )
+                .await,
+            Err(SessionJournalError::IdempotencyConflict)
+        );
     }
 }

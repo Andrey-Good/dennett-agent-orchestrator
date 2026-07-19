@@ -547,7 +547,7 @@
       },
       "estimate": {
         "target_agent_hours": 6,
-        "max_diff_lines": 4600
+        "max_diff_lines": 5200
       },
       "notes": [
         "This is the first durable schema in active development and therefore requires owner review before merge plus detached technical review.",
@@ -556,7 +556,7 @@
         "The embedded Head is the sole canonical project-session writer. The narrow implementation path is a provider-neutral append-only session port with an in-memory fake, a WAL-backed SQLite control-store adapter, deterministic snapshot folding and a revision-aware watch reducer; client drafts remain explicitly non-canonical.",
         "WP-M01-002 already generated the bounded M01 SessionService snapshot/delta wire contract. This package implements that contract behind domain ports and keeps protocols/generated artifacts unchanged; protocol compatibility is still checked.",
         "The original draft acceptance mixed a storage contract with visible desktop behavior while apps are forbidden in this package. TEST-DRAFT-CACHE-RECOVERY-001 now qualifies the separate DraftCachePort here; TEST-DESKTOP-DRAFT-RECOVERY-001 remains a specified WP-M01-007 UI/E2E obligation. Draft rows never enter the canonical session event journal.",
-        "The gross diff budget was raised from 2800 to 4600 after the SQLite/SQLx dependency lock accounted for about 1148 generated lines and the real R3 persistence, integrity, migration, watch and restart tests exceeded the original estimate. Recovery behavior and negative tests are not compressed to optimize the counter."
+        "The gross diff budget was raised from 2800 to 5200 after the SQLite/SQLx dependency lock accounted for about 1148 generated lines and the real R3 persistence, integrity, migration, watch and restart tests exceeded the original estimate. Detached and self-review hardening added a versioned exact-byte event checksum plus retry and watch-boundary regression tests; recovery behavior and negative tests are not compressed to optimize the counter."
       ]
     },
     {

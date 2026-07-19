@@ -104,7 +104,7 @@ pub fn apply_frame<T: Clone, D>(
             value,
         } => {
             let previous = current.cached();
-            if cursor.sequence == 0 {
+            if cursor.sequence != 1 {
                 return WatchState::Resyncing {
                     cached: previous,
                     reason: ResyncReason::SnapshotInvalid,
@@ -117,10 +117,7 @@ pub fn apply_frame<T: Clone, D>(
                         reason: ResyncReason::AuthorityEpochChanged,
                     };
                 }
-                if (cursor.stream_id == cached.cursor.stream_id
-                    && cursor.sequence <= cached.cursor.sequence)
-                    || revision < cached.revision
-                {
+                if cursor.stream_id == cached.cursor.stream_id || revision < cached.revision {
                     return WatchState::Resyncing {
                         cached: previous,
                         reason: ResyncReason::SnapshotInvalid,
@@ -378,6 +375,32 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn snapshot_must_open_a_new_stream_at_sequence_one() {
+        for frame in [
+            WatchFrame::<Vec<u8>, u8>::Snapshot {
+                cursor: cursor(2),
+                revision: 5,
+                fingerprint: vec![10],
+                value: vec![2],
+            },
+            WatchFrame::<Vec<u8>, u8>::Snapshot {
+                cursor: cursor(1),
+                revision: 5,
+                fingerprint: vec![10],
+                value: vec![2],
+            },
+        ] {
+            assert!(matches!(
+                apply_frame(snapshot(), frame, |_, _| unreachable!()),
+                WatchState::Resyncing {
+                    reason: ResyncReason::SnapshotInvalid,
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]

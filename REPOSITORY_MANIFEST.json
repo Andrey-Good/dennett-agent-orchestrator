@@ -175,13 +175,13 @@
     },
     {
       "path": "adapters/storage/sqlite/migrations/0001_control_store.sql",
-      "bytes": 930,
-      "sha256": "b110f71700850325a586df9946e795b232b9407bd28f457b1211abb7f56d0c40"
+      "bytes": 997,
+      "sha256": "0bc4f9ac502bc200f01826829d0a4ab673c071b9c6dce8747c719613129c9ee5"
     },
     {
       "path": "adapters/storage/sqlite/src/lib.rs",
-      "bytes": 35126,
-      "sha256": "027ee769ae89d3337fc151de8880c27fb0baa4bd68e6a66213891fd1e9d1aa6e"
+      "bytes": 39541,
+      "sha256": "b87f70b6b36da02708b9bd65bd551a9141baeda8b6cfec3c8d061ce1f901a487"
     },
     {
       "path": "adapters/transport/README.md",
@@ -410,8 +410,8 @@
     },
     {
       "path": "crates/dennett-memory-core/src/session.rs",
-      "bytes": 26077,
-      "sha256": "0b35753da1693fad50a93a4bc306dbf9dab4ea0d6435af1c1775a5aab309f644"
+      "bytes": 26573,
+      "sha256": "a30ee4dd3bfdbb745168f5289ef7d215c7aaa1008531ff2e413f667eb2d4b3ad"
     },
     {
       "path": "crates/dennett-observability/AGENTS.md",
@@ -460,8 +460,8 @@
     },
     {
       "path": "crates/dennett-sync-core/src/watch.rs",
-      "bytes": 12182,
-      "sha256": "dfeaa113b6be71af33dcbf7a5edff117e36f37e4d7270f8e5b13effa1a516abc"
+      "bytes": 12859,
+      "sha256": "f2a213190ade780bddd94ca3acbf167579cce3e99355e29e77cf1046f8d8373b"
     },
     {
       "path": "crates/dennett-trust-core/AGENTS.md",
@@ -1090,8 +1090,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 33971,
-      "sha256": "3201ee9f8e3091c995e8c553f192dc636dc886210750adc3d498381cf73ebe72"
+      "bytes": 34098,
+      "sha256": "069e2912bfac61d70b544fc2514d0c40960e4133c84936cc0f60bfd3a61ee157"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1435,8 +1435,8 @@
     },
     {
       "path": "services/head/src/session.rs",
-      "bytes": 15522,
-      "sha256": "b3ca6b2d3a8aec11c28adc2e71ba85c1ea3572f844e35b6628179278935384de"
+      "bytes": 16099,
+      "sha256": "cc85e5911d774e3bb1c091b75d795ddd1593b099aafca39496bd6aa770a2c65b"
     },
     {
       "path": "services/head/tests/fake_chat.rs",
