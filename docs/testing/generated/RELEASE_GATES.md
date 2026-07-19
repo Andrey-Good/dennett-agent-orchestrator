@@ -19,8 +19,8 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `R2` | `manual` | `manual` | evidence available |
 | `release` | `TEST-CODEX-SDK-CONTRACT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `specified` | `automated` | missing evidence |
-| `release` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `specified` | `automated` | missing evidence |
+| `release` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `automated` | `automated` | evidence available |
+| `release` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-FAKE-CHAT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `specified` | `planned` | missing evidence |

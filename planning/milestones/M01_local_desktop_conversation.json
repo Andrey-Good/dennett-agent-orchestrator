@@ -251,7 +251,7 @@
       "version": 1,
       "id": "WP-M01-003",
       "title": "Approve the first Project Chat workbench screen",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
@@ -333,7 +333,7 @@
       ],
       "owner_decision": {
         "required_before_start": false,
-        "required_before_merge": true
+        "required_before_merge": false
       },
       "estimate": {
         "target_agent_hours": 4,
@@ -353,7 +353,8 @@
         "At the third checkpoint the owner requested collection-scoped creation actions, an integrated account strip, a seamless rounded top-left material, larger compact composer controls, improved empty prompts and a single workspace-panel toggle. The corrected renderer and truthful M01/M02 project-folder boundary are recorded in docs/design/WP-M01-003/owner-direction-v3.md; owner approval remains mandatory before merge.",
         "Detached review of the third-checkpoint commit 49f6ca2 found two behavioral P2 defects: project-menu focus was not restored because its trigger ref was unattached, and Command Center chat creation ignored the selected project. Both were corrected with regression tests, and detached closure re-review of exact commit 297eb20 returned PASS after desktop typecheck and all 16 desktop tests. Owner visual approval remains mandatory before merge.",
         "The fifth owner-material direction replaces custom wallpaper projection and large CSS backdrop surfaces with Tauri's native Windows 11 Mica foundation, a bounded neutral central density layer and white-on-gray semantic hierarchy. The owner reviewed the corrected release window live and accepted the screen on 2026-07-19; remaining general polish is deferred and does not block this package.",
-        "For subsequent substantial visual changes, prepare an editable Figma prototype first, let the owner tune and approve visual and UX choices there, then transfer the accepted frame to native code and verify platform-only material and behavior in the release application."
+        "For subsequent substantial visual changes, prepare an editable Figma prototype first, let the owner tune and approve visual and UX choices there, then transfer the accepted frame to native code and verify platform-only material and behavior in the release application.",
+        "The final detached R2 closure review returned PASS for exact commit 3de0196cb1849f0467d2b9b7af91f729ea561ede after session isolation, reduced-transparency and non-Mica fallback, popup accessibility, metadata and current-contract findings were closed; the full repository gate and native release build also passed."
       ]
     },
     {

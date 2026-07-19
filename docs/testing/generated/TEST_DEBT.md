@@ -13,8 +13,6 @@ Quarantined, waived, retired-without-replacement and not-yet-automated cases.
 | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `memory` | missing automation | `tests/scenarios/offline-client-memory-not-canonical.yaml` |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `desktop` | missing automation | — |
 | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `desktop` | missing automation | — |
-| `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `R2` | `desktop` | missing automation | `apps/desktop/src/App.test.tsx` |
-| `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `desktop` | missing automation | `apps/desktop/src/App.test.tsx` |
 | `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `transport` | missing automation | — |
 | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `quality` | missing automation | — |
 | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `quality` | missing automation | — |

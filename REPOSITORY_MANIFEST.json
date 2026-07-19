@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 391,
+  "file_count": 392,
   "files": [
     {
       "path": ".editorconfig",
@@ -576,7 +576,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "e9e9d54a6a24787328e71ae3558e18909748621939ab231a241a8388831e4783"
+      "sha256": "955182c163a8043454ecea3ac74a5dc0c46851948cf93a6d046218953efe616d"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1191,22 +1191,22 @@
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
       "bytes": 2574,
-      "sha256": "11bdaf821089f1bc2e35abfe881d4a31d8be45efd8d4dc8d96da027023bae2e4"
+      "sha256": "bfff601463659f6541df3a2b49fb61cf541a09f1f755c80e8f367e6c94a187d7"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 3451,
-      "sha256": "726ebfd0f550e5702e6d2427b72c39e2a2ca0f6da3b381be5975dc7b4cade815"
+      "bytes": 3455,
+      "sha256": "e213ee62c65a05e7bc643eaf475e9486d522a9176c09d5434241d67f6da3b201"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
       "bytes": 7688,
-      "sha256": "2a5515afe72a0d86177ade108a2f5ffc50ca397702ea90614d25aa52dd9290c9"
+      "sha256": "bc70bb240a18e19a62e1a39dce1e39efc2a8f5c1da4078beb9a6c61bcdfeb3be"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 1540,
-      "sha256": "747a356907904329610151bd8551a08f0bd321aef86f88a37d403653310d3bd8"
+      "bytes": 1312,
+      "sha256": "dfc6833c76f15707eaaee154d9e959c17fdc13256e2fd6a4a1b85ce788c0e771"
     },
     {
       "path": "generated/README.md",
@@ -1345,8 +1345,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 38177,
-      "sha256": "1b278ad4591e822b495a4a5d31a58d7a1ee432d92f4e272de90a1dcfd096ac9f"
+      "bytes": 38503,
+      "sha256": "9a68ca3e935fd4b22af57463e9445fdc4c64a55618993c97e69597a6b4f852ba"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1407,6 +1407,11 @@
       "path": "planning/results/WP-M01-002.json",
       "bytes": 4976,
       "sha256": "6c4535201f8572d6da31a367bc3cd94eb76633242289fa66a4fd746b26b09c63"
+    },
+    {
+      "path": "planning/results/WP-M01-003.json",
+      "bytes": 6028,
+      "sha256": "ba634497bb6c0d245931a81e4f1428084f5bb7aeb7cf37de7c994562bfd7aa12"
     },
     {
       "path": "planning/results/WP-M01-004.json",
@@ -1786,7 +1791,7 @@
     {
       "path": "tests/catalog/m01.seed.json",
       "bytes": 22993,
-      "sha256": "232e7d76590367f7c1abfd8848050a133bc017c1cf394db0fe6f4f5f92c5b947"
+      "sha256": "4cfb11f639261fc43390b52c10d78ba02a6d1806b3d84c5bd0215c4f848fde61"
     },
     {
       "path": "tests/contracts/README.md",

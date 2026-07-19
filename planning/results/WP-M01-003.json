@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M01-003",
+    "status": "completed",
+    "summary": "Implemented and owner-approved the first native Project Chat workbench: an achromatic Tauri/React shell with Windows 11 Mica, project-scoped navigation, session-isolated fixture and draft state, keyboard-accessible composer controls, deterministic material states and a read-only resource workspace.",
+    "commits": [
+      "ab5ba429bb410328fde7d84e8674a4c072a78eda",
+      "303523c7c048b2f4912167ff4fc8bb1f9051bfa6",
+      "51cf1cfc90ba9ea8e323fb9b01dc00af57209ee8",
+      "8d6cbf6ba8358f6e72496c12e21e091c4521139a",
+      "da6632336c6576aeb7bc4f97c6917ebd02161036",
+      "566590540ca443401ec4fe8a0ef63a6433f46432",
+      "e03904b64b6430d167306fbb01c67542f7897170",
+      "542078a67509b95987440fdadb70391503320e8a",
+      "0d5997e39efd95b4703fd6c0db1e8af7f7511791",
+      "0c65a7b8a9ccf885cb390fa7fa1d7b06c3769159",
+      "eed2138db3c9b674c368e3f3ce44a4ac84759d34",
+      "b48520d4d981b530cac38e0a7d5d3e333be8cdba",
+      "40e40a6fb31e8905f03614cec15b092982cb1b3e",
+      "49f6ca2a7910b9e24be2d224ab9943de50f680c0",
+      "297eb20d52b33247386ffd13013a0f8062daa96b",
+      "dc119331bedb268c75a877c812d24b3cd8f9c9be",
+      "e14f35bf480deeeec8acfebd255a50134d2d2a53",
+      "19e553a1bf287fba6cedafc4d9306345cd6d4be1",
+      "f09151d095f100587958991a523246928d0ecef8",
+      "511da3312cbe714510560a20ff484ba7e12ed9a1",
+      "3de0196cb1849f0467d2b9b7af91f729ea561ede"
+    ],
+    "merge_ready_at": "2026-07-19",
+    "changed_files": [
+      "apps/desktop/**",
+      "docs/design/WP-M01-003/**",
+      "design-qa.md",
+      "tests/catalog/m01.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/batches/AB-M01-003.json",
+      "planning/milestones/M01_local_desktop_conversation.json",
+      "planning/results/WP-M01-003.json",
+      "pnpm-lock.yaml",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "SPEC-60:ProjectWorkspace",
+      "SPEC-60:ProjectChat",
+      "SPEC-60:ProgressiveDisclosure",
+      "SPEC-60:Accessibility",
+      "M01:OwnerUxGate",
+      "TEST-DESKTOP-PROJECT-CHAT-UI-001",
+      "TEST-DESKTOP-PROJECT-CHAT-A11Y-001"
+    ],
+    "tests": {
+      "passed": [
+        "20 desktop component and accessibility tests cover every fixture state, session-scoped Stop/messages/unsent drafts, A-to-B-to-A switching, project and chat creation, keyboard composition, focus containment and restoration, open-dialog axe checks, material fallbacks and truthful deferred controls",
+        "desktop TypeScript typecheck and production Vite build passed at exact reviewed commit 3de0196cb1849f0467d2b9b7af91f729ea561ede",
+        "Tauri shell unit test covers the Windows 11 Mica build boundary; capability-probe tests cover pending, unavailable, rejected and available states with a fail-closed opaque startup",
+        "official Tauri release build without installer bundling passed and produced apps/desktop/src-tauri/target/release/dennett-desktop-shell.exe",
+        "mise exec -- just check passed repository, documentation, planning, generated metadata, Rust, Python, TypeScript and protocol gates at exact repair commit 511da3312cbe714510560a20ff484ba7e12ed9a1",
+        "owner reviewed the native release window live and accepted the screen on 2026-07-19"
+      ],
+      "not_run": [
+        "real dennett-node, authenticated IPC, durable session restoration and provider streaming are intentionally deferred to WP-M01-006 and WP-M01-007",
+        "installer, signed release, multi-platform native-material comparison and Tauri end-to-end automation remain later release-hardening work",
+        "Git, file, terminal, browser-network and project-folder effects remain outside M01 and are represented only by disabled or read-only fixtures"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Detached read-only R2 review of the cumulative package produced two bounded repair rounds; final closure review of exact commit 3de0196cb1849f0467d2b9b7af91f729ea561ede against base 04faca1b8dd2eed8de2d517905ba7998dc88ca92 returned PASS with no open findings.",
+      "findings_closed": [
+        "Scoped fixture, Stop, sent-message and unsent-draft state by session and added A-to-B-to-A regression coverage",
+        "Made reduced-transparency rules override native Mica layers and added a fail-closed opaque fallback when Mica is pending, unavailable or rejected",
+        "Added truthful ARIA popup state, focus entry and Escape focus restoration for context and plugin dialogs with open-state accessibility checks",
+        "Regenerated canonical repository metadata and corrected the visible current owner contract from v3 to v5",
+        "Preserved conservative visual evidence: owner live acceptance is recorded without claiming a persisted final screenshot"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "visible fixture status and a bounded polite live region distinguish loading, streaming, stopped, timed-out, stale, resyncing, empty and restored presentation states without token-level announcements",
+      "native material capability failure changes only a local CSS fallback class and does not expose machine details or user content"
+    ],
+    "known_limitations": [
+      "the screen is a deterministic M01 renderer; its commands do not yet cross authenticated IPC or call the real Codex runtime",
+      "project creation and existing-folder choices are truthful local previews and do not mutate the filesystem",
+      "the provisional monochrome icon is not approved branding and further visual polish is deferred"
+    ],
+    "follow_up_candidates": [
+      "WP-M01-006",
+      "WP-M01-007",
+      "Figma-first visual polish before later substantial screen or material revisions",
+      "release-wide native accessibility and cross-platform material verification"
+    ],
+    "owner_decision_required": false
+  }
+}

@@ -100,7 +100,7 @@
     {
       "id": "TEST-DESKTOP-PROJECT-CHAT-UI-001",
       "title": "Project Chat renders the approved workbench states",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "ux", "project-chat"],
@@ -123,7 +123,7 @@
     {
       "id": "TEST-DESKTOP-PROJECT-CHAT-A11Y-001",
       "title": "Project Chat remains operable by keyboard and assistive technology",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "accessibility", "project-chat"],
