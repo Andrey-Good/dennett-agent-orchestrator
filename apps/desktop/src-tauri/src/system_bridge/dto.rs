@@ -637,4 +637,71 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn delta_and_resync_frames_preserve_revision_and_recovery_semantics() {
+        let delta = frame_to_event(
+            "subscription-1",
+            &SystemWatchFrame {
+                cursor: Some(WatchCursor {
+                    stream_id: "stream-1".to_owned(),
+                    sequence: 2,
+                    authority_epoch: 4,
+                }),
+                frame: Some(system_watch_frame::Frame::Delta(SystemDelta {
+                    base_revision: 9,
+                    new_revision: 10,
+                    mutations:
+                        vec![dennett_local_ipc::protocol::dennett::control::v1::SystemMutation {
+                        mutation: Some(system_mutation::Mutation::UpdateHealth(
+                            dennett_local_ipc::protocol::dennett::control::v1::SystemHealthUpdate {
+                                node_state: HealthState::Degraded as i32,
+                                status_code: "node_health_changed".to_owned(),
+                                observed_at: None,
+                            },
+                        )),
+                    }],
+                })),
+            },
+        )
+        .expect("delta event");
+        assert!(matches!(
+            delta,
+            DesktopSystemEvent::Delta {
+                base_revision,
+                new_revision,
+                mutations,
+                ..
+            } if base_revision == "9"
+                && new_revision == "10"
+                && matches!(mutations.as_slice(), [DesktopSystemMutation::UpdateHealth { .. }])
+        ));
+
+        let resync = frame_to_event(
+            "subscription-1",
+            &SystemWatchFrame {
+                cursor: Some(WatchCursor {
+                    stream_id: "stream-1".to_owned(),
+                    sequence: 3,
+                    authority_epoch: 4,
+                }),
+                frame: Some(system_watch_frame::Frame::ResyncRequired(
+                    dennett_local_ipc::protocol::dennett::sync::v1::ResyncRequired {
+                        current_revision: 12,
+                        reason: ResyncReason::RevisionGap as i32,
+                        snapshot_required: true,
+                    },
+                )),
+            },
+        )
+        .expect("resync event");
+        assert!(matches!(
+            resync,
+            DesktopSystemEvent::ResyncRequired {
+                current_revision,
+                reason,
+                ..
+            } if current_revision == "12" && reason == "resync_reason_revision_gap"
+        ));
+    }
 }

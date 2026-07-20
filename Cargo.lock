@@ -395,10 +395,12 @@ dependencies = [
  "dennett-head",
  "dennett-local-ipc",
  "dennett-observability",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
  "uuid",
+ "windows-sys",
 ]
 
 [[package]]

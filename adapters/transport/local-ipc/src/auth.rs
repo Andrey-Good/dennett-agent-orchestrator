@@ -10,6 +10,8 @@ const DEFAULT_BOOTSTRAP_CAPABILITY_TTL: Duration = Duration::from_secs(30);
 const DEFAULT_UI_SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 const CHALLENGE_BYTES: usize = 32;
 const PROOF_BYTES: usize = 32;
+const MAX_SESSION_RECORDS: usize = 64;
+const MAX_RECENT_CHALLENGES: usize = 256;
 
 #[derive(Clone, Debug)]
 pub struct HandshakePolicy {
@@ -70,6 +72,9 @@ impl SessionRegistry {
         peer: &PeerIdentity,
         hello: ClientHello,
     ) -> Result<ServerWelcome, AuthError> {
+        if !peer.claim_handshake() {
+            return Err(AuthError::HandshakeAlreadyAttempted);
+        }
         self.validate_hello(&hello)?;
         let protocol_version = hello
             .protocol_versions
@@ -83,6 +88,11 @@ impl SessionRegistry {
         let now = Instant::now();
         let mut state = self.state.lock().expect("session registry poisoned");
         state.purge(now);
+        if state.sessions.len() >= MAX_SESSION_RECORDS
+            || state.used_challenges.len() >= MAX_RECENT_CHALLENGES
+        {
+            return Err(AuthError::SessionCapacityExceeded);
+        }
         if state.used_challenges.contains_key(&challenge_digest) {
             return Err(AuthError::ChallengeReplay);
         }
@@ -104,6 +114,7 @@ impl SessionRegistry {
                 phase: SessionPhase::AwaitingBootstrap,
             },
         );
+        peer.mark_authenticated();
 
         let enabled_features = self
             .policy
@@ -213,7 +224,7 @@ struct RegistryState {
 impl RegistryState {
     fn purge(&mut self, now: Instant) {
         self.sessions
-            .retain(|_, record| now < record.session_expires_at);
+            .retain(|_, record| !record.peer.is_closed() && now < record.session_expires_at);
         self.used_challenges.retain(|_, expiry| now < *expiry);
     }
 }
@@ -273,6 +284,10 @@ pub(crate) enum AuthError {
     ChallengeInvalid,
     #[error("session challenge has already been used")]
     ChallengeReplay,
+    #[error("this connection already attempted a handshake")]
+    HandshakeAlreadyAttempted,
+    #[error("authenticated UI session capacity is temporarily exhausted")]
+    SessionCapacityExceeded,
     #[error("secure random generation failed")]
     RandomUnavailable,
     #[error("authenticated UI session is unknown or expired")]
@@ -299,6 +314,8 @@ impl AuthError {
             Self::ProtocolIncompatible => "ipc_protocol_incompatible",
             Self::ChallengeInvalid => "ipc_challenge_invalid",
             Self::ChallengeReplay => "ipc_challenge_replay",
+            Self::HandshakeAlreadyAttempted => "ipc_handshake_already_attempted",
+            Self::SessionCapacityExceeded => "ipc_session_capacity_exceeded",
             Self::RandomUnavailable => "ipc_random_unavailable",
             Self::SessionUnknown => "ipc_session_unknown",
             Self::ProofExpired => "ipc_proof_expired",
@@ -314,6 +331,7 @@ impl AuthError {
         matches!(
             self,
             Self::ChallengeReplay
+                | Self::SessionCapacityExceeded
                 | Self::SessionUnknown
                 | Self::ProofExpired
                 | Self::ProofAlreadyConsumed
@@ -351,11 +369,7 @@ mod tests {
     use super::*;
 
     fn peer(connection: &str) -> PeerIdentity {
-        PeerIdentity {
-            process_id: 42,
-            user_sid: "S-1-5-21-test".to_owned(),
-            connection_id: connection.to_owned(),
-        }
+        PeerIdentity::new(42, "S-1-5-21-test".to_owned(), connection.to_owned())
     }
 
     fn hello(challenge: u8) -> ClientHello {
@@ -409,21 +423,69 @@ mod tests {
         let mut wrong_installation = hello(2);
         wrong_installation.installation_id = "other".to_owned();
         assert!(matches!(
-            registry.issue(&peer("a"), wrong_installation),
+            registry.issue(&peer("wrong-installation"), wrong_installation),
             Err(AuthError::InstallationMismatch)
         ));
 
         let mut wrong_protocol = hello(3);
         wrong_protocol.protocol_versions = vec![99];
         assert!(matches!(
-            registry.issue(&peer("a"), wrong_protocol),
+            registry.issue(&peer("wrong-protocol"), wrong_protocol),
             Err(AuthError::ProtocolIncompatible)
         ));
 
-        registry.issue(&peer("a"), hello(4)).expect("first use");
+        registry
+            .issue(&peer("challenge-first"), hello(4))
+            .expect("first use");
         assert!(matches!(
-            registry.issue(&peer("a"), hello(4)),
+            registry.issue(&peer("challenge-replay"), hello(4)),
             Err(AuthError::ChallengeReplay)
+        ));
+    }
+
+    #[test]
+    fn one_handshake_per_connection_and_session_state_is_bounded() {
+        let registry = SessionRegistry::new(HandshakePolicy::m01("installation-1", "node", 7));
+        let first = peer("single-connection");
+        registry.issue(&first, hello(1)).expect("first handshake");
+        assert!(matches!(
+            registry.issue(&first, hello(2)),
+            Err(AuthError::HandshakeAlreadyAttempted)
+        ));
+
+        let registry = SessionRegistry::new(HandshakePolicy::m01("installation-1", "node", 7));
+        let mut peers = Vec::with_capacity(MAX_SESSION_RECORDS);
+        for index in 0..MAX_SESSION_RECORDS {
+            let peer = peer(&format!("session-{index}"));
+            registry
+                .issue(&peer, hello(index as u8))
+                .expect("bounded session");
+            peers.push(peer);
+        }
+        assert!(matches!(
+            registry.issue(&peer("over-capacity"), hello(200)),
+            Err(AuthError::SessionCapacityExceeded)
+        ));
+
+        peers[0].mark_closed();
+        registry
+            .issue(&peer("replacement"), hello(201))
+            .expect("closed connection is purged before admission");
+    }
+
+    #[test]
+    fn recent_challenge_cache_is_bounded() {
+        let registry = SessionRegistry::new(HandshakePolicy::m01("installation-1", "node", 7));
+        for index in 0..MAX_RECENT_CHALLENGES {
+            let peer = peer(&format!("challenge-{index}"));
+            registry
+                .issue(&peer, hello(index as u8))
+                .expect("bounded challenge");
+            peer.mark_closed();
+        }
+        assert!(matches!(
+            registry.issue(&peer("challenge-over-capacity"), hello(0)),
+            Err(AuthError::SessionCapacityExceeded)
         ));
     }
 }

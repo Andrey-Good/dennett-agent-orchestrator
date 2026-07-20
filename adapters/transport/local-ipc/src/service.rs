@@ -442,14 +442,12 @@ mod tests {
     #[cfg(windows)]
     use std::time::Duration;
     #[cfg(windows)]
+    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+    #[cfg(windows)]
     use tokio::sync::oneshot;
 
     fn peer() -> PeerIdentity {
-        PeerIdentity {
-            process_id: 7,
-            user_sid: "S-1-test".to_owned(),
-            connection_id: "connection-1".to_owned(),
-        }
+        PeerIdentity::new(7, "S-1-test".to_owned(), "connection-1".to_owned())
     }
 
     fn request<T>(value: T) -> Request<T> {
@@ -628,5 +626,65 @@ mod tests {
             .expect("server shutdown timed out")
             .expect("server task")
             .expect("server result");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unauthenticated_pipe_clients_expire_without_ending_the_accept_loop() {
+        let installation_id = format!("raw-pipe-timeout-{}", uuid::Uuid::now_v7());
+        let endpoint = LocalEndpoint::for_installation(&installation_id).expect("endpoint");
+        let projection = Arc::new(SystemProjection::new(SystemSnapshot::empty(7), 8));
+        let sessions = SessionRegistry::new(HandshakePolicy::m01(&installation_id, "node", 7));
+        let service = SystemServiceAdapter::new(projection, sessions);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_endpoint = endpoint.clone();
+        let server = tokio::spawn(run_system_server(server_endpoint, service, async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        let mut raw_clients = Vec::new();
+        for _ in 0..8 {
+            raw_clients.push(open_raw_pipe(&endpoint).await);
+        }
+        tokio::time::sleep(Duration::from_millis(3_500)).await;
+
+        let client = tokio::time::timeout(
+            Duration::from_secs(10),
+            AuthenticatedSystemClient::connect(ClientConfig::m01(
+                &installation_id,
+                "desktop-after-raw-clients",
+                "test",
+            )),
+        )
+        .await
+        .expect("authenticated reconnect deadline")
+        .expect("server accepts after pre-authentication timeouts");
+        assert_eq!(client.bootstrap().authority_epoch, 7);
+        drop(client);
+        drop(raw_clients);
+        shutdown_tx.send(()).expect("shutdown server");
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server shutdown timed out")
+            .expect("server task")
+            .expect("server result");
+    }
+
+    #[cfg(windows)]
+    async fn open_raw_pipe(endpoint: &LocalEndpoint) -> NamedPipeClient {
+        for _ in 0..400 {
+            match ClientOptions::new().open(endpoint.pipe_name()) {
+                Ok(pipe) => return pipe,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        || error.raw_os_error()
+                            == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32) =>
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("open raw pipe: {error}"),
+            }
+        }
+        panic!("raw pipe listener did not become available")
     }
 }

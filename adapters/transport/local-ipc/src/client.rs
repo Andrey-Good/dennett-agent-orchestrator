@@ -9,8 +9,11 @@ use crate::protocol::dennett::control::v1::{
 };
 use crate::transport::connect_channel;
 use crate::{DEFAULT_MAX_MESSAGE_BYTES, LocalEndpoint, M01_PROTOCOL_VERSION, TransportError};
+use std::time::Duration;
 use tonic::codec::Streaming;
 use tonic::transport::Channel;
+
+const DEFAULT_RPC_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientConfig {
@@ -18,6 +21,7 @@ pub struct ClientConfig {
     pub device_id: String,
     pub component_version: String,
     pub requested_features: Vec<String>,
+    pub rpc_deadline: Duration,
 }
 
 impl ClientConfig {
@@ -32,6 +36,7 @@ impl ClientConfig {
             device_id: device_id.into(),
             component_version: component_version.into(),
             requested_features: vec!["system-watch".to_owned()],
+            rpc_deadline: DEFAULT_RPC_DEADLINE,
         }
     }
 }
@@ -40,13 +45,18 @@ pub struct AuthenticatedSystemClient {
     inner: SystemServiceClient<Channel>,
     client_session_id: String,
     bootstrap: BootstrapSnapshot,
+    rpc_deadline: Duration,
 }
 
 impl AuthenticatedSystemClient {
     pub async fn connect(config: ClientConfig) -> Result<Self, ClientError> {
-        if config.device_id.is_empty() || config.component_version.is_empty() {
+        if config.device_id.is_empty()
+            || config.component_version.is_empty()
+            || config.rpc_deadline.is_zero()
+        {
             return Err(ClientError::InvalidConfiguration);
         }
+        let rpc_deadline = config.rpc_deadline;
         let endpoint = LocalEndpoint::for_installation(config.installation_id.clone())?;
         let channel = connect_channel(&endpoint).await?;
         let mut inner = SystemServiceClient::new(channel)
@@ -54,8 +64,9 @@ impl AuthenticatedSystemClient {
             .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize);
         let mut challenge = vec![0_u8; 32];
         getrandom::fill(&mut challenge).map_err(|_| ClientError::RandomUnavailable)?;
-        let response = inner
-            .handshake(HandshakeRequest {
+        let response = tokio::time::timeout(
+            rpc_deadline,
+            inner.handshake(HandshakeRequest {
                 hello: Some(ClientHello {
                     client_component: "dennett-desktop-shell".to_owned(),
                     component_version: config.component_version,
@@ -65,9 +76,11 @@ impl AuthenticatedSystemClient {
                     session_challenge: challenge,
                     requested_features: config.requested_features,
                 }),
-            })
-            .await?
-            .into_inner();
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("handshake"))??
+        .into_inner();
         let welcome = match response.outcome {
             Some(handshake_response::Outcome::Welcome(welcome)) => welcome,
             Some(handshake_response::Outcome::Error(error)) => {
@@ -84,14 +97,17 @@ impl AuthenticatedSystemClient {
         }
 
         let client_session_id = welcome.client_session_id;
-        let response = inner
-            .bootstrap(BootstrapRequest {
+        let response = tokio::time::timeout(
+            rpc_deadline,
+            inner.bootstrap(BootstrapRequest {
                 session_proof: welcome.session_proof,
                 known_revision: None,
                 client_session_id: client_session_id.clone(),
-            })
-            .await?
-            .into_inner();
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("bootstrap"))??
+        .into_inner();
         let bootstrap = match response.outcome {
             Some(bootstrap_response::Outcome::Snapshot(snapshot)) => snapshot,
             Some(bootstrap_response::Outcome::Error(error)) => {
@@ -106,6 +122,7 @@ impl AuthenticatedSystemClient {
             inner,
             client_session_id,
             bootstrap,
+            rpc_deadline,
         })
     }
 
@@ -115,14 +132,16 @@ impl AuthenticatedSystemClient {
     }
 
     pub async fn watch(&mut self) -> Result<AuthenticatedSystemWatch, ClientError> {
-        let inner = self
-            .inner
-            .watch(WatchRequest {
+        let inner = tokio::time::timeout(
+            self.rpc_deadline,
+            self.inner.watch(WatchRequest {
                 client_session_id: self.client_session_id.clone(),
                 known_revision: Some(self.bootstrap.revision),
-            })
-            .await?
-            .into_inner();
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("watch"))??
+        .into_inner();
         Ok(AuthenticatedSystemWatch {
             inner,
             state: WatchState::new(&self.bootstrap),
@@ -273,6 +292,8 @@ pub enum ClientError {
     AuthorityEpochMismatch,
     #[error("Node watch stream violated the local IPC contract: {0}")]
     WatchInvariant(&'static str),
+    #[error("local IPC {0} request exceeded its deadline")]
+    DeadlineExceeded(&'static str),
     #[error("Node rejected local IPC request: {0:?}")]
     Remote(ErrorEnvelope),
     #[error(transparent)]
@@ -291,6 +312,7 @@ impl ClientError {
             Self::ProtocolIncompatible => "ipc_protocol_incompatible",
             Self::AuthorityEpochMismatch => "ipc_authority_epoch_changed",
             Self::WatchInvariant(code) => watch_invariant_code(code),
+            Self::DeadlineExceeded(_) => "ipc_request_deadline_exceeded",
             Self::Remote(error) => &error.code,
             Self::Transport(TransportError::UnsupportedPlatform) => "ipc_platform_unsupported",
             Self::Transport(TransportError::InvalidInstallationId) => {
@@ -312,9 +334,10 @@ impl ClientError {
     #[must_use]
     pub fn retryable(&self) -> bool {
         match self {
-            Self::RandomUnavailable | Self::AuthorityEpochMismatch | Self::WatchInvariant(_) => {
-                true
-            }
+            Self::RandomUnavailable
+            | Self::AuthorityEpochMismatch
+            | Self::WatchInvariant(_)
+            | Self::DeadlineExceeded(_) => true,
             Self::Remote(error) => error.retryable,
             Self::Transport(TransportError::Io(_) | TransportError::Channel(_)) => true,
             Self::Grpc(status) => matches!(
@@ -424,6 +447,22 @@ mod tests {
                 snapshot_fingerprint: vec![1, 2, 3],
             }),
         )
+    }
+
+    #[tokio::test]
+    async fn zero_deadline_is_rejected_and_deadline_errors_are_retryable() {
+        let mut config = ClientConfig::m01("installation", "device", "test");
+        config.rpc_deadline = Duration::ZERO;
+        assert!(matches!(
+            AuthenticatedSystemClient::connect(config).await,
+            Err(ClientError::InvalidConfiguration)
+        ));
+
+        let error = ClientError::DeadlineExceeded("handshake");
+        assert_eq!(error.code(), "ipc_request_deadline_exceeded");
+        assert!(error.retryable());
+        assert!(!error.user_action_required());
+        assert!(!error.node_start_candidate());
     }
 
     #[test]

@@ -15,4 +15,6 @@ dennett-local-ipc = { path = "../../adapters/transport/local-ipc", default-featu
 
 [dev-dependencies]
 dennett-local-ipc = { path = "../../adapters/transport/local-ipc", default-features = false, features = ["client"] }
+tempfile.workspace = true
 uuid.workspace = true
+windows-sys.workspace = true

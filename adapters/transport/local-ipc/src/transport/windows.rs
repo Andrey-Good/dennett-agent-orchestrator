@@ -2,11 +2,14 @@ use super::{LocalEndpoint, PeerIdentity, TransportError};
 use async_stream::try_stream;
 use futures_core::Stream;
 use hyper_util::rt::TokioIo;
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::future::Future;
 use std::io;
 use std::os::windows::io::{AsRawHandle, RawHandle};
 use std::pin::Pin;
 use std::ptr;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -30,6 +33,9 @@ use windows_sys::Win32::System::Threading::{
 
 const CONNECT_RETRIES: usize = 80;
 const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(25);
+const PIPE_INSTANCE_RETRY_DELAY: Duration = Duration::from_millis(25);
+const PREAUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_CONNECTIONS_PER_PROCESS: usize = 8;
 
 pub(crate) async fn connect_channel(
     endpoint: &LocalEndpoint,
@@ -58,28 +64,50 @@ pub(crate) fn secure_incoming(
 ) -> Result<impl Stream<Item = Result<AuthenticatedPipe, io::Error>>, TransportError> {
     let expected_sid = current_process_user_sid()?;
     let pipe_name = endpoint.pipe_name().to_owned();
+    let limiter = ConnectionLimiter::default();
     Ok(try_stream! {
-        let mut first_instance = true;
-        let mut listener = create_secure_pipe(&pipe_name, &expected_sid, first_instance)?;
-        first_instance = false;
+        let mut listener = create_secure_pipe(&pipe_name, &expected_sid, true)?;
         loop {
             listener.connect().await?;
-            let next = create_secure_pipe(&pipe_name, &expected_sid, first_instance)?;
-            match validate_client_peer(&listener, &expected_sid) {
-                Ok(peer) => yield AuthenticatedPipe { inner: listener, peer },
+            let connected = listener;
+            match validate_client_peer(&connected, &expected_sid) {
+                Ok(peer) => match limiter.acquire(peer.process_id) {
+                    Some(permit) => yield AuthenticatedPipe::new(connected, peer, permit),
+                    None => tracing::warn!(
+                        process_id = peer.process_id,
+                        "rejected local IPC client above the per-process connection quota"
+                    ),
+                },
                 Err(error) => {
                     tracing::warn!(error = %error, "rejected local IPC client before gRPC");
                 }
             }
-            listener = next;
+            listener = create_secure_pipe_with_retry(&pipe_name, &expected_sid).await?;
         }
     })
 }
 
-#[derive(Debug)]
 pub(crate) struct AuthenticatedPipe {
     inner: NamedPipeServer,
     peer: PeerIdentity,
+    preauthentication_deadline: Pin<Box<tokio::time::Sleep>>,
+    _permit: ConnectionPermit,
+}
+
+impl AuthenticatedPipe {
+    fn new(inner: NamedPipeServer, peer: PeerIdentity, permit: ConnectionPermit) -> Self {
+        Self {
+            inner,
+            peer,
+            preauthentication_deadline: Box::pin(tokio::time::sleep(PREAUTHENTICATION_TIMEOUT)),
+            _permit: permit,
+        }
+    }
+
+    fn preauthentication_expired(&mut self, cx: &mut Context<'_>) -> bool {
+        !self.peer.is_authenticated()
+            && self.preauthentication_deadline.as_mut().poll(cx).is_ready()
+    }
 }
 
 impl Connected for AuthenticatedPipe {
@@ -96,7 +124,14 @@ impl AsyncRead for AuthenticatedPipe {
         cx: &mut Context<'_>,
         buffer: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_read(cx, buffer)
+        let this = self.get_mut();
+        if this.preauthentication_expired(cx) {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "local IPC client did not authenticate before the deadline",
+            )));
+        }
+        Pin::new(&mut this.inner).poll_read(cx, buffer)
     }
 }
 
@@ -106,7 +141,14 @@ impl AsyncWrite for AuthenticatedPipe {
         cx: &mut Context<'_>,
         buffer: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
-        Pin::new(&mut self.get_mut().inner).poll_write(cx, buffer)
+        let this = self.get_mut();
+        if this.preauthentication_expired(cx) {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "local IPC client did not authenticate before the deadline",
+            )));
+        }
+        Pin::new(&mut this.inner).poll_write(cx, buffer)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
@@ -115,6 +157,50 @@ impl AsyncWrite for AuthenticatedPipe {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+impl Drop for AuthenticatedPipe {
+    fn drop(&mut self) {
+        self.peer.mark_closed();
+    }
+}
+
+#[derive(Clone, Default)]
+struct ConnectionLimiter {
+    counts: Arc<Mutex<HashMap<u32, usize>>>,
+}
+
+impl ConnectionLimiter {
+    fn acquire(&self, process_id: u32) -> Option<ConnectionPermit> {
+        let mut counts = self.counts.lock().expect("connection limiter poisoned");
+        let count = counts.entry(process_id).or_default();
+        if *count >= MAX_CONNECTIONS_PER_PROCESS {
+            return None;
+        }
+        *count += 1;
+        Some(ConnectionPermit {
+            process_id,
+            counts: self.counts.clone(),
+        })
+    }
+}
+
+struct ConnectionPermit {
+    process_id: u32,
+    counts: Arc<Mutex<HashMap<u32, usize>>>,
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock().expect("connection limiter poisoned");
+        let Some(count) = counts.get_mut(&self.process_id) else {
+            return;
+        };
+        *count -= 1;
+        if *count == 0 {
+            counts.remove(&self.process_id);
+        }
     }
 }
 
@@ -133,6 +219,21 @@ async fn open_pipe_with_retry(pipe_name: &str) -> io::Result<NamedPipeClient> {
         }
     }
     unreachable!("bounded connection loop returns on its last attempt")
+}
+
+async fn create_secure_pipe_with_retry(
+    pipe_name: &str,
+    current_sid: &str,
+) -> io::Result<NamedPipeServer> {
+    loop {
+        match create_secure_pipe(pipe_name, current_sid, false) {
+            Ok(pipe) => return Ok(pipe),
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {
+                tokio::time::sleep(PIPE_INSTANCE_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn create_secure_pipe(
@@ -197,11 +298,7 @@ fn peer_identity(process_id: u32, expected_sid: &str) -> Result<PeerIdentity, Tr
     if actual_sid != expected_sid {
         return Err(TransportError::PeerUserMismatch);
     }
-    Ok(PeerIdentity {
-        process_id,
-        user_sid: actual_sid,
-        connection_id: random_hex(16)?,
-    })
+    Ok(PeerIdentity::new(process_id, actual_sid, random_hex(16)?))
 }
 
 fn current_process_user_sid() -> Result<String, TransportError> {
@@ -347,6 +444,18 @@ mod tests {
         let sid = current_process_user_sid().expect("current SID");
         let descriptor = SecurityDescriptor::current_user_only(&sid).expect("descriptor");
         assert!(!descriptor.raw.is_null());
+    }
+
+    #[test]
+    fn connection_limiter_bounds_each_peer_process_and_releases_slots() {
+        let limiter = ConnectionLimiter::default();
+        let mut permits = (0..MAX_CONNECTIONS_PER_PROCESS)
+            .map(|_| limiter.acquire(42).expect("quota slot"))
+            .collect::<Vec<_>>();
+        assert!(limiter.acquire(42).is_none());
+        assert!(limiter.acquire(43).is_some());
+        permits.pop();
+        assert!(limiter.acquire(42).is_some());
     }
 
     #[tokio::test]

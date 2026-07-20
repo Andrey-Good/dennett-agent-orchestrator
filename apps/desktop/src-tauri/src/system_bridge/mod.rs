@@ -24,6 +24,7 @@ use tokio::sync::watch;
 
 const COMPONENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const INITIAL_WATCH_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct DesktopBridge {
@@ -93,7 +94,6 @@ impl DesktopBridge {
             0,
         )
         .await?;
-        let snapshot = DesktopSystemSnapshot::from(client.bootstrap());
         send(
             &channel,
             DesktopSystemEvent::phase(&subscription_id, BridgePhase::Subscribing, 0),
@@ -103,6 +103,11 @@ impl DesktopBridge {
             .watch()
             .await
             .map_err(|error| UiSafeError::from_client(&error, &correlation_id))?;
+        let mut watch = watch;
+        // Consume the watch's authoritative initial snapshot before returning.
+        // Sending it through the Channel as well could let a newer snapshot race
+        // ahead of the older command response and then be overwritten by it.
+        let snapshot = take_initial_snapshot(&mut watch, &subscription_id, &correlation_id).await?;
         send(
             &channel,
             DesktopSystemEvent::phase(&subscription_id, BridgePhase::Watching, 0),
@@ -260,6 +265,54 @@ async fn connect(
     .await
 }
 
+async fn take_initial_snapshot(
+    watch: &mut AuthenticatedSystemWatch,
+    subscription_id: &str,
+    correlation_id: &str,
+) -> Result<DesktopSystemSnapshot, UiSafeError> {
+    let response = tokio::time::timeout(INITIAL_WATCH_SNAPSHOT_DEADLINE, watch.message())
+        .await
+        .map_err(|_| {
+            UiSafeError::new(
+                "ipc_watch_snapshot_deadline_exceeded",
+                "desktop.ipc_watch_snapshot_deadline_exceeded",
+                true,
+                false,
+                correlation_id,
+            )
+        })?
+        .map_err(|error| UiSafeError::from_client(&error, correlation_id))?
+        .ok_or_else(|| {
+            UiSafeError::new(
+                "ipc_watch_closed",
+                "desktop.ipc_watch_closed",
+                true,
+                false,
+                correlation_id,
+            )
+        })?;
+    let frame = response.frame.as_ref().ok_or_else(|| {
+        UiSafeError::new(
+            "ipc_watch_frame_missing",
+            "desktop.ipc_watch_frame_missing",
+            true,
+            false,
+            correlation_id,
+        )
+    })?;
+    match frame_to_event(subscription_id, frame)? {
+        DesktopSystemEvent::Snapshot { snapshot, .. } => Ok(snapshot),
+        DesktopSystemEvent::Error { error, .. } => Err(error),
+        _ => Err(UiSafeError::new(
+            "ipc_watch_first_frame_not_snapshot",
+            "desktop.ipc_watch_first_frame_not_snapshot",
+            true,
+            false,
+            correlation_id,
+        )),
+    }
+}
+
 struct WatchContext {
     metadata: InstallationMetadata,
     data_dir: PathBuf,
@@ -406,47 +459,36 @@ async fn supervise_watch(mut stream: AuthenticatedSystemWatch, context: WatchCon
             () = tokio::time::sleep(delay) => {}
         }
 
-        match connect_or_start(
-            &metadata,
-            &data_dir,
-            &node_starter,
-            &channel,
-            &subscription_id,
-            &correlation_id,
-            reconnect_attempt,
+        let Some(reopened) = reconnect_or_cancel(
+            &mut cancel,
+            reconnect_watch(
+                &metadata,
+                &data_dir,
+                &node_starter,
+                &channel,
+                &subscription_id,
+                &correlation_id,
+                reconnect_attempt,
+            ),
         )
         .await
-        {
-            Ok(mut client) => match client.watch().await {
-                Ok(next_stream) => {
-                    stream = next_stream;
-                    if channel
-                        .send(DesktopSystemEvent::phase(
-                            &subscription_id,
-                            BridgePhase::Watching,
-                            0,
-                        ))
-                        .is_err()
-                    {
-                        return;
-                    }
+        else {
+            return;
+        };
+        match reopened {
+            Ok(next_stream) => {
+                stream = next_stream;
+                if channel
+                    .send(DesktopSystemEvent::phase(
+                        &subscription_id,
+                        BridgePhase::Watching,
+                        0,
+                    ))
+                    .is_err()
+                {
+                    return;
                 }
-                Err(error) => {
-                    let retryable = error.retryable();
-                    if channel
-                        .send(DesktopSystemEvent::error(
-                            &subscription_id,
-                            UiSafeError::from_client(&error, &correlation_id),
-                        ))
-                        .is_err()
-                    {
-                        return;
-                    }
-                    if !retryable {
-                        return;
-                    }
-                }
-            },
+            }
             Err(error) => {
                 let retryable = error.retryable;
                 if channel
@@ -461,6 +503,51 @@ async fn supervise_watch(mut stream: AuthenticatedSystemWatch, context: WatchCon
             }
         }
     }
+}
+
+async fn reconnect_or_cancel<F>(
+    cancel: &mut watch::Receiver<bool>,
+    reconnect: F,
+) -> Option<F::Output>
+where
+    F: Future,
+{
+    tokio::pin!(reconnect);
+    loop {
+        tokio::select! {
+            changed = cancel.changed() => {
+                if changed.is_err() || *cancel.borrow() {
+                    return None;
+                }
+            }
+            result = &mut reconnect => return Some(result),
+        }
+    }
+}
+
+async fn reconnect_watch(
+    metadata: &InstallationMetadata,
+    data_dir: &Path,
+    node_starter: &Arc<dyn NodeStarter>,
+    channel: &Channel<DesktopSystemEvent>,
+    subscription_id: &str,
+    correlation_id: &str,
+    attempt: u32,
+) -> Result<AuthenticatedSystemWatch, UiSafeError> {
+    let mut client = connect_or_start(
+        metadata,
+        data_dir,
+        node_starter,
+        channel,
+        subscription_id,
+        correlation_id,
+        attempt,
+    )
+    .await?;
+    client
+        .watch()
+        .await
+        .map_err(|error| UiSafeError::from_client(&error, correlation_id))
 }
 
 type NodeStartFuture = Pin<Box<dyn Future<Output = Result<(), NodeStartError>> + Send>>;
@@ -548,7 +635,7 @@ fn node_start_error(error: NodeStartError, correlation_id: &str) -> UiSafeError 
 mod tests {
     use super::*;
     #[cfg(windows)]
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     #[cfg(windows)]
     use tauri::ipc::InvokeResponseBody;
     #[cfg(windows)]
@@ -565,6 +652,16 @@ mod tests {
     struct InProcessNodeStarter {
         starts: Arc<AtomicUsize>,
         node: Arc<Mutex<Option<InProcessNodeHandle>>>,
+    }
+
+    #[cfg(windows)]
+    struct PendingFutureGuard(Arc<AtomicBool>);
+
+    #[cfg(windows)]
+    impl Drop for PendingFutureGuard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
     }
 
     #[cfg(windows)]
@@ -653,30 +750,28 @@ mod tests {
             metadata.authority_epoch.to_string()
         );
 
-        let snapshot_event = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let body = event_rx.recv().await.expect("channel event");
-                let InvokeResponseBody::Json(json) = body else {
-                    panic!("expected JSON channel event");
-                };
-                assert!(!json.contains(&metadata.installation_id));
-                assert!(!json.contains(&metadata.device_id));
-                assert!(!json.contains("session_proof"));
-                let event: DesktopSystemEvent = serde_json::from_str(&json).expect("event JSON");
-                if matches!(event, DesktopSystemEvent::Snapshot { .. }) {
-                    break event;
+        let mut saw_watching = false;
+        while let Ok(body) = event_rx.try_recv() {
+            let InvokeResponseBody::Json(json) = body else {
+                panic!("expected JSON channel event");
+            };
+            assert!(!json.contains(&metadata.installation_id));
+            assert!(!json.contains(&metadata.device_id));
+            assert!(!json.contains("session_proof"));
+            let event: DesktopSystemEvent = serde_json::from_str(&json).expect("event JSON");
+            assert!(
+                !matches!(event, DesktopSystemEvent::Snapshot { .. }),
+                "the initial snapshot must have one ordered delivery path"
+            );
+            saw_watching |= matches!(
+                event,
+                DesktopSystemEvent::Phase {
+                    phase: BridgePhase::Watching,
+                    ..
                 }
-            }
-        })
-        .await
-        .expect("watch snapshot timeout");
-        assert!(matches!(
-            snapshot_event,
-            DesktopSystemEvent::Snapshot {
-                snapshot: DesktopSystemSnapshot { revision, .. },
-                ..
-            } if revision == "1"
-        ));
+            );
+        }
+        assert!(saw_watching);
 
         assert!(bridge.close_system_watch(
             "main",
@@ -703,5 +798,36 @@ mod tests {
         ));
         assert_eq!(node_starter.starts.load(Ordering::SeqCst), 1);
         node_starter.shutdown().await;
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn closing_watch_cancels_the_entire_in_flight_reconnect() {
+        let started = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (close, mut close_rx) = watch::channel(false);
+        let future_started = started.clone();
+        let future_cancelled = cancelled.clone();
+        let reconnect = async move {
+            future_started.store(true, Ordering::SeqCst);
+            let _guard = PendingFutureGuard(future_cancelled);
+            std::future::pending::<()>().await;
+        };
+        let task = tokio::spawn(async move { reconnect_or_cancel(&mut close_rx, reconnect).await });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending reconnect did not start");
+
+        close.send(true).expect("close reconnect");
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("closing the watch must cancel a hung reconnect promptly")
+            .expect("reconnect task");
+        assert!(result.is_none());
+        assert!(cancelled.load(Ordering::SeqCst));
     }
 }

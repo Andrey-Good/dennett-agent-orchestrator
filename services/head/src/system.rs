@@ -145,7 +145,8 @@ impl SystemProjection {
             delta: SystemDelta { mutations },
         };
         let snapshot = state.clone();
-        drop(state);
+        // Publication is part of the commit's critical section. Releasing the
+        // write lock first would allow revision N+1 to be broadcast before N.
         let _ = self.updates.send(committed);
         snapshot
     }
@@ -384,5 +385,45 @@ mod tests {
             })
         ));
         assert!(subscription.recv().await.expect("blocked").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_commits_publish_in_revision_order() {
+        const COMMITS: usize = 32;
+        let projection =
+            std::sync::Arc::new(SystemProjection::new(SystemSnapshot::empty(7), COMMITS + 1));
+        let mut subscription = projection.subscribe().await.expect("subscribe");
+        subscription.take_initial();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(COMMITS + 1));
+        let mut tasks = Vec::with_capacity(COMMITS);
+
+        for index in 0..COMMITS {
+            let projection = projection.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                projection
+                    .apply(vec![SystemMutation::Select {
+                        project_id: Some(format!("project-{index}")),
+                        session_id: None,
+                    }])
+                    .await
+            }));
+        }
+        barrier.wait().await;
+        for task in tasks {
+            task.await.expect("concurrent commit task");
+        }
+
+        for expected_revision in 2..=(COMMITS as u64 + 1) {
+            assert!(matches!(
+                subscription.recv().await.expect("ordered delta"),
+                Some(WatchFrame::Delta {
+                    base_revision,
+                    new_revision,
+                    ..
+                }) if base_revision + 1 == expected_revision && new_revision == expected_revision
+            ));
+        }
     }
 }

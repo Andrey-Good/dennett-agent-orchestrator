@@ -1,13 +1,87 @@
 use sha2::{Digest, Sha256};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(windows)]
 mod windows;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone)]
 pub struct PeerIdentity {
     pub process_id: u32,
     pub user_sid: String,
     pub connection_id: String,
+    connection: Arc<ConnectionState>,
+}
+
+#[derive(Debug, Default)]
+struct ConnectionState {
+    handshake_started: AtomicBool,
+    authenticated: AtomicBool,
+    closed: AtomicBool,
+}
+
+impl PeerIdentity {
+    pub(crate) fn new(process_id: u32, user_sid: String, connection_id: String) -> Self {
+        Self {
+            process_id,
+            user_sid,
+            connection_id,
+            connection: Arc::new(ConnectionState::default()),
+        }
+    }
+
+    pub(crate) fn claim_handshake(&self) -> bool {
+        self.connection
+            .handshake_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub(crate) fn mark_authenticated(&self) {
+        self.connection.authenticated.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_authenticated(&self) -> bool {
+        self.connection.authenticated.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_closed(&self) {
+        self.connection.closed.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.connection.closed.load(Ordering::Acquire)
+    }
+}
+
+impl std::fmt::Debug for PeerIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PeerIdentity")
+            .field("process_id", &self.process_id)
+            .field("user_sid", &self.user_sid)
+            .field("connection_id", &self.connection_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for PeerIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.process_id == other.process_id
+            && self.user_sid == other.user_sid
+            && self.connection_id == other.connection_id
+    }
+}
+
+impl Eq for PeerIdentity {}
+
+impl Hash for PeerIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.process_id.hash(state);
+        self.user_sid.hash(state);
+        self.connection_id.hash(state);
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
