@@ -22,6 +22,7 @@ struct ConnectionState {
 }
 
 impl PeerIdentity {
+    #[cfg(any(windows, test))]
     pub(crate) fn new(process_id: u32, user_sid: String, connection_id: String) -> Self {
         Self {
             process_id,
@@ -42,10 +43,12 @@ impl PeerIdentity {
         self.connection.authenticated.store(true, Ordering::Release);
     }
 
+    #[cfg(windows)]
     pub(crate) fn is_authenticated(&self) -> bool {
         self.connection.authenticated.load(Ordering::Acquire)
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn mark_closed(&self) {
         self.connection.closed.store(true, Ordering::Release);
     }

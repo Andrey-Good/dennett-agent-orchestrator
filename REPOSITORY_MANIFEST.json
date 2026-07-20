@@ -230,8 +230,8 @@
     },
     {
       "path": "adapters/transport/local-ipc/src/transport/mod.rs",
-      "bytes": 5650,
-      "sha256": "d3c73b6bfc2a535fb7cad9cacb51aa5bdca65ef26143b9dd4f493c00f8190265"
+      "bytes": 5732,
+      "sha256": "c8ffa4d62d5c1ef35f70b2b46c3b7deacb941ca0049919a1a9364fd4f92bdb1c"
     },
     {
       "path": "adapters/transport/local-ipc/src/transport/windows.rs",
