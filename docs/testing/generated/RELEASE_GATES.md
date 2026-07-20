@@ -23,8 +23,8 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-FAKE-CHAT-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `automated` | `automated` | evidence available |
-| `release` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `specified` | `planned` | missing evidence |
+| `release` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `manual` | `manual` | evidence available |
+| `release` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-PR-FAST-GATE-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-PRODUCT-IDENTITY-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `automated` | evidence available |

@@ -30,6 +30,7 @@ export const DEFAULT_CODEX_THREAD_OPTIONS: Readonly<
   approvalPolicy: "never",
   networkAccessEnabled: false,
   sandboxMode: "read-only",
+  skipGitRepoCheck: true,
   webSearchMode: "disabled",
 };
 const CODEX_NATIVE_EXTENSION_SCHEMA = "openai.codex.item-status@0.144.5";
@@ -60,6 +61,11 @@ interface ActiveTurn {
   controller: AbortController;
   deadlineTimer?: ReturnType<typeof setTimeout>;
   stopReason?: StopReason;
+}
+
+interface ProviderItemLifecycle {
+  itemType: string;
+  terminal: boolean;
 }
 
 class ManagedRuntimeEventStream
@@ -186,6 +192,61 @@ function safeItemExtension(item: Record<string, unknown>): RuntimeNativeExtensio
     schemaVersion: "0.144.5",
     payload,
   };
+}
+
+function boundedActivityMessage(value: string): string | undefined {
+  const normalized = value.trim();
+  if (normalized.length === 0) return undefined;
+  return normalized.length <= 2_000
+    ? normalized
+    : `${normalized.slice(0, 1_999)}…`;
+}
+
+function activityMessage(item: Record<string, unknown>): string | undefined {
+  switch (item.type) {
+    case "reasoning":
+      return typeof item.text === "string"
+        ? boundedActivityMessage(item.text)
+        : undefined;
+    case "command_execution":
+    case "mcp_tool_call":
+    case "web_search":
+    case "file_change":
+      return undefined;
+    case "todo_list": {
+      if (!Array.isArray(item.items)) return undefined;
+      const current = item.items.flatMap((todo) =>
+        isRecord(todo) && typeof todo.text === "string" && todo.completed !== true
+          ? [todo.text]
+          : []
+      );
+      return boundedActivityMessage(current.join(" · "));
+    }
+    default:
+      return undefined;
+  }
+}
+
+function activityPhase(itemType: unknown): string {
+  switch (itemType) {
+    case "reasoning": return "reasoning_summary";
+    case "command_execution": return "command";
+    case "mcp_tool_call": return "tool";
+    case "web_search": return "web_search";
+    case "file_change": return "workspace";
+    case "todo_list": return "plan";
+    default: throw new RuntimeAdapterError("protocol_violation");
+  }
+}
+
+function activityStatus(
+  eventType: "item.started" | "item.updated" | "item.completed",
+  item: Record<string, unknown>,
+): "started" | "updated" | "completed" | "failed" {
+  if (item.status === "failed") return "failed";
+  if (eventType === "item.started") return "started";
+  if (eventType === "item.updated") return "updated";
+  return "completed";
 }
 
 async function raceWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -391,6 +452,7 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     let iterator: AsyncIterator<ThreadEvent> | undefined;
     let exhausted = false;
     const itemText = new Map<string, string>();
+    const itemLifecycles = new Map<string, ProviderItemLifecycle>();
 
     const event = (
       kind: RuntimeEventKind,
@@ -508,11 +570,41 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
             }
             const runtimeItem = item as unknown as Record<string, unknown>;
             const itemType = runtimeItem.type;
-            if (itemType === "agent_message" || itemType === "reasoning") {
+            if (!isNonEmptyString(itemType)) {
+              throw new RuntimeAdapterError("protocol_violation");
+            }
+            const itemId = runtimeItem.id as string;
+            const priorLifecycle = itemLifecycles.get(itemId);
+            if (raw.type === "item.started") {
+              if (priorLifecycle || runtimeItem.status === "completed" || runtimeItem.status === "failed") {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+              itemLifecycles.set(itemId, { itemType, terminal: false });
+            } else if (raw.type === "item.updated") {
+              if (
+                !priorLifecycle
+                || priorLifecycle.terminal
+                || priorLifecycle.itemType !== itemType
+                || runtimeItem.status === "completed"
+                || runtimeItem.status === "failed"
+              ) {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+            } else {
+              if (
+                priorLifecycle?.terminal
+                || (priorLifecycle && priorLifecycle.itemType !== itemType)
+                || runtimeItem.status === "in_progress"
+                || runtimeItem.status === "running"
+              ) {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+              itemLifecycles.set(itemId, { itemType, terminal: true });
+            }
+            if (itemType === "agent_message") {
               if (typeof runtimeItem.text !== "string") {
                 throw new RuntimeAdapterError("protocol_violation");
               }
-              const itemId = runtimeItem.id as string;
               const previous = itemText.get(itemId) ?? "";
               if (!runtimeItem.text.startsWith(previous)) {
                 throw new RuntimeAdapterError("protocol_violation");
@@ -520,16 +612,8 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
               const delta = runtimeItem.text.slice(previous.length);
               itemText.set(itemId, runtimeItem.text);
               if (delta.length > 0) {
-                if (itemType === "agent_message") {
-                  emittedText = true;
-                  yield event({ type: "text_delta", text: delta });
-                } else {
-                  yield event({
-                    type: "progress",
-                    phase: "reasoning_summary",
-                    message: delta,
-                  });
-                }
+                emittedText = true;
+                yield event({ type: "text_delta", text: delta });
               }
               break;
             }
@@ -538,21 +622,24 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
               break;
             }
             if (
+              itemType === "reasoning" ||
               itemType === "command_execution" ||
               itemType === "mcp_tool_call" ||
               itemType === "web_search" ||
               itemType === "file_change" ||
               itemType === "todo_list"
             ) {
+              if (itemType === "reasoning" && typeof runtimeItem.text !== "string") {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+              const message = activityMessage(runtimeItem);
               yield event(
                 {
                   type: "progress",
-                  phase:
-                    itemType === "file_change"
-                      ? "workspace"
-                      : itemType === "todo_list"
-                        ? "plan"
-                        : "tool",
+                  activityId: runtimeItem.id as string,
+                  phase: activityPhase(itemType),
+                  ...(message === undefined ? {} : { message }),
+                  status: activityStatus(raw.type, runtimeItem),
                 },
                 [safeItemExtension(runtimeItem)],
               );

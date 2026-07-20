@@ -6,15 +6,26 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+fs2.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
 dennett-observability = { path = "../../crates/dennett-observability" }
+dennett-agent-core = { path = "../../crates/dennett-agent-core" }
+dennett-contracts = { path = "../../crates/dennett-contracts" }
+dennett-kernel = { path = "../../crates/dennett-kernel" }
+dennett-memory-core = { path = "../../crates/dennett-memory-core" }
 dennett-head = { path = "../head" }
 dennett-local-ipc = { path = "../../adapters/transport/local-ipc", default-features = false, features = ["server"] }
+dennett-storage-sqlite = { path = "../../adapters/storage/sqlite" }
 
 [dev-dependencies]
 dennett-local-ipc = { path = "../../adapters/transport/local-ipc", default-features = false, features = ["client"] }
+prost-types.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
 windows-sys.workspace = true

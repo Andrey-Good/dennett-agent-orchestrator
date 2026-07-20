@@ -13,12 +13,24 @@ export const fixtureIds = [
 export type FixtureId = (typeof fixtureIds)[number];
 export type FixtureTone = "active" | "good" | "quiet" | "warning" | "danger";
 
+export interface ChatActivity {
+  id: string;
+  phase: string;
+  message: string | null;
+  status: string;
+}
+
 export interface ChatMessage {
   id: string;
   author: "user" | "agent";
   paragraphs: string[];
   bullets?: string[];
   timestamp: string;
+  activities?: ChatActivity[];
+  startedAtUnixMs?: number | null;
+  completedAtUnixMs?: number | null;
+  active?: boolean;
+  terminalState?: string | null;
 }
 
 export interface ProjectChatSnapshot {
@@ -88,7 +100,7 @@ const activeMessage: ChatMessage = {
     "The second workbench pass is assembled. I am checking keyboard paths, the collapsible resource workspace and the compact composer before the owner checkpoint.",
   ],
   bullets: ["Monochrome tokens applied", "Resource viewer connected", "Accessibility pass running"],
-  timestamp: "now",
+  timestamp: "10:36",
 };
 
 const stateData: Record<

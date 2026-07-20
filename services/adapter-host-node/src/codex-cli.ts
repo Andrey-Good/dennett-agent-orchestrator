@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { access, link, mkdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -209,6 +209,76 @@ export function resolveCanaryCodexHomeDirectory(
     throw new CodexCanaryError("chatgpt_login_required");
   }
   return path.join(homeDirectory, ".dennett", "codex-canary-auth");
+}
+
+export function resolveRuntimeCodexHomeDirectory(
+  environment: NodeJS.ProcessEnv,
+): string {
+  if (environment.LOCALAPPDATA) {
+    return path.join(environment.LOCALAPPDATA, "Dennett", "codex-runtime");
+  }
+  const homeDirectory = environment.USERPROFILE ?? environment.HOME;
+  if (!homeDirectory) {
+    throw new CodexCanaryError("chatgpt_login_required");
+  }
+  return path.join(homeDirectory, ".dennett", "codex-runtime");
+}
+
+export async function prepareRuntimeCodexHome(
+  environment: NodeJS.ProcessEnv,
+  inspection: {
+    installation?: CodexInstallation;
+    runner?: ProcessRunner;
+  } = {},
+): Promise<string> {
+  const runtimeHome = resolveRuntimeCodexHomeDirectory(environment);
+  const runtimeAuth = path.join(runtimeHome, "auth.json");
+  await mkdir(runtimeHome, { recursive: true });
+  try {
+    await access(runtimeAuth);
+  } catch {
+    const canaryAuth = await resolveCanaryCodexAuthFile(environment);
+    try {
+      await link(canaryAuth, runtimeAuth);
+    } catch (error: unknown) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "EEXIST"
+      ) {
+        throw new CodexCanaryError("workspace_setup_failed");
+      }
+    }
+  }
+
+  const installation =
+    inspection.installation ?? (await resolveCodexInstallation());
+  const runtimeEnvironment = createSanitizedCodexEnvironment(environment);
+  runtimeEnvironment.CODEX_HOME = runtimeHome;
+  await inspectCodexCli(
+    installation.launcherPath,
+    runtimeEnvironment,
+    inspection.runner,
+  );
+  return runtimeHome;
+}
+
+export function createRuntimeSubscriptionCodexOptions(
+  environment: NodeJS.ProcessEnv,
+  codexHomeDirectory: string,
+): CodexOptions {
+  const sanitizedEnvironment = createSanitizedCodexEnvironment(environment);
+  sanitizedEnvironment.CODEX_HOME = codexHomeDirectory;
+  return {
+    env: sanitizedEnvironment,
+    config: {
+      model_provider: "openai",
+      forced_login_method: "chatgpt",
+      chatgpt_base_url: CHATGPT_BASE_URL,
+      cli_auth_credentials_store: "file",
+    },
+  };
 }
 
 export async function resolveCanaryCodexAuthFile(

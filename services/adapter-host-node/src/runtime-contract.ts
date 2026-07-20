@@ -76,6 +76,7 @@ export interface RuntimeTurnRequest {
   prompt: string;
   workspacePath: string;
   timeoutMs: number;
+  contextHandles?: string[];
   continuation?: OpaqueContinuation;
 }
 
@@ -109,6 +110,12 @@ export interface RuntimeUsage {
   reasoningOutputTokens: number;
 }
 
+export type RuntimeActivityStatus =
+  | "started"
+  | "updated"
+  | "completed"
+  | "failed";
+
 export type RuntimeTerminalOutcome =
   | { type: "completed" }
   | { type: "cancelled"; partial: boolean }
@@ -124,7 +131,13 @@ export type RuntimeTerminalOutcome =
 export type RuntimeEventKind =
   | { type: "started"; continuation?: OpaqueContinuation }
   | { type: "text_delta"; text: string }
-  | { type: "progress"; phase: string; message?: string }
+  | {
+      type: "progress";
+      activityId?: string;
+      phase: string;
+      message?: string;
+      status: RuntimeActivityStatus;
+    }
   | { type: "usage"; usage: RuntimeUsage }
   | { type: "warning"; code: string }
   | {

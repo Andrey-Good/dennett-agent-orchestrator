@@ -1,6 +1,14 @@
 use async_trait::async_trait;
 use dennett_kernel::{DennettError, DennettResult};
-use std::{collections::VecDeque, fmt, time::Duration};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fmt,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+
+const MAX_NATIVE_EXTENSIONS_PER_EVENT: usize = 16;
+const MAX_NATIVE_EXTENSION_PAYLOAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct AgentRequest {
@@ -152,6 +160,26 @@ pub struct RuntimeUsage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeActivityStatus {
+    Started,
+    Updated,
+    Completed,
+    Failed,
+}
+
+impl RuntimeActivityStatus {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Updated => "updated",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeTerminalKind {
     Completed,
     Cancelled,
@@ -203,8 +231,10 @@ pub enum RuntimeEventKind {
         text: String,
     },
     Progress {
+        activity_id: Option<String>,
         phase: String,
         message: Option<String>,
+        status: RuntimeActivityStatus,
     },
     Usage(RuntimeUsage),
     Warning {
@@ -338,6 +368,7 @@ pub struct RuntimeEventValidator {
     started: bool,
     terminal: bool,
     continuation: Option<OpaqueContinuation>,
+    activities: HashMap<String, (String, RuntimeActivityStatus)>,
 }
 
 impl RuntimeEventValidator {
@@ -350,6 +381,7 @@ impl RuntimeEventValidator {
             started: false,
             terminal: false,
             continuation: None,
+            activities: HashMap::new(),
         }
     }
 
@@ -361,9 +393,19 @@ impl RuntimeEventValidator {
         {
             return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
         }
-        if event.native_extensions.iter().any(|extension| {
-            extension.namespace.trim().is_empty() || extension.schema_version.trim().is_empty()
-        }) {
+        let mut extension_keys = HashSet::new();
+        if event.native_extensions.len() > MAX_NATIVE_EXTENSIONS_PER_EVENT
+            || event.native_extensions.iter().any(|extension| {
+                extension.namespace.trim().is_empty()
+                    || extension.schema_version.trim().is_empty()
+                    || extension.payload.is_empty()
+                    || extension.payload.len() > MAX_NATIVE_EXTENSION_PAYLOAD_BYTES
+                    || !extension_keys.insert((
+                        extension.namespace.as_str(),
+                        extension.schema_version.as_str(),
+                    ))
+            })
+        {
             return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
         }
 
@@ -378,13 +420,49 @@ impl RuntimeEventValidator {
             RuntimeEventKind::TextDelta { text } if text.is_empty() => {
                 return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
             }
-            RuntimeEventKind::Progress { phase, message }
-                if phase.trim().is_empty()
+            RuntimeEventKind::Progress {
+                activity_id,
+                phase,
+                message,
+                status,
+            } => {
+                if activity_id
+                    .as_ref()
+                    .is_some_and(|value| value.trim().is_empty())
+                    || phase.trim().is_empty()
                     || message
                         .as_ref()
-                        .is_some_and(|value| value.trim().is_empty()) =>
-            {
-                return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
+                        .is_some_and(|value| value.trim().is_empty())
+                    || activity_id.is_none()
+                        && matches!(
+                            status,
+                            RuntimeActivityStatus::Started | RuntimeActivityStatus::Updated
+                        )
+                {
+                    return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
+                }
+                if let Some(activity_id) = activity_id {
+                    match self.activities.get(activity_id) {
+                        Some((existing_phase, existing_status)) => {
+                            if existing_phase != phase
+                                || matches!(
+                                    existing_status,
+                                    RuntimeActivityStatus::Completed
+                                        | RuntimeActivityStatus::Failed
+                                )
+                                || matches!(status, RuntimeActivityStatus::Started)
+                            {
+                                return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
+                            }
+                        }
+                        None if matches!(status, RuntimeActivityStatus::Updated) => {
+                            return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
+                        }
+                        None => {}
+                    }
+                    self.activities
+                        .insert(activity_id.clone(), (phase.clone(), *status));
+                }
             }
             RuntimeEventKind::Warning { code } if code.trim().is_empty() => {
                 return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation));
@@ -433,6 +511,77 @@ pub trait RuntimeEventStream: Send {
 
 pub struct RuntimeTurn {
     events: Box<dyn RuntimeEventStream>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeContinuationError {
+    InvalidRequest,
+    StorageUnavailable,
+    IntegrityFailure,
+}
+
+impl fmt::Display for RuntimeContinuationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidRequest => "runtime continuation request is invalid",
+            Self::StorageUnavailable => "runtime continuation storage is unavailable",
+            Self::IntegrityFailure => "runtime continuation storage is inconsistent",
+        })
+    }
+}
+
+impl std::error::Error for RuntimeContinuationError {}
+
+#[async_trait]
+pub trait RuntimeContinuationPort: Send + Sync {
+    async fn load(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<OpaqueContinuation>, RuntimeContinuationError>;
+
+    async fn save(
+        &self,
+        session_id: &str,
+        continuation: &OpaqueContinuation,
+    ) -> Result<(), RuntimeContinuationError>;
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryRuntimeContinuationStore {
+    continuations: Arc<RwLock<HashMap<String, OpaqueContinuation>>>,
+}
+
+#[async_trait]
+impl RuntimeContinuationPort for InMemoryRuntimeContinuationStore {
+    async fn load(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<OpaqueContinuation>, RuntimeContinuationError> {
+        if session_id.trim().is_empty() {
+            return Err(RuntimeContinuationError::InvalidRequest);
+        }
+        Ok(self
+            .continuations
+            .read()
+            .map_err(|_| RuntimeContinuationError::StorageUnavailable)?
+            .get(session_id)
+            .cloned())
+    }
+
+    async fn save(
+        &self,
+        session_id: &str,
+        continuation: &OpaqueContinuation,
+    ) -> Result<(), RuntimeContinuationError> {
+        if session_id.trim().is_empty() {
+            return Err(RuntimeContinuationError::InvalidRequest);
+        }
+        self.continuations
+            .write()
+            .map_err(|_| RuntimeContinuationError::StorageUnavailable)?
+            .insert(session_id.to_owned(), continuation.clone());
+        Ok(())
+    }
 }
 
 impl RuntimeTurn {

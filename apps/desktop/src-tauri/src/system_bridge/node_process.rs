@@ -5,6 +5,8 @@ use std::process::{Command, Stdio};
 const NODE_EXECUTABLE_ENV: &str = "DENNETT_NODE_EXECUTABLE";
 const INSTALLATION_ID_ENV: &str = "DENNETT_INSTALLATION_ID";
 const AUTHORITY_EPOCH_ENV: &str = "DENNETT_AUTHORITY_EPOCH";
+const DATA_DIR_ENV: &str = "DENNETT_DATA_DIR";
+const PROJECT_ROOT_ENV: &str = "DENNETT_PROJECT_ROOT";
 
 pub(super) async fn start(
     metadata: InstallationMetadata,
@@ -21,9 +23,12 @@ fn start_blocking(metadata: &InstallationMetadata, data_dir: &Path) -> Result<()
     use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
 
     let executable = locate_executable()?;
+    let project_root = locate_project_root().unwrap_or_else(|| data_dir.to_path_buf());
     let child = Command::new(executable)
         .env(INSTALLATION_ID_ENV, &metadata.installation_id)
         .env(AUTHORITY_EPOCH_ENV, metadata.authority_epoch.to_string())
+        .env(DATA_DIR_ENV, data_dir)
+        .env(PROJECT_ROOT_ENV, project_root)
         .current_dir(data_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -38,6 +43,21 @@ fn start_blocking(metadata: &InstallationMetadata, data_dir: &Path) -> Result<()
     );
     drop(child);
     Ok(())
+}
+
+fn locate_project_root() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os(PROJECT_ROOT_ENV).map(PathBuf::from) {
+        return path.is_dir().then_some(path);
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().and_then(repository_root_from))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .as_deref()
+                .and_then(repository_root_from)
+        })
 }
 
 #[cfg(not(windows))]
@@ -64,19 +84,29 @@ fn locate_executable() -> Result<PathBuf, NodeStartError> {
     {
         candidates.push(parent.join(executable_name));
     }
-    if let Ok(current_directory) = std::env::current_dir() {
-        for ancestor in current_directory.ancestors().take(8) {
-            if ancestor.join("services/node/Cargo.toml").is_file() {
-                candidates.push(ancestor.join("target/release").join(executable_name));
-                candidates.push(ancestor.join("target/debug").join(executable_name));
-                break;
-            }
-        }
+    let executable_root = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().and_then(repository_root_from));
+    let working_root = std::env::current_dir()
+        .ok()
+        .as_deref()
+        .and_then(repository_root_from);
+    for root in executable_root.into_iter().chain(working_root) {
+        candidates.push(root.join("target/release").join(executable_name));
+        candidates.push(root.join("target/debug").join(executable_name));
     }
     candidates
         .into_iter()
         .find_map(executable)
         .ok_or(NodeStartError::ExecutableMissing)
+}
+
+fn repository_root_from(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .take(12)
+        .find(|candidate| candidate.join("services/node/Cargo.toml").is_file())
+        .map(Path::to_path_buf)
 }
 
 fn executable(path: PathBuf) -> Option<PathBuf> {
@@ -89,4 +119,28 @@ pub(super) enum NodeStartError {
     StartFailed,
     #[cfg(not(windows))]
     UnsupportedPlatform,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_root_is_discovered_from_a_nested_desktop_binary_directory() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let node_manifest = directory.path().join("services/node/Cargo.toml");
+        std::fs::create_dir_all(node_manifest.parent().expect("manifest parent"))
+            .expect("Node package directory");
+        std::fs::write(node_manifest, "[package]\nname = \"dennett-node\"\n")
+            .expect("Node manifest marker");
+        let desktop_binary_directory = directory
+            .path()
+            .join("apps/desktop/src-tauri/target/release");
+        std::fs::create_dir_all(&desktop_binary_directory).expect("desktop binary directory");
+
+        assert_eq!(
+            repository_root_from(&desktop_binary_directory),
+            Some(directory.path().to_path_buf())
+        );
+    }
 }

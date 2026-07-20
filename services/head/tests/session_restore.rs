@@ -28,6 +28,7 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
         session_id,
         command_id: CommandId::new(),
         text: "resume after restart".to_owned(),
+        revision: 1,
         updated_at_unix_ms: 2,
     };
     store
@@ -54,6 +55,7 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
             project_id,
             session_id,
             restored_draft.text.clone(),
+            None,
             3,
         )
         .await
@@ -64,6 +66,7 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
             project_id,
             session_id,
             restored_draft.text,
+            None,
             3,
         )
         .await
@@ -71,7 +74,7 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
     assert_eq!(retry.agent_turn_id, accepted.agent_turn_id);
     assert_eq!(retry.commit.snapshot.session.revision, 2);
     reopened
-        .discard(session_id)
+        .discard(session_id, restored_draft.command_id)
         .await
         .expect("discard sent draft");
 

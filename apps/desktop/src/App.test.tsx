@@ -303,14 +303,14 @@ describe("Project Chat workbench", () => {
     expect(screen.getByRole("button", { name: "Auto-approve" })).toBeVisible();
     expect(accessTrigger).toHaveFocus();
 
-    const runtimeTrigger = screen.getByRole("button", { name: /CodexHigh/ });
+    const runtimeTrigger = screen.getByRole("button", { name: /Agent runtime: Codex, High/ });
     expect(runtimeTrigger).toHaveAttribute("aria-controls", "composer-runtime-popover");
     await user.click(runtimeTrigger);
     const runtimeDialog = screen.getByRole("dialog", { name: "Agent runtime" });
     expect(within(runtimeDialog).getByText("Codex SDK")).toBeVisible();
     expect(within(runtimeDialog).getByRole("button", { name: "Medium" })).toHaveFocus();
     await user.click(within(runtimeDialog).getByRole("button", { name: "Medium" }));
-    expect(screen.getByRole("button", { name: /CodexMedium/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Agent runtime: Codex, Medium/ })).toBeVisible();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Agent runtime" })).not.toBeInTheDocument();
     await waitFor(() => expect(runtimeTrigger).toHaveFocus());

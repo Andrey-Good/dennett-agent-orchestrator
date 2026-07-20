@@ -4,6 +4,8 @@ use dennett_kernel::{DennettResult, ProjectChatUseCase};
 use dennett_memory_core::{MemoryEvent, MemoryPort};
 use std::sync::Arc;
 
+pub mod conversation;
+pub mod draft;
 pub mod session;
 pub mod system;
 

@@ -6,8 +6,10 @@ mod runtime;
 pub use fake::{FakeAgentRuntime, FakeRuntimeStep, ScriptedFakeAgentRuntime};
 pub use runtime::{
     AgentRequest, AgentResponse, AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest,
-    CancellationAcknowledgement, NativeExtension, OpaqueContinuation, RuntimeCapabilities,
-    RuntimeDeadline, RuntimeDescriptor, RuntimeError, RuntimeErrorCode, RuntimeEvent,
-    RuntimeEventKind, RuntimeEventStream, RuntimeEventValidator, RuntimeKind, RuntimeTerminal,
-    RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, RuntimeUsage,
+    CancellationAcknowledgement, InMemoryRuntimeContinuationStore, NativeExtension,
+    OpaqueContinuation, RuntimeActivityStatus, RuntimeCapabilities, RuntimeContinuationError,
+    RuntimeContinuationPort, RuntimeDeadline, RuntimeDescriptor, RuntimeError, RuntimeErrorCode,
+    RuntimeEvent, RuntimeEventKind, RuntimeEventStream, RuntimeEventValidator, RuntimeKind,
+    RuntimeTerminal, RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest,
+    RuntimeUsage,
 };

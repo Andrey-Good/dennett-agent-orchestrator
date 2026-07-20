@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "corepack pnpm dev",
-    "beforeBuildCommand": "corepack pnpm build"
+    "beforeDevCommand": "corepack pnpm dev:with-runtime",
+    "beforeBuildCommand": "corepack pnpm build:with-runtime"
   },
   "app": {
     "windows": [

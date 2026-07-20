@@ -76,6 +76,17 @@ message BootstrapSnapshot {
   string active_project_id = 6;
   string active_session_id = 7;
   HealthState node_state = 8;
+  RuntimeSummary runtime = 9;
+}
+
+message RuntimeSummary {
+  string adapter_id = 1;
+  string runtime_kind = 2;
+  bool streaming = 3;
+  bool continuation = 4;
+  bool scoped_cancellation = 5;
+  bool deadlines = 6;
+  repeated string native_extension_schemas = 7;
 }
 
 message BootstrapResponse {

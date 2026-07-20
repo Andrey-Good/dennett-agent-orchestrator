@@ -11,6 +11,13 @@
     "core:window:allow-start-dragging",
     "allow-native-mica-available",
     "allow-open-system-watch",
-    "allow-close-system-watch"
+    "allow-close-system-watch",
+    "allow-open-project-chat",
+    "allow-close-project-chat",
+    "allow-create-chat",
+    "allow-send-project-turn",
+    "allow-cancel-project-turn",
+    "allow-save-composer-draft",
+    "allow-discard-composer-draft"
   ]
 }

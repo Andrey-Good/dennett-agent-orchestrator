@@ -244,12 +244,152 @@ test("TEST-AGENT-RUNTIME-STREAM-001 normalizes an ordered Codex stream", async (
   );
   assert.equal(client.startOptions[0]?.approvalPolicy, "never");
   assert.equal(client.startOptions[0]?.networkAccessEnabled, false);
+  assert.equal(client.startOptions[0]?.skipGitRepoCheck, true);
   assert.equal(thread.closed, true);
 
   const serialized = JSON.stringify(events);
   assert.doesNotMatch(serialized, /private command|private output/);
   assert.match(serialized, /openai\.codex\.item-status/);
 });
+
+test("streams text deltas and preserves the safe provider activity lifecycle", async () => {
+  const thread = new ScriptedThread([
+    providerEvent({ type: "thread.started", thread_id: "thread-activity" }),
+    providerEvent({ type: "turn.started" }),
+    providerEvent({
+      type: "item.started",
+      item: { id: "reasoning-1", type: "reasoning", text: "Checking" },
+    }),
+    providerEvent({
+      type: "item.updated",
+      item: { id: "reasoning-1", type: "reasoning", text: "Checking the request" },
+    }),
+    providerEvent({
+      type: "item.completed",
+      item: { id: "reasoning-1", type: "reasoning", text: "Request checked" },
+    }),
+    providerEvent({
+      type: "item.started",
+      item: { id: "message-1", type: "agent_message", text: "" },
+    }),
+    providerEvent({
+      type: "item.updated",
+      item: { id: "message-1", type: "agent_message", text: "Hello" },
+    }),
+    providerEvent({
+      type: "item.completed",
+      item: { id: "message-1", type: "agent_message", text: "Hello owner" },
+    }),
+    providerEvent({
+      type: "item.completed",
+      item: {
+        id: "command-1",
+        type: "command_execution",
+        status: "completed",
+        command: "private command",
+        aggregated_output: "private output",
+      },
+    }),
+    usageEvent(),
+  ]);
+  const events = await collect(
+    await new CodexRuntimeAdapter(new ScriptedClient([thread])).startTurn(
+      request("session-activity", "turn-activity"),
+    ),
+  );
+
+  assert.deepEqual(
+    events.flatMap((event) =>
+      event.kind.type === "text_delta" ? [event.kind.text] : [],
+    ),
+    ["Hello", " owner"],
+  );
+  assert.deepEqual(
+    events.flatMap((event) =>
+      event.kind.type === "progress"
+        ? [{
+            activityId: event.kind.activityId,
+            phase: event.kind.phase,
+            message: event.kind.message,
+            status: event.kind.status,
+          }]
+        : [],
+    ),
+    [
+      { activityId: "reasoning-1", phase: "reasoning_summary", message: "Checking", status: "started" },
+      { activityId: "reasoning-1", phase: "reasoning_summary", message: "Checking the request", status: "updated" },
+      { activityId: "reasoning-1", phase: "reasoning_summary", message: "Request checked", status: "completed" },
+      { activityId: "command-1", phase: "command", message: undefined, status: "completed" },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(events), /private command|private output/);
+});
+
+for (const malformed of [
+  {
+    name: "an update before item start",
+    events: [providerEvent({
+      type: "item.updated",
+      item: { id: "item-1", type: "agent_message", text: "late" },
+    })],
+  },
+  {
+    name: "an item type change",
+    events: [
+      providerEvent({
+        type: "item.started",
+        item: { id: "item-1", type: "agent_message", text: "" },
+      }),
+      providerEvent({
+        type: "item.updated",
+        item: { id: "item-1", type: "reasoning", text: "changed" },
+      }),
+    ],
+  },
+  {
+    name: "an update after item completion",
+    events: [
+      providerEvent({
+        type: "item.completed",
+        item: { id: "item-1", type: "agent_message", text: "done" },
+      }),
+      providerEvent({
+        type: "item.updated",
+        item: { id: "item-1", type: "agent_message", text: "done late" },
+      }),
+    ],
+  },
+  {
+    name: "duplicate item completion",
+    events: [
+      providerEvent({
+        type: "item.completed",
+        item: { id: "item-1", type: "agent_message", text: "done" },
+      }),
+      providerEvent({
+        type: "item.completed",
+        item: { id: "item-1", type: "agent_message", text: "done" },
+      }),
+    ],
+  },
+]) {
+  test(`rejects ${malformed.name}`, async () => {
+    const thread = new ScriptedThread([
+      providerEvent({ type: "thread.started", thread_id: "thread-malformed-item" }),
+      providerEvent({ type: "turn.started" }),
+      ...malformed.events,
+    ]);
+    const turn = await new CodexRuntimeAdapter(new ScriptedClient([thread]))
+      .startTurn(request("session-malformed-item", "turn-malformed-item"));
+
+    await assert.rejects(
+      collect(turn),
+      (error: unknown) =>
+        error instanceof RuntimeAdapterError
+        && error.code === "protocol_violation",
+    );
+  });
+}
 
 test("TEST-AGENT-RUNTIME-CANCEL-001 scopes and acknowledges Stop", async () => {
   const contract = conformanceCase("scoped_cancellation");

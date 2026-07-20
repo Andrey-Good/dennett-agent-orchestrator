@@ -32,6 +32,14 @@ enum TurnState {
   TURN_STATE_FAILED = 6;
 }
 
+enum TurnActivityStatus {
+  TURN_ACTIVITY_STATUS_UNSPECIFIED = 0;
+  TURN_ACTIVITY_STATUS_STARTED = 1;
+  TURN_ACTIVITY_STATUS_UPDATED = 2;
+  TURN_ACTIVITY_STATUS_COMPLETED = 3;
+  TURN_ACTIVITY_STATUS_FAILED = 4;
+}
+
 message SessionSummary {
   string session_id = 1;
   string project_id = 2;
@@ -68,6 +76,22 @@ message TurnSnapshot {
   }
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp completed_at = 9;
+  repeated TurnActivitySnapshot activities = 10;
+}
+
+message TurnActivitySnapshot {
+  string activity_id = 1;
+  string phase = 2;
+  optional string message = 3;
+  TurnActivityStatus status = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  repeated NativeExtensionPayload native_extensions = 6;
+}
+
+message NativeExtensionPayload {
+  string namespace = 1;
+  string schema_version = 2;
+  string json_value = 3;
 }
 
 message SessionSnapshot {
@@ -90,6 +114,11 @@ message TurnTerminal {
   }
 }
 
+message TurnActivityUpsert {
+  string turn_id = 1;
+  TurnActivitySnapshot activity = 2;
+}
+
 message SessionMetadataUpdate {
   // Presence distinguishes no change from explicitly clearing a string field.
   optional string title = 1;
@@ -103,6 +132,7 @@ message SessionMutation {
     TurnTextAppend append_turn_text = 2;
     TurnTerminal finish_turn = 3;
     SessionMetadataUpdate update_session = 4;
+    TurnActivityUpsert upsert_turn_activity = 5;
   }
 }
 
@@ -111,6 +141,8 @@ message SessionDelta {
   uint64 base_revision = 1;
   uint64 new_revision = 2;
   repeated SessionMutation mutations = 3;
+  // Authoritative commit time shared by every mutation in this journal event.
+  google.protobuf.Timestamp committed_at = 4;
 }
 
 message SessionWatchFrame {
@@ -190,9 +222,88 @@ message WatchSessionResponse {
   SessionWatchFrame frame = 1;
 }
 
+// ComposerDraft is durable client-local state. It never enters the canonical
+// session event journal. command_id is retained when the draft becomes SendTurn.
+message ComposerDraft {
+  string project_id = 1;
+  string session_id = 2;
+  string command_id = 3;
+  string text = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  // Monotonic within one stable draft command. Older saves are ignored.
+  uint64 revision = 6;
+}
+
+message GetComposerDraftRequest {
+  string project_id = 1;
+  string session_id = 2;
+  string client_session_id = 3;
+}
+
+message ComposerDraftMissing {
+  string session_id = 1;
+}
+
+message GetComposerDraftResponse {
+  oneof outcome {
+    ComposerDraft draft = 1;
+    ComposerDraftMissing missing = 2;
+    dennett.common.v1.ErrorEnvelope error = 3;
+  }
+}
+
+message SaveComposerDraftRequest {
+  // operation.command_id identifies this save; draft.command_id remains stable
+  // across saves and is later reused by SendTurn.
+  dennett.common.v1.CommandMetadata operation = 1;
+  ComposerDraft draft = 2;
+}
+
+enum ComposerDraftWriteState {
+  COMPOSER_DRAFT_WRITE_STATE_UNSPECIFIED = 0;
+  COMPOSER_DRAFT_WRITE_STATE_SAVED = 1;
+  COMPOSER_DRAFT_WRITE_STATE_ALREADY_ACCEPTED = 2;
+}
+
+message ComposerDraftWriteReceipt {
+  string session_id = 1;
+  string command_id = 2;
+  google.protobuf.Timestamp persisted_at = 3;
+  ComposerDraftWriteState state = 4;
+}
+
+message SaveComposerDraftResponse {
+  oneof outcome {
+    ComposerDraftWriteReceipt saved = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
+message DiscardComposerDraftRequest {
+  dennett.common.v1.CommandMetadata operation = 1;
+  string project_id = 2;
+  string session_id = 3;
+  string draft_command_id = 4;
+}
+
+message ComposerDraftDiscarded {
+  string session_id = 1;
+  bool existed = 2;
+}
+
+message DiscardComposerDraftResponse {
+  oneof outcome {
+    ComposerDraftDiscarded discarded = 1;
+    dennett.common.v1.ErrorEnvelope error = 2;
+  }
+}
+
 service SessionService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc SendTurn(SendTurnRequest) returns (SendTurnResponse);
   rpc CancelTurn(CancelTurnRequest) returns (CancelTurnResponse);
   rpc WatchSession(WatchSessionRequest) returns (stream WatchSessionResponse);
+  rpc GetComposerDraft(GetComposerDraftRequest) returns (GetComposerDraftResponse);
+  rpc SaveComposerDraft(SaveComposerDraftRequest) returns (SaveComposerDraftResponse);
+  rpc DiscardComposerDraft(DiscardComposerDraftRequest) returns (DiscardComposerDraftResponse);
 }

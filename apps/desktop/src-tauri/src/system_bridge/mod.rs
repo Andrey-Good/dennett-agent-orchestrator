@@ -1,7 +1,9 @@
+mod conversation;
 mod dto;
 mod installation;
 mod node_process;
 
+pub use conversation::*;
 pub use dto::{
     CloseSystemWatchRequest, DesktopSystemEvent, OpenSystemWatchRequest, OpenSystemWatchResponse,
     UiSafeError,
@@ -25,6 +27,8 @@ use tokio::sync::watch;
 const COMPONENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const INITIAL_WATCH_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(5);
+const NODE_READY_DEADLINE: Duration = Duration::from_secs(5);
+const NODE_READY_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Clone)]
 pub struct DesktopBridge {
@@ -34,6 +38,7 @@ pub struct DesktopBridge {
 struct DesktopBridgeInner {
     data_dir: Option<PathBuf>,
     node_starter: Arc<dyn NodeStarter>,
+    node_start_gate: Arc<tokio::sync::Mutex<()>>,
     subscriptions: Mutex<HashMap<String, ActiveSubscription>>,
 }
 
@@ -53,6 +58,7 @@ impl DesktopBridge {
             inner: Arc::new(DesktopBridgeInner {
                 data_dir,
                 node_starter,
+                node_start_gate: Arc::new(tokio::sync::Mutex::new(())),
                 subscriptions: Mutex::new(HashMap::new()),
             }),
         }
@@ -88,6 +94,7 @@ impl DesktopBridge {
             &metadata,
             &data_dir,
             &self.inner.node_starter,
+            &self.inner.node_start_gate,
             &channel,
             &subscription_id,
             &correlation_id,
@@ -126,6 +133,7 @@ impl DesktopBridge {
         let task_subscription_id = subscription_id.clone();
         let task_correlation_id = correlation_id.clone();
         let node_starter = self.inner.node_starter.clone();
+        let node_start_gate = self.inner.node_start_gate.clone();
         tauri::async_runtime::spawn(async move {
             supervise_watch(
                 watch,
@@ -133,6 +141,7 @@ impl DesktopBridge {
                     metadata,
                     data_dir,
                     node_starter,
+                    node_start_gate,
                     channel,
                     cancel: cancel_rx,
                     subscription_id: task_subscription_id.clone(),
@@ -219,6 +228,7 @@ async fn connect_or_start(
     metadata: &InstallationMetadata,
     data_dir: &Path,
     node_starter: &Arc<dyn NodeStarter>,
+    node_start_gate: &tokio::sync::Mutex<()>,
     channel: &Channel<DesktopSystemEvent>,
     subscription_id: &str,
     correlation_id: &str,
@@ -237,6 +247,10 @@ async fn connect_or_start(
                 DesktopSystemEvent::phase(subscription_id, BridgePhase::StartingNode, attempt),
                 correlation_id,
             )?;
+            let _start_guard = node_start_gate.lock().await;
+            if let Ok(client) = connect(metadata).await {
+                return Ok(client);
+            }
             node_starter
                 .start(metadata.clone(), data_dir.to_path_buf())
                 .await
@@ -246,11 +260,28 @@ async fn connect_or_start(
                 DesktopSystemEvent::phase(subscription_id, BridgePhase::Handshaking, attempt),
                 correlation_id,
             )?;
-            connect(metadata)
+            wait_for_node(metadata)
                 .await
                 .map_err(|error| UiSafeError::from_client(&error, correlation_id))
         }
         Err(error) => Err(UiSafeError::from_client(&error, correlation_id)),
+    }
+}
+
+async fn wait_for_node(
+    metadata: &InstallationMetadata,
+) -> Result<AuthenticatedSystemClient, ClientError> {
+    let deadline = tokio::time::Instant::now() + NODE_READY_DEADLINE;
+    loop {
+        match connect(metadata).await {
+            Ok(client) => return Ok(client),
+            Err(error)
+                if error.node_start_candidate() && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(NODE_READY_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -317,6 +348,7 @@ struct WatchContext {
     metadata: InstallationMetadata,
     data_dir: PathBuf,
     node_starter: Arc<dyn NodeStarter>,
+    node_start_gate: Arc<tokio::sync::Mutex<()>>,
     channel: Channel<DesktopSystemEvent>,
     cancel: watch::Receiver<bool>,
     subscription_id: String,
@@ -328,6 +360,7 @@ async fn supervise_watch(mut stream: AuthenticatedSystemWatch, context: WatchCon
         metadata,
         data_dir,
         node_starter,
+        node_start_gate,
         channel,
         mut cancel,
         subscription_id,
@@ -465,6 +498,7 @@ async fn supervise_watch(mut stream: AuthenticatedSystemWatch, context: WatchCon
                 &metadata,
                 &data_dir,
                 &node_starter,
+                &node_start_gate,
                 &channel,
                 &subscription_id,
                 &correlation_id,
@@ -529,6 +563,7 @@ async fn reconnect_watch(
     metadata: &InstallationMetadata,
     data_dir: &Path,
     node_starter: &Arc<dyn NodeStarter>,
+    node_start_gate: &Arc<tokio::sync::Mutex<()>>,
     channel: &Channel<DesktopSystemEvent>,
     subscription_id: &str,
     correlation_id: &str,
@@ -538,6 +573,7 @@ async fn reconnect_watch(
         metadata,
         data_dir,
         node_starter,
+        node_start_gate,
         channel,
         subscription_id,
         correlation_id,
@@ -644,7 +680,7 @@ mod tests {
     #[cfg(windows)]
     type InProcessNodeHandle = (
         oneshot::Sender<()>,
-        tokio::task::JoinHandle<Result<(), dennett_local_ipc::TransportError>>,
+        tokio::task::JoinHandle<Result<(), dennett_node::NodeRunError>>,
     );
 
     #[cfg(windows)]
@@ -744,7 +780,13 @@ mod tests {
             )
             .await
             .expect("open system watch");
-        assert_eq!(opened.snapshot.revision, "1");
+        let initial_revision = opened.snapshot.revision.clone();
+        assert!(
+            initial_revision
+                .parse::<u64>()
+                .is_ok_and(|revision| revision > 0),
+            "the initial snapshot must carry an authoritative revision"
+        );
         assert_eq!(
             opened.snapshot.authority_epoch,
             metadata.authority_epoch.to_string()
@@ -789,7 +831,7 @@ mod tests {
             )
             .await
             .expect("Desktop reconnects while Node stays alive");
-        assert_eq!(reconnected.snapshot.revision, "1");
+        assert_eq!(reconnected.snapshot.revision, initial_revision);
         assert!(bridge.close_system_watch(
             "main",
             &CloseSystemWatchRequest {
@@ -797,6 +839,48 @@ mod tests {
             },
         ));
         assert_eq!(node_starter.starts.load(Ordering::SeqCst), 1);
+        node_starter.shutdown().await;
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_windows_share_one_node_start() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let node_starter = Arc::new(InProcessNodeStarter::default());
+        let bridge = DesktopBridge::with_node_starter(
+            Some(directory.path().to_owned()),
+            node_starter.clone(),
+        );
+        let first = bridge.open_system_watch(
+            "window-one".to_owned(),
+            OpenSystemWatchRequest {
+                correlation_id: "parallel-one".to_owned(),
+            },
+            Channel::new(|_| Ok(())),
+        );
+        let second = bridge.open_system_watch(
+            "window-two".to_owned(),
+            OpenSystemWatchRequest {
+                correlation_id: "parallel-two".to_owned(),
+            },
+            Channel::new(|_| Ok(())),
+        );
+        let (first, second) = tokio::join!(first, second);
+        let first = first.expect("first watch");
+        let second = second.expect("second watch");
+        assert_eq!(node_starter.starts.load(Ordering::SeqCst), 1);
+        assert!(bridge.close_system_watch(
+            "window-one",
+            &CloseSystemWatchRequest {
+                subscription_id: first.subscription_id,
+            },
+        ));
+        assert!(bridge.close_system_watch(
+            "window-two",
+            &CloseSystemWatchRequest {
+                subscription_id: second.subscription_id,
+            },
+        ));
         node_starter.shutdown().await;
     }
 

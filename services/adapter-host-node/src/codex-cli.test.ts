@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -7,6 +9,7 @@ import {
   assertNoApiKeyEnvironment,
   createSubscriptionCodexOptions,
   inspectCodexCli,
+  prepareRuntimeCodexHome,
   resolveCanaryCodexHomeDirectory,
   subscriptionCliArguments,
   type ProcessRunner,
@@ -166,4 +169,39 @@ test("CLI inspection maps a nonzero logged-out status to an actionable error", a
       error instanceof CodexCanaryError &&
       error.code === "chatgpt_login_required",
   );
+});
+
+test("runtime readiness verifies the pinned CLI and ChatGPT login", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dennett-runtime-auth-"));
+  try {
+    const environment = { LOCALAPPDATA: root, Path: "C:/Windows/System32" };
+    const runtimeHome = path.join(root, "Dennett", "codex-runtime");
+    await mkdir(runtimeHome, { recursive: true });
+    await writeFile(path.join(runtimeHome, "auth.json"), "{}", "utf8");
+    const calls: Array<{ args: string[]; environment: Record<string, string> }> = [];
+    const runner: ProcessRunner = async (_executable, args, options) => {
+      calls.push({ args, environment: options.environment });
+      return {
+        exitCode: 0,
+        stdout: args.at(-1) === "--version" ? "codex-cli 0.144.5\n" : "",
+        stderr: args.at(-1) === "--version" ? "" : "Logged in using ChatGPT\n",
+      };
+    };
+
+    assert.equal(
+      await prepareRuntimeCodexHome(environment, {
+        installation: {
+          launcherPath: "C:/synthetic/codex.js",
+          sdkVersion: "0.144.5",
+        },
+        runner,
+      }),
+      runtimeHome,
+    );
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.environment.CODEX_HOME, runtimeHome);
+    assert.equal("OPENAI_API_KEY" in (calls[0]?.environment ?? {}), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

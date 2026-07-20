@@ -132,6 +132,19 @@ pub struct DesktopSystemSnapshot {
     pub active_project_id: Option<String>,
     pub active_session_id: Option<String>,
     pub node_state: String,
+    pub runtime: Option<DesktopRuntimeSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRuntimeSummary {
+    pub adapter_id: String,
+    pub runtime_kind: String,
+    pub streaming: bool,
+    pub continuation: bool,
+    pub scoped_cancellation: bool,
+    pub deadlines: bool,
+    pub native_extension_schemas: Vec<String>,
 }
 
 impl From<&BootstrapSnapshot> for DesktopSystemSnapshot {
@@ -145,6 +158,15 @@ impl From<&BootstrapSnapshot> for DesktopSystemSnapshot {
             active_project_id: non_empty(&snapshot.active_project_id),
             active_session_id: non_empty(&snapshot.active_session_id),
             node_state: health_name(snapshot.node_state).to_owned(),
+            runtime: snapshot.runtime.as_ref().map(|runtime| DesktopRuntimeSummary {
+                adapter_id: runtime.adapter_id.clone(),
+                runtime_kind: runtime.runtime_kind.clone(),
+                streaming: runtime.streaming,
+                continuation: runtime.continuation,
+                scoped_cancellation: runtime.scoped_cancellation,
+                deadlines: runtime.deadlines,
+                native_extension_schemas: runtime.native_extension_schemas.clone(),
+            }),
         }
     }
 }

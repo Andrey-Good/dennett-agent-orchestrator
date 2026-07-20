@@ -39,6 +39,17 @@ export interface SystemSnapshot {
   activeProjectId: string | null;
   activeSessionId: string | null;
   nodeState: string;
+  runtime: RuntimeSummary | null;
+}
+
+export interface RuntimeSummary {
+  adapterId: string;
+  runtimeKind: string;
+  streaming: boolean;
+  continuation: boolean;
+  scopedCancellation: boolean;
+  deadlines: boolean;
+  nativeExtensionSchemas: string[];
 }
 
 export interface WatchCursor {
@@ -174,7 +185,7 @@ export function parseOpenedSystemWatch(value: unknown): OpenedSystemWatch {
   return {
     correlationId: text(record.correlationId, "correlationId"),
     subscriptionId: text(record.subscriptionId, "subscriptionId"),
-    snapshot: parseSnapshot(record.snapshot),
+    snapshot: parseSystemSnapshot(record.snapshot),
   };
 }
 
@@ -198,7 +209,7 @@ export function parseSystemEvent(value: unknown): SystemEvent {
         kind,
         subscriptionId,
         cursor: parseCursor(record.cursor),
-        snapshot: parseSnapshot(record.snapshot),
+        snapshot: parseSystemSnapshot(record.snapshot),
         fingerprint: text(record.fingerprint, "fingerprint"),
       };
     case "delta":
@@ -238,7 +249,7 @@ export function parseSystemEvent(value: unknown): SystemEvent {
   }
 }
 
-function parseSnapshot(value: unknown): SystemSnapshot {
+export function parseSystemSnapshot(value: unknown): SystemSnapshot {
   const record = object(value, "snapshot");
   return {
     revision: revision(record.revision, "revision"),
@@ -249,6 +260,23 @@ function parseSnapshot(value: unknown): SystemSnapshot {
     activeProjectId: optionalText(record.activeProjectId, "activeProjectId"),
     activeSessionId: optionalText(record.activeSessionId, "activeSessionId"),
     nodeState: text(record.nodeState, "nodeState"),
+    runtime: record.runtime === null ? null : parseRuntime(record.runtime),
+  };
+}
+
+function parseRuntime(value: unknown): RuntimeSummary {
+  const record = object(value, "runtime");
+  return {
+    adapterId: text(record.adapterId, "runtime.adapterId"),
+    runtimeKind: text(record.runtimeKind, "runtime.runtimeKind"),
+    streaming: flag(record.streaming, "runtime.streaming"),
+    continuation: flag(record.continuation, "runtime.continuation"),
+    scopedCancellation: flag(record.scopedCancellation, "runtime.scopedCancellation"),
+    deadlines: flag(record.deadlines, "runtime.deadlines"),
+    nativeExtensionSchemas: array(
+      record.nativeExtensionSchemas ?? [],
+      "runtime.nativeExtensionSchemas",
+    ).map((schema) => text(schema, "runtime.nativeExtensionSchemas[]")),
   };
 }
 

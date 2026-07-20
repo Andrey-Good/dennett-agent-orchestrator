@@ -1,14 +1,27 @@
 use crate::protocol::dennett::common::v1::ErrorEnvelope;
+use crate::protocol::dennett::common::v1::{CommandAccepted, CommandMetadata, StableRef};
 use crate::protocol::dennett::control::v1::bootstrap_response;
 use crate::protocol::dennett::control::v1::handshake_response;
+use crate::protocol::dennett::control::v1::session_service_client::SessionServiceClient;
 use crate::protocol::dennett::control::v1::system_service_client::SystemServiceClient;
 use crate::protocol::dennett::control::v1::system_watch_frame;
 use crate::protocol::dennett::control::v1::{
-    BootstrapRequest, BootstrapSnapshot, ClientHello, CompatibilityMode, HandshakeRequest,
-    WatchRequest, WatchResponse,
+    BootstrapRequest, BootstrapSnapshot, CancelTurnRequest, ClientHello, CompatibilityMode,
+    ComposerDraft, ComposerDraftDiscarded, ComposerDraftWriteReceipt, ContextAttachment,
+    CreateSessionAccepted, CreateSessionRequest, DiscardComposerDraftRequest,
+    GetComposerDraftRequest, HandshakeRequest, SaveComposerDraftRequest, SendTurnAccepted,
+    SendTurnRequest, WatchRequest, WatchResponse, WatchSessionRequest, WatchSessionResponse,
+};
+use crate::protocol::dennett::control::v1::{
+    cancel_turn_response, create_session_response, discard_composer_draft_response,
+    get_composer_draft_response, save_composer_draft_response, send_turn_response,
+    session_watch_frame,
 };
 use crate::transport::connect_channel;
-use crate::{DEFAULT_MAX_MESSAGE_BYTES, LocalEndpoint, M01_PROTOCOL_VERSION, TransportError};
+use crate::{
+    COMPOSER_DRAFT_FEATURE, DEFAULT_MAX_MESSAGE_BYTES, LocalEndpoint, M01_PROTOCOL_VERSION,
+    SESSION_CONVERSATION_FEATURE, SYSTEM_WATCH_FEATURE, TransportError,
+};
 use std::time::Duration;
 use tonic::codec::Streaming;
 use tonic::transport::Channel;
@@ -35,7 +48,11 @@ impl ClientConfig {
             installation_id: installation_id.into(),
             device_id: device_id.into(),
             component_version: component_version.into(),
-            requested_features: vec!["system-watch".to_owned()],
+            requested_features: vec![
+                SYSTEM_WATCH_FEATURE.to_owned(),
+                SESSION_CONVERSATION_FEATURE.to_owned(),
+                COMPOSER_DRAFT_FEATURE.to_owned(),
+            ],
             rpc_deadline: DEFAULT_RPC_DEADLINE,
         }
     }
@@ -43,6 +60,7 @@ impl ClientConfig {
 
 pub struct AuthenticatedSystemClient {
     inner: SystemServiceClient<Channel>,
+    sessions: SessionServiceClient<Channel>,
     client_session_id: String,
     bootstrap: BootstrapSnapshot,
     rpc_deadline: Duration,
@@ -57,9 +75,10 @@ impl AuthenticatedSystemClient {
             return Err(ClientError::InvalidConfiguration);
         }
         let rpc_deadline = config.rpc_deadline;
+        let requested_features = config.requested_features.clone();
         let endpoint = LocalEndpoint::for_installation(config.installation_id.clone())?;
         let channel = connect_channel(&endpoint).await?;
-        let mut inner = SystemServiceClient::new(channel)
+        let mut inner = SystemServiceClient::new(channel.clone())
             .max_decoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize)
             .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize);
         let mut challenge = vec![0_u8; 32];
@@ -92,6 +111,9 @@ impl AuthenticatedSystemClient {
             || welcome.compatibility_mode != CompatibilityMode::Full as i32
             || welcome.client_session_id.is_empty()
             || welcome.session_proof.is_empty()
+            || requested_features
+                .iter()
+                .any(|feature| !welcome.enabled_features.contains(feature))
         {
             return Err(ClientError::ProtocolIncompatible);
         }
@@ -120,6 +142,9 @@ impl AuthenticatedSystemClient {
         }
         Ok(Self {
             inner,
+            sessions: SessionServiceClient::new(channel)
+                .max_decoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize)
+                .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize),
             client_session_id,
             bootstrap,
             rpc_deadline,
@@ -147,11 +172,277 @@ impl AuthenticatedSystemClient {
             state: WatchState::new(&self.bootstrap),
         })
     }
+
+    pub async fn create_session(
+        &mut self,
+        command: ClientCommand,
+        project_id: String,
+        title: String,
+    ) -> Result<CreateSessionAccepted, ClientError> {
+        let expected_command_id = command.command_id.clone();
+        let expected_correlation_id = command.correlation_id.clone();
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.sessions.create_session(CreateSessionRequest {
+                command: Some(self.command_metadata(command)),
+                project_id,
+                title,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("create_session"))??
+        .into_inner();
+        match response.outcome {
+            Some(create_session_response::Outcome::Accepted(accepted)) => {
+                validate_command_accepted(
+                    accepted.command.as_ref(),
+                    &expected_command_id,
+                    &expected_correlation_id,
+                )?;
+                Ok(accepted)
+            }
+            Some(create_session_response::Outcome::Error(error)) => Err(ClientError::Remote(error)),
+            None => Err(ClientError::MalformedResponse("create session outcome")),
+        }
+    }
+
+    pub async fn send_turn(
+        &mut self,
+        command: ClientCommand,
+        project_id: String,
+        session_id: String,
+        text: String,
+        attachments: Vec<(String, String, String)>,
+    ) -> Result<SendTurnAccepted, ClientError> {
+        let expected_command_id = command.command_id.clone();
+        let expected_correlation_id = command.correlation_id.clone();
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.sessions.send_turn(SendTurnRequest {
+                command: Some(self.command_metadata(command)),
+                project_id,
+                session_id,
+                text,
+                attachments: attachments
+                    .into_iter()
+                    .map(|(kind, id, label)| ContextAttachment {
+                        source: Some(StableRef { kind, id }),
+                        label,
+                    })
+                    .collect(),
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("send_turn"))??
+        .into_inner();
+        match response.outcome {
+            Some(send_turn_response::Outcome::Accepted(accepted)) => {
+                validate_command_accepted(
+                    accepted.command.as_ref(),
+                    &expected_command_id,
+                    &expected_correlation_id,
+                )?;
+                Ok(accepted)
+            }
+            Some(send_turn_response::Outcome::Error(error)) => Err(ClientError::Remote(error)),
+            None => Err(ClientError::MalformedResponse("send turn outcome")),
+        }
+    }
+
+    pub async fn cancel_turn(
+        &mut self,
+        command: ClientCommand,
+        project_id: String,
+        session_id: String,
+        turn_id: String,
+    ) -> Result<(), ClientError> {
+        let expected_command_id = command.command_id.clone();
+        let expected_correlation_id = command.correlation_id.clone();
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.sessions.cancel_turn(CancelTurnRequest {
+                command: Some(self.command_metadata(command)),
+                project_id,
+                session_id,
+                turn_id,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("cancel_turn"))??
+        .into_inner();
+        match response.outcome {
+            Some(cancel_turn_response::Outcome::Accepted(accepted)) => {
+                validate_command_accepted(
+                    Some(&accepted),
+                    &expected_command_id,
+                    &expected_correlation_id,
+                )?;
+                Ok(())
+            }
+            Some(cancel_turn_response::Outcome::Error(error)) => Err(ClientError::Remote(error)),
+            None => Err(ClientError::MalformedResponse("cancel turn outcome")),
+        }
+    }
+
+    pub async fn watch_session(
+        &mut self,
+        session_id: String,
+        known_revision: Option<u64>,
+    ) -> Result<AuthenticatedSessionWatch, ClientError> {
+        let inner = tokio::time::timeout(
+            self.rpc_deadline,
+            self.sessions.watch_session(WatchSessionRequest {
+                session_id,
+                known_revision,
+                client_session_id: self.client_session_id.clone(),
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("watch_session"))??
+        .into_inner();
+        Ok(AuthenticatedSessionWatch {
+            inner,
+            state: SessionWatchState::new(
+                self.bootstrap.authority_epoch,
+                known_revision.unwrap_or(0),
+            ),
+        })
+    }
+
+    pub async fn get_composer_draft(
+        &mut self,
+        project_id: String,
+        session_id: String,
+    ) -> Result<Option<ComposerDraft>, ClientError> {
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.sessions.get_composer_draft(GetComposerDraftRequest {
+                project_id,
+                session_id,
+                client_session_id: self.client_session_id.clone(),
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("get_composer_draft"))??
+        .into_inner();
+        match response.outcome {
+            Some(get_composer_draft_response::Outcome::Draft(draft)) => Ok(Some(draft)),
+            Some(get_composer_draft_response::Outcome::Missing(_)) => Ok(None),
+            Some(get_composer_draft_response::Outcome::Error(error)) => {
+                Err(ClientError::Remote(error))
+            }
+            None => Err(ClientError::MalformedResponse("get composer draft outcome")),
+        }
+    }
+
+    pub async fn save_composer_draft(
+        &mut self,
+        operation: ClientCommand,
+        draft: ComposerDraft,
+    ) -> Result<ComposerDraftWriteReceipt, ClientError> {
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.sessions.save_composer_draft(SaveComposerDraftRequest {
+                operation: Some(self.command_metadata(operation)),
+                draft: Some(draft),
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("save_composer_draft"))??
+        .into_inner();
+        match response.outcome {
+            Some(save_composer_draft_response::Outcome::Saved(receipt)) => Ok(receipt),
+            Some(save_composer_draft_response::Outcome::Error(error)) => {
+                Err(ClientError::Remote(error))
+            }
+            None => Err(ClientError::MalformedResponse(
+                "save composer draft outcome",
+            )),
+        }
+    }
+
+    pub async fn discard_composer_draft(
+        &mut self,
+        operation: ClientCommand,
+        project_id: String,
+        session_id: String,
+        draft_command_id: String,
+    ) -> Result<ComposerDraftDiscarded, ClientError> {
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.sessions
+                .discard_composer_draft(DiscardComposerDraftRequest {
+                    operation: Some(self.command_metadata(operation)),
+                    project_id,
+                    session_id,
+                    draft_command_id,
+                }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("discard_composer_draft"))??
+        .into_inner();
+        match response.outcome {
+            Some(discard_composer_draft_response::Outcome::Discarded(discarded)) => Ok(discarded),
+            Some(discard_composer_draft_response::Outcome::Error(error)) => {
+                Err(ClientError::Remote(error))
+            }
+            None => Err(ClientError::MalformedResponse(
+                "discard composer draft outcome",
+            )),
+        }
+    }
+
+    fn command_metadata(&self, command: ClientCommand) -> CommandMetadata {
+        CommandMetadata {
+            idempotency_key: command.command_id.clone(),
+            command_id: command.command_id,
+            correlation_id: command.correlation_id,
+            authority_epoch_seen: self.bootstrap.authority_epoch,
+            created_at: Some(timestamp(command.created_at_unix_ms)),
+            expected_revision: command.expected_revision,
+            client_session_id: self.client_session_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientCommand {
+    pub command_id: String,
+    pub correlation_id: String,
+    pub created_at_unix_ms: u64,
+    pub expected_revision: Option<u64>,
+}
+
+impl ClientCommand {
+    #[must_use]
+    pub fn new(correlation_id: impl Into<String>, expected_revision: Option<u64>) -> Self {
+        Self {
+            command_id: uuid::Uuid::now_v7().to_string(),
+            correlation_id: correlation_id.into(),
+            created_at_unix_ms: unix_time_ms(),
+            expected_revision,
+        }
+    }
 }
 
 pub struct AuthenticatedSystemWatch {
     inner: Streaming<WatchResponse>,
     state: WatchState,
+}
+
+pub struct AuthenticatedSessionWatch {
+    inner: Streaming<WatchSessionResponse>,
+    state: SessionWatchState,
+}
+
+impl AuthenticatedSessionWatch {
+    pub async fn message(&mut self) -> Result<Option<WatchSessionResponse>, ClientError> {
+        let Some(response) = self.inner.message().await? else {
+            return Ok(None);
+        };
+        self.state.validate(&response)?;
+        Ok(Some(response))
+    }
 }
 
 impl AuthenticatedSystemWatch {
@@ -246,7 +537,8 @@ impl WatchState {
             }
             system_watch_frame::Frame::Delta(delta) => {
                 self.require_snapshot()?;
-                if delta.base_revision != self.revision || delta.new_revision <= delta.base_revision
+                if delta.base_revision != self.revision
+                    || delta.new_revision != delta.base_revision.saturating_add(1)
                 {
                     return Err(ClientError::WatchInvariant("revision_gap"));
                 }
@@ -276,6 +568,145 @@ impl WatchState {
             Ok(())
         }
     }
+}
+
+#[derive(Debug)]
+struct SessionWatchState {
+    authority_epoch: u64,
+    stream_id: Option<String>,
+    sequence: u64,
+    revision: u64,
+    first_frame: bool,
+    stale: bool,
+}
+
+impl SessionWatchState {
+    fn new(authority_epoch: u64, revision: u64) -> Self {
+        Self {
+            authority_epoch,
+            stream_id: None,
+            sequence: 0,
+            revision,
+            first_frame: true,
+            stale: false,
+        }
+    }
+
+    fn validate(&mut self, response: &WatchSessionResponse) -> Result<(), ClientError> {
+        if self.stale {
+            return Err(ClientError::WatchInvariant("frame_after_resync"));
+        }
+        let frame = response
+            .frame
+            .as_ref()
+            .ok_or(ClientError::WatchInvariant("missing_frame"))?;
+        let payload = frame
+            .frame
+            .as_ref()
+            .ok_or(ClientError::WatchInvariant("missing_payload"))?;
+        if matches!(payload, session_watch_frame::Frame::Error(_)) {
+            self.stale = true;
+            self.first_frame = false;
+            return Ok(());
+        }
+        let cursor = frame
+            .cursor
+            .as_ref()
+            .ok_or(ClientError::WatchInvariant("missing_cursor"))?;
+        if cursor.authority_epoch != self.authority_epoch {
+            return Err(ClientError::WatchInvariant("authority_epoch_changed"));
+        }
+        match &self.stream_id {
+            Some(stream_id) if stream_id != &cursor.stream_id => {
+                return Err(ClientError::WatchInvariant("stream_changed"));
+            }
+            None if cursor.stream_id.is_empty() => {
+                return Err(ClientError::WatchInvariant("missing_stream_id"));
+            }
+            None => self.stream_id = Some(cursor.stream_id.clone()),
+            Some(_) => {}
+        }
+        if cursor.sequence != self.sequence.saturating_add(1) {
+            return Err(ClientError::WatchInvariant("sequence_gap"));
+        }
+        match payload {
+            session_watch_frame::Frame::Snapshot(snapshot) => {
+                if !self.first_frame || snapshot.snapshot_fingerprint.is_empty() {
+                    return Err(ClientError::WatchInvariant("unexpected_snapshot"));
+                }
+                self.revision = snapshot
+                    .session
+                    .as_ref()
+                    .ok_or(ClientError::WatchInvariant("missing_snapshot"))?
+                    .revision;
+            }
+            session_watch_frame::Frame::Delta(delta) => {
+                self.require_snapshot()?;
+                if delta.base_revision != self.revision
+                    || delta.new_revision != delta.base_revision.saturating_add(1)
+                {
+                    return Err(ClientError::WatchInvariant("revision_gap"));
+                }
+                self.revision = delta.new_revision;
+            }
+            session_watch_frame::Frame::Heartbeat(heartbeat) => {
+                self.require_snapshot()?;
+                if heartbeat.current_revision != self.revision {
+                    return Err(ClientError::WatchInvariant("heartbeat_revision_mismatch"));
+                }
+            }
+            session_watch_frame::Frame::ResyncRequired(_) => {
+                self.require_snapshot()?;
+                self.stale = true;
+            }
+            session_watch_frame::Frame::Error(_) => {
+                unreachable!("handled before cursor validation")
+            }
+        }
+        self.sequence = cursor.sequence;
+        self.first_frame = false;
+        Ok(())
+    }
+
+    fn require_snapshot(&self) -> Result<(), ClientError> {
+        if self.first_frame {
+            Err(ClientError::WatchInvariant("first_frame_not_snapshot"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn timestamp(unix_ms: u64) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: (unix_ms / 1_000).try_into().unwrap_or(i64::MAX),
+        nanos: ((unix_ms % 1_000) * 1_000_000) as i32,
+    }
+}
+
+fn validate_command_accepted(
+    accepted: Option<&CommandAccepted>,
+    expected_command_id: &str,
+    expected_correlation_id: &str,
+) -> Result<(), ClientError> {
+    let accepted = accepted.ok_or(ClientError::MalformedResponse("command acknowledgement"))?;
+    if accepted.command_id != expected_command_id
+        || accepted.correlation_id != expected_correlation_id
+        || accepted.operation_id.trim().is_empty()
+        || accepted.accepted_revision == 0
+    {
+        return Err(ClientError::MalformedResponse("command acknowledgement"));
+    }
+    Ok(())
+}
+
+fn unix_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -463,6 +894,46 @@ mod tests {
         assert!(error.retryable());
         assert!(!error.user_action_required());
         assert!(!error.node_start_candidate());
+    }
+
+    #[test]
+    fn command_acknowledgement_must_match_the_request_and_be_durable() {
+        let valid = CommandAccepted {
+            command_id: "command-1".to_owned(),
+            correlation_id: "correlation-1".to_owned(),
+            operation_id: "operation-1".to_owned(),
+            accepted_revision: 1,
+        };
+        validate_command_accepted(Some(&valid), "command-1", "correlation-1")
+            .expect("matching durable acknowledgement");
+
+        for invalid in [
+            CommandAccepted {
+                command_id: "different-command".to_owned(),
+                ..valid.clone()
+            },
+            CommandAccepted {
+                correlation_id: "different-correlation".to_owned(),
+                ..valid.clone()
+            },
+            CommandAccepted {
+                operation_id: "  ".to_owned(),
+                ..valid.clone()
+            },
+            CommandAccepted {
+                accepted_revision: 0,
+                ..valid.clone()
+            },
+        ] {
+            assert!(matches!(
+                validate_command_accepted(Some(&invalid), "command-1", "correlation-1"),
+                Err(ClientError::MalformedResponse("command acknowledgement"))
+            ));
+        }
+        assert!(matches!(
+            validate_command_accepted(None, "command-1", "correlation-1"),
+            Err(ClientError::MalformedResponse("command acknowledgement"))
+        ));
     }
 
     #[test]

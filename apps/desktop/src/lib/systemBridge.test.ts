@@ -34,6 +34,7 @@ const snapshot = {
   activeProjectId: "project-1",
   activeSessionId: "session-1",
   nodeState: "health_state_ready",
+  runtime: null,
 };
 
 describe("TauriSystemBridgeClient", () => {

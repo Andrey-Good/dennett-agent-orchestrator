@@ -211,6 +211,8 @@ pub struct TurnSnapshot {
     pub created_at: ::core::option::Option<::prost_types::Timestamp>,
     #[prost(message, optional, tag="9")]
     pub completed_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, repeated, tag="10")]
+    pub activities: ::prost::alloc::vec::Vec<TurnActivitySnapshot>,
     #[prost(oneof="turn_snapshot::Outcome", tags="6, 7")]
     pub outcome: ::core::option::Option<turn_snapshot::Outcome>,
 }
@@ -223,6 +225,30 @@ pub mod turn_snapshot {
         #[prost(message, tag="7")]
         Error(super::super::super::common::v1::ErrorEnvelope),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TurnActivitySnapshot {
+    #[prost(string, tag="1")]
+    pub activity_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub phase: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="3")]
+    pub message: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration="TurnActivityStatus", tag="4")]
+    pub status: i32,
+    #[prost(message, optional, tag="5")]
+    pub updated_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, repeated, tag="6")]
+    pub native_extensions: ::prost::alloc::vec::Vec<NativeExtensionPayload>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NativeExtensionPayload {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub schema_version: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub json_value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionSnapshot {
@@ -259,6 +285,13 @@ pub mod turn_terminal {
         Error(super::super::super::common::v1::ErrorEnvelope),
     }
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TurnActivityUpsert {
+    #[prost(string, tag="1")]
+    pub turn_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub activity: ::core::option::Option<TurnActivitySnapshot>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionMetadataUpdate {
     /// Presence distinguishes no change from explicitly clearing a string field.
@@ -271,7 +304,7 @@ pub struct SessionMetadataUpdate {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionMutation {
-    #[prost(oneof="session_mutation::Mutation", tags="1, 2, 3, 4")]
+    #[prost(oneof="session_mutation::Mutation", tags="1, 2, 3, 4, 5")]
     pub mutation: ::core::option::Option<session_mutation::Mutation>,
 }
 /// Nested message and enum types in `SessionMutation`.
@@ -286,6 +319,8 @@ pub mod session_mutation {
         FinishTurn(super::TurnTerminal),
         #[prost(message, tag="4")]
         UpdateSession(super::SessionMetadataUpdate),
+        #[prost(message, tag="5")]
+        UpsertTurnActivity(super::TurnActivityUpsert),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -297,6 +332,9 @@ pub struct SessionDelta {
     pub new_revision: u64,
     #[prost(message, repeated, tag="3")]
     pub mutations: ::prost::alloc::vec::Vec<SessionMutation>,
+    /// Authoritative commit time shared by every mutation in this journal event.
+    #[prost(message, optional, tag="4")]
+    pub committed_at: ::core::option::Option<::prost_types::Timestamp>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionWatchFrame {
@@ -431,6 +469,123 @@ pub struct WatchSessionResponse {
     #[prost(message, optional, tag="1")]
     pub frame: ::core::option::Option<SessionWatchFrame>,
 }
+/// ComposerDraft is durable client-local state. It never enters the canonical
+/// session event journal. command_id is retained when the draft becomes SendTurn.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposerDraft {
+    #[prost(string, tag="1")]
+    pub project_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub command_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="5")]
+    pub updated_at: ::core::option::Option<::prost_types::Timestamp>,
+    /// Monotonic within one stable draft command. Older saves are ignored.
+    #[prost(uint64, tag="6")]
+    pub revision: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetComposerDraftRequest {
+    #[prost(string, tag="1")]
+    pub project_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub client_session_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposerDraftMissing {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetComposerDraftResponse {
+    #[prost(oneof="get_composer_draft_response::Outcome", tags="1, 2, 3")]
+    pub outcome: ::core::option::Option<get_composer_draft_response::Outcome>,
+}
+/// Nested message and enum types in `GetComposerDraftResponse`.
+pub mod get_composer_draft_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Draft(super::ComposerDraft),
+        #[prost(message, tag="2")]
+        Missing(super::ComposerDraftMissing),
+        #[prost(message, tag="3")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SaveComposerDraftRequest {
+    /// operation.command_id identifies this save; draft.command_id remains stable
+    /// across saves and is later reused by SendTurn.
+    #[prost(message, optional, tag="1")]
+    pub operation: ::core::option::Option<super::super::common::v1::CommandMetadata>,
+    #[prost(message, optional, tag="2")]
+    pub draft: ::core::option::Option<ComposerDraft>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposerDraftWriteReceipt {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub command_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub persisted_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(enumeration="ComposerDraftWriteState", tag="4")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SaveComposerDraftResponse {
+    #[prost(oneof="save_composer_draft_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<save_composer_draft_response::Outcome>,
+}
+/// Nested message and enum types in `SaveComposerDraftResponse`.
+pub mod save_composer_draft_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Saved(super::ComposerDraftWriteReceipt),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DiscardComposerDraftRequest {
+    #[prost(message, optional, tag="1")]
+    pub operation: ::core::option::Option<super::super::common::v1::CommandMetadata>,
+    #[prost(string, tag="2")]
+    pub project_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub draft_command_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposerDraftDiscarded {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(bool, tag="2")]
+    pub existed: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DiscardComposerDraftResponse {
+    #[prost(oneof="discard_composer_draft_response::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<discard_composer_draft_response::Outcome>,
+}
+/// Nested message and enum types in `DiscardComposerDraftResponse`.
+pub mod discard_composer_draft_response {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Discarded(super::ComposerDraftDiscarded),
+        #[prost(message, tag="2")]
+        Error(super::super::super::common::v1::ErrorEnvelope),
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SessionState {
@@ -542,6 +697,70 @@ impl TurnState {
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum TurnActivityStatus {
+    Unspecified = 0,
+    Started = 1,
+    Updated = 2,
+    Completed = 3,
+    Failed = 4,
+}
+impl TurnActivityStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "TURN_ACTIVITY_STATUS_UNSPECIFIED",
+            Self::Started => "TURN_ACTIVITY_STATUS_STARTED",
+            Self::Updated => "TURN_ACTIVITY_STATUS_UPDATED",
+            Self::Completed => "TURN_ACTIVITY_STATUS_COMPLETED",
+            Self::Failed => "TURN_ACTIVITY_STATUS_FAILED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "TURN_ACTIVITY_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "TURN_ACTIVITY_STATUS_STARTED" => Some(Self::Started),
+            "TURN_ACTIVITY_STATUS_UPDATED" => Some(Self::Updated),
+            "TURN_ACTIVITY_STATUS_COMPLETED" => Some(Self::Completed),
+            "TURN_ACTIVITY_STATUS_FAILED" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ComposerDraftWriteState {
+    Unspecified = 0,
+    Saved = 1,
+    AlreadyAccepted = 2,
+}
+impl ComposerDraftWriteState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "COMPOSER_DRAFT_WRITE_STATE_UNSPECIFIED",
+            Self::Saved => "COMPOSER_DRAFT_WRITE_STATE_SAVED",
+            Self::AlreadyAccepted => "COMPOSER_DRAFT_WRITE_STATE_ALREADY_ACCEPTED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "COMPOSER_DRAFT_WRITE_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "COMPOSER_DRAFT_WRITE_STATE_SAVED" => Some(Self::Saved),
+            "COMPOSER_DRAFT_WRITE_STATE_ALREADY_ACCEPTED" => Some(Self::AlreadyAccepted),
+            _ => None,
+        }
+    }
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientHello {
     #[prost(string, tag="1")]
@@ -630,6 +849,25 @@ pub struct BootstrapSnapshot {
     pub active_session_id: ::prost::alloc::string::String,
     #[prost(enumeration="HealthState", tag="8")]
     pub node_state: i32,
+    #[prost(message, optional, tag="9")]
+    pub runtime: ::core::option::Option<RuntimeSummary>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RuntimeSummary {
+    #[prost(string, tag="1")]
+    pub adapter_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub runtime_kind: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub streaming: bool,
+    #[prost(bool, tag="4")]
+    pub continuation: bool,
+    #[prost(bool, tag="5")]
+    pub scoped_cancellation: bool,
+    #[prost(bool, tag="6")]
+    pub deadlines: bool,
+    #[prost(string, repeated, tag="7")]
+    pub native_extension_schemas: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BootstrapResponse {

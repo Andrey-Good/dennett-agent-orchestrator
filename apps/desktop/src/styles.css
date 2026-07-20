@@ -86,6 +86,8 @@ button:disabled { cursor: not-allowed; opacity: 0.34; }
 .workbench.sidebar-collapsed { --left-shell-width: 52px; grid-template-columns: 52px 0 minmax(480px, 1fr) 316px; }
 .workbench.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 264px minmax(480px, 1fr) 54px; }
 .workbench.sidebar-collapsed.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 0 minmax(480px, 1fr) 54px; }
+.workbench.resources-unavailable { --resource-shell-width: 0px; grid-template-columns: 52px 264px minmax(480px, 1fr) 0; }
+.workbench.sidebar-collapsed.resources-unavailable { --resource-shell-width: 0px; grid-template-columns: 52px 0 minmax(480px, 1fr) 0; }
 
 /* The browser preview stays opaque for deterministic screenshots. In the native
    shell Windows owns the wallpaper-derived Mica material; React only adds the
@@ -477,6 +479,18 @@ html.native-shell.native-mica-unavailable .main-workspace::after { display: none
 .state-line strong { color: var(--text-primary-glass); font-size: 10px; font-weight: 650; }
 .state-line span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .state-line small { font-size: 9px; white-space: nowrap; }
+.state-action {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary-glass);
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  padding: 4px 9px;
+}
+.state-action:hover { background: rgba(255, 255, 255, 0.13); }
+.state-action:disabled { cursor: default; opacity: 0.56; }
 .tone-danger { border-bottom-style: dashed; }
 .tone-warning { border-bottom-color: rgba(255, 255, 255, 0.16); }
 .tone-quiet { opacity: 0.78; }
@@ -487,6 +501,34 @@ html.native-shell.native-mica-unavailable .main-workspace::after { display: none
 .message-copy p { margin: 0 0 11px; }
 .message-copy ul { margin: 13px 0 8px; padding-left: 19px; color: var(--text-primary-glass); }
 .message-copy li { margin: 6px 0; padding-left: 2px; }
+.message-markdown > :first-child { margin-top: 0; }
+.message-markdown > :last-child { margin-bottom: 0; }
+.message-markdown h1,
+.message-markdown h2,
+.message-markdown h3,
+.message-markdown h4 { margin: 22px 0 9px; color: var(--text); line-height: 1.28; }
+.message-markdown h1 { font-size: 1.45em; }
+.message-markdown h2 { font-size: 1.27em; }
+.message-markdown h3 { font-size: 1.12em; }
+.message-markdown blockquote { margin: 14px 0; padding-left: 13px; border-left: 2px solid var(--line-strong); color: var(--text-muted); }
+.message-markdown code { padding: 2px 5px; border-radius: 6px; background: rgba(255, 255, 255, 0.09); font: 0.91em/1.45 "Cascadia Code", Consolas, monospace; }
+.message-markdown pre { max-width: 100%; margin: 14px 0; padding: 13px 15px; overflow: auto; border-radius: 13px; background: rgba(0, 0, 0, 0.27); }
+.message-markdown pre code { padding: 0; background: transparent; }
+.message-markdown a { color: var(--text); text-decoration-color: rgba(255, 255, 255, 0.38); text-underline-offset: 3px; }
+.message-markdown table { display: block; max-width: 100%; margin: 14px 0; overflow-x: auto; border-collapse: collapse; }
+.message-markdown th,
+.message-markdown td { padding: 7px 10px; border: 1px solid var(--line); text-align: left; }
+.message-markdown hr { margin: 20px 0; border: 0; border-top: 1px solid var(--line); }
+.turn-activity { margin: 0 0 17px; padding: 0 0 14px; border-bottom: 1px solid var(--line); color: var(--text-muted); }
+.turn-activity__summary { display: flex; align-items: center; gap: 8px; min-height: 25px; }
+.turn-activity__summary strong { color: var(--text-muted); font-size: 12px; font-weight: 560; }
+.turn-activity__items { display: grid; gap: 9px; margin-top: 10px; }
+.turn-activity__item { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 7px; }
+.turn-activity__item > svg { margin-top: 2px; color: var(--text-faint); }
+.turn-activity__item span { min-width: 0; }
+.turn-activity__item strong { display: block; color: var(--text-muted); font-size: 12px; font-weight: 530; }
+.turn-activity__item small { display: block; margin-top: 2px; overflow-wrap: anywhere; color: var(--text-faint); font-size: 11px; line-height: 1.48; white-space: pre-wrap; }
+.turn-activity__waiting { margin: 7px 0 0 23px !important; color: var(--text-faint); font-size: 11px; }
 .message--user .message-copy {
   width: fit-content;
   max-width: min(76%, 600px);
@@ -496,7 +538,7 @@ html.native-shell.native-mica-unavailable .main-workspace::after { display: none
   background: var(--message-user);
 }
 .message--user .message-copy p { margin: 0; }
-.message-time { display: block; margin-top: 7px; color: var(--text-faint); font-size: 9px; }
+.message-time { display: block; margin-top: 8px; color: var(--text-faint); font-size: 10px; }
 .message--user .message-time { text-align: right; }
 
 .empty-state { display: flex; min-height: 360px; align-items: center; justify-content: center; flex-direction: column; color: var(--text-muted); text-align: center; }
@@ -596,6 +638,8 @@ html.native-shell.native-mica-unavailable .main-workspace::after { display: none
 .runtime-choice > div { display: flex; padding: 2px; border: 1px solid var(--line); border-radius: 9px; }
 .runtime-choice button { height: 27px; padding: 0 8px; border: 0; border-radius: 7px; color: var(--text-faint); background: transparent; font-size: 10px; cursor: pointer; }
 .runtime-choice button.is-selected { color: var(--text); background: #3b3b3b; }
+.composer-setting.is-static { cursor: default; }
+.runtime-capability-note { margin: 7px 2px 1px; color: var(--text-faint); font-size: 10px; line-height: 1.45; }
 
 .artifact-surface { display: grid; grid-template-rows: 54px minmax(0, 1fr); min-width: 0; min-height: 0; padding: 12px 14px 14px; }
 .artifact-header { display: flex; align-items: center; justify-content: space-between; padding: 0 5px 0 10px; }
@@ -699,6 +743,8 @@ html.native-shell.native-mica-unavailable .main-workspace::after { display: none
   .workbench.sidebar-collapsed { grid-template-columns: 52px 0 minmax(470px, 1fr) 300px; }
   .workbench.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 244px minmax(470px, 1fr) 54px; }
   .workbench.sidebar-collapsed.resources-collapsed { --resource-shell-width: 54px; grid-template-columns: 52px 0 minmax(470px, 1fr) 54px; }
+  .workbench.resources-unavailable { --resource-shell-width: 0px; grid-template-columns: 52px 244px minmax(470px, 1fr) 0; }
+  .workbench.sidebar-collapsed.resources-unavailable { --resource-shell-width: 0px; grid-template-columns: 52px 0 minmax(470px, 1fr) 0; }
   .breadcrumbs span:nth-last-of-type(1) { max-width: 125px; }
   .breadcrumbs strong { max-width: 150px; }
 }
