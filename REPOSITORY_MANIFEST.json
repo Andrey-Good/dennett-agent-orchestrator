@@ -75,8 +75,8 @@
     },
     {
       "path": "Cargo.toml",
-      "bytes": 1576,
-      "sha256": "ffe989cd0b16ab936df6cfb782bde7899c5a10064deab31f9cae2e6ea2aa4bc6"
+      "bytes": 1639,
+      "sha256": "94e6907395072dfe6ada86ff1b1994420d72962949822b42f5ec131a6be2b050"
     },
     {
       "path": "GOVERNANCE.md",
@@ -235,8 +235,8 @@
     },
     {
       "path": "adapters/transport/local-ipc/src/transport/windows.rs",
-      "bytes": 14977,
-      "sha256": "a5999050c174a35df901e3d6da8c99565161410f6dd3dace12c78f1b6f819ea1"
+      "bytes": 18330,
+      "sha256": "4c4dc0ed538a4c72cea89e5ee61099216df4b935f2763103f29a83e48fe6937d"
     },
     {
       "path": "adapters/voice/README.md",

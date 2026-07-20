@@ -332,9 +332,15 @@ impl Drop for SecurityDescriptor {
 mod tests {
     use super::*;
     use windows_sys::Win32::Security::Authorization::{
-        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
+        ConvertStringSidToSidW, GetSecurityInfo, SE_KERNEL_OBJECT,
     };
-    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL_SIZE_INFORMATION, AclSizeInformation,
+        DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation,
+        GetSecurityDescriptorControl, SE_DACL_PROTECTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
     #[test]
     fn current_user_security_descriptor_is_constructible() {
@@ -352,12 +358,44 @@ mod tests {
         ))
         .expect("endpoint");
         let pipe = create_secure_pipe(endpoint.pipe_name(), &sid, true).expect("secure pipe");
-        let actual = pipe_dacl_sddl(pipe.as_raw_handle()).expect("pipe DACL");
-        assert_eq!(actual, format!("D:P(A;;FA;;;{sid})"));
+        let actual = inspect_pipe_dacl(pipe.as_raw_handle(), &sid).expect("pipe DACL");
+        assert!(actual.protected, "the pipe DACL must not inherit entries");
+        assert_eq!(actual.ace_count, 1, "only the current user may be present");
+        assert_eq!(actual.ace_type, ACCESS_ALLOWED_ACE_TYPE as u8);
+        assert_eq!(actual.ace_flags, 0);
+        assert_eq!(actual.mask, FILE_ALL_ACCESS);
+        assert!(
+            actual.trustee_matches_current_user,
+            "the sole access entry must belong to the current process user"
+        );
     }
 
-    fn pipe_dacl_sddl(handle: RawHandle) -> io::Result<String> {
+    #[derive(Debug)]
+    struct DaclFacts {
+        protected: bool,
+        ace_count: u32,
+        ace_type: u8,
+        ace_flags: u8,
+        mask: u32,
+        trustee_matches_current_user: bool,
+    }
+
+    fn inspect_pipe_dacl(handle: RawHandle, expected_sid: &str) -> io::Result<DaclFacts> {
+        let encoded_sid: Vec<u16> = expected_sid
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut expected_sid_raw = ptr::null_mut();
+        // SAFETY: encoded_sid is NUL-terminated and expected_sid_raw is writable.
+        if unsafe { ConvertStringSidToSidW(encoded_sid.as_ptr(), &raw mut expected_sid_raw) } == 0
+            || expected_sid_raw.is_null()
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let expected_sid_allocation = LocalAllocation(expected_sid_raw);
+
         let mut descriptor = ptr::null_mut();
+        let mut dacl = ptr::null_mut();
         // SAFETY: handle is a live pipe object and descriptor is writable output storage.
         let status = unsafe {
             GetSecurityInfo(
@@ -366,45 +404,94 @@ mod tests {
                 DACL_SECURITY_INFORMATION,
                 ptr::null_mut(),
                 ptr::null_mut(),
-                ptr::null_mut(),
+                &raw mut dacl,
                 ptr::null_mut(),
                 &raw mut descriptor,
             )
         };
-        if status != 0 || descriptor.is_null() {
+        let descriptor_allocation = LocalAllocation(descriptor);
+        if status != 0 {
             return Err(io::Error::from_raw_os_error(status as i32));
         }
+        if descriptor_allocation.0.is_null() || dacl.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "pipe has no inspectable DACL",
+            ));
+        }
 
-        let mut encoded = ptr::null_mut();
-        let mut encoded_len = 0_u32;
-        // SAFETY: descriptor came from GetSecurityInfo; output pointers are writable.
-        let converted = unsafe {
-            ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                descriptor,
-                SDDL_REVISION_1,
-                DACL_SECURITY_INFORMATION,
-                &raw mut encoded,
-                &raw mut encoded_len,
+        let mut size = ACL_SIZE_INFORMATION::default();
+        // SAFETY: dacl points inside descriptor_allocation and size is writable.
+        if unsafe {
+            GetAclInformation(
+                dacl,
+                (&raw mut size).cast::<c_void>(),
+                size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
             )
-        };
-        if converted == 0 || encoded.is_null() {
-            let error = io::Error::last_os_error();
-            // SAFETY: descriptor was allocated by the local allocator.
-            unsafe { LocalFree(descriptor.cast::<c_void>()) };
-            return Err(error);
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
         }
 
-        // SAFETY: the converter returned encoded_len initialized UTF-16 code units.
-        let value = String::from_utf16(unsafe {
-            std::slice::from_raw_parts(encoded, encoded_len as usize)
-        })
-        .map(|value| value.trim_end_matches('\0').to_owned())
-        .map_err(io::Error::other);
-        // SAFETY: both allocations are documented LocalAlloc results.
-        unsafe {
-            LocalFree(encoded.cast::<c_void>());
-            LocalFree(descriptor.cast::<c_void>());
+        let mut raw_ace = ptr::null_mut();
+        // SAFETY: index zero is requested only after the ACL metadata is read. A
+        // zero-entry ACL is reported as an invalid security descriptor below.
+        if size.AceCount == 0 || unsafe { GetAce(dacl, 0, &raw mut raw_ace) } == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "pipe DACL has no access entry",
+            ));
         }
-        value
+        // SAFETY: every ACE starts with ACE_HEADER and raw_ace points into the
+        // live DACL allocation.
+        let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
+        if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "pipe DACL entry is not an allow ACE",
+            ));
+        }
+        // SAFETY: GetAce returned the first ACE in the live DACL allocation.
+        let ace = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
+        let ace_sid = (&raw const ace.SidStart).cast_mut().cast::<c_void>();
+        // SAFETY: both pointers identify valid SIDs owned by live allocations.
+        let trustee_matches_current_user =
+            unsafe { EqualSid(ace_sid, expected_sid_allocation.0) } != 0;
+
+        let mut control = 0_u16;
+        let mut revision = 0_u32;
+        // SAFETY: descriptor_allocation is live and output pointers are writable.
+        if unsafe {
+            GetSecurityDescriptorControl(
+                descriptor_allocation.0,
+                &raw mut control,
+                &raw mut revision,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(DaclFacts {
+            protected: control & SE_DACL_PROTECTED != 0,
+            ace_count: size.AceCount,
+            ace_type: ace.Header.AceType,
+            ace_flags: ace.Header.AceFlags,
+            mask: ace.Mask,
+            trustee_matches_current_user,
+        })
+    }
+
+    struct LocalAllocation(*mut c_void);
+
+    impl Drop for LocalAllocation {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: both ConvertStringSidToSidW and GetSecurityInfo allocate
+                // the values wrapped here with LocalAlloc.
+                unsafe { LocalFree(self.0) };
+            }
+        }
     }
 }
