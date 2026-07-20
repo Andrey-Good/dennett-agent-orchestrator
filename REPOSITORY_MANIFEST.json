@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 415,
+  "file_count": 416,
   "files": [
     {
       "path": ".editorconfig",
@@ -676,7 +676,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "70318f264b2604599b85458a5dabcf8df1268bc0b243f9cc891ed10ae463ba47"
+      "sha256": "7bc93140eb60e520bcebca10ac6b7ca53287f60139346619160a7a462b51d1d5"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1291,7 +1291,7 @@
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
       "bytes": 2576,
-      "sha256": "fdc7265764166dfb297181ba06fea21c14691227f3eb4be254c115f6e28e8160"
+      "sha256": "7a4cd8eb1cdbbc9c297ec92711c3c75c9dbdf62c8ec4e82a1736f397ca620920"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1446,7 +1446,7 @@
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
       "bytes": 39520,
-      "sha256": "adb279b6e2458194e30bb5ccb59698a99b23cc536b97d91938ad17ec836a9be5"
+      "sha256": "e7faec759d36b17fe6b45b9832b1ca196254a554b0052c7a36185650c707fd83"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1522,6 +1522,11 @@
       "path": "planning/results/WP-M01-005.json",
       "bytes": 4969,
       "sha256": "c94f8e6c415917a008a5f86837321da31ffd9981375e947818dd8ac082ce4db7"
+    },
+    {
+      "path": "planning/results/WP-M01-006.json",
+      "bytes": 6444,
+      "sha256": "eb54e974cdad23f9fd9560fe200a70e2a56f76b9608985a1598c16730ab4ba4a"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",

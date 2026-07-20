@@ -583,7 +583,7 @@
       "version": 1,
       "id": "WP-M01-006",
       "title": "Connect Tauri to the persistent Node over authenticated local IPC",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
