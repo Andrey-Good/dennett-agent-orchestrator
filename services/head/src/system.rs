@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use dennett_contracts::SessionEventId;
 use dennett_sync_core::watch::{ResyncReason, WatchCursor, WatchError, WatchFrame};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -162,7 +163,7 @@ impl SystemStatePort for SystemProjection {
         // Subscribe before loading the snapshot so a racing commit is retained.
         let receiver = self.updates.subscribe();
         let snapshot = self.state.read().await.clone();
-        let stream_id = format!("system-{}", unix_time_ms());
+        let stream_id = format!("system-{}", SessionEventId::new().0);
         let initial = WatchFrame::Snapshot {
             cursor: WatchCursor {
                 stream_id: stream_id.clone(),
@@ -385,6 +386,23 @@ mod tests {
             })
         ));
         assert!(subscription.recv().await.expect("blocked").is_none());
+    }
+
+    #[tokio::test]
+    async fn rapid_subscriptions_receive_distinct_stream_identities() {
+        let projection = SystemProjection::new(SystemSnapshot::empty(7), 8);
+        let mut first = projection.subscribe().await.expect("first subscription");
+        let mut second = projection.subscribe().await.expect("second subscription");
+        let first_stream = match first.take_initial().expect("first snapshot") {
+            WatchFrame::Snapshot { cursor, .. } => cursor.stream_id,
+            frame => panic!("expected first snapshot, got {frame:?}"),
+        };
+        let second_stream = match second.take_initial().expect("second snapshot") {
+            WatchFrame::Snapshot { cursor, .. } => cursor.stream_id,
+            frame => panic!("expected second snapshot, got {frame:?}"),
+        };
+
+        assert_ne!(first_stream, second_stream);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
