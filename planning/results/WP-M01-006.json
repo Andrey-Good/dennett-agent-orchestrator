@@ -17,6 +17,7 @@
       "41a7f8e60ca94cee81b1ba123ced59bd45cd9377"
     ],
     "merge_ready_at": "2026-07-20",
+    "merged_at": "2026-07-20",
     "changed_files": [
       ".github/workflows/ci-windows.yml",
       "adapters/transport/local-ipc/**",
