@@ -6,7 +6,7 @@
 
 Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 
-- Package status: `MERGED` 6, `REFINED` 1
+- Package status: `IN_PROGRESS` 1, `MERGED` 6
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -28,7 +28,7 @@ Current milestone: `M01` — Local desktop conversation (status: `ACTIVE`).
 | `WP-M01-006` | `MERGED` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `R2` | `automated` | `desktop` |
 | `WP-M01-006` | `MERGED` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `R2` | `automated` | `transport` |
 | `WP-M01-006` | `MERGED` | `TEST-TAURI-WATCH-BRIDGE-001` | `R2` | `automated` | `desktop` |
-| `WP-M01-007` | `REFINED` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `specified` | `desktop` |
-| `WP-M01-007` | `REFINED` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `specified` | `quality` |
-| `WP-M01-007` | `REFINED` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `specified` | `quality` |
-| `WP-M01-007` | `REFINED` | `TEST-M01-TRACE-CORRELATION-001` | `R2` | `specified` | `observability` |
+| `WP-M01-007` | `IN_PROGRESS` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `R2` | `specified` | `desktop` |
+| `WP-M01-007` | `IN_PROGRESS` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `R2` | `specified` | `quality` |
+| `WP-M01-007` | `IN_PROGRESS` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `R2` | `specified` | `quality` |
+| `WP-M01-007` | `IN_PROGRESS` | `TEST-M01-TRACE-CORRELATION-001` | `R2` | `specified` | `observability` |
