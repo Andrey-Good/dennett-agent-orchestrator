@@ -7,4 +7,14 @@ rust-version.workspace = true
 
 [dependencies]
 tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
 dennett-observability = { path = "../../crates/dennett-observability" }
+dennett-head = { path = "../head" }
+dennett-local-ipc = { path = "../../adapters/transport/local-ipc", default-features = false, features = ["server"] }
+
+[dev-dependencies]
+dennett-local-ipc = { path = "../../adapters/transport/local-ipc", default-features = false, features = ["client"] }
+tempfile.workspace = true
+uuid.workspace = true
+windows-sys.workspace = true

@@ -5,6 +5,7 @@ use dennett_memory_core::{MemoryEvent, MemoryPort};
 use std::sync::Arc;
 
 pub mod session;
+pub mod system;
 
 pub struct HeadApplication<A: AgentRuntimePort, M: MemoryPort> {
     agent: Arc<A>,

@@ -1,3 +1,11 @@
+mod system_bridge;
+
+use system_bridge::{
+    CloseSystemWatchRequest, DesktopBridge, DesktopSystemEvent, OpenSystemWatchRequest,
+    OpenSystemWatchResponse, UiSafeError,
+};
+use tauri::{Manager, WebviewWindow, ipc::Channel};
+
 #[tauri::command]
 async fn project_chat(text: String) -> Result<String, String> {
     // Repository skeleton only. Production code must call dennett-node over typed local IPC.
@@ -49,11 +57,40 @@ fn native_mica_available() -> bool {
     mica_supported_for_build(windows_build_number())
 }
 
+#[tauri::command]
+async fn open_system_watch(
+    window: WebviewWindow,
+    bridge: tauri::State<'_, DesktopBridge>,
+    request: OpenSystemWatchRequest,
+    on_event: Channel<DesktopSystemEvent>,
+) -> Result<OpenSystemWatchResponse, UiSafeError> {
+    bridge
+        .open_system_watch(window.label().to_owned(), request, on_event)
+        .await
+}
+
+#[tauri::command]
+fn close_system_watch(
+    window: WebviewWindow,
+    bridge: tauri::State<'_, DesktopBridge>,
+    request: CloseSystemWatchRequest,
+) -> bool {
+    bridge.close_system_watch(window.label(), &request)
+}
+
 fn main() {
+    dennett_observability::init("dennett-desktop-shell");
     tauri::Builder::default()
+        .setup(|app| {
+            let data_dir = app.path().app_local_data_dir().ok();
+            app.manage(DesktopBridge::new(data_dir));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             project_chat,
-            native_mica_available
+            native_mica_available,
+            open_system_watch,
+            close_system_watch
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dennett desktop shell");

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-mica-available"
+description = "Enables the native_mica_available command without any pre-configured scope."
+commands.allow = ["native_mica_available"]
+
+[[permission]]
+identifier = "deny-native-mica-available"
+description = "Denies the native_mica_available command without any pre-configured scope."
+commands.deny = ["native_mica_available"]

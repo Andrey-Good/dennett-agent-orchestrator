@@ -15,3 +15,17 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prost-types = "0.14"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v7"] }
+dennett-local-ipc = { path = "../../../adapters/transport/local-ipc", default-features = false, features = ["client"] }
+dennett-observability = { path = "../../../crates/dennett-observability" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+dennett-node = { path = "../../../services/node" }
+tempfile = "3"

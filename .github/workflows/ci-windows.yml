@@ -1,0 +1,60 @@
+name: Windows Desktop IPC
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci-windows.yml"
+      - "adapters/transport/local-ipc/**"
+      - "apps/desktop/**"
+      - "generated/rust/**"
+      - "services/head/**"
+      - "services/node/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "mise.toml"
+      - "pnpm-lock.yaml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ci-windows.yml"
+      - "adapters/transport/local-ipc/**"
+      - "apps/desktop/**"
+      - "generated/rust/**"
+      - "services/head/**"
+      - "services/node/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "mise.toml"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ipc-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authenticated-desktop-ipc:
+    name: Authenticated desktop IPC
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: "2026.7.7"
+          cache: true
+      - name: Install frozen desktop dependencies
+        run: mise exec -- corepack pnpm install --frozen-lockfile
+      - name: Test Named Pipe authentication and detached Node lifecycle
+        run: mise exec -- cargo test -p dennett-local-ipc -p dennett-node
+      - name: Test the Tauri watch bridge
+        run: mise exec -- cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Test and typecheck the renderer boundary
+        run: |
+          mise exec -- corepack pnpm --filter @dennett/desktop test
+          mise exec -- corepack pnpm --filter @dennett/desktop typecheck

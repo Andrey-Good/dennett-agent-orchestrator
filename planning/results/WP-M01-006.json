@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M01-006",
+    "status": "completed",
+    "summary": "Connected the accepted Tauri desktop shell to an independently owned dennett-node over authenticated Windows Named Pipes, with current-user ACLs and bilateral identity checks, a bounded one-use bootstrap proof, authoritative bootstrap/watch state, ordered deltas, cancellation-aware reconnect and UI-safe renderer DTOs.",
+    "commits": [
+      "a09790b2fb92215995f6da6e100b079db8d62499",
+      "47efa4a3162ccb7a081ae79ecd91a9afc7a9d481",
+      "96db631ceeeec1cdcbd6b0f919f9049f888a87a0",
+      "2de37f1e37b6b8a113dcae988e892f39036513c1",
+      "cf4423fec7e1ae6342ede2d2544752472196ee4e",
+      "94310ca160486f5327e320439113030c58c258d4",
+      "22217a580991d19ae3accae86b17cbdb1af66ebd",
+      "c0a43356c294aabc23bec108aecdaf1e7bd3580b",
+      "5d88c7916313ef1771eac99560f70960aec6d7be",
+      "41a7f8e60ca94cee81b1ba123ced59bd45cd9377"
+    ],
+    "merge_ready_at": "2026-07-20",
+    "changed_files": [
+      ".github/workflows/ci-windows.yml",
+      "adapters/transport/local-ipc/**",
+      "apps/desktop/src-tauri/**",
+      "apps/desktop/src/lib/systemBridge.ts",
+      "apps/desktop/src/lib/systemBridge.test.ts",
+      "services/head/src/system.rs",
+      "services/node/**",
+      "tests/catalog/m01.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M01_local_desktop_conversation.json",
+      "planning/results/WP-M01-006.json",
+      "Cargo.toml",
+      "Cargo.lock",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "ARCH-83:DesktopLifecycle",
+      "ARCH-83:LocalDesktopIPC",
+      "ARCH-83:TauriBridge",
+      "ARCH-83:WatchReducer",
+      "M01:NodeSurvivesWindow",
+      "M01:AuthenticatedHandshake",
+      "TEST-LOCAL-IPC-HANDSHAKE-001",
+      "TEST-DESKTOP-NODE-LIFECYCLE-001",
+      "TEST-TAURI-WATCH-BRIDGE-001"
+    ],
+    "tests": {
+      "passed": [
+        "17 local IPC tests cover semantic current-user DACLs, bilateral peer identity, one handshake per connection, replay and proof binding, bounded session and challenge state, raw-client pre-authentication expiry, accept-loop recovery, message limits, authenticated bootstrap and ordered watch frames",
+        "7 Head system tests cover snapshot-first watches, lagged-stream resync, concurrent revision publication order and collision-safe stream identities",
+        "3 real-process Node lifecycle tests include abrupt launcher abort followed by two authenticated reconnects to the surviving detached Node",
+        "10 Tauri bridge tests cover safe DTO conversion, exact-one initial snapshot delivery, Node-independent window close and cancellation of the complete reconnect future",
+        "23 desktop renderer tests preserve the owner-approved screen and enforce the transport-neutral DennettClient boundary without exposing installation or proof secrets",
+        "mise exec -- just check passed repository, documentation, planning, Rust, Python, TypeScript and protocol gates at c0a43356c294aabc23bec108aecdaf1e7bd3580b",
+        "final executable head 41a7f8e60ca94cee81b1ba123ced59bd45cd9377 passed targeted Head tests and strict clippy after collision-safe stream identity was added",
+        "GitHub Fast Gate run 80 and Windows Desktop IPC run 6 both passed on final reviewed executable head 41a7f8e60ca94cee81b1ba123ced59bd45cd9377"
+      ],
+      "not_run": [
+        "Unix Domain Socket implementation and certification remain a later transport-adapter package",
+        "long-duration load, fuzzing, cross-process same-user flooding, machine suspend and forced resource-exhaustion campaigns remain release-wide adversarial hardening",
+        "the complete visible conversation, Codex turn, Stop, timeout, draft restoration and forced gap recovery belong to WP-M01-007"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Two detached read-only R2 reviews of exact executable commit 5d88c7916313ef1771eac99560f70960aec6d7be returned PASS with no P0-P2 findings. One reviewer reported a P3 millisecond stream-identity collision; it was replaced by UUIDv7 and both reviewers rechecked exact clean commit 41a7f8e60ca94cee81b1ba123ced59bd45cd9377 and returned PASS.",
+      "findings_closed": [
+        "Serialized committed SystemProjection delta publication with the revision write lock so concurrent commits cannot broadcast out of order",
+        "Removed the duplicate initial-snapshot delivery race by returning the watch snapshot once through the command response before channel deltas",
+        "Added bounded connect, handshake, bootstrap, watch-open and initial-snapshot deadlines and made window close cancel the entire reconnect path",
+        "Limited pre-authenticated Named Pipe clients per process, expired idle raw connections and kept ERROR_PIPE_BUSY from terminating the accept loop",
+        "Bound one handshake attempt to each accepted connection and bounded or purged session and challenge registry state",
+        "Replaced millisecond stream identities with UUIDv7 and added a rapid-subscription collision regression test",
+        "Replaced lifecycle simulation with a real launcher abort and verified the detached Node remains reachable by successive authenticated clients"
+      ],
+      "findings_open": []
+    },
+    "migrations": [],
+    "observability_changes": [
+      "desktop startup and recovery expose discovery, Node start, handshake, subscribe, watching and reconnect phases without logging endpoint, installation, challenge or proof material",
+      "deadline, protocol, authority-epoch, watch-gap and Node-start failures retain distinct UI-safe codes and retry guidance"
+    ],
+    "known_limitations": [
+      "the real local IPC transport is Windows Named Pipe only in this package; other operating systems fail closed as unsupported",
+      "authenticated same-user sessions have a bounded twelve-hour lifetime and long-lived watch reads intentionally have no idle deadline; reconnect and shutdown remain cancellable",
+      "the accepted desktop screen is unchanged and does not submit a real chat turn until WP-M01-007"
+    ],
+    "follow_up_candidates": [
+      "WP-M01-007",
+      "Unix Domain Socket transport adapter",
+      "release-wide IPC fuzzing, sustained-load and resource-exhaustion qualification"
+    ],
+    "owner_decision_required": false
+  }
+}

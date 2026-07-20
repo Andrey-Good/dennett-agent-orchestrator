@@ -17,18 +17,18 @@ Each row links one requirement to its catalogue evidence.
 | `ARCH-81:ProtocolPackages` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-83:Bootstrap` | `TEST-BOOTSTRAP-CLEAN-001` | `WP-M00-001` | `repository` | `Justfile`, `tools/bootstrap.py`, `tools/doctor.py`, `tools/tests/test_bootstrap.py`, `tools/tests/test_doctor.py` | `release` |
 | `ARCH-83:Correlation` | `TEST-M01-TRACE-CORRELATION-001` | `WP-M01-007` | `observability` | — | — |
-| `ARCH-83:DesktopLifecycle` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | — | `release` |
+| `ARCH-83:DesktopLifecycle` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | `apps/desktop/src-tauri/src/system_bridge/mod.rs`, `services/node/tests/desktop_lifecycle.rs` | `release` |
 | `ARCH-83:DraftPersistence` | `TEST-DESKTOP-DRAFT-RECOVERY-001` | `WP-M01-007` | `desktop` | — | — |
 | `ARCH-83:FirstVerticalSlice` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
 | `ARCH-83:FirstVerticalSlice` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `WP-M01-007` | `quality` | — | `release` |
 | `ARCH-83:GeneratedClients` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
-| `ARCH-83:LocalDesktopIPC` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | — | `release` |
+| `ARCH-83:LocalDesktopIPC` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | `adapters/transport/local-ipc/src/auth.rs`, `adapters/transport/local-ipc/src/client.rs`, `adapters/transport/local-ipc/src/service.rs`, `adapters/transport/local-ipc/src/transport/windows.rs` | `release` |
 | `ARCH-83:Milestone0` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
 | `ARCH-83:ProtocolCompatibility` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `ARCH-83:ProviderLiveSmoke` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-login.ts` | `release` |
 | `ARCH-83:RepositoryLayout` | `TEST-REPO-STRUCTURE-001` | `WP-M00-001`, `WP-M01-001` | `repository` | `tools/tests/test_verify_repo.py`, `tools/verify_repo.py` | `release` |
-| `ARCH-83:TauriBridge` | `TEST-TAURI-WATCH-BRIDGE-001` | `WP-M01-006` | `desktop` | — | `release` |
-| `ARCH-83:WatchReducer` | `TEST-TAURI-WATCH-BRIDGE-001` | `WP-M01-006` | `desktop` | — | `release` |
+| `ARCH-83:TauriBridge` | `TEST-TAURI-WATCH-BRIDGE-001` | `WP-M01-006` | `desktop` | `apps/desktop/src-tauri/src/system_bridge/dto.rs`, `apps/desktop/src-tauri/src/system_bridge/mod.rs`, `apps/desktop/src/lib/systemBridge.test.ts`, `services/head/src/system.rs` | `release` |
+| `ARCH-83:WatchReducer` | `TEST-TAURI-WATCH-BRIDGE-001` | `WP-M01-006` | `desktop` | `apps/desktop/src-tauri/src/system_bridge/dto.rs`, `apps/desktop/src-tauri/src/system_bridge/mod.rs`, `apps/desktop/src/lib/systemBridge.test.ts`, `services/head/src/system.rs` | `release` |
 | `ARCH-83:WatchReducer` | `TEST-WATCH-GAP-RESYNC-001` | `WP-M01-005` | `sync` | `crates/dennett-sync-core/src/watch.rs`, `services/head/src/session.rs` | `release` |
 | `DEBT-0001` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `docs/decisions/ADR-006-m01-protocol-epoch.md`, `protocols/buf.yaml`, `protocols/epoch-migrations/m00-to-m01.json`, `protocols/proto/dennett/common/v1/common.proto`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/session.proto`, `protocols/proto/dennett/control/v1/system.proto`, `protocols/proto/dennett/sync/v1/watch.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `DEBT-0002` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `docs/decisions/ADR-006-m01-protocol-epoch.md`, `protocols/buf.yaml`, `protocols/epoch-migrations/m00-to-m01.json`, `protocols/proto/dennett/common/v1/common.proto`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/session.proto`, `protocols/proto/dennett/control/v1/system.proto`, `protocols/proto/dennett/sync/v1/watch.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
@@ -45,11 +45,11 @@ Each row links one requirement to its catalogue evidence.
 | `M00:FakeVerticalPath` | `TEST-FAKE-CHAT-001` | `WP-M00-007` | `agents` | `Justfile`, `services/head/src/main.rs`, `services/head/tests/fake_chat.rs` | `release` |
 | `M00:ProtocolBreakingGate` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `M00:RustBaseline` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
-| `M01:AuthenticatedHandshake` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | — | `release` |
+| `M01:AuthenticatedHandshake` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | `adapters/transport/local-ipc/src/auth.rs`, `adapters/transport/local-ipc/src/client.rs`, `adapters/transport/local-ipc/src/service.rs`, `adapters/transport/local-ipc/src/transport/windows.rs` | `release` |
 | `M01:ExitGate` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `WP-M01-007` | `quality` | — | `release` |
 | `M01:ExitGate` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `WP-M01-007` | `quality` | — | `release` |
 | `M01:ExitGate` | `TEST-M01-TRACE-CORRELATION-001` | `WP-M01-007` | `observability` | — | — |
-| `M01:NodeSurvivesWindow` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | — | `release` |
+| `M01:NodeSurvivesWindow` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | `apps/desktop/src-tauri/src/system_bridge/mod.rs`, `services/node/tests/desktop_lifecycle.rs` | `release` |
 | `M01:OneRealRuntime` | `TEST-CODEX-SDK-CONTINUATION-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `services/adapter-host-node/src/codex-runtime-canary.ts`, `tests/contracts/agent_runtime_conformance.json` | — |
 | `M01:OneRealRuntime` | `TEST-CODEX-SDK-CONTRACT-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary-lib.test.ts`, `services/adapter-host-node/src/codex-cli.test.ts`, `services/adapter-host-node/src/codex-workspace.test.ts` | `release` |
 | `M01:OwnerUxGate` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |

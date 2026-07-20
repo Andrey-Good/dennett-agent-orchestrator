@@ -359,7 +359,7 @@
     {
       "id": "TEST-LOCAL-IPC-HANDSHAKE-001",
       "title": "Desktop and Node establish a versioned authenticated local IPC session",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "node", "ipc", "security"],
@@ -368,21 +368,30 @@
       "work_package_refs": ["WP-M01-006"],
       "expected": [
         "Windows uses a per-install Named Pipe with OS-local access controls and no default TCP listener",
+        "The Named Pipe DACL is protected and semantically grants full access only to the current Windows user",
         "ClientHello and ServerWelcome negotiate a supported protocol version and short-lived session proof",
+        "Each accepted connection permits one bounded handshake attempt; expired or disconnected sessions and replay challenges cannot grow without limit",
+        "Unauthenticated same-user clients are limited per process and evicted by a pre-authentication deadline without terminating the accept loop",
+        "Connect, handshake, bootstrap and watch-open operations have bounded deadlines with retryable transport-neutral errors",
         "Invalid challenge, incompatible protocol and wrong installation identity are rejected",
         "The React renderer never receives Node credentials or raw endpoint secrets"
       ],
       "implementation": {
         "target_suite": "desktop Node IPC",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "adapters/transport/local-ipc/src/auth.rs",
+          "adapters/transport/local-ipc/src/client.rs",
+          "adapters/transport/local-ipc/src/service.rs",
+          "adapters/transport/local-ipc/src/transport/windows.rs"
+        ]
       },
       "owner": "transport"
     },
     {
       "id": "TEST-DESKTOP-NODE-LIFECYCLE-001",
       "title": "Closing the desktop window leaves Node and active state alive",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "node", "lifecycle", "recovery"],
@@ -392,20 +401,24 @@
       "expected": [
         "Desktop startup renders a local shell before bootstrap completes and reports freshness",
         "Closing or crashing the Tauri window does not terminate dennett-node",
+        "Abrupt termination of a real desktop-launcher process leaves the detached Node reachable by successive authenticated clients",
         "Reopening creates a new UI session, reconnects and restores the prior authoritative session",
         "Node absent and protocol mismatch lead to Recovery actions instead of an empty application"
       ],
       "implementation": {
         "target_suite": "desktop lifecycle integration",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "services/node/tests/desktop_lifecycle.rs",
+          "apps/desktop/src-tauri/src/system_bridge/mod.rs"
+        ]
       },
       "owner": "desktop"
     },
     {
       "id": "TEST-TAURI-WATCH-BRIDGE-001",
       "title": "Tauri forwards typed watch frames without owning domain state",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "tauri", "sync"],
@@ -414,14 +427,21 @@
       "work_package_refs": ["WP-M01-006"],
       "expected": [
         "Tauri validates command payloads and forwards stable command identifiers",
-        "A Tauri channel carries snapshot and delta frames without reimplementing session semantics",
+        "The command response is the only delivery path for the initial snapshot; the channel then carries ordered delta and recovery frames without reimplementing session semantics",
+        "Concurrent authoritative commits are published in revision order and delta or revision-gap recovery fields survive DTO conversion",
+        "Closing a watch promptly cancels the complete in-flight reconnect pipeline, including a hung Node start",
         "Reconnect and Node-absent errors map to transport-neutral client errors",
         "Frontend features depend on DennettClient rather than importing Tauri APIs directly"
       ],
       "implementation": {
         "target_suite": "Tauri bridge and renderer client",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "apps/desktop/src-tauri/src/system_bridge/dto.rs",
+          "apps/desktop/src-tauri/src/system_bridge/mod.rs",
+          "apps/desktop/src/lib/systemBridge.test.ts",
+          "services/head/src/system.rs"
+        ]
       },
       "owner": "desktop"
     },

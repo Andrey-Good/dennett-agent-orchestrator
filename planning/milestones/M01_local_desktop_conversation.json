@@ -583,7 +583,7 @@
       "version": 1,
       "id": "WP-M01-006",
       "title": "Connect Tauri to the persistent Node over authenticated local IPC",
-      "status": "REFINED",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
@@ -609,6 +609,7 @@
         "WP-M01-005"
       ],
       "allowed_roots": [
+        "services/head",
         "services/node",
         "apps/desktop/src-tauri",
         "apps/desktop/src/lib",
@@ -623,6 +624,7 @@
         "Cargo.toml",
         "Cargo.lock",
         "pnpm-lock.yaml",
+        ".github/workflows/ci-windows.yml",
         "REPOSITORY_MANIFEST.json",
         "REPOSITORY_CHECKSUMS.sha256",
         "docs/CHECKSUMS.sha256"
@@ -659,6 +661,7 @@
         "TEST-TAURI-WATCH-BRIDGE-001"
       ],
       "required_commands": [
+        "cargo test -p dennett-local-ipc",
         "cargo test -p dennett-node",
         "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
         "corepack pnpm --filter @dennett/desktop test",
@@ -677,11 +680,15 @@
       },
       "estimate": {
         "target_agent_hours": 6,
-        "max_diff_lines": 3000
+        "max_diff_lines": 8000
       },
       "notes": [
         "Windows Named Pipe is the first implementation; Unix Domain Socket support must remain a transport adapter, not a different application contract.",
-        "Closing or crashing the Tauri window never sends the explicit Stop Dennett on Device command."
+        "Closing or crashing the Tauri window never sends the explicit Stop Dennett on Device command.",
+        "The embedded Head remains the authoritative owner of bootstrap and watch state; Node and transport expose an application-facing port instead of inventing a second projection owner.",
+        "Local authentication is provided by Named Pipe ACL and bilateral OS peer validation. The protocol proof is a short-lived single-use bootstrap capability bound to the accepted connection, peer, installation and Authority Epoch.",
+        "A dedicated Windows CI workflow is in scope because real Named Pipe ACL, peer identity and detached process lifecycle behavior cannot be accepted from portable fakes alone.",
+        "The initial 3000-line change estimate was raised to 8000 after detached R2 review exposed missing timeout, saturation, ordering, single-snapshot and real launcher-crash coverage; the owner explicitly preferred retaining useful reliability work over optimizing for the line budget."
       ]
     },
     {
