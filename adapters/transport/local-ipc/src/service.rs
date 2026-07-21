@@ -1976,7 +1976,7 @@ mod tests {
     use dennett_head::conversation::LocalProject;
     use dennett_head::draft::SessionOperationLocks;
     use dennett_head::session::SessionCoordinator;
-    use dennett_head::system::{ProjectSummary, SystemMutation, SystemProjection};
+    use dennett_head::system::{SystemMutation, SystemProjection};
     use dennett_memory_core::session::{InMemorySessionEventStore, SessionJournal};
     use dennett_sync_core::admission::InMemoryCommandAdmissionStore;
     use dennett_sync_core::draft::InMemoryDraftCache;
@@ -1984,6 +1984,8 @@ mod tests {
 
     #[cfg(windows)]
     use crate::{AuthenticatedSystemClient, ClientConfig};
+    #[cfg(windows)]
+    use dennett_head::system::ProjectSummary;
     #[cfg(windows)]
     use std::time::Duration;
     #[cfg(windows)]
