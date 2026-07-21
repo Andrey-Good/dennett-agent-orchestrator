@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="720" viewBox="0 0 1500 720" role="img" aria-labelledby="title desc">
+  <title id="title">M01 local conversation lifecycle</title>
+  <desc id="desc">Путь команды через Desktop, authenticated Node IPC, Head, provider runtime and durable journal, with exact-turn steering, stop, timeout, gap resync and UI restart.</desc>
+  <rect width="1500" height="720" rx="42" fill="#151515"/>
+  <text x="70" y="80" fill="#f0f0f0" font-family="Segoe UI, sans-serif" font-size="36" font-weight="650">Не один запрос, а временной контракт</text>
+  <text x="70" y="125" fill="#8e8e8e" font-family="Segoe UI, sans-serif" font-size="22">Каноническая история живёт вне UI; provider остаётся заменяемым.</text>
+  <g font-family="Segoe UI, sans-serif" text-anchor="middle">
+    <g><rect x="55" y="205" width="220" height="120" rx="28" fill="#292929"/><text x="165" y="258" fill="#fff" font-size="25">Desktop</text><text x="165" y="296" fill="#aaa" font-size="18">presentation</text></g>
+    <g><rect x="350" y="205" width="220" height="120" rx="28" fill="#292929"/><text x="460" y="258" fill="#fff" font-size="25">Node</text><text x="460" y="296" fill="#aaa" font-size="18">durable local owner</text></g>
+    <g><rect x="645" y="205" width="220" height="120" rx="28" fill="#303030"/><text x="755" y="258" fill="#fff" font-size="25">Head</text><text x="755" y="296" fill="#aaa" font-size="18">session authority</text></g>
+    <g><rect x="940" y="205" width="220" height="120" rx="28" fill="#292929"/><text x="1050" y="258" fill="#fff" font-size="25">Runtime port</text><text x="1050" y="296" fill="#aaa" font-size="18">Codex / future</text></g>
+    <g><rect x="1235" y="205" width="220" height="120" rx="28" fill="#353535"/><text x="1345" y="258" fill="#fff" font-size="25">Journal</text><text x="1345" y="296" fill="#aaa" font-size="18">SQLite events</text></g>
+  </g>
+  <g stroke="#d7d7d7" stroke-width="3" fill="none" opacity="0.58"><path d="M275 265H350"/><path d="M570 265H645"/><path d="M865 265H940"/><path d="M1160 265H1235"/></g>
+  <g font-family="Segoe UI, sans-serif">
+    <rect x="70" y="410" width="300" height="110" rx="26" fill="#fff" opacity="0.07"/><text x="100" y="454" fill="#fff" font-size="23">Clarify</text><text x="100" y="490" fill="#aaa" font-size="19">exact active turn · no restart</text>
+    <rect x="400" y="410" width="300" height="110" rx="26" fill="#fff" opacity="0.07"/><text x="430" y="454" fill="#fff" font-size="23">Stop / timeout</text><text x="430" y="490" fill="#aaa" font-size="19">terminal state · no spinner</text>
+    <rect x="730" y="410" width="300" height="110" rx="26" fill="#fff" opacity="0.07"/><text x="760" y="454" fill="#fff" font-size="23">Watch gap</text><text x="760" y="490" fill="#aaa" font-size="19">explicit resync snapshot</text>
+    <rect x="1060" y="410" width="365" height="110" rx="26" fill="#fff" opacity="0.09"/><text x="1090" y="454" fill="#fff" font-size="23">Close and reopen UI</text><text x="1090" y="490" fill="#aaa" font-size="19">same authoritative session</text>
+    <text x="75" y="610" fill="#bdbdbd" font-size="23">Порядок:</text><text x="190" y="610" fill="#f0f0f0" font-size="23">commentary → effect → clarification → later work → final Markdown.</text>
+    <text x="75" y="655" fill="#bdbdbd" font-size="23">Граница:</text><text x="190" y="655" fill="#f0f0f0" font-size="23">UI может исчезнуть; история, admission и causal timestamps — нет.</text>
+  </g>
+</svg>

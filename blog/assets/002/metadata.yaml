@@ -1,0 +1,53 @@
+post: 002
+assets:
+  - id: 002-hero
+    type: diagram
+    path: hero-local-conversation.svg
+    source: repository-evidence-composition
+    alt: "A local Dennett conversation crossing Desktop, Node, Head, Codex and durable session history"
+    caption: "The visible chat is the smallest box in the path. M01 had to make every boundary behind it restartable, ordered and honest."
+    license: project-owned
+    generated_by: null
+  - id: 002-01
+    type: comparison-screenshot
+    path: 01-material-iterations.jpg
+    source: docs/design/WP-M01-003/native-v6-v10-focused-comparison.jpg
+    alt: "Two native Dennett sidebar material checkpoints, v6 and v10, shown side by side"
+    caption: "The code-driven material search changed the shell repeatedly before the project returned to native Mica. These are intermediate checkpoints, not the final accepted surface."
+    license: project-owned
+    generated_by: null
+  - id: 002-02
+    type: screenshot
+    path: 02-shell-before.png
+    source: docs/design/WP-M01-003/shell-layer-before.png
+    alt: "Intermediate Dennett shell with a separate sidebar boundary and clipped central content"
+    caption: "Before the layer correction, the sidebar owned a visible stick-like divider and the right panel behaved like a peer column."
+    license: project-owned
+    generated_by: null
+  - id: 002-03
+    type: screenshot
+    path: 03-shell-after.png
+    source: docs/design/WP-M01-003/shell-layer-after-v1.png
+    alt: "Reworked Dennett shell with the central workspace layered over the unified top and left surface"
+    caption: "The corrected composition made the central workspace own its curved boundary and placed the resource panel inside it. This still used fixture content."
+    license: project-owned
+    generated_by: null
+  - id: 002-04
+    type: comparison-screenshot
+    path: 04-mica-transition.jpg
+    source: docs/design/WP-M01-003/native-v10-v11-mica-focused-comparison.jpg
+    alt: "Native v10 custom projection beside the v11 Windows Mica checkpoint"
+    caption: "The v11 checkpoint removed application-owned wallpaper projection in favor of Windows Mica. A later live pass still had to reduce overlays and remove a displaced blur rectangle."
+    license: project-owned
+    generated_by: null
+  - id: 002-path
+    type: diagram
+    path: conversation-lifecycle.svg
+    source: planning/results/WP-M01-007.json
+    alt: "Conversation lifecycle with same-turn clarification, Stop, timeout, resync and restart restoration"
+    caption: "M01's correctness boundary is temporal: commentary and effects stay ordered, clarification targets the exact active turn, and restart restores canonical history."
+    license: project-owned
+    generated_by: null
+privacy_review:
+  status: passed
+  notes: "Only public repository fixtures and loopback 127.0.0.1 appear; no private prompts, local paths, credentials or user-network addresses."

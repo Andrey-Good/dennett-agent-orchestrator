@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 442,
+  "file_count": 463,
   "files": [
     {
       "path": ".editorconfig",
@@ -50,8 +50,8 @@
     },
     {
       "path": "AGENTS.md",
-      "bytes": 11142,
-      "sha256": "dff951bcefa669c9fd53ca58b221ee42b0df2db193396ac16999013dc43571d9"
+      "bytes": 12248,
+      "sha256": "26b44b1ad4ab1d29ccaed05e7aae81d1ac8cd20eade80ab68ccb8fa91b48fd6b"
     },
     {
       "path": "CHANGELOG.md",
@@ -90,13 +90,13 @@
     },
     {
       "path": "README.md",
-      "bytes": 9339,
-      "sha256": "fca1b5e975f014c1986268c21e48d4adfe65c770839d06ed6d18c5bdac8fd6c0"
+      "bytes": 9638,
+      "sha256": "3cf4d68ed9a6bd00062576ef0bea6769f4f49e88515bd22a3fc2389156ee0ab5"
     },
     {
       "path": "README.ru.md",
-      "bytes": 3827,
-      "sha256": "45dc49e0e482b78ddfc459a74f7eb72ed720901c0988d11c2fa8750aa15acc77"
+      "bytes": 4204,
+      "sha256": "01e279ba0335e8af6cea5ecd0aaabeb3c28ce2b20fc6771815ef734b69447b04"
     },
     {
       "path": "ROADMAP.md",
@@ -527,6 +527,111 @@
       "path": "apps/mobile/tsconfig.json",
       "bytes": 179,
       "sha256": "0e5f225ae5f8a9bdc6024279da2049926a7f1b0818bb994f6d628c811650a47b"
+    },
+    {
+      "path": "blog/AGENTS.md",
+      "bytes": 55385,
+      "sha256": "bdba934d638f6635e2ca58933f1589ffa9295e1c4bc090bf55b157f194482f83"
+    },
+    {
+      "path": "blog/INDEX.md",
+      "bytes": 1638,
+      "sha256": "bf8f7c2244d44666dcc7d94e92339a1c1f4be9f19f7fd05954c58f1579e6ae76"
+    },
+    {
+      "path": "blog/README.md",
+      "bytes": 1528,
+      "sha256": "cecf9e591b6a4993a9f4b01c555b5588364bfc081e6781fafdc3a39509a25e65"
+    },
+    {
+      "path": "blog/assets/001/fake-conversation-path.svg",
+      "bytes": 2966,
+      "sha256": "651739ad46f3a3dad3ed628277957b7460a5223f2991035ee8361fe5be79d1fe"
+    },
+    {
+      "path": "blog/assets/001/hero-foundation.svg",
+      "bytes": 3637,
+      "sha256": "308921cbd25bc90f9efb86731f7cf05d78a59297c6f62a755f6211eac2e05505"
+    },
+    {
+      "path": "blog/assets/001/metadata.yaml",
+      "bytes": 1057,
+      "sha256": "d7162886b6d300ea467a446d2f601545afc88f07aafc44b1a72a8a14b177458f"
+    },
+    {
+      "path": "blog/assets/002/01-material-iterations.jpg",
+      "bytes": 136405,
+      "sha256": "667e1220b6682725961bfd55052acc7ffc34f91797f974983975551aeec93c0c"
+    },
+    {
+      "path": "blog/assets/002/02-shell-before.png",
+      "bytes": 103633,
+      "sha256": "3350ba2c248b459c21aa5a8af833eb3ab32bf0d4bd103da85c42946184cf8067"
+    },
+    {
+      "path": "blog/assets/002/03-shell-after.png",
+      "bytes": 98392,
+      "sha256": "62cac655859b854e3c1958eb4628e719685fad850d678cc9bbdda910d5e76059"
+    },
+    {
+      "path": "blog/assets/002/04-mica-transition.jpg",
+      "bytes": 120901,
+      "sha256": "45d597ad6b5504e33a52ce1231dfae5c05ce2b838cc530e8bea26e41cb68873e"
+    },
+    {
+      "path": "blog/assets/002/conversation-lifecycle.svg",
+      "bytes": 3620,
+      "sha256": "a1029d28e56ad8d971d2c632264b456a904c70bdfae0c0c9396b24966505ba8d"
+    },
+    {
+      "path": "blog/assets/002/hero-local-conversation.svg",
+      "bytes": 3871,
+      "sha256": "9aa8065074c4ddaad322e25e9abe8e9dcb27dd6ba83d40d8f3fd460ce91c563c"
+    },
+    {
+      "path": "blog/assets/002/metadata.yaml",
+      "bytes": 2886,
+      "sha256": "cb155e01289619411cb663313098e9f886cee682e41c7bcf4e5cfae9e46ebc68"
+    },
+    {
+      "path": "blog/evidence/M00.yaml",
+      "bytes": 8818,
+      "sha256": "157053755ed87b97d7aa07eebc1abcfb3961fa5a237e12273188533a542b6887"
+    },
+    {
+      "path": "blog/evidence/M01.yaml",
+      "bytes": 15206,
+      "sha256": "71d96aea0a9ce05bec22e88de2317af27a65d84cb7655014644563e482b808a5"
+    },
+    {
+      "path": "blog/evidence/editorial-review-001-002.md",
+      "bytes": 2018,
+      "sha256": "53ee27d8ae01282ea0fe19a9e9ad02123702fcb94ee95a58d0499b5dde70af0a"
+    },
+    {
+      "path": "blog/notes/README.md",
+      "bytes": 331,
+      "sha256": "c6b268638d6a98dbdae6ec4dc182affccb3f2a88e2e3f45a0262d0db4e366bde"
+    },
+    {
+      "path": "blog/notes/_milestone_capture_template.md",
+      "bytes": 455,
+      "sha256": "2bea503ab7129d8aa1a69655d606283e64632054c9d4ae30f8e4f7186b81f2b8"
+    },
+    {
+      "path": "blog/posts/000_До_первой_строки_кода.md",
+      "bytes": 80142,
+      "sha256": "47f27cb8d5d33a381bf78ba5b9405c4220601ad6bfecb9fd479793aafe931cc2"
+    },
+    {
+      "path": "blog/posts/001_M00_Репозиторий_научился_не_верить_мне_на_слово.md",
+      "bytes": 30407,
+      "sha256": "17a0ac683edb2a8a2c537b189702e0087807a72a93420feb4e2138c3ec75417b"
+    },
+    {
+      "path": "blog/posts/002_M01_Чат_который_должен_пережить_закрытое_окно.md",
+      "bytes": 46971,
+      "sha256": "e37a56ebb5fa9a6637642820f78ae8fd746e555de13be8cbe58a40c8041b85dc"
     },
     {
       "path": "crates/AGENTS.md",

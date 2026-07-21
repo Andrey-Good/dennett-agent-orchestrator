@@ -44,6 +44,16 @@ The repository is architecture-first. Do not invent product semantics inside cod
 
 Do not begin a semantic code change without a Work Package. A broad user request must first be converted into a bounded package or autonomous batch.
 
+## Engineering chronicle
+
+The repository-root `blog/` is a non-canonical engineering chronicle. It never owns product behavior, architecture or acceptance semantics; `docs/`, `planning/`, tests and runtime evidence remain authoritative.
+
+- Read `blog/AGENTS.md` before creating or editing blog material.
+- At the start of a potentially interesting milestone or Work Package, open one compact capture file under `blog/notes/`; append only facts, links, measurements, owner feedback and privacy-safe visual candidates that may matter to a reader.
+- Keep at most one active capture file per milestone. At milestone closure, consolidate useful material into `blog/evidence/`, remove uncited scratch material, and update `blog/INDEX.md` so the workflow does not accumulate diary debris.
+- Write a milestone chronicle after an accepted milestone when there is a real story. Combine small adjacent milestones instead of publishing automatic release notes.
+- A large post requires the evidence, privacy and independent editorial gates defined by `blog/AGENTS.md`; publication never blocks a critical product fix.
+
 ## Engineering priorities
 
 Use this priority order when trade-offs are unavoidable:

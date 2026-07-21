@@ -1,0 +1,21 @@
+post: 001
+assets:
+  - id: 001-hero
+    type: diagram
+    path: hero-foundation.svg
+    source: repository-evidence-composition
+    alt: "M00 foundation with ten Work Packages, sixteen catalogued tests and a credential-free fake conversation path"
+    caption: "M00 did not ship a user interface. It made bootstrap, protocols, plans, tests and merges reproducible enough that later code could be distrusted systematically."
+    license: project-owned
+    generated_by: null
+  - id: 001-fake-path
+    type: diagram
+    path: fake-conversation-path.svg
+    source: planning/results/WP-M00-007.json
+    alt: "Credential-free path from a Head command through a fake runtime to a Result Envelope and Memory Event"
+    caption: "The first executable vertical path used a deterministic fake on purpose: M00 proved contracts and correlation before a paid or authenticated provider entered the loop."
+    license: project-owned
+    generated_by: null
+privacy_review:
+  status: passed
+  notes: "No credentials, private prompts, machine paths or personal identifiers."
