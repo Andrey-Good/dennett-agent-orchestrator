@@ -87,6 +87,28 @@ message RuntimeSummary {
   bool scoped_cancellation = 5;
   bool deadlines = 6;
   repeated string native_extension_schemas = 7;
+  repeated RuntimeControlDescriptor controls = 8;
+  // unsupported | native | interrupt_and_resume
+  string steering = 9;
+}
+
+message RuntimeControlCondition {
+  string control_id = 1;
+  repeated string choice_ids = 2;
+}
+
+message RuntimeControlChoice {
+  string id = 1;
+  string label = 2;
+  optional string description = 3;
+  repeated RuntimeControlCondition available_when = 4;
+}
+
+message RuntimeControlDescriptor {
+  string id = 1;
+  string label = 2;
+  string default_choice_id = 3;
+  repeated RuntimeControlChoice choices = 4;
 }
 
 message BootstrapResponse {

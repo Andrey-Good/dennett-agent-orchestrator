@@ -87,6 +87,11 @@ EXPECTED_ENUM_VALUES: dict[str, tuple[tuple[str, int], ...]] = {
         ("TURN_ACTIVITY_STATUS_COMPLETED", 3),
         ("TURN_ACTIVITY_STATUS_FAILED", 4),
     ),
+    ".dennett.control.v1.TurnDeliveryMode": (
+        ("TURN_DELIVERY_MODE_UNSPECIFIED", 0),
+        ("TURN_DELIVERY_MODE_NEW_TURN", 1),
+        ("TURN_DELIVERY_MODE_STEER_NOW", 2),
+    ),
 }
 EXPECTED_SERVICE_METHODS: dict[str, tuple[MethodContract, ...]] = {
     ".dennett.control.v1.SystemService": (
@@ -436,6 +441,7 @@ EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
             label="LABEL_REPEATED",
             type_name=".dennett.control.v1.TurnActivitySnapshot",
         ),
+        _field("created_revision", 11, "TYPE_UINT64"),
     ),
     ".dennett.control.v1.TurnActivitySnapshot": (
         _field("activity_id", 1, "TYPE_STRING"),
@@ -461,6 +467,8 @@ EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
             label="LABEL_REPEATED",
             type_name=".dennett.control.v1.NativeExtensionPayload",
         ),
+        _field("created_at", 7, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field("created_revision", 8, "TYPE_UINT64"),
     ),
     ".dennett.control.v1.NativeExtensionPayload": (
         _field("namespace", 1, "TYPE_STRING"),
@@ -544,6 +552,78 @@ EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
         _field("scoped_cancellation", 5, "TYPE_BOOL"),
         _field("deadlines", 6, "TYPE_BOOL"),
         _field("native_extension_schemas", 7, "TYPE_STRING", label="LABEL_REPEATED"),
+        _field(
+            "controls",
+            8,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlDescriptor",
+        ),
+        _field("steering", 9, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.RuntimeControlCondition": (
+        _field("control_id", 1, "TYPE_STRING"),
+        _field("choice_ids", 2, "TYPE_STRING", label="LABEL_REPEATED"),
+    ),
+    ".dennett.control.v1.RuntimeControlChoice": (
+        _field("id", 1, "TYPE_STRING"),
+        _field("label", 2, "TYPE_STRING"),
+        _field("description", 3, "TYPE_STRING", oneof_index=0, proto3_optional=True),
+        _field(
+            "available_when",
+            4,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlCondition",
+        ),
+    ),
+    ".dennett.control.v1.RuntimeControlDescriptor": (
+        _field("id", 1, "TYPE_STRING"),
+        _field("label", 2, "TYPE_STRING"),
+        _field("default_choice_id", 3, "TYPE_STRING"),
+        _field(
+            "choices",
+            4,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlChoice",
+        ),
+    ),
+    ".dennett.control.v1.SendTurnRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("session_id", 3, "TYPE_STRING"),
+        _field("text", 4, "TYPE_STRING"),
+        _field(
+            "attachments",
+            5,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.ContextAttachment",
+        ),
+        _field(
+            "runtime_controls",
+            6,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlSelection",
+        ),
+        _field(
+            "delivery_mode",
+            7,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.TurnDeliveryMode",
+        ),
+        _field("expected_active_turn_id", 8, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.RuntimeControlSelection": (
+        _field("control_id", 1, "TYPE_STRING"),
+        _field("choice_id", 2, "TYPE_STRING"),
     ),
     ".dennett.control.v1.SystemSnapshot": (
         _field(

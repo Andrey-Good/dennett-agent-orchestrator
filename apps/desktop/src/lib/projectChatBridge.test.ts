@@ -38,6 +38,7 @@ const system = {
     continuation: false,
     scopedCancellation: false,
     deadlines: false,
+    steering: "unsupported",
   },
 };
 
@@ -197,17 +198,117 @@ describe("TauriProjectChatClient", () => {
       revision: "1",
       commandId,
       text: "send once",
+      runtimeControls: [
+        { controlId: "model", choiceId: "gpt-new" },
+        { controlId: "reasoning_effort", choiceId: "high" },
+      ],
     });
     await client.discardDraft({ projectId: "project-1", sessionId: "session-1", commandId });
 
     expect(accepted.commandId).toBe(commandId);
     expect(invoke.mock.calls[0][1]).toMatchObject({ request: { commandId, text: "send once", revision: 1 } });
-    expect(invoke.mock.calls[1][1]).toMatchObject({ request: { commandId, expectedRevision: "1" } });
+    expect(invoke.mock.calls[1][1]).toMatchObject({
+      request: {
+        commandId,
+        expectedRevision: "1",
+        runtimeControls: [
+          { controlId: "model", choiceId: "gpt-new" },
+          { controlId: "reasoning_effort", choiceId: "high" },
+        ],
+      },
+    });
     expect(invoke.mock.calls[2][1]).toMatchObject({ request: { commandId } });
+  });
+
+  it("rejects a non-durable or unknown draft write receipt", async () => {
+    const client = new TauriProjectChatClient({
+      invoke: vi.fn(async () => ({
+        commandId: "00000000-0000-7000-8000-000000000001",
+        state: "composer_draft_write_state_unknown",
+      })),
+      createChannel: () => ({}),
+      identity: () => "operation-1",
+    });
+
+    await expect(client.saveDraft({
+      projectId: "project-1",
+      sessionId: "session-1",
+      commandId: "00000000-0000-7000-8000-000000000001",
+      text: "must be durable",
+      revision: 1,
+    })).rejects.toThrow("Invalid save_composer_draft state");
   });
 });
 
 describe("project chat validation", () => {
+  it("preserves revision order when live deltas share a timestamp and after snapshot reload", () => {
+    const sharedTimestamp = 1_750_000_000_000;
+    let current = applyProjectChatEvent(session, parseProjectChatEvent({
+      kind: "delta",
+      subscriptionId: "subscription-1",
+      cursor: { streamId: "stream-1", sequence: "2", authorityEpoch: "7" },
+      baseRevision: "1",
+      newRevision: "2",
+      committedAtUnixMs: sharedTimestamp,
+      mutations: [{
+        kind: "upsertTurn",
+        turn: {
+          turnId: "turn-ordered",
+          commandId: "command-ordered",
+          role: "turn_role_agent",
+          state: "turn_state_accepted",
+          text: "",
+          activities: [],
+          outcome: null,
+          createdAtUnixMs: sharedTimestamp,
+          completedAtUnixMs: null,
+        },
+      }],
+    }));
+
+    for (const [revision, activityId, message] of [
+      [3, "first", "First owner-facing update"],
+      [4, "second", "Second owner-facing update"],
+    ] as const) {
+      current = applyProjectChatEvent(current, parseProjectChatEvent({
+        kind: "delta",
+        subscriptionId: "subscription-1",
+        cursor: { streamId: "stream-1", sequence: String(revision), authorityEpoch: "7" },
+        baseRevision: String(revision - 1),
+        newRevision: String(revision),
+        committedAtUnixMs: sharedTimestamp,
+        mutations: [{
+          kind: "upsertTurnActivity",
+          turnId: "turn-ordered",
+          activity: {
+            activityId,
+            phase: "commentary",
+            message,
+            status: "turn_activity_status_completed",
+            createdRevision: String(revision),
+            createdAtUnixMs: sharedTimestamp,
+            updatedAtUnixMs: sharedTimestamp,
+            nativeExtensions: [],
+          },
+        }],
+      }));
+    }
+
+    expect(current.turns[0].activities.map((activity) => activity.activityId)).toEqual(["first", "second"]);
+    const reloaded = parseOpenedProjectChat({
+      correlationId: "correlation-reload",
+      subscriptionId: "subscription-reload",
+      system: {
+        ...system,
+        revision: "4",
+        recentSessions: [{ ...system.recentSessions[0], revision: "4" }],
+      },
+      session: current,
+      draft: null,
+    });
+    expect(reloaded.session.turns[0].activities.map((activity) => activity.activityId)).toEqual(["first", "second"]);
+  });
+
   it("rejects malformed draft payloads and revision jumps before reducer state changes", () => {
     expect(() => parseOpenedProjectChat({
       correlationId: "correlation-1",
@@ -227,6 +328,18 @@ describe("project chat validation", () => {
       mutations: [],
     });
     expect(() => applyProjectChatEvent(session, jump)).toThrow("Session revision gap");
+
+    const revisionTwo = { ...session, session: { ...session.session, revision: "2" } };
+    const duplicate = parseProjectChatEvent({
+      kind: "delta",
+      subscriptionId: "subscription-1",
+      cursor: { streamId: "stream-1", sequence: "2", authorityEpoch: "7" },
+      baseRevision: "1",
+      newRevision: "2",
+      committedAtUnixMs: 1_750_000_000_000,
+      mutations: [],
+    });
+    expect(applyProjectChatEvent(revisionTwo, duplicate)).toBe(revisionTwo);
   });
 
   it("keeps an authoritative timeout terminal when a late provider mutation arrives", () => {
@@ -260,5 +373,19 @@ describe("project chat validation", () => {
       state: "turn_state_timed_out",
       text: "retained partial response",
     });
+
+    const lateUpsert = parseProjectChatEvent({
+      kind: "delta",
+      subscriptionId: "subscription-1",
+      cursor: { streamId: "stream-1", sequence: "3", authorityEpoch: "7" },
+      baseRevision: "2",
+      newRevision: "3",
+      committedAtUnixMs: 1_750_000_000_100,
+      mutations: [{
+        kind: "upsertTurn",
+        turn: { ...timedOut.turns[0], state: "turn_state_streaming", text: "late success" },
+      }],
+    });
+    expect(() => applyProjectChatEvent(timedOut, lateUpsert)).toThrow("Terminal turn is immutable");
   });
 });

@@ -144,7 +144,34 @@ pub struct DesktopRuntimeSummary {
     pub continuation: bool,
     pub scoped_cancellation: bool,
     pub deadlines: bool,
+    pub steering: String,
     pub native_extension_schemas: Vec<String>,
+    pub controls: Vec<DesktopRuntimeControlDescriptor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRuntimeControlCondition {
+    pub control_id: String,
+    pub choice_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRuntimeControlChoice {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub available_when: Vec<DesktopRuntimeControlCondition>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRuntimeControlDescriptor {
+    pub id: String,
+    pub label: String,
+    pub default_choice_id: String,
+    pub choices: Vec<DesktopRuntimeControlChoice>,
 }
 
 impl From<&BootstrapSnapshot> for DesktopSystemSnapshot {
@@ -165,7 +192,34 @@ impl From<&BootstrapSnapshot> for DesktopSystemSnapshot {
                 continuation: runtime.continuation,
                 scoped_cancellation: runtime.scoped_cancellation,
                 deadlines: runtime.deadlines,
+                steering: runtime.steering.clone(),
                 native_extension_schemas: runtime.native_extension_schemas.clone(),
+                controls: runtime
+                    .controls
+                    .iter()
+                    .map(|control| DesktopRuntimeControlDescriptor {
+                        id: control.id.clone(),
+                        label: control.label.clone(),
+                        default_choice_id: control.default_choice_id.clone(),
+                        choices: control
+                            .choices
+                            .iter()
+                            .map(|choice| DesktopRuntimeControlChoice {
+                                id: choice.id.clone(),
+                                label: choice.label.clone(),
+                                description: choice.description.clone(),
+                                available_when: choice
+                                    .available_when
+                                    .iter()
+                                    .map(|condition| DesktopRuntimeControlCondition {
+                                        control_id: condition.control_id.clone(),
+                                        choice_ids: condition.choice_ids.clone(),
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
             }),
         }
     }

@@ -7,13 +7,23 @@ import { test } from "node:test";
 import { CodexCanaryError } from "./codex-canary-lib.js";
 import {
   assertNoApiKeyEnvironment,
+  createRuntimeSubscriptionCodexOptions,
   createSubscriptionCodexOptions,
   inspectCodexCli,
+  loadRuntimeCodexModelCatalog,
   prepareRuntimeCodexHome,
   resolveCanaryCodexHomeDirectory,
   subscriptionCliArguments,
+  type CodexInstallation,
   type ProcessRunner,
 } from "./codex-cli.js";
+
+const SYNTHETIC_INSTALLATION: CodexInstallation = {
+  launcherPath: "C:/synthetic/codex.js",
+  nativeExecutablePath: "C:/synthetic/codex.exe",
+  nativePathDirectories: ["C:/synthetic/codex-path"],
+  sdkVersion: "0.144.6",
+};
 
 test("API key and injected access-token modes are rejected before canary execution", () => {
   for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"]) {
@@ -26,6 +36,25 @@ test("API key and injected access-token modes are rejected before canary executi
   }
 
   assert.doesNotThrow(() => assertNoApiKeyEnvironment({}));
+});
+
+test("runtime options activate the native Windows workspace sandbox", () => {
+  const windows = createRuntimeSubscriptionCodexOptions(
+    { Path: "C:/Windows/System32" },
+    "C:/synthetic/codex-runtime",
+    { model_reasoning_effort: "high" },
+    "win32",
+  );
+  assert.deepEqual(windows.config?.windows, { sandbox: "unelevated" });
+  assert.equal(windows.config?.model_reasoning_effort, "high");
+
+  const linux = createRuntimeSubscriptionCodexOptions(
+    { PATH: "/usr/bin" },
+    "/tmp/codex-runtime",
+    {},
+    "linux",
+  );
+  assert.equal(linux.config?.windows, undefined);
 });
 
 test("subscription options pin ChatGPT and remove custom-provider environment", () => {
@@ -90,7 +119,7 @@ test("CLI inspection invokes the official launcher and accepts only ChatGPT logi
     calls.push(args);
     return {
       exitCode: 0,
-      stdout: args.at(-1) === "--version" ? "codex-cli 0.144.5\n" : "",
+      stdout: args.at(-1) === "--version" ? "codex-cli 0.144.6\n" : "",
       stderr:
         args.at(-1) === "--version" ? "" : "Logged in using ChatGPT\n",
     };
@@ -99,7 +128,7 @@ test("CLI inspection invokes the official launcher and accepts only ChatGPT logi
     await inspectCodexCli("C:/synthetic/codex.js", {}, chatGptRunner),
     {
       authMode: "chatgpt",
-      cliVersion: "codex-cli 0.144.5",
+      cliVersion: "codex-cli 0.144.6",
     },
   );
   assert.deepEqual(calls, [
@@ -112,7 +141,7 @@ test("CLI inspection invokes the official launcher and accepts only ChatGPT logi
 
   const apiKeyRunner: ProcessRunner = async (_executable, args) => ({
     exitCode: 0,
-    stdout: args.at(-1) === "--version" ? "codex-cli 0.144.5\n" : "",
+    stdout: args.at(-1) === "--version" ? "codex-cli 0.144.6\n" : "",
     stderr:
       args.at(-1) === "--version" ? "" : "Logged in using an API key\n",
   });
@@ -132,7 +161,7 @@ test("CLI inspection rejects ambiguous login text and version drift", async () =
   ]) {
     const runner: ProcessRunner = async (_executable, args) => ({
       exitCode: 0,
-      stdout: args.at(-1) === "--version" ? "codex-cli 0.144.5\n" : "",
+      stdout: args.at(-1) === "--version" ? "codex-cli 0.144.6\n" : "",
       stderr: args.at(-1) === "--version" ? "" : `${ambiguousStatus}\n`,
     });
     await assert.rejects(
@@ -159,7 +188,7 @@ test("CLI inspection rejects ambiguous login text and version drift", async () =
 test("CLI inspection maps a nonzero logged-out status to an actionable error", async () => {
   const loggedOutRunner: ProcessRunner = async (_executable, args) => ({
     exitCode: args.at(-1) === "--version" ? 0 : 1,
-    stdout: args.at(-1) === "--version" ? "codex-cli 0.144.5\n" : "",
+      stdout: args.at(-1) === "--version" ? "codex-cli 0.144.6\n" : "",
     stderr: args.at(-1) === "--version" ? "" : "Not logged in\n",
   });
 
@@ -183,17 +212,14 @@ test("runtime readiness verifies the pinned CLI and ChatGPT login", async () => 
       calls.push({ args, environment: options.environment });
       return {
         exitCode: 0,
-        stdout: args.at(-1) === "--version" ? "codex-cli 0.144.5\n" : "",
+        stdout: args.at(-1) === "--version" ? "codex-cli 0.144.6\n" : "",
         stderr: args.at(-1) === "--version" ? "" : "Logged in using ChatGPT\n",
       };
     };
 
     assert.equal(
       await prepareRuntimeCodexHome(environment, {
-        installation: {
-          launcherPath: "C:/synthetic/codex.js",
-          sdkVersion: "0.144.5",
-        },
+        installation: SYNTHETIC_INSTALLATION,
         runner,
       }),
       runtimeHome,
@@ -203,5 +229,50 @@ test("runtime readiness verifies the pinned CLI and ChatGPT login", async () => 
     assert.equal("OPENAI_API_KEY" in (calls[0]?.environment ?? {}), false);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime model discovery uses the official sanitized subscription command", async () => {
+  const calls: Array<{ args: string[]; environment: Record<string, string> }> = [];
+  const catalog = { models: [{ slug: "gpt-synthetic" }] };
+  const runner: ProcessRunner = async (_executable, args, options) => {
+    calls.push({ args, environment: options.environment });
+    return { exitCode: 0, stdout: JSON.stringify(catalog), stderr: "" };
+  };
+  assert.deepEqual(
+    await loadRuntimeCodexModelCatalog(
+      { Path: "C:/Windows/System32", OPENAI_API_KEY: "must-not-leak" },
+      "C:/synthetic/runtime-home",
+      {
+        installation: SYNTHETIC_INSTALLATION,
+        runner,
+      },
+    ),
+    catalog,
+  );
+  assert.deepEqual(calls[0]?.args, [
+    "C:/synthetic/codex.js",
+    ...subscriptionCliArguments(["debug", "models"]),
+  ]);
+  assert.equal(calls[0]?.environment.CODEX_HOME, "C:/synthetic/runtime-home");
+  assert.equal("OPENAI_API_KEY" in (calls[0]?.environment ?? {}), false);
+});
+
+test("runtime model discovery rejects malformed and failed catalog output", async () => {
+  for (const result of [
+    { exitCode: 0, stdout: "not-json", stderr: "" },
+    { exitCode: 1, stdout: "{}", stderr: "private provider failure" },
+  ]) {
+    await assert.rejects(
+      loadRuntimeCodexModelCatalog(
+        {},
+        "C:/synthetic/runtime-home",
+        {
+          installation: SYNTHETIC_INSTALLATION,
+          runner: async () => result,
+        },
+      ),
+      (error: unknown) => error instanceof CodexCanaryError && error.code === "cli_command_failed",
+    );
   }
 });

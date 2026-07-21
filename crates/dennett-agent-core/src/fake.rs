@@ -2,8 +2,8 @@ use crate::runtime::{
     AgentRequest, AgentResponse, AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest,
     CancellationAcknowledgement, NativeExtension, OpaqueContinuation, RuntimeActivityStatus,
     RuntimeCapabilities, RuntimeDescriptor, RuntimeError, RuntimeErrorCode, RuntimeEvent,
-    RuntimeEventKind, RuntimeEventStream, RuntimeKind, RuntimeTerminal, RuntimeTerminalKind,
-    RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, RuntimeUsage,
+    RuntimeEventKind, RuntimeEventStream, RuntimeKind, RuntimeSteeringMode, RuntimeTerminal,
+    RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, RuntimeUsage,
 };
 use async_trait::async_trait;
 use dennett_kernel::DennettResult;
@@ -36,8 +36,10 @@ impl AgentRuntimePort for FakeAgentRuntime {
                 continuation: false,
                 scoped_cancellation: false,
                 deadlines: false,
+                steering: RuntimeSteeringMode::Unsupported,
                 native_extension_schemas: Vec::new(),
             },
+            controls: Vec::new(),
         })
     }
 }
@@ -132,8 +134,10 @@ impl AgentRuntimePort for ScriptedFakeAgentRuntime {
                 continuation: true,
                 scoped_cancellation: true,
                 deadlines: true,
+                steering: RuntimeSteeringMode::InterruptAndResume,
                 native_extension_schemas: Vec::new(),
             },
+            controls: Vec::new(),
         })
     }
 

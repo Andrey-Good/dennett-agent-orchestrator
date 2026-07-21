@@ -32,6 +32,12 @@ enum TurnState {
   TURN_STATE_FAILED = 6;
 }
 
+enum TurnDeliveryMode {
+  TURN_DELIVERY_MODE_UNSPECIFIED = 0;
+  TURN_DELIVERY_MODE_NEW_TURN = 1;
+  TURN_DELIVERY_MODE_STEER_NOW = 2;
+}
+
 enum TurnActivityStatus {
   TURN_ACTIVITY_STATUS_UNSPECIFIED = 0;
   TURN_ACTIVITY_STATUS_STARTED = 1;
@@ -42,6 +48,7 @@ enum TurnActivityStatus {
 
 message SessionSummary {
   string session_id = 1;
+  // Empty for a standalone session backed by the Node-owned scratch workspace.
   string project_id = 2;
   string title = 3;
   SessionState state = 4;
@@ -77,6 +84,9 @@ message TurnSnapshot {
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp completed_at = 9;
   repeated TurnActivitySnapshot activities = 10;
+  // Canonical session revision that created this turn; unlike wall time it is
+  // a total order and remains stable after restart.
+  uint64 created_revision = 11;
 }
 
 message TurnActivitySnapshot {
@@ -86,6 +96,10 @@ message TurnActivitySnapshot {
   TurnActivityStatus status = 4;
   google.protobuf.Timestamp updated_at = 5;
   repeated NativeExtensionPayload native_extensions = 6;
+  // Stable first-observed time used to preserve causal placement across updates.
+  google.protobuf.Timestamp created_at = 7;
+  // Canonical session revision that first created this activity.
+  uint64 created_revision = 8;
 }
 
 message NativeExtensionPayload {
@@ -160,6 +174,7 @@ message SessionWatchFrame {
 
 message CreateSessionRequest {
   dennett.common.v1.CommandMetadata command = 1;
+  // Empty creates a standalone session.
   string project_id = 2;
   string title = 3;
 }
@@ -183,6 +198,16 @@ message SendTurnRequest {
   string session_id = 3;
   string text = 4;
   repeated ContextAttachment attachments = 5;
+  repeated RuntimeControlSelection runtime_controls = 6;
+  // Unspecified is treated as NEW_TURN for backward compatibility.
+  TurnDeliveryMode delivery_mode = 7;
+  // Required for STEER_NOW so a stale client cannot steer a newer active turn.
+  string expected_active_turn_id = 8;
+}
+
+message RuntimeControlSelection {
+  string control_id = 1;
+  string choice_id = 2;
 }
 
 message SendTurnAccepted {

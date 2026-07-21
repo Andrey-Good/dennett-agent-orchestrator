@@ -1,5 +1,12 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { parseSystemSnapshot, type Revision, type SystemSnapshot, type UiSafeError, type WatchCursor } from "./systemBridge";
+import {
+  parseSystemSnapshot,
+  type Revision,
+  type RuntimeControlSelection,
+  type SystemSnapshot,
+  type UiSafeError,
+  type WatchCursor,
+} from "./systemBridge";
 
 export interface SessionSummary {
   sessionId: string;
@@ -26,6 +33,7 @@ export interface ProjectTurn {
   text: string;
   activities: TurnActivity[];
   outcome: TurnOutcome | null;
+  createdRevision?: Revision | null;
   createdAtUnixMs: number | null;
   completedAtUnixMs: number | null;
 }
@@ -35,6 +43,8 @@ export interface TurnActivity {
   phase: string;
   message: string | null;
   status: string;
+  createdRevision?: Revision | null;
+  createdAtUnixMs: number | null;
   updatedAtUnixMs: number | null;
   nativeExtensions: NativeExtension[];
 }
@@ -57,6 +67,10 @@ export interface ComposerDraft {
   revision: Revision;
   updatedAtUnixMs: number | null;
 }
+
+export type ComposerDraftWriteState =
+  | "composer_draft_write_state_saved"
+  | "composer_draft_write_state_already_accepted";
 
 export type SessionMutation =
   | { kind: "upsertTurn"; turn: ProjectTurn }
@@ -137,7 +151,7 @@ export class TauriProjectChatClient {
     };
   }
 
-  async createChat(projectId: string, title = "Untitled chat"): Promise<{ sessionId: string }> {
+  async createChat(projectId: string | null, title = "Untitled chat"): Promise<{ sessionId: string }> {
     const result = record(await this.dependencies.invoke("create_chat", {
       request: {
         correlationId: this.dependencies.identity(),
@@ -150,11 +164,14 @@ export class TauriProjectChatClient {
   }
 
   async sendTurn(request: {
-    projectId: string;
+    projectId: string | null;
     sessionId: string;
     revision: Revision;
     text: string;
+    runtimeControls?: RuntimeControlSelection[];
     commandId?: string;
+    deliveryMode?: "new_turn" | "steer_now";
+    activeTurnId?: string | null;
   }): Promise<{ commandId: string; turnId: string }> {
     const commandId = request.commandId ?? this.dependencies.identity();
     const result = record(await this.dependencies.invoke("send_project_turn", {
@@ -165,6 +182,9 @@ export class TauriProjectChatClient {
         sessionId: request.sessionId,
         expectedRevision: request.revision,
         text: request.text,
+        runtimeControls: request.runtimeControls ?? [],
+        deliveryMode: request.deliveryMode ?? "new_turn",
+        expectedActiveTurnId: request.activeTurnId ?? null,
       },
     }), "send_project_turn response");
     return {
@@ -173,7 +193,7 @@ export class TauriProjectChatClient {
     };
   }
 
-  async cancelTurn(request: { projectId: string; sessionId: string; turnId: string }): Promise<void> {
+  async cancelTurn(request: { projectId: string | null; sessionId: string; turnId: string }): Promise<void> {
     await this.dependencies.invoke("cancel_project_turn", {
       request: {
         correlationId: this.dependencies.identity(),
@@ -186,12 +206,12 @@ export class TauriProjectChatClient {
   }
 
   async saveDraft(request: {
-    projectId: string;
+    projectId: string | null;
     sessionId: string;
     commandId: string;
     text: string;
     revision: number;
-  }): Promise<{ commandId: string; state: string }> {
+  }): Promise<{ commandId: string; state: ComposerDraftWriteState }> {
     const result = record(await this.dependencies.invoke("save_composer_draft", {
       request: {
         correlationId: this.dependencies.identity(),
@@ -204,14 +224,16 @@ export class TauriProjectChatClient {
         updatedAtUnixMs: Date.now(),
       },
     }), "save_composer_draft response");
-    return {
-      commandId: text(result.commandId, "commandId"),
-      state: text(result.state, "state"),
-    };
+    const state = text(result.state, "state");
+    if (
+      state !== "composer_draft_write_state_saved"
+      && state !== "composer_draft_write_state_already_accepted"
+    ) throw new Error("Invalid save_composer_draft state");
+    return { commandId: text(result.commandId, "commandId"), state };
   }
 
   async discardDraft(request: {
-    projectId: string;
+    projectId: string | null;
     sessionId: string;
     commandId: string;
   }): Promise<boolean> {
@@ -235,17 +257,24 @@ export function applyProjectChatEvent(
 ): ProjectChatState {
   if (event.kind === "snapshot") return structuredClone(event.snapshot);
   if (event.kind !== "delta") return current;
-  if (
-    event.baseRevision !== current.session.revision
-    || BigInt(event.newRevision) !== BigInt(event.baseRevision) + 1n
-  ) throw new Error("Session revision gap");
+  const currentRevision = BigInt(current.session.revision);
+  const baseRevision = BigInt(event.baseRevision);
+  const newRevision = BigInt(event.newRevision);
+  if (newRevision !== baseRevision + 1n) throw new Error("Session revision gap");
+  if (newRevision <= currentRevision) return current;
+  if (baseRevision !== currentRevision) throw new Error("Session revision gap");
   const next = structuredClone(current);
   for (const mutation of event.mutations) {
     switch (mutation.kind) {
       case "upsertTurn": {
         const index = next.turns.findIndex((turn) => turn.turnId === mutation.turn.turnId);
         if (index === -1) next.turns.push(structuredClone(mutation.turn));
-        else next.turns[index] = structuredClone(mutation.turn);
+        else {
+          if (isTerminalTurnState(next.turns[index].state)) {
+            throw new Error("Terminal turn is immutable");
+          }
+          next.turns[index] = structuredClone(mutation.turn);
+        }
         break;
       }
       case "appendTurnText": {
@@ -318,12 +347,17 @@ function parseDraft(value: unknown): ComposerDraft {
 
 function parseActivity(value: unknown): TurnActivity {
   const valueRecord = record(value, "turn activity");
+  const updatedAtUnixMs = optionalInteger(valueRecord.updatedAtUnixMs, "updatedAtUnixMs");
   return {
     activityId: text(valueRecord.activityId, "activityId"),
     phase: text(valueRecord.phase, "phase"),
     message: optionalText(valueRecord.message, "message"),
     status: text(valueRecord.status, "status"),
-    updatedAtUnixMs: optionalInteger(valueRecord.updatedAtUnixMs, "updatedAtUnixMs"),
+    createdRevision: optionalRevision(valueRecord.createdRevision, "createdRevision"),
+    createdAtUnixMs: valueRecord.createdAtUnixMs == null
+      ? updatedAtUnixMs
+      : optionalInteger(valueRecord.createdAtUnixMs, "createdAtUnixMs"),
+    updatedAtUnixMs,
     nativeExtensions: array(
       valueRecord.nativeExtensions ?? [],
       "nativeExtensions",
@@ -421,6 +455,7 @@ function parseTurn(value: unknown): ProjectTurn {
     text: text(valueRecord.text, "text", true),
     activities: array(valueRecord.activities, "activities").map(parseActivity),
     outcome: valueRecord.outcome === null ? null : parseOutcome(valueRecord.outcome),
+    createdRevision: optionalRevision(valueRecord.createdRevision, "createdRevision"),
     createdAtUnixMs: optionalInteger(valueRecord.createdAtUnixMs, "createdAtUnixMs"),
     completedAtUnixMs: optionalInteger(valueRecord.completedAtUnixMs, "completedAtUnixMs"),
   };
@@ -513,6 +548,10 @@ function revision(value: unknown, label: string): Revision {
   const parsed = text(value, label);
   if (!/^(0|[1-9]\d*)$/.test(parsed)) throw new Error(`Invalid ${label}`);
   return parsed;
+}
+
+function optionalRevision(value: unknown, label: string): Revision | null {
+  return value == null ? null : revision(value, label);
 }
 
 function optionalInteger(value: unknown, label: string): number | null {

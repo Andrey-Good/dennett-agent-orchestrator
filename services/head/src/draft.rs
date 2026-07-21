@@ -61,7 +61,7 @@ impl ComposerDraftApplication {
 
     pub async fn load(
         &self,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         session_id: SessionId,
     ) -> Result<Option<DraftRecord>, DraftApplicationError> {
         let _guard = self.locks.acquire(session_id).await;
@@ -111,7 +111,7 @@ impl ComposerDraftApplication {
 
     pub async fn discard(
         &self,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         session_id: SessionId,
         command_id: CommandId,
     ) -> Result<bool, DraftApplicationError> {
@@ -140,7 +140,7 @@ impl ComposerDraftApplication {
 
     async fn require_session(
         &self,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         session_id: SessionId,
     ) -> Result<(), DraftApplicationError> {
         let snapshot = self.sessions.restore(session_id).await?;
@@ -182,7 +182,7 @@ mod tests {
         );
         let project_id = ProjectId::new();
         let created = sessions
-            .create_session(CommandId::new(), project_id, "Draft".to_owned(), 1)
+            .create_session(CommandId::new(), Some(project_id), "Draft".to_owned(), 1)
             .await
             .expect("create session");
         let session_id = created.snapshot.session.session_id;
@@ -199,7 +199,7 @@ mod tests {
         let (application, sessions, project_id, session_id) = application().await;
         let command_id = CommandId::new();
         let draft = DraftRecord {
-            project_id,
+            project_id: Some(project_id),
             session_id,
             command_id,
             text: "send once".to_owned(),
@@ -213,7 +213,7 @@ mod tests {
         sessions
             .accept_turn(
                 command_id,
-                project_id,
+                Some(project_id),
                 session_id,
                 draft.text.clone(),
                 Some(1),
@@ -227,7 +227,7 @@ mod tests {
         );
         assert_eq!(
             application
-                .load(project_id, session_id)
+                .load(Some(project_id), session_id)
                 .await
                 .expect("load"),
             None

@@ -9,8 +9,9 @@ use crate::protocol::dennett::control::v1::{
     BootstrapRequest, BootstrapSnapshot, CancelTurnRequest, ClientHello, CompatibilityMode,
     ComposerDraft, ComposerDraftDiscarded, ComposerDraftWriteReceipt, ContextAttachment,
     CreateSessionAccepted, CreateSessionRequest, DiscardComposerDraftRequest,
-    GetComposerDraftRequest, HandshakeRequest, SaveComposerDraftRequest, SendTurnAccepted,
-    SendTurnRequest, WatchRequest, WatchResponse, WatchSessionRequest, WatchSessionResponse,
+    GetComposerDraftRequest, HandshakeRequest, RuntimeControlSelection, SaveComposerDraftRequest,
+    SendTurnAccepted, SendTurnRequest, TurnDeliveryMode, WatchRequest, WatchResponse,
+    WatchSessionRequest, WatchSessionResponse,
 };
 use crate::protocol::dennett::control::v1::{
     cancel_turn_response, create_session_response, discard_composer_draft_response,
@@ -35,6 +36,18 @@ pub struct ClientConfig {
     pub component_version: String,
     pub requested_features: Vec<String>,
     pub rpc_deadline: Duration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientSendTurnRequest {
+    pub command: ClientCommand,
+    pub project_id: String,
+    pub session_id: String,
+    pub text: String,
+    pub attachments: Vec<(String, String, String)>,
+    pub runtime_controls: Vec<(String, String)>,
+    pub delivery_mode: TurnDeliveryMode,
+    pub expected_active_turn_id: Option<String>,
 }
 
 impl ClientConfig {
@@ -208,12 +221,18 @@ impl AuthenticatedSystemClient {
 
     pub async fn send_turn(
         &mut self,
-        command: ClientCommand,
-        project_id: String,
-        session_id: String,
-        text: String,
-        attachments: Vec<(String, String, String)>,
+        request: ClientSendTurnRequest,
     ) -> Result<SendTurnAccepted, ClientError> {
+        let ClientSendTurnRequest {
+            command,
+            project_id,
+            session_id,
+            text,
+            attachments,
+            runtime_controls,
+            delivery_mode,
+            expected_active_turn_id,
+        } = request;
         let expected_command_id = command.command_id.clone();
         let expected_correlation_id = command.correlation_id.clone();
         let response = tokio::time::timeout(
@@ -230,6 +249,15 @@ impl AuthenticatedSystemClient {
                         label,
                     })
                     .collect(),
+                runtime_controls: runtime_controls
+                    .into_iter()
+                    .map(|(control_id, choice_id)| RuntimeControlSelection {
+                        control_id,
+                        choice_id,
+                    })
+                    .collect(),
+                delivery_mode: delivery_mode as i32,
+                expected_active_turn_id: expected_active_turn_id.unwrap_or_default(),
             }),
         )
         .await

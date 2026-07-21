@@ -18,6 +18,9 @@ export interface ChatActivity {
   phase: string;
   message: string | null;
   status: string;
+  createdRevision?: string | null;
+  createdAtUnixMs?: number | null;
+  updatedAtUnixMs?: number | null;
 }
 
 export interface ChatMessage {
@@ -31,6 +34,8 @@ export interface ChatMessage {
   completedAtUnixMs?: number | null;
   active?: boolean;
   terminalState?: string | null;
+  showActivitySummary?: boolean;
+  deliveryError?: string;
 }
 
 export interface ProjectChatSnapshot {

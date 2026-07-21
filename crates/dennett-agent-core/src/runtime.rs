@@ -9,6 +9,8 @@ use std::{
 
 const MAX_NATIVE_EXTENSIONS_PER_EVENT: usize = 16;
 const MAX_NATIVE_EXTENSION_PAYLOAD_BYTES: usize = 64 * 1024;
+const MAX_RUNTIME_CONTROLS: usize = 32;
+const MAX_RUNTIME_CONTROL_VALUE_BYTES: usize = 128;
 
 #[derive(Clone, Debug)]
 pub struct AgentRequest {
@@ -92,7 +94,51 @@ pub struct RuntimeCapabilities {
     pub continuation: bool,
     pub scoped_cancellation: bool,
     pub deadlines: bool,
+    /// Describes how an in-flight user clarification can be applied. The
+    /// controlled path cancels the current provider turn, then resumes its
+    /// opaque continuation with the clarification as a new canonical turn.
+    pub steering: RuntimeSteeringMode,
     pub native_extension_schemas: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeSteeringMode {
+    Unsupported,
+    Native,
+    InterruptAndResume,
+}
+
+impl RuntimeSteeringMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unsupported => "unsupported",
+            Self::Native => "native",
+            Self::InterruptAndResume => "interrupt_and_resume",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeControlCondition {
+    pub control_id: String,
+    pub choice_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeControlChoice {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub available_when: Vec<RuntimeControlCondition>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeControlDescriptor {
+    pub id: String,
+    pub label: String,
+    pub default_choice_id: String,
+    pub choices: Vec<RuntimeControlChoice>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,12 +146,19 @@ pub struct RuntimeDescriptor {
     pub adapter_id: String,
     pub runtime_kind: RuntimeKind,
     pub capabilities: RuntimeCapabilities,
+    pub controls: Vec<RuntimeControlDescriptor>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeKind {
     NativeAgent,
     GenericLoop,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeControlSelection {
+    pub control_id: String,
+    pub choice_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,6 +187,7 @@ pub struct RuntimeTurnRequest {
     pub prompt: String,
     pub workspace_path: String,
     pub context_handles: Vec<String>,
+    pub runtime_controls: Vec<RuntimeControlSelection>,
     pub continuation: Option<OpaqueContinuation>,
     pub deadline: RuntimeDeadline,
 }
@@ -146,6 +200,20 @@ impl RuntimeTurnRequest {
             || self.workspace_path.trim().is_empty()
         {
             return Err(RuntimeError::new(RuntimeErrorCode::InvalidRequest));
+        }
+        if self.runtime_controls.len() > MAX_RUNTIME_CONTROLS {
+            return Err(RuntimeError::new(RuntimeErrorCode::InvalidRequest));
+        }
+        let mut control_ids = HashSet::new();
+        for selection in &self.runtime_controls {
+            if selection.control_id.trim().is_empty()
+                || selection.choice_id.trim().is_empty()
+                || selection.control_id.len() > MAX_RUNTIME_CONTROL_VALUE_BYTES
+                || selection.choice_id.len() > MAX_RUNTIME_CONTROL_VALUE_BYTES
+                || !control_ids.insert(selection.control_id.as_str())
+            {
+                return Err(RuntimeError::new(RuntimeErrorCode::InvalidRequest));
+            }
         }
         Ok(())
     }
@@ -335,6 +403,35 @@ impl std::error::Error for RuntimeError {}
 pub struct CancelRuntimeTurnRequest {
     pub session_id: String,
     pub turn_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SteerRuntimeTurnRequest {
+    pub session_id: String,
+    pub turn_id: String,
+    /// Stable provider-facing identity used to make a retried steer idempotent.
+    pub message_id: String,
+    pub text: String,
+}
+
+impl SteerRuntimeTurnRequest {
+    pub fn validate(&self) -> Result<(), RuntimeError> {
+        if self.session_id.trim().is_empty()
+            || self.turn_id.trim().is_empty()
+            || self.message_id.trim().is_empty()
+            || self.text.trim().is_empty()
+        {
+            return Err(RuntimeError::new(RuntimeErrorCode::InvalidRequest));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SteeringAcknowledgement {
+    pub session_id: String,
+    pub turn_id: String,
+    pub message_id: String,
 }
 
 impl CancelRuntimeTurnRequest {
@@ -679,8 +776,10 @@ pub trait AgentRuntimePort: Send + Sync {
                 continuation: false,
                 scoped_cancellation: false,
                 deadlines: false,
+                steering: RuntimeSteeringMode::Unsupported,
                 native_extension_schemas: Vec::new(),
             },
+            controls: Vec::new(),
         })
     }
 
@@ -740,6 +839,14 @@ pub trait AgentRuntimePort: Send + Sync {
         &self,
         request: CancelRuntimeTurnRequest,
     ) -> Result<CancellationAcknowledgement, RuntimeError> {
+        request.validate()?;
+        Err(RuntimeError::new(RuntimeErrorCode::Unsupported))
+    }
+
+    async fn steer_turn(
+        &self,
+        request: SteerRuntimeTurnRequest,
+    ) -> Result<SteeringAcknowledgement, RuntimeError> {
         request.validate()?;
         Err(RuntimeError::new(RuntimeErrorCode::Unsupported))
     }

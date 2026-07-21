@@ -58,6 +58,13 @@ Use this priority order when trade-offs are unavoidable:
 
 Code, tests and project artifacts must remain understandable without access to the model transcript or hidden reasoning.
 
+Apply DRY, KISS and YAGNI as review constraints, not as excuses to weaken behavior or create a dead end:
+
+- design public contracts, ownership boundaries and ports for the planned product evolution (including replaceable providers, additional capabilities and multi-device operation), then choose the simplest internal implementation that satisfies those contracts and their failure modes;
+- remove duplication when it repeats authoritative knowledge or is already causing divergent behavior; do not introduce an abstraction merely because two snippets look similar;
+- preserve documented replacement seams and typed capability discovery now, but do not pre-implement speculative provider behavior, generic frameworks or fallback machinery without a current contract or demonstrated need;
+- every added layer, state machine or abstraction must protect a named invariant, recovery path, test seam or confirmed provider boundary. If it does not, simplify or remove it.
+
 If required product or architecture semantics are missing, ambiguous or contradictory, do not silently invent a permanent rule in code. Capture the assumption or decision in the Work Package, a decision request, specification, ADR or acceptance test. Stop for owner input when the choice changes product behavior, privacy, authority, external cost, recoverability or another difficult-to-reverse boundary.
 
 Prefer mature capabilities already provided by the selected runtime, SDK, framework or platform. Add translation, normalization, safety enforcement and stable project-level ports around them; implement custom lifecycle, session, tool, approval or discovery machinery only when the existing capability cannot satisfy the documented contract, reliability, portability or replacement requirements.
@@ -66,7 +73,7 @@ Prefer mature capabilities already provided by the selected runtime, SDK, framew
 
 Until the owner explicitly changes this constraint:
 
-- Codex SDK is the only permitted real agent runtime integration;
+- the official Codex runtime bundled with the pinned Codex SDK dependency is the only permitted real agent runtime integration; use the high-level TypeScript SDK for simple sequential runs and the bundled Codex App Server when a documented product contract needs richer native behavior such as in-flight steer;
 - deterministic fake/in-memory runtimes remain required for tests and credential-free development;
 - Codex SDK and provider-specific types stay inside adapter or adapter-host roots; domain and application code depend on `AgentRuntimePort` and other provider-neutral ports;
 - implement Codex-first, not Codex-only: preserve descriptors, capability probes, session mapping, typed `native_extensions` and conformance boundaries so later providers and local models can be added without rewriting core behavior;
@@ -141,10 +148,14 @@ A PC configured as a full Head uses the same canonical Memory Fabric and server-
 
 Before editing:
 
+- write a compact behavior contract for every non-trivial change: user-visible outcome, explicit non-goals, authoritative state owner, lifecycle/state transitions, failure and recovery behavior, and acceptance scenarios; keep it in the Work Package, test names or a nearby design note rather than creating a document when those existing artifacts are sufficient;
+- for an external SDK, runtime, OS or framework capability, verify the installed version and exercise the smallest disposable technical spike before designing a fallback or changing production architecture; do not infer that a lower-level official capability is absent only because a high-level wrapper does not expose it;
 - identify owner and invariant;
 - identify permission/effect implications;
 - identify protocol/schema/migration impact;
 - identify tests required.
+
+Implement the smallest end-to-end slice that proves the contract, run its focused tests, and only then widen the change. If the spike contradicts the intended design, revise the contract before expanding code. This is a quality gate, not a requirement for duplicate prose, approvals or ceremony.
 
 After editing:
 

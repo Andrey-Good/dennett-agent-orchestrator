@@ -49,7 +49,33 @@ export interface RuntimeSummary {
   continuation: boolean;
   scopedCancellation: boolean;
   deadlines: boolean;
+  steering: "unsupported" | "native" | "interrupt_and_resume";
   nativeExtensionSchemas: string[];
+  controls: RuntimeControlDescriptor[];
+}
+
+export interface RuntimeControlCondition {
+  controlId: string;
+  choiceIds: string[];
+}
+
+export interface RuntimeControlChoice {
+  id: string;
+  label: string;
+  description: string | null;
+  availableWhen: RuntimeControlCondition[];
+}
+
+export interface RuntimeControlDescriptor {
+  id: string;
+  label: string;
+  defaultChoiceId: string;
+  choices: RuntimeControlChoice[];
+}
+
+export interface RuntimeControlSelection {
+  controlId: string;
+  choiceId: string;
 }
 
 export interface WatchCursor {
@@ -273,10 +299,51 @@ function parseRuntime(value: unknown): RuntimeSummary {
     continuation: flag(record.continuation, "runtime.continuation"),
     scopedCancellation: flag(record.scopedCancellation, "runtime.scopedCancellation"),
     deadlines: flag(record.deadlines, "runtime.deadlines"),
+    steering: steeringMode(record.steering),
     nativeExtensionSchemas: array(
       record.nativeExtensionSchemas ?? [],
       "runtime.nativeExtensionSchemas",
     ).map((schema) => text(schema, "runtime.nativeExtensionSchemas[]")),
+    controls: array(record.controls ?? [], "runtime.controls").map(parseRuntimeControl),
+  };
+}
+
+function steeringMode(value: unknown): RuntimeSummary["steering"] {
+  if (value === "unsupported" || value === "native" || value === "interrupt_and_resume") {
+    return value;
+  }
+  throw new Error("Invalid runtime.steering");
+}
+
+function parseRuntimeControl(value: unknown): RuntimeControlDescriptor {
+  const control = object(value, "runtime.control");
+  return {
+    id: text(control.id, "runtime.control.id"),
+    label: text(control.label, "runtime.control.label"),
+    defaultChoiceId: text(control.defaultChoiceId, "runtime.control.defaultChoiceId"),
+    choices: array(control.choices, "runtime.control.choices").map((rawChoice) => {
+      const choice = object(rawChoice, "runtime.control.choice");
+      return {
+        id: text(choice.id, "runtime.control.choice.id"),
+        label: text(choice.label, "runtime.control.choice.label"),
+        description: choice.description == null
+          ? null
+          : text(choice.description, "runtime.control.choice.description"),
+        availableWhen: array(
+          choice.availableWhen ?? [],
+          "runtime.control.choice.availableWhen",
+        ).map((rawCondition) => {
+          const condition = object(rawCondition, "runtime.control.condition");
+          return {
+            controlId: text(condition.controlId, "runtime.control.condition.controlId"),
+            choiceIds: array(
+              condition.choiceIds,
+              "runtime.control.condition.choiceIds",
+            ).map((choiceId) => text(choiceId, "runtime.control.condition.choiceIds[]")),
+          };
+        }),
+      };
+    }),
   };
 }
 

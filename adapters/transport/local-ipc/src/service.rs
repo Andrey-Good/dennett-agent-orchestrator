@@ -18,9 +18,11 @@ use crate::protocol::dennett::control::v1::system_watch_frame;
 use crate::protocol::dennett::control::v1::{
     BootstrapRequest, BootstrapResponse, BootstrapSnapshot, GetHealthRequest, GetHealthResponse,
     GetHealthResult, HandshakeRequest, HandshakeResponse, HealthState, ProjectState,
-    ProjectSummary as WireProjectSummary, RuntimeSummary as WireRuntimeSummary, SessionState,
-    SessionSummary as WireSessionSummary, SystemDelta as WireSystemDelta, SystemHealthUpdate,
-    SystemMutation as WireSystemMutation, SystemSelectionUpdate,
+    ProjectSummary as WireProjectSummary, RuntimeControlChoice as WireRuntimeControlChoice,
+    RuntimeControlCondition as WireRuntimeControlCondition,
+    RuntimeControlDescriptor as WireRuntimeControlDescriptor, RuntimeSummary as WireRuntimeSummary,
+    SessionState, SessionSummary as WireSessionSummary, SystemDelta as WireSystemDelta,
+    SystemHealthUpdate, SystemMutation as WireSystemMutation, SystemSelectionUpdate,
     SystemSnapshot as WireSystemSnapshot, SystemWatchFrame, WatchRequest, WatchResponse,
 };
 use crate::protocol::dennett::control::v1::{
@@ -32,8 +34,8 @@ use crate::protocol::dennett::control::v1::{
     SaveComposerDraftRequest, SaveComposerDraftResponse, SendTurnAccepted, SendTurnRequest,
     SendTurnResponse, SessionDelta, SessionMetadataUpdate, SessionMutation, SessionSnapshot,
     SessionWatchFrame, TurnActivitySnapshot, TurnActivityStatus as WireTurnActivityStatus,
-    TurnActivityUpsert, TurnRole, TurnSnapshot, TurnState, TurnTerminal, TurnTextAppend,
-    WatchSessionRequest, WatchSessionResponse,
+    TurnActivityUpsert, TurnDeliveryMode as WireTurnDeliveryMode, TurnRole, TurnSnapshot,
+    TurnState, TurnTerminal, TurnTextAppend, WatchSessionRequest, WatchSessionResponse,
 };
 use crate::protocol::dennett::control::v1::{
     cancel_turn_response, create_session_response, discard_composer_draft_response,
@@ -45,10 +47,11 @@ use crate::protocol::dennett::sync::v1::{
     WatchHeartbeat,
 };
 use crate::{LocalEndpoint, PeerIdentity, SessionRegistry, TransportError};
-use dennett_agent_core::{RuntimeDescriptor, RuntimeKind};
+use dennett_agent_core::{RuntimeControlSelection, RuntimeDescriptor, RuntimeKind};
 use dennett_contracts::{CommandId, ProjectId, SessionId, TurnId};
 use dennett_head::conversation::{
     ConversationApplication, ConversationError, ConversationTurnRequest, TraceContext,
+    TurnDeliveryMode,
 };
 use dennett_head::draft::{ComposerDraftApplication, DraftApplicationError, DraftSaveOutcome};
 use dennett_head::system::{
@@ -189,6 +192,9 @@ impl<S: SystemStatePort + 'static> SystemService for SystemServiceAdapter<S> {
                             yield Ok(error_watch_response(auth_error(error)));
                             return;
                         }
+                        if let Some(heartbeat) = subscription.heartbeat() {
+                            yield Ok(watch_to_wire(heartbeat));
+                        }
                     }
                     received = subscription.recv() => {
                         match received {
@@ -310,7 +316,7 @@ impl SessionService for SessionServiceAdapter {
         }) {
             Ok(command) => {
                 let body = request.into_inner();
-                match parse_project_id(&body.project_id).and_then(|project_id| {
+                match parse_optional_project_id(&body.project_id).and_then(|project_id| {
                     if body.title.trim().is_empty() {
                         Err(ServiceError::InvalidRequest)
                     } else {
@@ -323,7 +329,7 @@ impl SessionService for SessionServiceAdapter {
                             let intent_hash = command_intent_hash(
                                 "create_session",
                                 command.expected_revision,
-                                &[project_id.0.to_string().as_str(), title.as_str()],
+                                &[body.project_id.as_str(), title.as_str()],
                             );
                             match self
                                 .accept(&command, command_id, "create_session", intent_hash)
@@ -429,15 +435,21 @@ impl SessionService for SessionServiceAdapter {
         span.record("dennett.command.id", command.command_id.as_str());
         span.record("dennett.project.id", body.project_id.as_str());
         span.record("dennett.session.id", body.session_id.as_str());
-        let parsed = parse_project_id(&body.project_id).and_then(|project_id| {
+        let parsed = parse_optional_project_id(&body.project_id).and_then(|project_id| {
+            let expected_active_turn_id = if body.expected_active_turn_id.trim().is_empty() {
+                None
+            } else {
+                Some(TurnId(parse_uuid(&body.expected_active_turn_id)?))
+            };
             Ok((
                 project_id,
                 SessionId(parse_uuid(&body.session_id)?),
                 CommandId(parse_uuid(&command.command_id)?),
+                expected_active_turn_id,
             ))
         });
         let outcome = match parsed {
-            Ok((project_id, session_id, command_id)) => {
+            Ok((project_id, session_id, command_id, expected_active_turn_id)) => {
                 let intent_hash = match send_turn_intent_hash(&body, command.expected_revision) {
                     Ok(intent_hash) => intent_hash,
                     Err(error) => {
@@ -471,6 +483,25 @@ impl SessionService for SessionServiceAdapter {
                         }));
                     }
                 };
+                let runtime_controls = match parse_runtime_controls(&body) {
+                    Ok(runtime_controls) => runtime_controls,
+                    Err(error) => {
+                        return Ok(Response::new(SendTurnResponse {
+                            outcome: Some(send_turn_response::Outcome::Error(service_error(
+                                error,
+                                &correlation,
+                            ))),
+                        }));
+                    }
+                };
+                let delivery_mode = match WireTurnDeliveryMode::try_from(body.delivery_mode)
+                    .unwrap_or(WireTurnDeliveryMode::Unspecified)
+                {
+                    WireTurnDeliveryMode::Unspecified | WireTurnDeliveryMode::NewTurn => {
+                        TurnDeliveryMode::NewTurn
+                    }
+                    WireTurnDeliveryMode::SteerNow => TurnDeliveryMode::SteerNow,
+                };
                 let trace = TraceContext {
                     installation_id: self.sessions.policy().installation_id.clone(),
                     device_id: authenticated.device_id,
@@ -491,6 +522,9 @@ impl SessionService for SessionServiceAdapter {
                             expected_revision: command.expected_revision,
                             text: body.text,
                             context_handles: handles,
+                            runtime_controls,
+                            delivery_mode,
+                            expected_active_turn_id,
                         })
                         .await
                     {
@@ -539,7 +573,7 @@ impl SessionService for SessionServiceAdapter {
         let outcome = match self.authenticate(&request, &command.client_session_id) {
             Ok(authenticated) if command.authority_epoch_seen == authenticated.authority_epoch => {
                 let body = request.into_inner();
-                let parsed = parse_project_id(&body.project_id).and_then(|project_id| {
+                let parsed = parse_optional_project_id(&body.project_id).and_then(|project_id| {
                     Ok((
                         project_id,
                         SessionId(parse_uuid(&body.session_id)?),
@@ -548,9 +582,7 @@ impl SessionService for SessionServiceAdapter {
                     ))
                 });
                 match parsed {
-                    Ok((project_id, session_id, turn_id, command_id))
-                        if project_id == self.application.project().project_id =>
-                    {
+                    Ok((project_id, session_id, turn_id, command_id)) => {
                         let intent_hash = command_intent_hash(
                             "cancel_turn",
                             command.expected_revision,
@@ -565,7 +597,11 @@ impl SessionService for SessionServiceAdapter {
                             .await
                         {
                             Ok(accepted) => {
-                                match self.application.cancel_turn(session_id, turn_id).await {
+                                match self
+                                    .application
+                                    .cancel_turn(project_id, session_id, turn_id)
+                                    .await
+                                {
                                     Ok(_) => cancel_turn_response::Outcome::Accepted(accepted),
                                     Err(error) => cancel_turn_response::Outcome::Error(
                                         conversation_error(error, &correlation),
@@ -578,10 +614,6 @@ impl SessionService for SessionServiceAdapter {
                             )),
                         }
                     }
-                    Ok(_) => cancel_turn_response::Outcome::Error(service_error(
-                        ServiceError::ScopeMismatch,
-                        &correlation,
-                    )),
                     Err(error) => {
                         cancel_turn_response::Outcome::Error(service_error(error, &correlation))
                     }
@@ -604,7 +636,7 @@ impl SessionService for SessionServiceAdapter {
         let outcome = match self.authenticate(&request, &request.get_ref().client_session_id) {
             Ok(_) => {
                 let body = request.into_inner();
-                let parsed = parse_project_id(&body.project_id).and_then(|project_id| {
+                let parsed = parse_optional_project_id(&body.project_id).and_then(|project_id| {
                     Ok((project_id, SessionId(parse_uuid(&body.session_id)?)))
                 });
                 match parsed {
@@ -664,7 +696,7 @@ impl SessionService for SessionServiceAdapter {
                     .ok_or(ServiceError::InvalidRequest)
                     .and_then(|draft| {
                         Ok(DraftRecord {
-                            project_id: parse_project_id(&draft.project_id)?,
+                            project_id: parse_optional_project_id(&draft.project_id)?,
                             session_id: SessionId(parse_uuid(&draft.session_id)?),
                             command_id: CommandId(parse_uuid(&draft.command_id)?),
                             text: draft.text,
@@ -736,7 +768,7 @@ impl SessionService for SessionServiceAdapter {
         let outcome = match self.authenticate(&request, &command.client_session_id) {
             Ok(authenticated) if command.authority_epoch_seen == authenticated.authority_epoch => {
                 let body = request.into_inner();
-                let parsed = parse_project_id(&body.project_id).and_then(|project_id| {
+                let parsed = parse_optional_project_id(&body.project_id).and_then(|project_id| {
                     Ok((
                         project_id,
                         SessionId(parse_uuid(&body.session_id)?),
@@ -818,6 +850,7 @@ impl SessionService for SessionServiceAdapter {
                 }
             };
             let mut commands = HashMap::new();
+            let mut activity_created = HashMap::new();
             let Some(initial) = subscription.take_initial() else {
                 yield Ok(session_error_response(internal_error("session_watch_missing_snapshot", "session.watch_missing_snapshot")));
                 return;
@@ -825,9 +858,18 @@ impl SessionService for SessionServiceAdapter {
             if let WatchFrame::Snapshot { value, .. } = &initial {
                 for turn in &value.turns {
                     commands.insert(turn.turn_id, turn.command_id);
+                    for activity in &turn.activities {
+                        activity_created.insert(
+                            (turn.turn_id, activity.activity_id.clone()),
+                            (
+                                activity.created_at_unix_ms,
+                                activity.created_revision,
+                            ),
+                        );
+                    }
                 }
             }
-            yield Ok(session_watch_to_wire(initial, &mut commands));
+            yield Ok(session_watch_to_wire(initial, &mut commands, &mut activity_created));
             let mut lease = tokio::time::interval(lease_interval);
             lease.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             lease.tick().await;
@@ -838,10 +880,13 @@ impl SessionService for SessionServiceAdapter {
                             yield Ok(session_error_response(auth_error(error)));
                             return;
                         }
+                        if let Some(heartbeat) = subscription.heartbeat() {
+                            yield Ok(session_watch_to_wire(heartbeat, &mut commands, &mut activity_created));
+                        }
                     }
                     received = subscription.recv() => {
                         match received {
-                            Ok(Some(frame)) => yield Ok(session_watch_to_wire(frame, &mut commands)),
+                            Ok(Some(frame)) => yield Ok(session_watch_to_wire(frame, &mut commands, &mut activity_created)),
                             Ok(None) => return,
                             Err(error) => {
                                 yield Ok(session_error_response(conversation_error(error.into(), "")));
@@ -971,7 +1016,34 @@ fn runtime_to_wire(runtime: &RuntimeDescriptor) -> WireRuntimeSummary {
         continuation: runtime.capabilities.continuation,
         scoped_cancellation: runtime.capabilities.scoped_cancellation,
         deadlines: runtime.capabilities.deadlines,
+        steering: runtime.capabilities.steering.as_str().to_owned(),
         native_extension_schemas: runtime.capabilities.native_extension_schemas.clone(),
+        controls: runtime
+            .controls
+            .iter()
+            .map(|control| WireRuntimeControlDescriptor {
+                id: control.id.clone(),
+                label: control.label.clone(),
+                default_choice_id: control.default_choice_id.clone(),
+                choices: control
+                    .choices
+                    .iter()
+                    .map(|choice| WireRuntimeControlChoice {
+                        id: choice.id.clone(),
+                        label: choice.label.clone(),
+                        description: choice.description.clone(),
+                        available_when: choice
+                            .available_when
+                            .iter()
+                            .map(|condition| WireRuntimeControlCondition {
+                                control_id: condition.control_id.clone(),
+                                choice_ids: condition.choice_ids.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
@@ -1071,7 +1143,7 @@ fn watch_to_wire(frame: DomainWatchFrame) -> WatchResponse {
         } => SystemWatchFrame {
             cursor: Some(cursor_to_wire(cursor)),
             frame: Some(system_watch_frame::Frame::Heartbeat(WatchHeartbeat {
-                observed_at: None,
+                observed_at: Some(timestamp(unix_time_ms())),
                 current_revision,
             })),
         },
@@ -1108,11 +1180,18 @@ fn watch_to_wire(frame: DomainWatchFrame) -> WatchResponse {
 fn session_watch_to_wire(
     frame: dennett_head::session::SessionWatchFrame,
     commands: &mut HashMap<TurnId, CommandId>,
+    activity_created: &mut HashMap<(TurnId, String), (u64, u64)>,
 ) -> WatchSessionResponse {
     let frame = match frame {
         WatchFrame::Snapshot { cursor, value, .. } => {
             for turn in &value.turns {
                 commands.insert(turn.turn_id, turn.command_id);
+                for activity in &turn.activities {
+                    activity_created.insert(
+                        (turn.turn_id, activity.activity_id.clone()),
+                        (activity.created_at_unix_ms, activity.created_revision),
+                    );
+                }
             }
             SessionWatchFrame {
                 cursor: Some(cursor_to_wire(cursor)),
@@ -1133,6 +1212,7 @@ fn session_watch_to_wire(
                 new_revision,
                 delta,
                 commands,
+                activity_created,
             ))),
         },
         WatchFrame::Heartbeat {
@@ -1141,7 +1221,7 @@ fn session_watch_to_wire(
         } => SessionWatchFrame {
             cursor: Some(cursor_to_wire(cursor)),
             frame: Some(session_watch_frame::Frame::Heartbeat(WatchHeartbeat {
-                observed_at: None,
+                observed_at: Some(timestamp(unix_time_ms())),
                 current_revision,
             })),
         },
@@ -1186,7 +1266,10 @@ fn session_snapshot_to_wire(snapshot: &ProjectSessionSnapshot) -> SessionSnapsho
 fn session_summary_snapshot_to_wire(snapshot: &ProjectSessionSnapshot) -> WireSessionSummary {
     WireSessionSummary {
         session_id: snapshot.session.session_id.0.to_string(),
-        project_id: snapshot.session.project_id.0.to_string(),
+        project_id: snapshot
+            .session
+            .project_id
+            .map_or_else(String::new, |project_id| project_id.0.to_string()),
         title: snapshot.session.title.clone(),
         state: session_state_to_wire(snapshot.session.state),
         revision: snapshot.session.revision,
@@ -1211,6 +1294,7 @@ fn turn_to_wire(turn: &SessionTurn) -> TurnSnapshot {
         created_at: Some(timestamp(turn.created_at_unix_ms)),
         completed_at: turn.completed_at_unix_ms.map(timestamp),
         activities: turn.activities.iter().map(activity_to_wire).collect(),
+        created_revision: turn.created_revision,
     }
 }
 
@@ -1221,6 +1305,12 @@ fn activity_to_wire(activity: &SessionTurnActivity) -> TurnActivitySnapshot {
         message: activity.message.clone(),
         status: activity_status_to_wire(activity.status),
         updated_at: Some(timestamp(activity.updated_at_unix_ms)),
+        created_at: Some(timestamp(if activity.created_at_unix_ms == 0 {
+            activity.updated_at_unix_ms
+        } else {
+            activity.created_at_unix_ms
+        })),
+        created_revision: activity.created_revision,
         native_extensions: activity
             .native_extensions
             .iter()
@@ -1310,8 +1400,10 @@ fn session_delta_to_wire(
     new_revision: u64,
     event: CommittedSessionEvent,
     commands: &mut HashMap<TurnId, CommandId>,
+    activity_created: &mut HashMap<(TurnId, String), (u64, u64)>,
 ) -> SessionDelta {
     let committed_at_unix_ms = event.committed_at_unix_ms;
+    let committed_revision = event.revision;
     let mutations = match event.body {
         SessionEventBody::SessionCreated { title, .. } => vec![SessionMutation {
             mutation: Some(session_mutation::Mutation::UpdateSession(
@@ -1342,6 +1434,7 @@ fn session_delta_to_wire(
                         created_at: Some(timestamp(committed_at_unix_ms)),
                         completed_at: Some(timestamp(committed_at_unix_ms)),
                         activities: Vec::new(),
+                        created_revision: committed_revision,
                     })),
                 },
                 SessionMutation {
@@ -1355,6 +1448,7 @@ fn session_delta_to_wire(
                         created_at: Some(timestamp(committed_at_unix_ms)),
                         completed_at: None,
                         activities: Vec::new(),
+                        created_revision: committed_revision,
                     })),
                 },
                 SessionMutation {
@@ -1367,6 +1461,43 @@ fn session_delta_to_wire(
                     )),
                 },
             ]
+        }
+        SessionEventBody::UserSteerRequested {
+            user_turn_id,
+            command_id,
+            text,
+            ..
+        } => {
+            commands.insert(user_turn_id, command_id);
+            vec![SessionMutation {
+                mutation: Some(session_mutation::Mutation::UpsertTurn(TurnSnapshot {
+                    turn_id: user_turn_id.0.to_string(),
+                    command_id: command_id.0.to_string(),
+                    role: TurnRole::User as i32,
+                    state: TurnState::Accepted as i32,
+                    text,
+                    outcome: None,
+                    created_at: Some(timestamp(committed_at_unix_ms)),
+                    completed_at: None,
+                    activities: Vec::new(),
+                    created_revision: committed_revision,
+                })),
+            }]
+        }
+        SessionEventBody::UserSteerFinished {
+            user_turn_id,
+            state,
+            error,
+            ..
+        } => {
+            vec![SessionMutation {
+                mutation: Some(session_mutation::Mutation::FinishTurn(TurnTerminal {
+                    turn_id: user_turn_id.0.to_string(),
+                    state: turn_state_to_wire(state),
+                    outcome: error
+                        .map(|error| turn_terminal::Outcome::Error(session_error_to_wire(&error))),
+                })),
+            }]
         }
         SessionEventBody::AgentTextAppended { turn_id, text } => vec![SessionMutation {
             mutation: Some(session_mutation::Mutation::AppendTurnText(TurnTextAppend {
@@ -1381,24 +1512,31 @@ fn session_delta_to_wire(
             message,
             status,
             native_extensions,
-        } => vec![SessionMutation {
-            mutation: Some(session_mutation::Mutation::UpsertTurnActivity(
-                TurnActivityUpsert {
-                    turn_id: turn_id.0.to_string(),
-                    activity: Some(TurnActivitySnapshot {
-                        activity_id,
-                        phase,
-                        message,
-                        status: activity_status_to_wire(status),
-                        updated_at: Some(timestamp(committed_at_unix_ms)),
-                        native_extensions: native_extensions
-                            .iter()
-                            .map(native_extension_to_wire)
-                            .collect(),
-                    }),
-                },
-            )),
-        }],
+        } => {
+            let (created_at_unix_ms, created_revision) = *activity_created
+                .entry((turn_id, activity_id.clone()))
+                .or_insert((committed_at_unix_ms, committed_revision));
+            vec![SessionMutation {
+                mutation: Some(session_mutation::Mutation::UpsertTurnActivity(
+                    TurnActivityUpsert {
+                        turn_id: turn_id.0.to_string(),
+                        activity: Some(TurnActivitySnapshot {
+                            activity_id,
+                            phase,
+                            message,
+                            status: activity_status_to_wire(status),
+                            updated_at: Some(timestamp(committed_at_unix_ms)),
+                            created_at: Some(timestamp(created_at_unix_ms)),
+                            created_revision,
+                            native_extensions: native_extensions
+                                .iter()
+                                .map(native_extension_to_wire)
+                                .collect(),
+                        }),
+                    },
+                )),
+            }]
+        }
         SessionEventBody::TurnFinished {
             turn_id,
             state,
@@ -1594,10 +1732,13 @@ fn send_turn_intent_hash(
     request: &SendTurnRequest,
     expected_revision: Option<u64>,
 ) -> Result<[u8; 32], ServiceError> {
+    let delivery_mode = request.delivery_mode.to_string();
     let mut fields = vec![
         request.project_id.as_str(),
         request.session_id.as_str(),
         request.text.as_str(),
+        delivery_mode.as_str(),
+        request.expected_active_turn_id.as_str(),
     ];
     for attachment in &request.attachments {
         let source = attachment
@@ -1613,12 +1754,44 @@ fn send_turn_intent_hash(
             attachment.label.as_str(),
         ]);
     }
+    for selection in &request.runtime_controls {
+        fields.extend([selection.control_id.as_str(), selection.choice_id.as_str()]);
+    }
     Ok(command_intent_hash("send_turn", expected_revision, &fields))
+}
+
+fn parse_runtime_controls(
+    request: &SendTurnRequest,
+) -> Result<Vec<RuntimeControlSelection>, ServiceError> {
+    if request.runtime_controls.len() > 32 {
+        return Err(ServiceError::InvalidRequest);
+    }
+    let mut seen = std::collections::HashSet::new();
+    request
+        .runtime_controls
+        .iter()
+        .map(|selection| {
+            if selection.control_id.trim().is_empty()
+                || selection.choice_id.trim().is_empty()
+                || selection.control_id.len() > 128
+                || selection.choice_id.len() > 128
+                || !seen.insert(selection.control_id.as_str())
+            {
+                return Err(ServiceError::InvalidRequest);
+            }
+            Ok(RuntimeControlSelection {
+                control_id: selection.control_id.clone(),
+                choice_id: selection.choice_id.clone(),
+            })
+        })
+        .collect()
 }
 
 fn draft_to_wire(draft: &DraftRecord) -> ComposerDraft {
     ComposerDraft {
-        project_id: draft.project_id.0.to_string(),
+        project_id: draft
+            .project_id
+            .map_or_else(String::new, |id| id.0.to_string()),
         session_id: draft.session_id.0.to_string(),
         command_id: draft.command_id.0.to_string(),
         text: draft.text.clone(),
@@ -1651,7 +1824,6 @@ enum ServiceError {
     Auth(AuthError),
     Admission(CommandAdmissionError),
     InvalidRequest,
-    ScopeMismatch,
 }
 
 impl From<CommandAdmissionError> for ServiceError {
@@ -1683,9 +1855,20 @@ fn parse_project_id(value: &str) -> Result<ProjectId, ServiceError> {
     parse_uuid(value).map(ProjectId)
 }
 
+fn parse_optional_project_id(value: &str) -> Result<Option<ProjectId>, ServiceError> {
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        parse_project_id(value).map(Some)
+    }
+}
+
 fn conversation_error(error: ConversationError, correlation_id: &str) -> ErrorEnvelope {
     let (code, retryable, user_action_required, current_revision) = match error {
         ConversationError::InvalidRequest => ("conversation_request_invalid", false, true, None),
+        ConversationError::TurnAlreadyActive => {
+            ("conversation_turn_already_active", true, false, None)
+        }
         ConversationError::ScopeMismatch => ("conversation_scope_mismatch", false, true, None),
         ConversationError::SessionUnavailable => {
             ("conversation_session_unavailable", true, false, None)
@@ -1769,15 +1952,6 @@ fn service_error(error: ServiceError, correlation_id: &str) -> ErrorEnvelope {
             details_handle: String::new(),
             current_revision: None,
         },
-        ServiceError::ScopeMismatch => ErrorEnvelope {
-            code: "scope_mismatch".to_owned(),
-            message_key: "local_ipc.scope_mismatch".to_owned(),
-            correlation_id: correlation_id.to_owned(),
-            retryable: false,
-            user_action_required: true,
-            details_handle: String::new(),
-            current_revision: None,
-        },
     }
 }
 
@@ -1828,6 +2002,57 @@ mod tests {
     }
 
     #[test]
+    fn send_turn_identity_and_validation_include_provider_controls() {
+        let base = SendTurnRequest {
+            command: None,
+            project_id: "project".to_owned(),
+            session_id: "session".to_owned(),
+            text: "prompt".to_owned(),
+            attachments: Vec::new(),
+            runtime_controls: vec![
+                crate::protocol::dennett::control::v1::RuntimeControlSelection {
+                    control_id: "model".to_owned(),
+                    choice_id: "gpt-new".to_owned(),
+                },
+            ],
+            delivery_mode: WireTurnDeliveryMode::NewTurn as i32,
+            expected_active_turn_id: String::new(),
+        };
+        assert_eq!(
+            parse_runtime_controls(&base).expect("valid runtime controls"),
+            vec![RuntimeControlSelection {
+                control_id: "model".to_owned(),
+                choice_id: "gpt-new".to_owned(),
+            }]
+        );
+        let mut changed = base.clone();
+        changed.runtime_controls[0].choice_id = "gpt-small".to_owned();
+        assert_ne!(
+            send_turn_intent_hash(&base, Some(3)).expect("base intent"),
+            send_turn_intent_hash(&changed, Some(3)).expect("changed intent"),
+        );
+        let mut steered = base.clone();
+        steered.delivery_mode = WireTurnDeliveryMode::SteerNow as i32;
+        steered.expected_active_turn_id = "00000000-0000-7000-8000-000000000099".to_owned();
+        assert_ne!(
+            send_turn_intent_hash(&base, Some(3)).expect("new-turn intent"),
+            send_turn_intent_hash(&steered, Some(3)).expect("steer intent"),
+        );
+
+        let mut duplicate = base;
+        duplicate.runtime_controls.push(
+            crate::protocol::dennett::control::v1::RuntimeControlSelection {
+                control_id: "model".to_owned(),
+                choice_id: "gpt-small".to_owned(),
+            },
+        );
+        assert!(matches!(
+            parse_runtime_controls(&duplicate),
+            Err(ServiceError::InvalidRequest)
+        ));
+    }
+
+    #[test]
     fn session_deltas_carry_the_canonical_event_time() {
         let session_id = SessionId::new();
         let command_id = CommandId::new();
@@ -1835,6 +2060,7 @@ mod tests {
         let agent_turn_id = TurnId::new();
         let committed_at_unix_ms = 1_234_567_890;
         let mut commands = HashMap::new();
+        let mut activity_created = HashMap::new();
         let delta = session_delta_to_wire(
             1,
             2,
@@ -1853,6 +2079,7 @@ mod tests {
                 committed_at_unix_ms,
             },
             &mut commands,
+            &mut activity_created,
         );
 
         assert_eq!(
@@ -1873,6 +2100,82 @@ mod tests {
             turn_times,
             vec![committed_at_unix_ms as i64, committed_at_unix_ms as i64]
         );
+        let turn_revisions = delta
+            .mutations
+            .iter()
+            .filter_map(|mutation| match mutation.mutation.as_ref() {
+                Some(session_mutation::Mutation::UpsertTurn(turn)) => Some(turn.created_revision),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(turn_revisions, vec![2, 2]);
+    }
+
+    #[test]
+    fn activity_delta_keeps_its_first_causal_timestamp_across_updates() {
+        let session_id = SessionId::new();
+        let turn_id = TurnId::new();
+        let mut commands = HashMap::new();
+        let mut activity_created = HashMap::new();
+        let event = |revision, status, committed_at_unix_ms| CommittedSessionEvent {
+            event_id: dennett_contracts::SessionEventId::new(),
+            session_id,
+            revision,
+            payload_version: dennett_memory_core::session::SESSION_EVENT_PAYLOAD_VERSION,
+            command_id: None,
+            body: SessionEventBody::AgentActivityUpserted {
+                turn_id,
+                activity_id: "commentary-1".to_owned(),
+                phase: "commentary".to_owned(),
+                message: Some("Working".to_owned()),
+                status,
+                native_extensions: Vec::new(),
+            },
+            committed_at_unix_ms,
+        };
+        let first = session_delta_to_wire(
+            1,
+            2,
+            event(2, SessionActivityStatus::Started, 10),
+            &mut commands,
+            &mut activity_created,
+        );
+        let updated = session_delta_to_wire(
+            2,
+            3,
+            event(3, SessionActivityStatus::Completed, 20),
+            &mut commands,
+            &mut activity_created,
+        );
+        fn activity(delta: &SessionDelta) -> &TurnActivitySnapshot {
+            match delta.mutations[0].mutation.as_ref() {
+                Some(session_mutation::Mutation::UpsertTurnActivity(update)) => {
+                    update.activity.as_ref().expect("activity")
+                }
+                _ => panic!("activity mutation"),
+            }
+        }
+
+        assert_eq!(
+            activity(&first).created_at.as_ref().map(timestamp_unix_ms),
+            Some(10)
+        );
+        assert_eq!(
+            activity(&updated)
+                .created_at
+                .as_ref()
+                .map(timestamp_unix_ms),
+            Some(10)
+        );
+        assert_eq!(
+            activity(&updated)
+                .updated_at
+                .as_ref()
+                .map(timestamp_unix_ms),
+            Some(20)
+        );
+        assert_eq!(activity(&first).created_revision, 2);
+        assert_eq!(activity(&updated).created_revision, 2);
     }
 
     fn timestamp_unix_ms(value: &prost_types::Timestamp) -> i64 {
@@ -1905,6 +2208,7 @@ mod tests {
                 project_id,
                 display_name: "Test project".to_owned(),
                 workspace_path: "C:\\test-project".to_owned(),
+                standalone_workspace_path: "C:\\test-scratch".to_owned(),
             },
         ));
         let registry = SessionRegistry::new(HandshakePolicy::m01("install", "node", 7));

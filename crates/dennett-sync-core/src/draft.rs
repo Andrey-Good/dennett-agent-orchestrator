@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DraftRecord {
-    pub project_id: ProjectId,
+    pub project_id: Option<ProjectId>,
     pub session_id: SessionId,
     pub command_id: CommandId,
     pub text: String,
@@ -120,7 +120,7 @@ mod tests {
         let session_id = SessionId::new();
         let command_id = CommandId::new();
         let mut draft = DraftRecord {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             session_id,
             command_id,
             text: "first".to_owned(),
@@ -170,7 +170,7 @@ mod tests {
     async fn stale_save_cannot_replace_newer_text() {
         let cache = InMemoryDraftCache::default();
         let newer = DraftRecord {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             session_id: SessionId::new(),
             command_id: CommandId::new(),
             text: "newer".to_owned(),

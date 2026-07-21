@@ -9,8 +9,9 @@ import type { CodexOptions } from "@openai/codex-sdk";
 import { CodexCanaryError } from "./codex-canary-lib.js";
 
 const CHATGPT_BASE_URL = "https://chatgpt.com/backend-api/";
-export const PINNED_CODEX_VERSION = "0.144.5";
+export const PINNED_CODEX_VERSION = "0.144.6";
 const CLI_FILESYSTEM_TIMEOUT_MS = 10_000;
+const MAX_MODEL_CATALOG_BYTES = 8 * 1024 * 1024;
 const CHATGPT_LOGIN_STATUS = "Logged in using ChatGPT";
 const SUBSCRIPTION_CONFIG_ARGUMENTS = [
   "--config",
@@ -60,7 +61,24 @@ const SAFE_ENVIRONMENT = new Set([
 
 export interface CodexInstallation {
   launcherPath: string;
+  nativeExecutablePath: string;
+  nativePathDirectories: string[];
   sdkVersion: string;
+}
+
+function nativeCodexTarget(): { packageName: string; triple: string } {
+  const target = `${process.platform}-${process.arch}`;
+  const targets: Record<string, { packageName: string; triple: string }> = {
+    "linux-x64": { packageName: "@openai/codex-linux-x64", triple: "x86_64-unknown-linux-musl" },
+    "linux-arm64": { packageName: "@openai/codex-linux-arm64", triple: "aarch64-unknown-linux-musl" },
+    "darwin-x64": { packageName: "@openai/codex-darwin-x64", triple: "x86_64-apple-darwin" },
+    "darwin-arm64": { packageName: "@openai/codex-darwin-arm64", triple: "aarch64-apple-darwin" },
+    "win32-x64": { packageName: "@openai/codex-win32-x64", triple: "x86_64-pc-windows-msvc" },
+    "win32-arm64": { packageName: "@openai/codex-win32-arm64", triple: "aarch64-pc-windows-msvc" },
+  };
+  const resolved = targets[target];
+  if (!resolved) throw new CodexCanaryError("codex_package_invalid");
+  return resolved;
 }
 
 export interface CodexCliStatus {
@@ -267,6 +285,8 @@ export async function prepareRuntimeCodexHome(
 export function createRuntimeSubscriptionCodexOptions(
   environment: NodeJS.ProcessEnv,
   codexHomeDirectory: string,
+  configOverrides: NonNullable<CodexOptions["config"]> = {},
+  platform: NodeJS.Platform = process.platform,
 ): CodexOptions {
   const sanitizedEnvironment = createSanitizedCodexEnvironment(environment);
   sanitizedEnvironment.CODEX_HOME = codexHomeDirectory;
@@ -277,8 +297,41 @@ export function createRuntimeSubscriptionCodexOptions(
       forced_login_method: "chatgpt",
       chatgpt_base_url: CHATGPT_BASE_URL,
       cli_auth_credentials_store: "file",
+      // Codex otherwise degrades workspace-write to read-only on native Windows.
+      // The unelevated restricted-token sandbox preserves the workspace boundary.
+      ...(platform === "win32" ? { windows: { sandbox: "unelevated" } } : {}),
+      ...configOverrides,
     },
   };
+}
+
+export async function loadRuntimeCodexModelCatalog(
+  environment: NodeJS.ProcessEnv,
+  codexHomeDirectory: string,
+  inspection: {
+    installation?: CodexInstallation;
+    runner?: ProcessRunner;
+  } = {},
+): Promise<unknown> {
+  const installation = inspection.installation ?? (await resolveCodexInstallation());
+  const runtimeEnvironment = createSanitizedCodexEnvironment(environment);
+  runtimeEnvironment.CODEX_HOME = codexHomeDirectory;
+  const result = await (inspection.runner ?? runProcess)(
+    process.execPath,
+    [installation.launcherPath, ...subscriptionCliArguments(["debug", "models"])],
+    { environment: runtimeEnvironment },
+  );
+  if (
+    result.exitCode !== 0 ||
+    Buffer.byteLength(result.stdout, "utf8") > MAX_MODEL_CATALOG_BYTES
+  ) {
+    throw new CodexCanaryError("cli_command_failed");
+  }
+  try {
+    return JSON.parse(result.stdout) as unknown;
+  } catch {
+    throw new CodexCanaryError("cli_command_failed");
+  }
 }
 
 export async function resolveCanaryCodexAuthFile(
@@ -346,11 +399,29 @@ export async function resolveCodexInstallation(): Promise<CodexInstallation> {
       path.dirname(codexPackagePath),
       launcherRelativePath,
     );
+    const nativeTarget = nativeCodexTarget();
+    const nativePackagePath = sdkRequire.resolve(`${nativeTarget.packageName}/package.json`);
+    const nativeRoot = path.resolve(
+      path.dirname(nativePackagePath),
+      "vendor",
+      nativeTarget.triple,
+    );
+    const nativeExecutablePath = path.join(
+      nativeRoot,
+      "bin",
+      process.platform === "win32" ? "codex.exe" : "codex",
+    );
+    const nativePathDirectories = [path.join(nativeRoot, "codex-path")];
     await withCliFilesystemDeadline(
-      access(launcherPath),
+      Promise.all([access(launcherPath), access(nativeExecutablePath), access(nativePathDirectories[0])]),
       "codex_binary_missing",
     );
-    return { launcherPath, sdkVersion: PINNED_CODEX_VERSION };
+    return {
+      launcherPath,
+      nativeExecutablePath,
+      nativePathDirectories,
+      sdkVersion: PINNED_CODEX_VERSION,
+    };
   } catch (error: unknown) {
     if (error instanceof CodexCanaryError) {
       throw error;

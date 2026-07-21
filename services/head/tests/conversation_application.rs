@@ -1,13 +1,16 @@
 use async_trait::async_trait;
 use dennett_agent_core::{
     AgentRequest, AgentResponse, AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest,
-    CancellationAcknowledgement, FakeRuntimeStep, RuntimeCapabilities, RuntimeDescriptor,
-    RuntimeEvent, RuntimeEventKind, RuntimeEventStream, RuntimeKind, RuntimeTerminal,
-    RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, ScriptedFakeAgentRuntime,
+    CancellationAcknowledgement, FakeRuntimeStep, RuntimeCapabilities, RuntimeControlSelection,
+    RuntimeDescriptor, RuntimeError, RuntimeErrorCode, RuntimeEvent, RuntimeEventKind,
+    RuntimeEventStream, RuntimeKind, RuntimeSteeringMode, RuntimeTerminal, RuntimeTerminalOutcome,
+    RuntimeTurn, RuntimeTurnRequest, ScriptedFakeAgentRuntime, SteerRuntimeTurnRequest,
+    SteeringAcknowledgement,
 };
 use dennett_contracts::{CommandId, ProjectId, SessionId};
 use dennett_head::conversation::{
-    ConversationApplication, ConversationTurnRequest, LocalProject, TraceContext,
+    ConversationApplication, ConversationError, ConversationTurnRequest, LocalProject,
+    TraceContext, TurnDeliveryMode,
 };
 use dennett_head::session::SessionCoordinator;
 use dennett_head::system::{SystemProjection, SystemSnapshot, SystemStatePort};
@@ -50,6 +53,7 @@ fn application(
                 project_id,
                 display_name: "Test project".to_owned(),
                 workspace_path: "C:\\test-project".to_owned(),
+                standalone_workspace_path: "C:\\test-scratch".to_owned(),
             },
         )
         .with_turn_timeout(timeout),
@@ -77,12 +81,262 @@ fn turn_request(
     ConversationTurnRequest {
         trace: trace(correlation_id),
         command_id,
-        project_id,
+        project_id: Some(project_id),
         session_id,
         expected_revision,
         text: text.to_owned(),
         context_handles: Vec::new(),
+        runtime_controls: Vec::new(),
+        delivery_mode: TurnDeliveryMode::NewTurn,
+        expected_active_turn_id: None,
     }
+}
+
+#[tokio::test]
+async fn native_steer_keeps_the_provider_turn_running_and_is_idempotently_durable() {
+    let runtime = Arc::new(ControlledRuntime::new(true));
+    let (application, project_id) = application(runtime.clone(), Duration::from_secs(2));
+    let initialized = application
+        .initialize(CommandId::new(), "Native steer".to_owned())
+        .await
+        .expect("initialize");
+    let session_id = initialized.session.session_id;
+    let accepted = application
+        .send_turn(turn_request(
+            "correlation-start-steer",
+            CommandId::new(),
+            project_id,
+            session_id,
+            Some(1),
+            "Start the long task",
+        ))
+        .await
+        .expect("start turn");
+    runtime.wait_until_streaming().await;
+
+    let steer_command = CommandId::new();
+    let mut steer = turn_request(
+        "correlation-native-steer",
+        steer_command,
+        project_id,
+        session_id,
+        None,
+        "Add this constraint without restarting",
+    );
+    steer.delivery_mode = TurnDeliveryMode::SteerNow;
+    steer.expected_active_turn_id = Some(accepted.agent_turn_id);
+    steer.runtime_controls = vec![RuntimeControlSelection {
+        control_id: "model".to_owned(),
+        choice_id: "next-model".to_owned(),
+    }];
+    assert!(matches!(
+        application.send_turn(steer.clone()).await,
+        Err(ConversationError::ScopeMismatch)
+    ));
+    steer.runtime_controls.clear();
+    let steered = application
+        .send_turn(steer.clone())
+        .await
+        .expect("steer active provider turn");
+    assert_eq!(steered.agent_turn_id, accepted.agent_turn_id);
+    assert_eq!(runtime.cancel_calls(), 0);
+    assert_eq!(
+        runtime.state.steers.lock().expect("steers lock").as_slice(),
+        &[SteerRuntimeTurnRequest {
+            session_id: session_id.0.to_string(),
+            turn_id: accepted.agent_turn_id.0.to_string(),
+            message_id: steer_command.0.to_string(),
+            text: "Add this constraint without restarting".to_owned(),
+        }]
+    );
+    let snapshot = application
+        .restore(session_id)
+        .await
+        .expect("restore steer");
+    assert_eq!(
+        snapshot.session.active_turn_id,
+        Some(accepted.agent_turn_id)
+    );
+    let steer_turn = snapshot
+        .turns
+        .iter()
+        .find(|turn| turn.turn_id == steered.user_turn_id)
+        .expect("durable steer user turn");
+    assert_eq!(steer_turn.state, SessionTurnState::Completed);
+
+    let replayed = application
+        .send_turn(steer)
+        .await
+        .expect("replay accepted steer");
+    assert_eq!(replayed.user_turn_id, steered.user_turn_id);
+    assert_eq!(runtime.state.steers.lock().expect("steers lock").len(), 1);
+    application
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
+        .await
+        .expect("stop test turn");
+}
+
+#[tokio::test]
+async fn native_steer_waits_for_the_accepted_turn_to_reach_the_runtime() {
+    let runtime =
+        Arc::new(ControlledRuntime::new(true).with_start_delay(Duration::from_millis(100)));
+    let (application, project_id) = application(runtime.clone(), Duration::from_secs(2));
+    let initialized = application
+        .initialize(CommandId::new(), "Immediate steer".to_owned())
+        .await
+        .expect("initialize");
+    let session_id = initialized.session.session_id;
+    let accepted = application
+        .send_turn(turn_request(
+            "correlation-start-delayed",
+            CommandId::new(),
+            project_id,
+            session_id,
+            Some(1),
+            "Start and register slowly",
+        ))
+        .await
+        .expect("accept initial turn");
+
+    let steer_command = CommandId::new();
+    let mut steer = turn_request(
+        "correlation-immediate-steer",
+        steer_command,
+        project_id,
+        session_id,
+        None,
+        "Apply this immediately",
+    );
+    steer.delivery_mode = TurnDeliveryMode::SteerNow;
+    steer.expected_active_turn_id = Some(accepted.agent_turn_id);
+    let steered = application
+        .send_turn(steer)
+        .await
+        .expect("wait for runtime registration and steer");
+
+    assert_eq!(steered.agent_turn_id, accepted.agent_turn_id);
+    assert_eq!(
+        runtime.state.steers.lock().expect("steers lock").as_slice(),
+        &[SteerRuntimeTurnRequest {
+            session_id: session_id.0.to_string(),
+            turn_id: accepted.agent_turn_id.0.to_string(),
+            message_id: steer_command.0.to_string(),
+            text: "Apply this immediately".to_owned(),
+        }]
+    );
+    application
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
+        .await
+        .expect("stop delayed test turn");
+}
+
+#[tokio::test]
+async fn native_steer_timeout_becomes_a_visible_durable_failure() {
+    let runtime = Arc::new(ControlledRuntime::new(true).with_steer_delay(Duration::from_secs(5)));
+    let (application, project_id) = application(runtime.clone(), Duration::from_secs(5));
+    let initialized = application
+        .initialize(CommandId::new(), "Steer timeout".to_owned())
+        .await
+        .expect("initialize");
+    let session_id = initialized.session.session_id;
+    let accepted = application
+        .send_turn(turn_request(
+            "correlation-start-timeout",
+            CommandId::new(),
+            project_id,
+            session_id,
+            Some(1),
+            "Keep working",
+        ))
+        .await
+        .expect("start turn");
+    runtime.wait_until_streaming().await;
+
+    let steer_command = CommandId::new();
+    let mut steer = turn_request(
+        "correlation-steer-timeout",
+        steer_command,
+        project_id,
+        session_id,
+        None,
+        "This delivery will time out",
+    );
+    steer.delivery_mode = TurnDeliveryMode::SteerNow;
+    steer.expected_active_turn_id = Some(accepted.agent_turn_id);
+    let error = application
+        .send_turn(steer)
+        .await
+        .expect_err("timed-out steer must not look accepted");
+    assert!(matches!(
+        error,
+        ConversationError::Runtime(RuntimeError {
+            code: RuntimeErrorCode::ProviderUnavailable,
+            ..
+        })
+    ));
+
+    let snapshot = application
+        .restore(session_id)
+        .await
+        .expect("restore timeout");
+    let failed = snapshot
+        .turns
+        .iter()
+        .find(|turn| turn.command_id == steer_command)
+        .expect("durable steer turn");
+    assert_eq!(failed.state, SessionTurnState::Failed);
+    assert!(matches!(
+        failed.outcome,
+        Some(SessionTurnOutcome::Error(ref safe))
+            if safe.code == RuntimeErrorCode::ProviderUnavailable.as_str()
+    ));
+    application
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
+        .await
+        .expect("stop timeout test turn");
+}
+
+#[tokio::test]
+async fn standalone_chat_runs_in_the_node_owned_scratch_workspace() {
+    let runtime = Arc::new(ControlledRuntime::new(true));
+    let (application, project_id) = application(runtime.clone(), Duration::from_secs(2));
+    application
+        .initialize(CommandId::new(), "Project chat".to_owned())
+        .await
+        .expect("initialize project");
+    let standalone = application
+        .create_session(CommandId::new(), None, "Standalone chat".to_owned())
+        .await
+        .expect("create standalone session");
+    assert_eq!(standalone.snapshot.session.project_id, None);
+    let session_id = standalone.snapshot.session.session_id;
+    let mut request = turn_request(
+        "correlation-standalone",
+        CommandId::new(),
+        project_id,
+        session_id,
+        Some(1),
+        "Explore this idea",
+    );
+    request.project_id = None;
+    let accepted = application
+        .send_turn(request)
+        .await
+        .expect("send standalone turn");
+    runtime.wait_until_streaming().await;
+    assert_eq!(
+        runtime
+            .state
+            .workspace_paths
+            .lock()
+            .expect("workspace paths lock")
+            .as_slice(),
+        &["C:\\test-scratch".to_owned()]
+    );
+    application
+        .cancel_turn(None, session_id, accepted.agent_turn_id)
+        .await
+        .expect("stop standalone test turn");
 }
 
 async fn wait_for_terminal(
@@ -248,11 +502,11 @@ async fn initialization_and_restore_are_isolated_to_one_project() {
     let owned_project = ProjectId::new();
     let other_project = ProjectId::new();
     let owned = coordinator
-        .create_session(CommandId::new(), owned_project, "Owned".to_owned(), 1)
+        .create_session(CommandId::new(), Some(owned_project), "Owned".to_owned(), 1)
         .await
         .expect("create owned session");
     let other = coordinator
-        .create_session(CommandId::new(), other_project, "Other".to_owned(), 2)
+        .create_session(CommandId::new(), Some(other_project), "Other".to_owned(), 2)
         .await
         .expect("create other session");
     let system = Arc::new(SystemProjection::new(SystemSnapshot::empty(7), 16));
@@ -264,6 +518,7 @@ async fn initialization_and_restore_are_isolated_to_one_project() {
             project_id: owned_project,
             display_name: "Owned project".to_owned(),
             workspace_path: "C:\\owned".to_owned(),
+            standalone_workspace_path: "C:\\scratch".to_owned(),
         },
     );
     let active = application
@@ -316,12 +571,16 @@ async fn stop_is_scoped_and_terminal_retry_is_idempotent() {
 
     assert!(
         application
-            .cancel_turn(session_id, dennett_contracts::TurnId::new())
+            .cancel_turn(
+                Some(project_id),
+                session_id,
+                dennett_contracts::TurnId::new()
+            )
             .await
             .is_err()
     );
     let first = application
-        .cancel_turn(session_id, accepted.agent_turn_id)
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
         .await
         .expect("cancel active turn");
     assert_eq!(first.disposition, CancelDisposition::Requested);
@@ -336,7 +595,7 @@ async fn stop_is_scoped_and_terminal_retry_is_idempotent() {
     ));
 
     let retry = application
-        .cancel_turn(session_id, accepted.agent_turn_id)
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
         .await
         .expect("terminal cancel retry");
     assert_eq!(
@@ -344,6 +603,151 @@ async fn stop_is_scoped_and_terminal_retry_is_idempotent() {
         CancelDisposition::AlreadyTerminal(dennett_agent_core::RuntimeTerminalKind::Cancelled)
     );
     assert_eq!(runtime.cancel_calls(), 1);
+}
+
+#[tokio::test]
+async fn provider_control_selections_reach_the_runtime_turn_unchanged() {
+    let runtime = Arc::new(ControlledRuntime::new(true));
+    let (application, project_id) = application(runtime.clone(), Duration::from_secs(1));
+    let initialized = application
+        .initialize(CommandId::new(), "Runtime controls".to_owned())
+        .await
+        .expect("initialize");
+    let session_id = initialized.session.session_id;
+    let mut request = turn_request(
+        "correlation-runtime-controls",
+        CommandId::new(),
+        project_id,
+        session_id,
+        Some(1),
+        "Use selected runtime settings",
+    );
+    request.runtime_controls = vec![
+        RuntimeControlSelection {
+            control_id: "model".to_owned(),
+            choice_id: "gpt-new".to_owned(),
+        },
+        RuntimeControlSelection {
+            control_id: "reasoning_effort".to_owned(),
+            choice_id: "ultra".to_owned(),
+        },
+    ];
+    let accepted = application.send_turn(request).await.expect("accept turn");
+    runtime.wait_until_streaming().await;
+    assert_eq!(
+        *runtime
+            .state
+            .runtime_controls
+            .lock()
+            .expect("runtime controls lock"),
+        vec![
+            RuntimeControlSelection {
+                control_id: "model".to_owned(),
+                choice_id: "gpt-new".to_owned(),
+            },
+            RuntimeControlSelection {
+                control_id: "reasoning_effort".to_owned(),
+                choice_id: "ultra".to_owned(),
+            },
+        ]
+    );
+    application
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
+        .await
+        .expect("cancel captured turn");
+}
+
+#[tokio::test]
+async fn stop_interrupts_a_turn_while_the_provider_is_still_starting() {
+    let runtime = Arc::new(HangingStartRuntime::default());
+    let (application, project_id) = application(runtime.clone(), Duration::from_secs(1));
+    let initialized = application
+        .initialize(CommandId::new(), "Pending cancellation".to_owned())
+        .await
+        .expect("initialize");
+    let session_id = initialized.session.session_id;
+    let accepted = application
+        .send_turn(turn_request(
+            "correlation-pending-cancel",
+            CommandId::new(),
+            project_id,
+            session_id,
+            Some(1),
+            "Start slowly",
+        ))
+        .await
+        .expect("accept turn");
+    runtime.wait_until_starting().await;
+
+    let acknowledgement = application
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
+        .await
+        .expect("cancel pending turn");
+    assert_eq!(acknowledgement.disposition, CancelDisposition::Requested);
+    let final_snapshot = wait_for_terminal(&application, session_id).await;
+    assert_eq!(
+        final_snapshot.turns.last().expect("agent turn").state,
+        SessionTurnState::Cancelled
+    );
+    assert_eq!(runtime.cancel_calls.load(Ordering::Acquire), 1);
+    assert!(runtime.cancelled.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn concurrent_stop_retries_after_the_first_provider_cancellation_fails() {
+    let runtime = Arc::new(FlakyCancelRuntime::new());
+    let (application, project_id) = application(runtime.clone(), Duration::from_secs(1));
+    let initialized = application
+        .initialize(CommandId::new(), "Concurrent cancellation".to_owned())
+        .await
+        .expect("initialize");
+    let session_id = initialized.session.session_id;
+    let accepted = application
+        .send_turn(turn_request(
+            "correlation-concurrent-cancel",
+            CommandId::new(),
+            project_id,
+            session_id,
+            Some(1),
+            "Begin",
+        ))
+        .await
+        .expect("accept turn");
+    runtime.inner.wait_until_streaming().await;
+
+    let first_application = application.clone();
+    let turn_id = accepted.agent_turn_id;
+    let first = tokio::spawn(async move {
+        first_application
+            .cancel_turn(Some(project_id), session_id, turn_id)
+            .await
+    });
+    runtime.wait_until_first_cancel().await;
+    let second_application = application.clone();
+    let second = tokio::spawn(async move {
+        second_application
+            .cancel_turn(Some(project_id), session_id, turn_id)
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !second.is_finished(),
+        "the second caller must wait for an authoritative result"
+    );
+
+    runtime.release_first_cancel();
+    assert!(first.await.expect("first cancellation task").is_err());
+    let acknowledgement = second
+        .await
+        .expect("second cancellation task")
+        .expect("second cancellation retries");
+    assert_eq!(acknowledgement.disposition, CancelDisposition::Requested);
+    assert_eq!(runtime.cancel_calls.load(Ordering::Acquire), 2);
+    let final_snapshot = wait_for_terminal(&application, session_id).await;
+    assert_eq!(
+        final_snapshot.turns.last().expect("agent turn").state,
+        SessionTurnState::Cancelled
+    );
 }
 
 #[tokio::test]
@@ -390,6 +794,40 @@ async fn head_deadline_turns_a_hung_provider_into_visible_timeout() {
         SessionTurnState::TimedOut,
         "a provider event after the deadline must not replace the authoritative timeout"
     );
+}
+
+#[tokio::test]
+async fn head_deadline_reports_failure_when_the_provider_cannot_be_fenced() {
+    let runtime = Arc::new(FailingCancelRuntime {
+        inner: ControlledRuntime::new(true),
+    });
+    let (application, project_id) = application(runtime.clone(), Duration::from_millis(80));
+    let initialized = application
+        .initialize(CommandId::new(), "Unfenced timeout".to_owned())
+        .await
+        .expect("initialize");
+    let session_id = initialized.session.session_id;
+    application
+        .send_turn(turn_request(
+            "correlation-unfenced-timeout",
+            CommandId::new(),
+            project_id,
+            session_id,
+            Some(1),
+            "Do not claim a safe timeout",
+        ))
+        .await
+        .expect("accept turn");
+    runtime.inner.wait_until_streaming().await;
+
+    let final_snapshot = wait_for_terminal(&application, session_id).await;
+    let agent_turn = final_snapshot.turns.last().expect("agent turn");
+    assert_eq!(agent_turn.state, SessionTurnState::Failed);
+    assert!(matches!(
+        agent_turn.outcome,
+        Some(SessionTurnOutcome::Error(ref safe))
+            if safe.code == RuntimeErrorCode::ProviderUnavailable.as_str()
+    ));
 }
 
 #[tokio::test]
@@ -516,7 +954,7 @@ async fn cancelled_turn_keeps_the_same_privacy_safe_trace_chain() {
         .expect("accept traced turn");
     runtime.wait_until_streaming().await;
     application
-        .cancel_turn(session_id, accepted.agent_turn_id)
+        .cancel_turn(Some(project_id), session_id, accepted.agent_turn_id)
         .await
         .expect("cancel traced turn");
     wait_for_terminal(&application, session_id).await;
@@ -553,6 +991,169 @@ async fn cancelled_turn_keeps_the_same_privacy_safe_trace_chain() {
 #[derive(Clone)]
 struct ControlledRuntime {
     state: Arc<ControlledState>,
+    start_delay: Duration,
+    steer_delay: Duration,
+}
+
+#[derive(Clone)]
+struct FlakyCancelRuntime {
+    inner: ControlledRuntime,
+    cancel_calls: Arc<AtomicUsize>,
+    first_cancel_entered: Arc<Notify>,
+    release_first: Arc<Notify>,
+}
+
+#[derive(Clone)]
+struct FailingCancelRuntime {
+    inner: ControlledRuntime,
+}
+
+#[async_trait]
+impl AgentRuntimePort for FailingCancelRuntime {
+    async fn respond(&self, request: AgentRequest) -> DennettResult<AgentResponse> {
+        self.inner.respond(request).await
+    }
+
+    async fn describe(&self) -> Result<RuntimeDescriptor, RuntimeError> {
+        self.inner.describe().await
+    }
+
+    async fn start_turn(&self, request: RuntimeTurnRequest) -> Result<RuntimeTurn, RuntimeError> {
+        self.inner.start_turn(request).await
+    }
+
+    async fn cancel_turn(
+        &self,
+        _request: CancelRuntimeTurnRequest,
+    ) -> Result<CancellationAcknowledgement, RuntimeError> {
+        Err(RuntimeError::retryable(
+            RuntimeErrorCode::ProviderUnavailable,
+        ))
+    }
+}
+
+impl FlakyCancelRuntime {
+    fn new() -> Self {
+        Self {
+            inner: ControlledRuntime::new(true),
+            cancel_calls: Arc::new(AtomicUsize::new(0)),
+            first_cancel_entered: Arc::new(Notify::new()),
+            release_first: Arc::new(Notify::new()),
+        }
+    }
+
+    async fn wait_until_first_cancel(&self) {
+        tokio::time::timeout(Duration::from_secs(1), self.first_cancel_entered.notified())
+            .await
+            .expect("first provider cancellation was not attempted");
+    }
+
+    fn release_first_cancel(&self) {
+        self.release_first.notify_waiters();
+    }
+}
+
+#[async_trait]
+impl AgentRuntimePort for FlakyCancelRuntime {
+    async fn respond(&self, request: AgentRequest) -> DennettResult<AgentResponse> {
+        self.inner.respond(request).await
+    }
+
+    async fn describe(&self) -> Result<RuntimeDescriptor, RuntimeError> {
+        self.inner.describe().await
+    }
+
+    async fn start_turn(&self, request: RuntimeTurnRequest) -> Result<RuntimeTurn, RuntimeError> {
+        self.inner.start_turn(request).await
+    }
+
+    async fn cancel_turn(
+        &self,
+        request: CancelRuntimeTurnRequest,
+    ) -> Result<CancellationAcknowledgement, RuntimeError> {
+        let call = self.cancel_calls.fetch_add(1, Ordering::AcqRel);
+        if call == 0 {
+            let released = self.release_first.notified();
+            self.first_cancel_entered.notify_waiters();
+            released.await;
+            return Err(RuntimeError::retryable(
+                RuntimeErrorCode::ProviderUnavailable,
+            ));
+        }
+        self.inner.cancel_turn(request).await
+    }
+}
+
+#[derive(Clone, Default)]
+struct HangingStartRuntime {
+    starting: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+    changed: Arc<Notify>,
+    cancel_calls: Arc<AtomicUsize>,
+}
+
+impl HangingStartRuntime {
+    async fn wait_until_starting(&self) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let changed = self.changed.notified();
+                if self.starting.load(Ordering::Acquire) {
+                    return;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("runtime did not enter start_turn");
+    }
+}
+
+#[async_trait]
+impl AgentRuntimePort for HangingStartRuntime {
+    async fn respond(&self, request: AgentRequest) -> DennettResult<AgentResponse> {
+        Ok(AgentResponse {
+            text: request.prompt,
+            evidence_handles: request.context_handles,
+        })
+    }
+
+    async fn describe(&self) -> Result<RuntimeDescriptor, dennett_agent_core::RuntimeError> {
+        Ok(RuntimeDescriptor {
+            adapter_id: "dennett.test.hanging-start".to_owned(),
+            runtime_kind: RuntimeKind::GenericLoop,
+            capabilities: RuntimeCapabilities {
+                streaming: true,
+                continuation: false,
+                scoped_cancellation: true,
+                deadlines: true,
+                steering: RuntimeSteeringMode::Unsupported,
+                native_extension_schemas: Vec::new(),
+            },
+            controls: Vec::new(),
+        })
+    }
+
+    async fn start_turn(
+        &self,
+        _request: RuntimeTurnRequest,
+    ) -> Result<RuntimeTurn, dennett_agent_core::RuntimeError> {
+        self.starting.store(true, Ordering::Release);
+        self.changed.notify_waiters();
+        std::future::pending().await
+    }
+
+    async fn cancel_turn(
+        &self,
+        request: CancelRuntimeTurnRequest,
+    ) -> Result<CancellationAcknowledgement, dennett_agent_core::RuntimeError> {
+        self.cancel_calls.fetch_add(1, Ordering::AcqRel);
+        self.cancelled.store(true, Ordering::Release);
+        Ok(CancellationAcknowledgement {
+            session_id: request.session_id,
+            turn_id: request.turn_id,
+            disposition: CancelDisposition::Requested,
+        })
+    }
 }
 
 struct ControlledState {
@@ -563,6 +1164,9 @@ struct ControlledState {
     streaming: AtomicBool,
     changed: Notify,
     turn: Mutex<Option<(String, String)>>,
+    runtime_controls: Mutex<Vec<RuntimeControlSelection>>,
+    steers: Mutex<Vec<SteerRuntimeTurnRequest>>,
+    workspace_paths: Mutex<Vec<String>>,
 }
 
 impl ControlledRuntime {
@@ -576,8 +1180,23 @@ impl ControlledRuntime {
                 streaming: AtomicBool::new(false),
                 changed: Notify::new(),
                 turn: Mutex::new(None),
+                runtime_controls: Mutex::new(Vec::new()),
+                steers: Mutex::new(Vec::new()),
+                workspace_paths: Mutex::new(Vec::new()),
             }),
+            start_delay: Duration::ZERO,
+            steer_delay: Duration::ZERO,
         }
+    }
+
+    fn with_start_delay(mut self, delay: Duration) -> Self {
+        self.start_delay = delay;
+        self
+    }
+
+    fn with_steer_delay(mut self, delay: Duration) -> Self {
+        self.steer_delay = delay;
+        self
     }
 
     async fn wait_until_streaming(&self) {
@@ -617,8 +1236,10 @@ impl AgentRuntimePort for ControlledRuntime {
                 continuation: false,
                 scoped_cancellation: true,
                 deadlines: true,
+                steering: RuntimeSteeringMode::Native,
                 native_extension_schemas: Vec::new(),
             },
+            controls: Vec::new(),
         })
     }
 
@@ -627,6 +1248,17 @@ impl AgentRuntimePort for ControlledRuntime {
         request: RuntimeTurnRequest,
     ) -> Result<RuntimeTurn, dennett_agent_core::RuntimeError> {
         request.validate()?;
+        tokio::time::sleep(self.start_delay).await;
+        *self
+            .state
+            .runtime_controls
+            .lock()
+            .expect("runtime controls lock") = request.runtime_controls.clone();
+        self.state
+            .workspace_paths
+            .lock()
+            .expect("workspace paths lock")
+            .push(request.workspace_path.clone());
         *self.state.turn.lock().expect("turn lock") =
             Some((request.session_id.clone(), request.turn_id.clone()));
         Ok(RuntimeTurn::from_stream(
@@ -667,6 +1299,34 @@ impl AgentRuntimePort for ControlledRuntime {
             session_id: request.session_id,
             turn_id: request.turn_id,
             disposition,
+        })
+    }
+
+    async fn steer_turn(
+        &self,
+        request: SteerRuntimeTurnRequest,
+    ) -> Result<SteeringAcknowledgement, dennett_agent_core::RuntimeError> {
+        request.validate()?;
+        tokio::time::sleep(self.steer_delay).await;
+        let matches = self
+            .state
+            .turn
+            .lock()
+            .expect("turn lock")
+            .as_ref()
+            .is_some_and(|turn| turn.0 == request.session_id && turn.1 == request.turn_id);
+        if !matches || self.state.terminal.load(Ordering::Acquire) {
+            return Err(RuntimeError::recoverable(RuntimeErrorCode::ScopeMismatch));
+        }
+        self.state
+            .steers
+            .lock()
+            .expect("steers lock")
+            .push(request.clone());
+        Ok(SteeringAcknowledgement {
+            session_id: request.session_id,
+            turn_id: request.turn_id,
+            message_id: request.message_id,
         })
     }
 }

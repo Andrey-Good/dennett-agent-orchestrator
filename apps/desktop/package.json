@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:with-runtime": "corepack pnpm --filter @dennett/adapter-host-node build && vite",
+    "dev:with-runtime": "corepack pnpm --filter @dennett/adapter-host-node build && cargo build --manifest-path ../../Cargo.toml -p dennett-node && vite",
     "build": "tsc --noEmit && vite build",
-    "build:with-runtime": "corepack pnpm --filter @dennett/adapter-host-node build && tsc --noEmit && vite build",
+    "build:with-runtime": "corepack pnpm --filter @dennett/adapter-host-node build && cargo build --manifest-path ../../Cargo.toml -p dennett-node --release && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

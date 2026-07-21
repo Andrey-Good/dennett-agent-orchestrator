@@ -717,7 +717,11 @@ impl DraftCachePort for SqliteControlStore {
                updated_at_unix_ms = excluded.updated_at_unix_ms, revision = excluded.revision",
         )
         .bind(&session_id)
-        .bind(draft.project_id.0.to_string())
+        .bind(
+            draft
+                .project_id
+                .map_or_else(String::new, |project_id| project_id.0.to_string()),
+        )
         .bind(&command_id)
         .bind(draft.text)
         .bind(
@@ -758,10 +762,14 @@ impl DraftCachePort for SqliteControlStore {
                 .try_get("updated_at_unix_ms")
                 .map_err(|_| DraftCacheError::StorageUnavailable)?;
             Ok(DraftRecord {
-                project_id: ProjectId(
-                    Uuid::parse_str(&project_id)
-                        .map_err(|_| DraftCacheError::StorageUnavailable)?,
-                ),
+                project_id: if project_id.is_empty() {
+                    None
+                } else {
+                    Some(ProjectId(
+                        Uuid::parse_str(&project_id)
+                            .map_err(|_| DraftCacheError::StorageUnavailable)?,
+                    ))
+                },
                 session_id: SessionId(
                     Uuid::parse_str(&session_id)
                         .map_err(|_| DraftCacheError::StorageUnavailable)?,
@@ -883,7 +891,7 @@ mod tests {
                 session_id,
                 Some(CommandId::new()),
                 SessionEventBody::SessionCreated {
-                    project_id: ProjectId::new(),
+                    project_id: Some(ProjectId::new()),
                     title: format!("{state:?}"),
                 },
                 time,
@@ -1019,7 +1027,7 @@ mod tests {
                     session_id,
                     Some(CommandId::new()),
                     SessionEventBody::SessionCreated {
-                        project_id: ProjectId::new(),
+                        project_id: Some(ProjectId::new()),
                         title: "conflict".to_owned(),
                     },
                     1,
@@ -1063,7 +1071,7 @@ mod tests {
                     session_id,
                     Some(CommandId::new()),
                     SessionEventBody::SessionCreated {
-                        project_id: ProjectId::new(),
+                        project_id: Some(ProjectId::new()),
                         title: "rollback".to_owned(),
                     },
                     1,
@@ -1092,7 +1100,7 @@ mod tests {
                 session_id,
                 Some(CommandId::new()),
                 SessionEventBody::SessionCreated {
-                    project_id: ProjectId::new(),
+                    project_id: Some(ProjectId::new()),
                     title: "integrity".to_owned(),
                 },
                 1,
@@ -1127,7 +1135,7 @@ mod tests {
                 session_id,
                 Some(CommandId::new()),
                 SessionEventBody::SessionCreated {
-                    project_id: ProjectId::new(),
+                    project_id: Some(ProjectId::new()),
                     title: "future payload".to_owned(),
                 },
                 1,
@@ -1249,7 +1257,7 @@ mod tests {
                     session_id,
                     Some(CommandId::new()),
                     SessionEventBody::SessionCreated {
-                        project_id: ProjectId::new(),
+                        project_id: Some(ProjectId::new()),
                         title: "crash committed".to_owned(),
                     },
                     1,
@@ -1293,7 +1301,7 @@ mod tests {
         let path = database_path(&temp);
         let store = SqliteControlStore::open(&path).await.expect("open store");
         let draft = DraftRecord {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             session_id: SessionId::new(),
             command_id: CommandId::new(),
             text: "unsent".to_owned(),

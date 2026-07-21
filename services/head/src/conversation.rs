@@ -1,14 +1,17 @@
-use crate::draft::ComposerDraftApplication;
-use crate::session::{AcceptedTurn, AgentActivityUpdate, SessionCoordinator, SessionSubscription};
+use crate::draft::{ComposerDraftApplication, SessionOperationLocks};
+use crate::session::{
+    AcceptedTurn, AgentActivityUpdate, SessionCoordinator, SessionSubscription,
+    UserSteerCompletion, UserSteerRequest,
+};
 use crate::system::{
     ProjectSummary, SessionSummary, SystemHealth, SystemMutation, SystemProjection,
 };
 use dennett_agent_core::{
     AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest, CancellationAcknowledgement,
     InMemoryRuntimeContinuationStore, NativeExtension, RuntimeActivityStatus,
-    RuntimeContinuationError, RuntimeContinuationPort, RuntimeDeadline, RuntimeError,
-    RuntimeErrorCode, RuntimeEvent, RuntimeEventKind, RuntimeTerminalKind, RuntimeTerminalOutcome,
-    RuntimeTurnRequest,
+    RuntimeContinuationError, RuntimeContinuationPort, RuntimeControlSelection, RuntimeDeadline,
+    RuntimeError, RuntimeErrorCode, RuntimeEvent, RuntimeEventKind, RuntimeSteeringMode,
+    RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurnRequest, SteerRuntimeTurnRequest,
 };
 use dennett_contracts::{CommandId, ProjectId, SessionEventId, SessionId, TurnId};
 use dennett_memory_core::session::{
@@ -21,24 +24,36 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tracing::Instrument;
 
 const DEFAULT_TURN_TIMEOUT: Duration = Duration::from_secs(120);
 const PROVIDER_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const COMMIT_RETRY_DELAY: Duration = Duration::from_millis(100);
+const MAX_TURN_OUTPUT_BYTES: usize = 768 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ActiveTurnPhase {
-    Pending,
+    Preparing,
+    Starting,
     Running,
     Finishing,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 struct ActiveTurnControl {
-    phase: ActiveTurnPhase,
+    phase: watch::Sender<ActiveTurnPhase>,
     cancel_requested: bool,
+    cancel_signal: watch::Sender<bool>,
+    cancel_gate: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeTurnInput {
+    prompt: String,
+    context_handles: Vec<String>,
+    runtime_controls: Vec<RuntimeControlSelection>,
+    workspace_path: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +61,13 @@ pub struct LocalProject {
     pub project_id: ProjectId,
     pub display_name: String,
     pub workspace_path: String,
+    pub standalone_workspace_path: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnDeliveryMode {
+    NewTurn,
+    SteerNow,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,11 +82,14 @@ pub struct TraceContext {
 pub struct ConversationTurnRequest {
     pub trace: TraceContext,
     pub command_id: CommandId,
-    pub project_id: ProjectId,
+    pub project_id: Option<ProjectId>,
     pub session_id: SessionId,
     pub expected_revision: Option<u64>,
     pub text: String,
     pub context_handles: Vec<String>,
+    pub runtime_controls: Vec<RuntimeControlSelection>,
+    pub delivery_mode: TurnDeliveryMode,
+    pub expected_active_turn_id: Option<TurnId>,
 }
 
 #[derive(Clone)]
@@ -76,6 +101,7 @@ pub struct ConversationApplication {
     continuations: Arc<dyn RuntimeContinuationPort>,
     active_turns: Arc<Mutex<HashMap<(SessionId, TurnId), ActiveTurnControl>>>,
     drafts: Option<ComposerDraftApplication>,
+    turn_gates: SessionOperationLocks,
     turn_timeout: Duration,
 }
 
@@ -95,6 +121,7 @@ impl ConversationApplication {
             continuations: Arc::new(InMemoryRuntimeContinuationStore::default()),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             drafts: None,
+            turn_gates: SessionOperationLocks::default(),
             turn_timeout: DEFAULT_TURN_TIMEOUT,
         }
     }
@@ -132,14 +159,17 @@ impl ConversationApplication {
             .restore_all()
             .await?
             .into_iter()
-            .filter(|snapshot| snapshot.session.project_id == self.project.project_id)
+            .filter(|snapshot| self.scope_is_local(snapshot.session.project_id))
             .collect::<Vec<_>>();
-        if restored.is_empty() {
+        if !restored
+            .iter()
+            .any(|snapshot| snapshot.session.project_id == Some(self.project.project_id))
+        {
             restored.push(
                 self.sessions
                     .create_session(
                         create_command_id,
-                        self.project.project_id,
+                        Some(self.project.project_id),
                         default_title,
                         unix_time_ms(),
                     )
@@ -150,6 +180,34 @@ impl ConversationApplication {
 
         for snapshot in &mut restored {
             if let Some(turn_id) = snapshot.session.active_turn_id {
+                let pending_steers = snapshot
+                    .turns
+                    .iter()
+                    .filter(|turn| {
+                        turn.role == SessionTurnRole::User
+                            && turn.state == SessionTurnState::Accepted
+                    })
+                    .map(|turn| turn.turn_id)
+                    .collect::<Vec<_>>();
+                for user_turn_id in pending_steers {
+                    *snapshot = self
+                        .sessions
+                        .finish_steer(UserSteerCompletion {
+                            event_id: SessionEventId::new(),
+                            session_id: snapshot.session.session_id,
+                            user_turn_id,
+                            agent_turn_id: turn_id,
+                            state: SessionTurnState::Failed,
+                            error: Some(SafeSessionError {
+                                code: "runtime_interrupted".to_owned(),
+                                message_key: "session.steer_interrupted".to_owned(),
+                                details_handle: None,
+                            }),
+                            committed_at_unix_ms: unix_time_ms(),
+                        })
+                        .await?
+                        .snapshot;
+                }
                 *snapshot = self
                     .sessions
                     .finish_turn(
@@ -185,7 +243,7 @@ impl ConversationApplication {
                 .map(|snapshot| SystemMutation::UpsertSession(session_summary(snapshot))),
         );
         mutations.push(SystemMutation::Select {
-            project_id: Some(active.session.project_id.0.to_string()),
+            project_id: active.session.project_id.map(|id| id.0.to_string()),
             session_id: Some(active.session.session_id.0.to_string()),
         });
         mutations.push(SystemMutation::SetHealth(SystemHealth::Ready));
@@ -196,10 +254,10 @@ impl ConversationApplication {
     pub async fn create_session(
         &self,
         command_id: CommandId,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         title: String,
     ) -> Result<SessionCommit, ConversationError> {
-        self.require_project(project_id)?;
+        self.require_scope(project_id)?;
         let commit = self
             .sessions
             .create_session(command_id, project_id, title, unix_time_ms())
@@ -208,7 +266,7 @@ impl ConversationApplication {
             .apply(vec![
                 SystemMutation::UpsertSession(session_summary(&commit.snapshot)),
                 SystemMutation::Select {
-                    project_id: Some(project_id.0.to_string()),
+                    project_id: project_id.map(|id| id.0.to_string()),
                     session_id: Some(commit.snapshot.session.session_id.0.to_string()),
                 },
             ])
@@ -228,15 +286,102 @@ impl ConversationApplication {
             expected_revision,
             text,
             context_handles,
+            runtime_controls,
+            delivery_mode,
+            expected_active_turn_id,
         } = request;
-        self.require_project(project_id)?;
+        self.require_scope(project_id)?;
         if text.trim().is_empty() {
             return Err(ConversationError::InvalidRequest);
         }
+        let _turn_guard = self.turn_gates.acquire(session_id).await;
         let draft_guard = match &self.drafts {
             Some(drafts) => Some(drafts.acquire(session_id).await),
             None => None,
         };
+        let existing = self.sessions.event_for_command(command_id).await?;
+        let snapshot = self.sessions.restore(session_id).await?;
+        if snapshot.session.project_id != project_id {
+            return Err(ConversationError::ScopeMismatch);
+        }
+        if let Some(existing) = existing.as_ref()
+            && let dennett_memory_core::session::SessionEventBody::UserSteerRequested {
+                agent_turn_id,
+                ..
+            } = &existing.body
+        {
+            if delivery_mode != TurnDeliveryMode::SteerNow
+                || expected_active_turn_id != Some(*agent_turn_id)
+                || !context_handles.is_empty()
+                || !runtime_controls.is_empty()
+            {
+                return Err(ConversationError::ScopeMismatch);
+            }
+            self.require_native_steering().await?;
+            let accepted = self
+                .deliver_native_steer(
+                    trace,
+                    command_id,
+                    project_id,
+                    session_id,
+                    *agent_turn_id,
+                    text,
+                )
+                .await?;
+            if let Some(drafts) = &self.drafts
+                && let Err(error) = drafts.discard_accepted(session_id, command_id).await
+            {
+                tracing::warn!(code = ?error, "accepted steer draft cleanup will be retried");
+            }
+            drop(draft_guard);
+            return Ok(accepted);
+        }
+        if existing.is_none() {
+            if let Some(active_turn_id) = snapshot.session.active_turn_id {
+                if delivery_mode != TurnDeliveryMode::SteerNow {
+                    return Err(ConversationError::TurnAlreadyActive);
+                }
+                if expected_active_turn_id != Some(active_turn_id)
+                    || !context_handles.is_empty()
+                    || !runtime_controls.is_empty()
+                {
+                    return Err(ConversationError::ScopeMismatch);
+                }
+                self.require_native_steering().await?;
+                let accepted = self
+                    .deliver_native_steer(
+                        trace,
+                        command_id,
+                        project_id,
+                        session_id,
+                        active_turn_id,
+                        text,
+                    )
+                    .await?;
+                if let Some(drafts) = &self.drafts
+                    && let Err(error) = drafts.discard_accepted(session_id, command_id).await
+                {
+                    tracing::warn!(code = ?error, "accepted steer draft cleanup will be retried");
+                }
+                drop(draft_guard);
+                return Ok(accepted);
+            }
+            if delivery_mode == TurnDeliveryMode::SteerNow || expected_active_turn_id.is_some() {
+                return Err(ConversationError::ScopeMismatch);
+            }
+            if let Some(expected) = expected_revision
+                && expected != snapshot.session.revision
+            {
+                return Err(SessionJournalError::RevisionConflict {
+                    expected,
+                    actual: snapshot.session.revision,
+                }
+                .into());
+            }
+        } else if expected_active_turn_id.is_some() {
+            return Err(ConversationError::ScopeMismatch);
+        }
+        let admission_revision = self.sessions.restore(session_id).await?.session.revision;
         let accepted = self
             .sessions
             .accept_turn(
@@ -244,7 +389,7 @@ impl ConversationApplication {
                 project_id,
                 session_id,
                 text.clone(),
-                expected_revision,
+                Some(admission_revision),
                 unix_time_ms(),
             )
             .await?;
@@ -256,11 +401,15 @@ impl ConversationApplication {
         drop(draft_guard);
         let turn_id = accepted.agent_turn_id;
         if !accepted.replayed {
+            let (cancel_signal, cancel_rx) = watch::channel(false);
+            let (phase, _) = watch::channel(ActiveTurnPhase::Preparing);
             self.active_turns.lock().await.insert(
                 (session_id, turn_id),
                 ActiveTurnControl {
-                    phase: ActiveTurnPhase::Pending,
+                    phase,
                     cancel_requested: false,
+                    cancel_signal,
+                    cancel_gate: Arc::new(Mutex::new(())),
                 },
             );
             self.system
@@ -269,12 +418,14 @@ impl ConversationApplication {
                 ))])
                 .await;
             let application = self.clone();
+            let workspace_path = self.workspace_for(project_id).to_owned();
+            let project_span_id = project_id.map(|id| id.0.to_string()).unwrap_or_default();
             let span = tracing::info_span!(
                 "project_chat_turn",
                 dennett.installation.id = %trace.installation_id,
                 dennett.device.id = %trace.device_id,
                 dennett.component = "dennett-head",
-                dennett.project.id = %project_id.0,
+                dennett.project.id = %project_span_id,
                 dennett.session.id = %session_id.0,
                 dennett.command.id = %command_id.0,
                 dennett.runtime.turn.id = %turn_id.0,
@@ -289,7 +440,18 @@ impl ConversationApplication {
             tokio::spawn(
                 async move {
                     application
-                        .run_turn(session_id, turn_id, text, context_handles, span)
+                        .run_turn(
+                            session_id,
+                            turn_id,
+                            RuntimeTurnInput {
+                                prompt: text,
+                                context_handles,
+                                runtime_controls,
+                                workspace_path,
+                            },
+                            cancel_rx,
+                            span,
+                        )
                         .await;
                 }
                 .instrument(instrument_span),
@@ -298,13 +460,215 @@ impl ConversationApplication {
         Ok(accepted)
     }
 
+    async fn require_native_steering(&self) -> Result<(), ConversationError> {
+        let descriptor = tokio::time::timeout(PROVIDER_CONTROL_TIMEOUT, self.runtime.describe())
+            .await
+            .map_err(|_| RuntimeError::retryable(RuntimeErrorCode::ProviderUnavailable))??;
+        if descriptor.capabilities.steering != RuntimeSteeringMode::Native {
+            return Err(RuntimeError::new(RuntimeErrorCode::Unsupported).into());
+        }
+        Ok(())
+    }
+
+    async fn deliver_native_steer(
+        &self,
+        trace: TraceContext,
+        command_id: CommandId,
+        project_id: Option<ProjectId>,
+        session_id: SessionId,
+        agent_turn_id: TurnId,
+        text: String,
+    ) -> Result<AcceptedTurn, ConversationError> {
+        let mut accepted = self
+            .sessions
+            .request_steer(UserSteerRequest {
+                command_id,
+                project_id,
+                session_id,
+                agent_turn_id,
+                text: text.clone(),
+                expected_revision: None,
+                committed_at_unix_ms: unix_time_ms(),
+            })
+            .await?;
+        self.system
+            .apply(vec![SystemMutation::UpsertSession(session_summary(
+                &accepted.commit.snapshot,
+            ))])
+            .await;
+        let user_state = accepted
+            .commit
+            .snapshot
+            .turns
+            .iter()
+            .find(|turn| turn.turn_id == accepted.user_turn_id)
+            .map(|turn| turn.state)
+            .ok_or(ConversationError::SessionUnavailable)?;
+        match user_state {
+            SessionTurnState::Completed => return Ok(accepted),
+            SessionTurnState::Failed => {
+                return Err(RuntimeError::recoverable(RuntimeErrorCode::ProviderFailure).into());
+            }
+            SessionTurnState::Accepted => {}
+            _ => return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation).into()),
+        }
+
+        let span = tracing::info_span!(
+            "project_chat_steer",
+            dennett.installation.id = %trace.installation_id,
+            dennett.device.id = %trace.device_id,
+            dennett.component = "dennett-head",
+            dennett.project.id = %project_id.map(|id| id.0.to_string()).unwrap_or_default(),
+            dennett.session.id = %session_id.0,
+            dennett.command.id = %command_id.0,
+            dennett.runtime.turn.id = %agent_turn_id.0,
+            dennett.provider.id = tracing::field::Empty,
+            dennett.memory.event.id = tracing::field::Empty,
+            dennett.protocol.version = 1_u64,
+            dennett.authority.epoch = trace.authority_epoch,
+            correlation_id = %trace.correlation_id,
+        );
+        let control_deadline = tokio::time::Instant::now() + PROVIDER_CONTROL_TIMEOUT;
+        let steering = match self
+            .wait_until_runtime_steerable(session_id, agent_turn_id, control_deadline)
+            .await
+        {
+            Ok(()) => match tokio::time::timeout_at(
+                control_deadline,
+                self.runtime.steer_turn(SteerRuntimeTurnRequest {
+                    session_id: session_id.0.to_string(),
+                    turn_id: agent_turn_id.0.to_string(),
+                    message_id: command_id.0.to_string(),
+                    text,
+                }),
+            )
+            .instrument(span.clone())
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(RuntimeError::retryable(
+                    RuntimeErrorCode::ProviderUnavailable,
+                )),
+            },
+            Err(error) => Err(error),
+        };
+
+        let (state, safe_error, runtime_error) = match steering {
+            Ok(_) => (SessionTurnState::Completed, None, None),
+            Err(error) => (
+                SessionTurnState::Failed,
+                Some(SafeSessionError {
+                    code: error.code.as_str().to_owned(),
+                    message_key: "session.steer_failed".to_owned(),
+                    details_handle: None,
+                }),
+                Some(error),
+            ),
+        };
+        let commit = self
+            .finish_steer_reliably(
+                session_id,
+                accepted.user_turn_id,
+                agent_turn_id,
+                state,
+                safe_error,
+            )
+            .await?;
+        record_span_text(
+            &span,
+            "dennett.memory.event.id",
+            &commit.event.event_id.0.to_string(),
+        );
+        self.system
+            .apply(vec![SystemMutation::UpsertSession(session_summary(
+                &commit.snapshot,
+            ))])
+            .await;
+        accepted.commit = commit;
+        if let Some(error) = runtime_error {
+            return Err(error.into());
+        }
+        Ok(accepted)
+    }
+
+    async fn wait_until_runtime_steerable(
+        &self,
+        session_id: SessionId,
+        turn_id: TurnId,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), RuntimeError> {
+        let mut phase_changes = {
+            let active = self.active_turns.lock().await;
+            active
+                .get(&(session_id, turn_id))
+                .ok_or_else(|| RuntimeError::recoverable(RuntimeErrorCode::ScopeMismatch))?
+                .phase
+                .subscribe()
+        };
+        loop {
+            {
+                let active = self.active_turns.lock().await;
+                let control = active
+                    .get(&(session_id, turn_id))
+                    .ok_or_else(|| RuntimeError::recoverable(RuntimeErrorCode::ScopeMismatch))?;
+                let phase = *control.phase.borrow();
+                if control.cancel_requested || phase == ActiveTurnPhase::Finishing {
+                    return Err(RuntimeError::recoverable(RuntimeErrorCode::ScopeMismatch));
+                }
+                if phase == ActiveTurnPhase::Running {
+                    return Ok(());
+                }
+            }
+            tokio::time::timeout_at(deadline, phase_changes.changed())
+                .await
+                .map_err(|_| RuntimeError::retryable(RuntimeErrorCode::ProviderUnavailable))?
+                .map_err(|_| RuntimeError::recoverable(RuntimeErrorCode::ScopeMismatch))?;
+        }
+    }
+
+    async fn finish_steer_reliably(
+        &self,
+        session_id: SessionId,
+        user_turn_id: TurnId,
+        agent_turn_id: TurnId,
+        state: SessionTurnState,
+        error: Option<SafeSessionError>,
+    ) -> Result<SessionCommit, ConversationError> {
+        let event_id = SessionEventId::new();
+        let committed_at = unix_time_ms();
+        loop {
+            match self
+                .sessions
+                .finish_steer(UserSteerCompletion {
+                    event_id,
+                    session_id,
+                    user_turn_id,
+                    agent_turn_id,
+                    state,
+                    error: error.clone(),
+                    committed_at_unix_ms: committed_at,
+                })
+                .await
+            {
+                Ok(commit) => return Ok(commit),
+                Err(
+                    SessionJournalError::StorageUnavailable
+                    | SessionJournalError::RevisionConflict { .. },
+                ) => tokio::time::sleep(COMMIT_RETRY_DELAY).await,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     pub async fn cancel_turn(
         &self,
+        project_id: Option<ProjectId>,
         session_id: SessionId,
         turn_id: TurnId,
     ) -> Result<CancellationAcknowledgement, ConversationError> {
         let snapshot = self.sessions.restore(session_id).await?;
-        if snapshot.session.project_id != self.project.project_id {
+        self.require_scope(project_id)?;
+        if snapshot.session.project_id != project_id {
             return Err(ConversationError::ScopeMismatch);
         }
         let turn = snapshot
@@ -324,7 +688,37 @@ impl ConversationApplication {
         if snapshot.session.active_turn_id != Some(turn_id) {
             return Err(ConversationError::ScopeMismatch);
         }
-        let contact_provider = {
+        let cancel_gate = {
+            let active = self.active_turns.lock().await;
+            active
+                .get(&(session_id, turn_id))
+                .map(|control| Arc::clone(&control.cancel_gate))
+                .ok_or(ConversationError::SessionUnavailable)?
+        };
+        let _cancel_guard = cancel_gate.lock().await;
+
+        // A concurrent cancellation may have completed while this caller waited.
+        // Re-read canonical state before deciding whether another provider request is needed.
+        let snapshot = self.sessions.restore(session_id).await?;
+        let turn = snapshot
+            .turns
+            .iter()
+            .find(|candidate| {
+                candidate.turn_id == turn_id && candidate.role == SessionTurnRole::Agent
+            })
+            .ok_or(ConversationError::ScopeMismatch)?;
+        if turn.state.is_terminal() {
+            return Ok(CancellationAcknowledgement {
+                session_id: session_id.0.to_string(),
+                turn_id: turn_id.0.to_string(),
+                disposition: CancelDisposition::AlreadyTerminal(terminal_kind(turn.state)),
+            });
+        }
+        if snapshot.session.active_turn_id != Some(turn_id) {
+            return Err(ConversationError::ScopeMismatch);
+        }
+
+        let (cancel_signal, phase) = {
             let mut active = self.active_turns.lock().await;
             let control = active
                 .get_mut(&(session_id, turn_id))
@@ -337,15 +731,78 @@ impl ConversationApplication {
                 ));
             }
             control.cancel_requested = true;
-            control.phase == ActiveTurnPhase::Running
+            (control.cancel_signal.clone(), *control.phase.borrow())
         };
-        if !contact_provider {
+        if phase == ActiveTurnPhase::Preparing {
+            let _ = cancel_signal.send(true);
             return Ok(cancellation_ack(
                 session_id,
                 turn_id,
                 CancelDisposition::Requested,
             ));
         }
+        let acknowledgement = match tokio::time::timeout(
+            PROVIDER_CONTROL_TIMEOUT,
+            self.runtime.cancel_turn(CancelRuntimeTurnRequest {
+                session_id: session_id.0.to_string(),
+                turn_id: turn_id.0.to_string(),
+            }),
+        )
+        .await
+        {
+            Ok(Ok(acknowledgement)) => acknowledgement,
+            Ok(Err(error)) => {
+                self.reset_cancel_request(session_id, turn_id).await;
+                return Err(ConversationError::Runtime(error));
+            }
+            Err(_) => {
+                self.reset_cancel_request(session_id, turn_id).await;
+                return Err(ConversationError::Runtime(RuntimeError::retryable(
+                    RuntimeErrorCode::ProviderUnavailable,
+                )));
+            }
+        };
+        if acknowledgement.disposition == CancelDisposition::NotFound {
+            if phase == ActiveTurnPhase::Starting {
+                let _ = cancel_signal.send(true);
+                return Ok(cancellation_ack(
+                    session_id,
+                    turn_id,
+                    CancelDisposition::Requested,
+                ));
+            }
+            self.reset_cancel_request(session_id, turn_id).await;
+            return Err(ConversationError::Runtime(RuntimeError::recoverable(
+                RuntimeErrorCode::ScopeMismatch,
+            )));
+        }
+        if matches!(
+            acknowledgement.disposition,
+            CancelDisposition::Requested
+                | CancelDisposition::AlreadyRequested
+                | CancelDisposition::AlreadyTerminal(RuntimeTerminalKind::Cancelled)
+        ) {
+            let _ = cancel_signal.send(true);
+        }
+        Ok(acknowledgement)
+    }
+
+    async fn reset_cancel_request(&self, session_id: SessionId, turn_id: TurnId) {
+        if let Some(control) = self
+            .active_turns
+            .lock()
+            .await
+            .get_mut(&(session_id, turn_id))
+        {
+            control.cancel_requested = false;
+        }
+    }
+
+    async fn cancel_runtime_before_terminal(
+        &self,
+        session_id: SessionId,
+        turn_id: TurnId,
+    ) -> Result<(), RuntimeError> {
         let acknowledgement = tokio::time::timeout(
             PROVIDER_CONTROL_TIMEOUT,
             self.runtime.cancel_turn(CancelRuntimeTurnRequest {
@@ -354,25 +811,34 @@ impl ConversationApplication {
             }),
         )
         .await
-        .map_err(|_| {
-            ConversationError::Runtime(RuntimeError::retryable(
-                RuntimeErrorCode::ProviderUnavailable,
-            ))
-        })??;
-        if acknowledgement.disposition == CancelDisposition::NotFound {
-            return Err(ConversationError::Runtime(RuntimeError::recoverable(
-                RuntimeErrorCode::ScopeMismatch,
-            )));
+        .map_err(|_| RuntimeError::retryable(RuntimeErrorCode::ProviderUnavailable))??;
+        match acknowledgement.disposition {
+            CancelDisposition::Requested
+            | CancelDisposition::AlreadyRequested
+            | CancelDisposition::AlreadyTerminal(RuntimeTerminalKind::Cancelled)
+            | CancelDisposition::AlreadyTerminal(RuntimeTerminalKind::TimedOut) => Ok(()),
+            CancelDisposition::AlreadyTerminal(
+                RuntimeTerminalKind::Completed | RuntimeTerminalKind::Failed,
+            ) => Err(RuntimeError::recoverable(RuntimeErrorCode::ProviderFailure)),
+            CancelDisposition::NotFound => {
+                Err(RuntimeError::recoverable(RuntimeErrorCode::ScopeMismatch))
+            }
         }
-        Ok(acknowledgement)
     }
 
     pub async fn subscribe(
         &self,
         session_id: SessionId,
     ) -> Result<SessionSubscription, ConversationError> {
-        self.require_session_project(session_id).await?;
-        Ok(self.sessions.subscribe(session_id).await?)
+        self.require_session_scope(session_id).await?;
+        self.sessions.subscribe(session_id).await.map_err(|error| {
+            tracing::error!(
+                dennett.session.id = %session_id.0,
+                code = ?error,
+                "failed to open authoritative session watch"
+            );
+            error.into()
+        })
     }
 
     pub async fn restore(
@@ -380,18 +846,22 @@ impl ConversationApplication {
         session_id: SessionId,
     ) -> Result<ProjectSessionSnapshot, ConversationError> {
         let snapshot = self.sessions.restore(session_id).await?;
-        if snapshot.session.project_id != self.project.project_id {
+        if !self.scope_is_local(snapshot.session.project_id) {
             return Err(ConversationError::ScopeMismatch);
         }
         Ok(snapshot)
     }
 
-    async fn require_session_project(
-        &self,
-        session_id: SessionId,
-    ) -> Result<(), ConversationError> {
-        let snapshot = self.sessions.restore(session_id).await?;
-        if snapshot.session.project_id != self.project.project_id {
+    async fn require_session_scope(&self, session_id: SessionId) -> Result<(), ConversationError> {
+        let snapshot = self.sessions.restore(session_id).await.map_err(|error| {
+            tracing::error!(
+                dennett.session.id = %session_id.0,
+                code = ?error,
+                "failed to restore authoritative session"
+            );
+            error
+        })?;
+        if !self.scope_is_local(snapshot.session.project_id) {
             return Err(ConversationError::ScopeMismatch);
         }
         Ok(())
@@ -401,23 +871,35 @@ impl ConversationApplication {
         &self,
         session_id: SessionId,
         turn_id: TurnId,
-        prompt: String,
-        context_handles: Vec<String>,
+        input: RuntimeTurnInput,
+        mut cancel_rx: watch::Receiver<bool>,
         trace_span: tracing::Span,
     ) {
+        let RuntimeTurnInput {
+            prompt,
+            context_handles,
+            runtime_controls,
+            workspace_path,
+        } = input;
         let deadline_at = tokio::time::Instant::now() + self.turn_timeout;
-        if self.cancel_requested(session_id, turn_id).await {
+        if *cancel_rx.borrow() {
             self.finish_cancelled(session_id, turn_id, String::new(), &trace_span)
                 .await;
             return;
         }
-        let descriptor = match tokio::time::timeout_at(deadline_at, self.runtime.describe()).await {
-            Ok(descriptor) => descriptor,
-            Err(_) => {
-                self.finish_timeout(session_id, turn_id, String::new(), &trace_span)
-                    .await;
+        let descriptor = tokio::select! {
+            biased;
+            () = wait_for_cancel_signal(&mut cancel_rx) => {
+                self.finish_cancelled(session_id, turn_id, String::new(), &trace_span).await;
                 return;
             }
+            descriptor = tokio::time::timeout_at(deadline_at, self.runtime.describe()) => match descriptor {
+                Ok(descriptor) => descriptor,
+                Err(_) => {
+                    self.finish_timeout(session_id, turn_id, String::new(), &trace_span).await;
+                    return;
+                }
+            },
         };
         let provider_id = descriptor
             .as_ref()
@@ -428,13 +910,28 @@ impl ConversationApplication {
                 .await;
             return;
         }
-        if self.cancel_requested(session_id, turn_id).await {
+        if *cancel_rx.borrow() {
             self.finish_cancelled(session_id, turn_id, String::new(), &trace_span)
                 .await;
             return;
         }
         let session_key = session_id.0.to_string();
-        let continuation = match self.continuations.load(&session_key).await {
+        let continuation = tokio::select! {
+            biased;
+            () = wait_for_cancel_signal(&mut cancel_rx) => {
+                self.finish_cancelled(session_id, turn_id, String::new(), &trace_span).await;
+                return;
+            }
+            continuation = tokio::time::timeout_at(deadline_at, self.continuations.load(&session_key)) => match continuation {
+                Ok(continuation) => continuation,
+                Err(_) => {
+                self.finish_timeout(session_id, turn_id, String::new(), &trace_span)
+                    .await;
+                return;
+                }
+            },
+        };
+        let continuation = match continuation {
             Ok(continuation) => continuation,
             Err(error) => {
                 self.finish_runtime_error(
@@ -459,33 +956,20 @@ impl ConversationApplication {
             session_id: session_id.0.to_string(),
             turn_id: turn_id.0.to_string(),
             prompt,
-            workspace_path: self.project.workspace_path.clone(),
+            workspace_path,
             context_handles,
+            runtime_controls,
             continuation,
             deadline,
         };
-        let mut turn =
-            match tokio::time::timeout_at(deadline_at, self.runtime.start_turn(request)).await {
-                Ok(Ok(turn)) => turn,
-                Ok(Err(error)) => {
-                    self.finish_runtime_error(session_id, turn_id, error, &trace_span)
-                        .await;
-                    return;
-                }
-                Err(_) => {
-                    self.finish_timeout(session_id, turn_id, String::new(), &trace_span)
-                        .await;
-                    return;
-                }
-            };
-        let cancel_after_start = {
+        let start_cancel_requested = {
             let mut active = self.active_turns.lock().await;
             active.get_mut(&(session_id, turn_id)).map(|control| {
-                control.phase = ActiveTurnPhase::Running;
+                control.phase.send_replace(ActiveTurnPhase::Starting);
                 control.cancel_requested
             })
         };
-        let Some(cancel_after_start) = cancel_after_start else {
+        let Some(start_cancel_requested) = start_cancel_requested else {
             self.finish_runtime_error(
                 session_id,
                 turn_id,
@@ -495,31 +979,57 @@ impl ConversationApplication {
             .await;
             return;
         };
-        if cancel_after_start {
-            let _ = tokio::time::timeout(
-                PROVIDER_CONTROL_TIMEOUT,
-                self.runtime.cancel_turn(CancelRuntimeTurnRequest {
-                    session_id: session_id.0.to_string(),
-                    turn_id: turn_id.0.to_string(),
-                }),
-            )
-            .await;
+        if start_cancel_requested {
+            self.finish_cancelled(session_id, turn_id, String::new(), &trace_span)
+                .await;
+            return;
         }
+        let mut turn = tokio::select! {
+            biased;
+            () = wait_for_cancel_signal(&mut cancel_rx) => {
+                self.finish_cancelled(session_id, turn_id, String::new(), &trace_span).await;
+                return;
+            }
+            turn = tokio::time::timeout_at(deadline_at, self.runtime.start_turn(request)) => match turn {
+                Ok(Ok(turn)) => turn,
+                Ok(Err(error)) => {
+                    self.finish_runtime_error(session_id, turn_id, error, &trace_span)
+                        .await;
+                    return;
+                }
+                Err(_) => {
+                    match self.cancel_runtime_before_terminal(session_id, turn_id).await {
+                        Ok(()) => {
+                            self.finish_timeout(session_id, turn_id, String::new(), &trace_span)
+                                .await;
+                        }
+                        Err(error) => {
+                            self.finish_runtime_error(session_id, turn_id, error, &trace_span)
+                                .await;
+                        }
+                    }
+                    return;
+                }
+            },
+        };
         let mut output = String::new();
         loop {
             let next = match tokio::time::timeout_at(deadline_at, turn.next_event()).await {
                 Ok(next) => next,
                 Err(_) => {
-                    let _ = tokio::time::timeout(
-                        PROVIDER_CONTROL_TIMEOUT,
-                        self.runtime.cancel_turn(CancelRuntimeTurnRequest {
-                            session_id: session_id.0.to_string(),
-                            turn_id: turn_id.0.to_string(),
-                        }),
-                    )
-                    .await;
-                    self.finish_timeout(session_id, turn_id, output, &trace_span)
-                        .await;
+                    match self
+                        .cancel_runtime_before_terminal(session_id, turn_id)
+                        .await
+                    {
+                        Ok(()) => {
+                            self.finish_timeout(session_id, turn_id, output, &trace_span)
+                                .await;
+                        }
+                        Err(error) => {
+                            self.finish_runtime_error(session_id, turn_id, error, &trace_span)
+                                .await;
+                        }
+                    }
                     return;
                 }
             };
@@ -549,6 +1059,22 @@ impl ConversationApplication {
             } = event;
             match kind {
                 RuntimeEventKind::Started { continuation } => {
+                    let transitioned = {
+                        let mut active = self.active_turns.lock().await;
+                        active.get_mut(&(session_id, turn_id)).map(|control| {
+                            control.phase.send_replace(ActiveTurnPhase::Running);
+                        })
+                    };
+                    if transitioned.is_none() {
+                        self.finish_runtime_error(
+                            session_id,
+                            turn_id,
+                            RuntimeError::new(RuntimeErrorCode::ProtocolViolation),
+                            &trace_span,
+                        )
+                        .await;
+                        return;
+                    }
                     if let Some(continuation) = continuation
                         && let Err(error) =
                             self.continuations.save(&session_key, &continuation).await
@@ -564,6 +1090,18 @@ impl ConversationApplication {
                     }
                 }
                 RuntimeEventKind::TextDelta { text } => {
+                    if output.len().saturating_add(text.len()) > MAX_TURN_OUTPUT_BYTES {
+                        let error = self
+                            .cancel_runtime_before_terminal(session_id, turn_id)
+                            .await
+                            .err()
+                            .unwrap_or_else(|| {
+                                RuntimeError::recoverable(RuntimeErrorCode::ProviderFailure)
+                            });
+                        self.finish_runtime_error(session_id, turn_id, error, &trace_span)
+                            .await;
+                        return;
+                    }
                     output.push_str(&text);
                     if let Err(error) = self
                         .append_agent_text_reliably(session_id, turn_id, text)
@@ -783,7 +1321,7 @@ impl ConversationApplication {
             .await
             .get_mut(&(session_id, turn_id))
         {
-            control.phase = ActiveTurnPhase::Finishing;
+            control.phase.send_replace(ActiveTurnPhase::Finishing);
         }
         let event_id = SessionEventId::new();
         let committed_at = unix_time_ms();
@@ -837,14 +1375,6 @@ impl ConversationApplication {
             .lock()
             .await
             .remove(&(session_id, turn_id));
-    }
-
-    async fn cancel_requested(&self, session_id: SessionId, turn_id: TurnId) -> bool {
-        self.active_turns
-            .lock()
-            .await
-            .get(&(session_id, turn_id))
-            .is_some_and(|control| control.cancel_requested)
     }
 
     async fn append_agent_text_reliably(
@@ -909,11 +1439,23 @@ impl ConversationApplication {
         }
     }
 
-    fn require_project(&self, project_id: ProjectId) -> Result<(), ConversationError> {
-        if project_id == self.project.project_id {
+    fn scope_is_local(&self, project_id: Option<ProjectId>) -> bool {
+        project_id.is_none() || project_id == Some(self.project.project_id)
+    }
+
+    fn require_scope(&self, project_id: Option<ProjectId>) -> Result<(), ConversationError> {
+        if self.scope_is_local(project_id) {
             Ok(())
         } else {
             Err(ConversationError::ScopeMismatch)
+        }
+    }
+
+    fn workspace_for(&self, project_id: Option<ProjectId>) -> &str {
+        if project_id.is_some() {
+            &self.project.workspace_path
+        } else {
+            &self.project.standalone_workspace_path
         }
     }
 }
@@ -943,6 +1485,17 @@ fn session_activity_status(status: RuntimeActivityStatus) -> SessionActivityStat
         RuntimeActivityStatus::Updated => SessionActivityStatus::Updated,
         RuntimeActivityStatus::Completed => SessionActivityStatus::Completed,
         RuntimeActivityStatus::Failed => SessionActivityStatus::Failed,
+    }
+}
+
+async fn wait_for_cancel_signal(cancel_rx: &mut watch::Receiver<bool>) {
+    if *cancel_rx.borrow() {
+        return;
+    }
+    loop {
+        if cancel_rx.changed().await.is_err() || *cancel_rx.borrow() {
+            return;
+        }
     }
 }
 
@@ -995,7 +1548,10 @@ fn runtime_continuation_error(error: RuntimeContinuationError) -> RuntimeError {
 fn session_summary(snapshot: &ProjectSessionSnapshot) -> SessionSummary {
     SessionSummary {
         session_id: snapshot.session.session_id.0.to_string(),
-        project_id: snapshot.session.project_id.0.to_string(),
+        project_id: snapshot
+            .session
+            .project_id
+            .map_or_else(String::new, |id| id.0.to_string()),
         title: snapshot.session.title.clone(),
         state: snapshot.session.state,
         revision: snapshot.session.revision,
@@ -1017,6 +1573,8 @@ fn unix_time_ms() -> u64 {
 pub enum ConversationError {
     #[error("conversation request is invalid")]
     InvalidRequest,
+    #[error("another conversation turn is already active")]
+    TurnAlreadyActive,
     #[error("conversation scope does not match the local project")]
     ScopeMismatch,
     #[error("conversation session is unavailable")]

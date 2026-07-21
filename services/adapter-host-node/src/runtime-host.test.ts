@@ -9,6 +9,8 @@ import {
   type RuntimeEvent,
   type RuntimeTurn,
   type RuntimeTurnRequest,
+  type SteerRuntimeTurnRequest,
+  type SteeringAcknowledgement,
 } from "./runtime-contract.js";
 import { RuntimeHost } from "./runtime-host.js";
 import { RuntimeAdapterError } from "./runtime-contract.js";
@@ -25,8 +27,10 @@ class FakeAdapter implements AgentRuntimeAdapter {
         continuation: true,
         scopedCancellation: true,
         deadlines: true,
+        steering: "native",
         nativeExtensionSchemas: [],
       },
+      controls: [],
     };
   }
 
@@ -67,6 +71,16 @@ class FakeAdapter implements AgentRuntimeAdapter {
     turnId: string;
   }): Promise<CancellationAcknowledgement> {
     return { ...request, disposition: { type: "requested" } };
+  }
+
+  async steerTurn(
+    request: SteerRuntimeTurnRequest,
+  ): Promise<SteeringAcknowledgement> {
+    return {
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      messageId: request.messageId,
+    };
   }
 }
 
@@ -120,6 +134,73 @@ test("runtime host returns only safe typed failures", async () => {
     },
   }]);
   assert.equal(JSON.stringify(messages).includes("private-prompt"), false);
+});
+
+test("runtime host forwards native steering without starting another turn", async () => {
+  const messages: Record<string, unknown>[] = [];
+  const host = new RuntimeHost(new FakeAdapter(), (message) => {
+    messages.push(message);
+  });
+  await host.handleLine(JSON.stringify({
+    v: 1,
+    id: "steer-1",
+    method: "steer_turn",
+    params: {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      messageId: "message-1",
+      text: "Use the new constraint",
+    },
+  }));
+  assert.deepEqual(messages, [{
+    v: 1,
+    id: "steer-1",
+    result: {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      messageId: "message-1",
+    },
+  }]);
+});
+
+test("a slow steer does not block an independent Stop request", async () => {
+  let releaseSteer: (() => void) | undefined;
+  let steerEntered: (() => void) | undefined;
+  const entered = new Promise<void>((resolve) => { steerEntered = resolve; });
+  const gate = new Promise<void>((resolve) => { releaseSteer = resolve; });
+  class SlowSteerAdapter extends FakeAdapter {
+    override async steerTurn(request: SteerRuntimeTurnRequest): Promise<SteeringAcknowledgement> {
+      steerEntered?.();
+      await gate;
+      return super.steerTurn(request);
+    }
+  }
+  const messages: Record<string, unknown>[] = [];
+  const host = new RuntimeHost(new SlowSteerAdapter(), (message) => { messages.push(message); });
+  const steering = host.handleLine(JSON.stringify({
+    v: 1,
+    id: "steer-slow",
+    method: "steer_turn",
+    params: {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      messageId: "message-1",
+      text: "slow clarification",
+    },
+  }));
+  await entered;
+
+  await host.handleLine(JSON.stringify({
+    v: 1,
+    id: "cancel-fast",
+    method: "cancel_turn",
+    params: { sessionId: "session-1", turnId: "turn-1" },
+  }));
+  assert.equal(messages[0]?.id, "cancel-fast");
+
+  releaseSteer?.();
+  await steering;
+  assert.equal(messages[1]?.id, "steer-slow");
 });
 
 test("runtime host reports healthy only after the adapter is ready", async () => {

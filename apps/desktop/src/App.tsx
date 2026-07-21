@@ -54,8 +54,14 @@ import {
   applyProjectChatEvent,
   type ProjectChatEvent,
   type ProjectChatState,
+  type ProjectTurn,
 } from "./lib/projectChatBridge";
-import type { SystemSnapshot } from "./lib/systemBridge";
+import type {
+  RuntimeControlChoice,
+  RuntimeControlDescriptor,
+  RuntimeControlSelection,
+  SystemSnapshot,
+} from "./lib/systemBridge";
 import "./styles.css";
 
 type Icon = React.ComponentType<IconProps>;
@@ -68,6 +74,7 @@ interface LiveConnectionState {
   phase: LiveConnectionPhase;
   message: string | null;
   targetSessionId: string | null;
+  lastEventAtUnixMs: number | null;
 }
 type WorkspaceSurface =
   | { kind: "chat" }
@@ -110,6 +117,50 @@ const recentChats: SessionItem[] = [
 ];
 
 const updateAvailable = false;
+const LIVE_WATCH_STALE_AFTER_MS = 70_000;
+const ACCESS_CONTROL_ID = "dennett.access_mode";
+
+function runtimeChoiceAvailable(
+  choice: RuntimeControlChoice,
+  selections: Readonly<Record<string, string>>,
+): boolean {
+  return choice.availableWhen.every((condition) => {
+    const selected = selections[condition.controlId];
+    return selected !== undefined && condition.choiceIds.includes(selected);
+  });
+}
+
+function reconcileRuntimeSelections(
+  controls: readonly RuntimeControlDescriptor[],
+  requested: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const next = Object.fromEntries(controls.flatMap((control) => {
+    const initial = control.choices.some((choice) => choice.id === requested[control.id])
+      ? requested[control.id]
+      : control.defaultChoiceId;
+    return initial ? [[control.id, initial]] : [];
+  }));
+  for (let pass = 0; pass <= controls.length; pass += 1) {
+    let changed = false;
+    for (const control of controls) {
+      const available = control.choices.filter((choice) => runtimeChoiceAvailable(choice, next));
+      const selected = available.find((choice) => choice.id === next[control.id])
+        ?? available.find((choice) => choice.id === control.defaultChoiceId)
+        ?? available[0];
+      if (!selected) {
+        if (control.id in next) {
+          delete next[control.id];
+          changed = true;
+        }
+      } else if (next[control.id] !== selected.id) {
+        next[control.id] = selected.id;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return next;
+}
 
 const browserPreviewDocument = `<!doctype html>
 <html lang="en">
@@ -213,26 +264,39 @@ function formatElapsed(durationMs: number): string {
 function activityLabel(phase: string, status: string): string {
   const completed = status.endsWith("_completed");
   const failed = status.endsWith("_failed");
+  const stopped = status.endsWith("_cancelled");
+  const timedOut = status.endsWith("_timed_out");
   switch (phase) {
-    case "reasoning_summary": return "Reasoning summary";
-    case "command": return failed ? "Command failed" : completed ? "Ran command" : "Running command";
-    case "workspace": return failed ? "File update failed" : completed ? "Updated files" : "Updating files";
-    case "web_search": return completed ? "Searched the web" : "Searching the web";
-    case "plan": return completed ? "Updated the plan" : "Updating the plan";
-    case "tool": return failed ? "Tool failed" : completed ? "Used tool" : "Using tool";
+    case "commentary": return "Agent update";
+    case "command": return stopped ? "Command stopped" : timedOut ? "Command timed out" : failed ? "Command failed" : completed ? "Ran command" : "Running command";
+    case "workspace": return stopped ? "File update stopped" : timedOut ? "File update timed out" : failed ? "File update failed" : completed ? "Updated files" : "Updating files";
+    case "web_search": return stopped ? "Search stopped" : timedOut ? "Search timed out" : completed ? "Searched the web" : "Searching the web";
+    case "plan": return stopped ? "Plan update stopped" : timedOut ? "Plan update timed out" : completed ? "Updated the plan" : "Updating the plan";
+    case "tool": return stopped ? "Tool stopped" : timedOut ? "Tool timed out" : failed ? "Tool failed" : completed ? "Used tool" : "Using tool";
     default: return completed ? "Completed activity" : "Working";
   }
 }
 
 function ActivityIcon({ phase, status }: { phase: string; status: string }): React.JSX.Element {
+  if (status.endsWith("_cancelled")) return <Stop size={15} weight="fill" aria-hidden="true" />;
+  if (status.endsWith("_timed_out")) return <WarningCircle size={15} aria-hidden="true" />;
   if (status.endsWith("_failed")) return <WarningCircle size={15} aria-hidden="true" />;
   if (!status.endsWith("_completed")) return <CircleNotch size={15} className="spin" aria-hidden="true" />;
-  if (phase === "reasoning_summary") return <Brain size={15} aria-hidden="true" />;
+  if (phase === "commentary") return <ChatCircleDots size={15} aria-hidden="true" />;
   if (phase === "workspace") return <FileCode size={15} aria-hidden="true" />;
   if (phase === "web_search") return <Globe size={15} aria-hidden="true" />;
   if (phase === "plan") return <ListChecks size={15} aria-hidden="true" />;
   if (phase === "tool") return <Plug size={15} aria-hidden="true" />;
   return <Command size={15} aria-hidden="true" />;
+}
+
+function effectiveActivityStatus(message: ChatMessage, status: string): string {
+  if (status.endsWith("_completed") || status.endsWith("_failed") || message.active) return status;
+  const terminal = message.terminalState ?? "";
+  if (terminal.endsWith("_cancelled")) return "turn_activity_status_cancelled";
+  if (terminal.endsWith("_timed_out")) return "turn_activity_status_timed_out";
+  if (terminal.endsWith("_failed")) return "turn_activity_status_failed";
+  return "turn_activity_status_completed";
 }
 
 function ActivityTimeline({ message }: { message: ChatMessage }): React.JSX.Element | null {
@@ -243,38 +307,51 @@ function ActivityTimeline({ message }: { message: ChatMessage }): React.JSX.Elem
     return () => window.clearInterval(timer);
   }, [message.active]);
   if (message.author !== "agent" || message.startedAtUnixMs == null) return null;
-  const elapsedUntil = message.completedAtUnixMs ?? Date.now();
-  const elapsed = formatElapsed(elapsedUntil - message.startedAtUnixMs);
+  const elapsedUntil = message.completedAtUnixMs ?? (message.active ? Date.now() : null);
+  const elapsed = elapsedUntil === null
+    ? null
+    : formatElapsed(elapsedUntil - message.startedAtUnixMs);
   const activities = message.activities ?? [];
+  const showSummary = message.showActivitySummary !== false;
+  if (activities.length === 0 && !showSummary) return null;
   const terminal = message.terminalState ?? "";
   const summary = message.active
-    ? { icon: <CircleNotch size={15} className="spin" aria-hidden="true" />, text: `Working for ${elapsed}` }
+    ? { icon: <CircleNotch size={15} className="spin" aria-hidden="true" />, text: `Working for ${elapsed ?? "0s"}` }
     : terminal.endsWith("_cancelled")
-      ? { icon: <Stop size={15} weight="fill" aria-hidden="true" />, text: `Stopped after ${elapsed}` }
+      ? { icon: <Stop size={15} weight="fill" aria-hidden="true" />, text: elapsed ? `Stopped after ${elapsed}` : "Stopped" }
       : terminal.endsWith("_timed_out")
-        ? { icon: <WarningCircle size={15} aria-hidden="true" />, text: `Timed out after ${elapsed}` }
+        ? { icon: <WarningCircle size={15} aria-hidden="true" />, text: elapsed ? `Timed out after ${elapsed}` : "Timed out" }
         : terminal.endsWith("_failed")
-          ? { icon: <WarningCircle size={15} aria-hidden="true" />, text: `Failed after ${elapsed}` }
-          : { icon: <CheckCircle size={15} aria-hidden="true" />, text: `Worked for ${elapsed}` };
+          ? { icon: <WarningCircle size={15} aria-hidden="true" />, text: elapsed ? `Failed after ${elapsed}` : "Failed" }
+          : { icon: <CheckCircle size={15} aria-hidden="true" />, text: elapsed ? `Worked for ${elapsed}` : "Completed" };
   return (
     <section className={`turn-activity${message.active ? " is-active" : ""}`} aria-label="Agent work">
-      <div className="turn-activity__summary">
-        {summary.icon}
-        <strong>{summary.text}</strong>
-      </div>
       {activities.length > 0 ? (
         <div className="turn-activity__items">
-          {activities.map((activity) => (
-            <div className="turn-activity__item" key={activity.id}>
-              <ActivityIcon phase={activity.phase} status={activity.status} />
-              <span>
-                <strong>{activityLabel(activity.phase, activity.status)}</strong>
-                {activity.message && <small>{activity.message}</small>}
-              </span>
+          {activities.map((activity) => activity.phase === "commentary" && activity.message ? (
+            <div className="turn-activity__commentary" key={activity.id}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{activity.message}</ReactMarkdown>
             </div>
-          ))}
+          ) : (() => {
+            const status = effectiveActivityStatus(message, activity.status);
+            return (
+              <div className="turn-activity__item" key={activity.id}>
+                <ActivityIcon phase={activity.phase} status={status} />
+                <span>
+                  <strong>{activityLabel(activity.phase, status)}</strong>
+                  {activity.message && <small>{activity.message}</small>}
+                </span>
+              </div>
+            );
+          })())}
         </div>
       ) : message.active ? <p className="turn-activity__waiting">Starting the agent…</p> : null}
+      {showSummary && (
+        <div className="turn-activity__summary">
+          {summary.icon}
+          <strong>{summary.text}</strong>
+        </div>
+      )}
     </section>
   );
 }
@@ -296,24 +373,168 @@ function Message({ message }: { message: ChatMessage }): React.JSX.Element {
         {message.author !== "agent" && message.bullets && (
           <ul>{message.bullets.map((item) => <li key={item}>{item}</li>)}</ul>
         )}
+        {message.deliveryError && (
+          <span className="message-delivery-error"><WarningCircle size={13} aria-hidden="true" />{message.deliveryError}</span>
+        )}
         <span className="message-time">{message.timestamp}</span>
       </div>
     </article>
   );
 }
 
-function EmptyConversation({ onSuggestion }: { onSuggestion: (prompt: string) => void }): React.JSX.Element {
+function EmptyConversation({
+  onSuggestion,
+  projectScoped,
+}: {
+  onSuggestion: (prompt: string) => void;
+  projectScoped: boolean;
+}): React.JSX.Element {
   return (
     <div className="empty-state">
       <ChatCircleDots size={30} aria-hidden="true" />
-      <h2>Start with the project</h2>
-      <p>Ask the direct agent to inspect, explain or change the selected workspace.</p>
+      <h2>{projectScoped ? "Start with the project" : "Start a conversation"}</h2>
+      <p>{projectScoped
+        ? "Ask the direct agent to inspect, explain or change the selected workspace."
+        : "Ask the agent to explore an idea, answer a question or begin a task."}</p>
       <div className="prompt-suggestions" role="group" aria-label="Prompt suggestions">
         <button type="button" onClick={() => onSuggestion("Задай мне вопросы, чтобы лучше понять мою идею проекта")}>Задай мне вопросы о моей идее</button>
         <button type="button" onClick={() => onSuggestion("Изучи этот репозиторий и расскажи, что это")}>Изучи этот репозиторий</button>
       </div>
     </div>
   );
+}
+
+function isTerminalTurn(state: string): boolean {
+  return /_(completed|cancelled|timed_out|failed)$/.test(state);
+}
+
+function visibleTurn(turn: ProjectTurn): boolean {
+  return turn.text.length > 0 || turn.activities.length > 0 || !isTerminalTurn(turn.state);
+}
+
+function userMessage(turn: ProjectTurn): ChatMessage {
+  return {
+    id: turn.turnId,
+    author: "user",
+    paragraphs: turn.text.split(/\n\s*\n/).filter(Boolean),
+    timestamp: formatClock(turn.createdAtUnixMs),
+    startedAtUnixMs: turn.createdAtUnixMs,
+    completedAtUnixMs: turn.completedAtUnixMs,
+    active: !isTerminalTurn(turn.state),
+    terminalState: turn.state,
+    deliveryError: turn.state.endsWith("_failed")
+      ? "Clarification delivery could not be confirmed"
+      : undefined,
+  };
+}
+
+function finalCommentaryId(turn: ProjectTurn): string | undefined {
+  const finalTexts = new Set([
+    turn.text.trim(),
+    turn.outcome?.kind === "result" ? turn.outcome.summary?.trim() ?? "" : "",
+  ].filter(Boolean));
+  if (finalTexts.size === 0) return undefined;
+  return [...turn.activities].reverse().find((activity) => (
+    activity.phase === "commentary"
+    && activity.message !== null
+    && finalTexts.has(activity.message.trim())
+  ))?.activityId;
+}
+
+function activitySegment(activity: ProjectTurn["activities"][number], steers: readonly ProjectTurn[]): number {
+  if (
+    activity.createdRevision != null
+    && steers.every((steer) => steer.createdRevision != null)
+  ) {
+    const activityRevision = BigInt(activity.createdRevision);
+    return steers.filter((steer) => activityRevision >= BigInt(steer.createdRevision!)).length;
+  }
+  const causalAt = activity.createdAtUnixMs ?? activity.updatedAtUnixMs;
+  if (causalAt === null) return steers.length;
+  return steers.filter((steer) => causalAt >= (steer.createdAtUnixMs ?? Number.NEGATIVE_INFINITY)).length;
+}
+
+function agentMessages(turn: ProjectTurn, steers: readonly ProjectTurn[]): Array<ChatMessage | null> {
+  const duplicateFinalCommentary = finalCommentaryId(turn);
+  const activities = turn.activities.filter((activity) => (
+    activity.phase !== "reasoning_summary" && activity.activityId !== duplicateFinalCommentary
+  ));
+  const groupedActivities = Array.from({ length: steers.length + 1 }, () => [] as typeof activities);
+  for (const activity of activities) {
+    const segment = activitySegment(activity, steers);
+    groupedActivities[Math.min(segment, steers.length)].push(activity);
+  }
+  const active = !isTerminalTurn(turn.state);
+  return groupedActivities.map((segmentActivities, index) => {
+    const last = index === groupedActivities.length - 1;
+    const paragraphs = last ? turn.text.split(/\n\s*\n/).filter(Boolean) : [];
+    if (segmentActivities.length === 0 && paragraphs.length === 0 && !(last && (active || turn.createdAtUnixMs !== null))) {
+      return null;
+    }
+    return {
+      id: `${turn.turnId}:segment:${index}`,
+      author: "agent" as const,
+      paragraphs,
+      timestamp: formatClock(index === 0 ? turn.createdAtUnixMs : steers[index - 1]?.createdAtUnixMs),
+      activities: segmentActivities.map((activity) => ({
+        id: activity.activityId,
+        phase: activity.phase,
+        message: activity.message,
+        status: activity.status,
+        createdRevision: activity.createdRevision,
+        createdAtUnixMs: activity.createdAtUnixMs,
+        updatedAtUnixMs: activity.updatedAtUnixMs,
+      })),
+      startedAtUnixMs: turn.createdAtUnixMs,
+      completedAtUnixMs: last ? turn.completedAtUnixMs : null,
+      active,
+      terminalState: turn.state,
+      showActivitySummary: last,
+    };
+  });
+}
+
+function liveMessages(turns: readonly ProjectTurn[]): ChatMessage[] {
+  const agentEntries = turns.flatMap((turn, index) => turn.role.endsWith("_agent") ? [{ turn, index }] : []);
+  const pairedUsers = new Set(agentEntries.flatMap(({ turn: agent }) => {
+    const user = turns.find((candidate) => (
+      candidate.role.endsWith("_user") && candidate.commandId === agent.commandId
+    ));
+    return user ? [user.turnId] : [];
+  }));
+  const consumedUsers = new Set<string>();
+  const blocks = agentEntries.map(({ turn: agent, index: agentIndex }, agentPosition) => {
+    const nextAgentIndex = agentEntries[agentPosition + 1]?.index ?? turns.length;
+    const pairedUser = turns.find((candidate) => (
+      candidate.role.endsWith("_user") && candidate.commandId === agent.commandId
+    ));
+    const steers = turns.slice(agentIndex + 1, nextAgentIndex).filter((candidate) => (
+      candidate.role.endsWith("_user") && !pairedUsers.has(candidate.turnId)
+    ));
+    if (pairedUser) consumedUsers.add(pairedUser.turnId);
+    for (const steer of steers) consumedUsers.add(steer.turnId);
+    const segments = agentMessages(agent, steers);
+    const messages: ChatMessage[] = [];
+    if (pairedUser && visibleTurn(pairedUser)) messages.push(userMessage(pairedUser));
+    for (let segment = 0; segment < segments.length; segment += 1) {
+      const agentSegment = segments[segment];
+      if (agentSegment) messages.push(agentSegment);
+      const steer = steers[segment];
+      if (steer && visibleTurn(steer)) messages.push(userMessage(steer));
+    }
+    return {
+      index: pairedUser ? turns.indexOf(pairedUser) : agentIndex,
+      messages,
+    };
+  });
+  const orphanUsers = turns.flatMap((turn, index) => (
+    turn.role.endsWith("_user") && !consumedUsers.has(turn.turnId) && visibleTurn(turn)
+      ? [{ index, messages: [userMessage(turn)] }]
+      : []
+  ));
+  return [...blocks, ...orphanUsers]
+    .sort((left, right) => left.index - right.index)
+    .flatMap((block) => block.messages);
 }
 
 function liveSnapshot(state: ProjectChatState | null, connection: LiveConnectionState): ProjectChatSnapshot | null {
@@ -334,33 +555,16 @@ function liveSnapshot(state: ProjectChatState | null, connection: LiveConnection
   const active = state.session.activeTurnId !== null;
   const lastAgent = [...state.turns].reverse().find((turn) => turn.role.endsWith("_agent"));
   const terminal = lastAgent?.state ?? "";
-  const view = terminal.endsWith("_timed_out")
+  const view = active
+    ? ["streaming", "Working", "active", "The project agent is responding. You can stop this turn."] as const
+    : terminal.endsWith("_timed_out")
     ? ["timed-out", "Timed out", "danger", "The runtime exceeded its deadline. The partial response is preserved."] as const
     : terminal.endsWith("_cancelled")
       ? ["stopped", "Stopped", "warning", "Generation stopped. The partial response is preserved."] as const
       : terminal.endsWith("_failed")
         ? ["stale", "Failed", "danger", "The runtime could not complete this turn."] as const
-        : active
-          ? ["streaming", "Working", "active", "The project agent is responding. You can stop this turn."] as const
-          : ["restored", "Ready", "good", "Conversation is synchronized with the local Node."] as const;
-  const messages: ChatMessage[] = state.turns
-    .filter((turn) => (turn.role.endsWith("_user") || turn.role.endsWith("_agent")) && (turn.text.length > 0 || turn.activities.length > 0 || !turn.state.match(/_(completed|cancelled|timed_out|failed)$/)))
-    .map((turn) => ({
-      id: turn.turnId,
-      author: turn.role.endsWith("_user") ? "user" : "agent",
-      paragraphs: turn.text.split(/\n\s*\n/).filter(Boolean),
-      timestamp: formatClock(turn.createdAtUnixMs),
-      activities: turn.activities.map((activity) => ({
-        id: activity.activityId,
-        phase: activity.phase,
-        message: activity.message,
-        status: activity.status,
-      })),
-      startedAtUnixMs: turn.createdAtUnixMs,
-      completedAtUnixMs: turn.completedAtUnixMs,
-      active: !turn.state.match(/_(completed|cancelled|timed_out|failed)$/),
-      terminalState: turn.state,
-    }));
+        : ["restored", "Ready", "good", "Conversation is synchronized with the local Node."] as const;
+  const messages = liveMessages(state.turns);
   if (connection.phase !== "live") {
     return {
       state: connection.phase === "opening" ? "loading" : "resyncing",
@@ -441,9 +645,12 @@ export function App(): React.JSX.Element {
   const [localMessages, setLocalMessages] = React.useState<Record<string, ChatMessage[]>>({});
   const [announcement, setAnnouncement] = React.useState("Project Chat opened");
   const [commandOpen, setCommandOpen] = React.useState(false);
+  const [commandQuery, setCommandQuery] = React.useState("");
   const [composerPopover, setComposerPopover] = React.useState<ComposerPopover>(null);
+  const [expandedRuntimeControl, setExpandedRuntimeControl] = React.useState<string | null>(null);
   const [accessMode, setAccessMode] = React.useState<AccessMode>("full");
   const [reasoning, setReasoning] = React.useState<ReasoningLevel>("high");
+  const [runtimeSelections, setRuntimeSelections] = React.useState<Record<string, string>>({});
   const [planPinned, setPlanPinned] = React.useState(false);
   const [planHovered, setPlanHovered] = React.useState(false);
   const [liveSystem, setLiveSystem] = React.useState<SystemSnapshot | null>(null);
@@ -452,8 +659,13 @@ export function App(): React.JSX.Element {
     phase: nativeShell ? "opening" : "live",
     message: null,
     targetSessionId: null,
+    lastEventAtUnixMs: nativeShell ? null : Date.now(),
   });
+  const liveConnectionRef = React.useRef(liveConnection);
+  liveConnectionRef.current = liveConnection;
   const [retryingTurnId, setRetryingTurnId] = React.useState<string | null>(null);
+  const [creatingChat, setCreatingChat] = React.useState(false);
+  const [sendingSessions, setSendingSessions] = React.useState<ReadonlySet<string>>(new Set());
   const [reconnectAttempt, setReconnectAttempt] = React.useState(0);
   const commandRef = React.useRef<HTMLInputElement>(null);
   const commandDialogRef = React.useRef<HTMLDivElement>(null);
@@ -465,7 +677,8 @@ export function App(): React.JSX.Element {
   const accessTriggerRef = React.useRef<HTMLButtonElement>(null);
   const accessFirstRef = React.useRef<HTMLButtonElement>(null);
   const runtimeTriggerRef = React.useRef<HTMLButtonElement>(null);
-  const runtimeFirstRef = React.useRef<HTMLButtonElement>(null);
+  const runtimeFirstRef = React.useRef<HTMLElement | null>(null);
+  const runtimeControlTriggerRefs = React.useRef<Record<string, HTMLButtonElement | null>>({});
   const contextTriggerRef = React.useRef<HTMLButtonElement>(null);
   const contextDialogRef = React.useRef<HTMLDivElement>(null);
   const pluginsTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -481,11 +694,17 @@ export function App(): React.JSX.Element {
   const currentDraftCommandsRef = React.useRef<Record<string, string>>({});
   const persistedDraftCommandsRef = React.useRef<Record<string, string>>({});
   const draftSaveQueuesRef = React.useRef<Record<string, Promise<boolean>>>({});
+  const pendingSentDraftsRef = React.useRef<Record<string, { text: string; nextCommandId: string }>>({});
+  const sendingSessionsRef = React.useRef(new Set<string>());
+  const creatingChatRef = React.useRef(false);
+  const navigationSequenceRef = React.useRef(0);
   const retryCommandsRef = React.useRef<Record<string, string>>({});
   const activityAnnouncementRef = React.useRef<string | null>(null);
   const allowWindowCloseRef = React.useRef(false);
   const closingWindowRef = React.useRef(false);
   const persistCurrentDraftRef = React.useRef<() => Promise<boolean>>(async () => true);
+  const draftsBySessionRef = React.useRef(draftsBySession);
+  draftsBySessionRef.current = draftsBySession;
   if (nativeShell && !liveClientRef.current) liveClientRef.current = new TauriProjectChatClient();
   const authoritativeProjectGroups: ProjectGroup[] = liveSystem?.projects.map((project) => ({
     id: project.projectId,
@@ -498,7 +717,15 @@ export function App(): React.JSX.Element {
     ...project,
     sessions: nativeShell ? project.sessions : [...project.sessions, ...localSessions.filter((session) => session.projectId === project.id)],
   }));
-  const standaloneSessions = nativeShell ? [] : [...localSessions.filter((session) => !session.projectId), ...recentChats];
+  const standaloneSessions = nativeShell
+    ? liveSystem?.recentSessions
+      .filter((session) => !session.projectId)
+      .map((session) => ({
+        id: session.sessionId,
+        title: session.title,
+        meta: session.activeTurnId ? "Working" : formatClock(session.lastActivityAtUnixMs),
+      })) ?? []
+    : [...localSessions.filter((session) => !session.projectId), ...recentChats];
   const allSessions = [...visibleProjectGroups.flatMap((project) => project.sessions), ...standaloneSessions];
   const selectedTitle = allSessions.find((session) => session.id === selectedSession)?.title ?? allSessions[0]?.title ?? "Opening chat";
   const selectedProject = visibleProjectGroups.find((project) => project.sessions.some((session) => session.id === selectedSession));
@@ -508,6 +735,22 @@ export function App(): React.JSX.Element {
   const draftCommand = draftCommandsBySession[selectedSession];
   const resourcesAvailable = !nativeShell;
   const runtimeAdapterId = liveSystem?.runtime?.adapterId ?? null;
+  const steeringMode = liveSystem?.runtime?.steering ?? "unsupported";
+  const advertisedRuntimeControls = nativeShell ? liveSystem?.runtime?.controls ?? [] : [];
+  const effectiveRuntimeSelections = reconcileRuntimeSelections(advertisedRuntimeControls, runtimeSelections);
+  const accessControl = advertisedRuntimeControls.find((control) => control.id === ACCESS_CONTROL_ID) ?? null;
+  const runtimeControls = advertisedRuntimeControls.filter((control) => control.id !== ACCESS_CONTROL_ID);
+  const selectedRuntimeControls: RuntimeControlSelection[] = advertisedRuntimeControls.flatMap((control) => {
+    const choiceId = effectiveRuntimeSelections[control.id];
+    return choiceId ? [{ controlId: control.id, choiceId }] : [];
+  });
+  const selectedAccessChoice = accessControl?.choices.find(
+    (choice) => choice.id === effectiveRuntimeSelections[accessControl.id],
+  ) ?? null;
+  const runtimeSelectionSummary = runtimeControls
+    .map((control) => control.choices.find((choice) => choice.id === effectiveRuntimeSelections[control.id])?.label)
+    .filter((label): label is string => Boolean(label))
+    .join(" · ");
   const runtimeName = !nativeShell
     ? "Codex"
     : runtimeAdapterId === "openai.codex.sdk"
@@ -517,7 +760,7 @@ export function App(): React.JSX.Element {
         : runtimeAdapterId ?? "Runtime";
   const runtimeModeLabel = nativeShell
     ? liveSystem?.runtime?.runtimeKind === "native_agent"
-      ? "Native agent"
+      ? runtimeSelectionSummary || "Native agent"
       : liveSystem?.runtime?.runtimeKind === "generic_loop"
         ? "Agent loop"
         : null
@@ -527,23 +770,45 @@ export function App(): React.JSX.Element {
     liveConnection.phase === "live"
     && liveChat?.session.sessionId === selectedSession
   );
+  const runtimeControlsLocked = nativeShell && Boolean(liveChat?.session.activeTurnId);
+
+  React.useEffect(() => {
+    if (!nativeShell) return;
+    setRuntimeSelections((selections) => reconcileRuntimeSelections(advertisedRuntimeControls, selections));
+  }, [liveSystem?.runtime, nativeShell]);
+
+  React.useEffect(() => {
+    if (composerPopover !== "runtime") setExpandedRuntimeControl(null);
+  }, [composerPopover]);
+
+  React.useEffect(() => {
+    if (runtimeControlsLocked && (composerPopover === "runtime" || composerPopover === "access")) {
+      setComposerPopover(null);
+    }
+  }, [composerPopover, runtimeControlsLocked]);
 
   const setSelectedFixture = React.useCallback((nextFixture: FixtureId) => {
     setFixturesBySession((fixtures) => ({ ...fixtures, [selectedSession]: nextFixture }));
   }, [selectedSession]);
 
   const setDraft = React.useCallback((nextDraft: string) => {
+    const pending = pendingSentDraftsRef.current[selectedSession];
+    if (pending && pending.text !== nextDraft) delete pendingSentDraftsRef.current[selectedSession];
     setDraftsBySession((drafts) => ({ ...drafts, [selectedSession]: nextDraft }));
   }, [selectedSession]);
 
   const openCommandCenter = React.useCallback(() => {
     setComposerPopover(null);
+    setCommandQuery("");
     setCommandOpen((open) => {
       if (!open && document.activeElement instanceof HTMLElement) returnFocusRef.current = document.activeElement;
       return true;
     });
   }, []);
-  const closeCommandCenter = React.useCallback(() => setCommandOpen(false), []);
+  const closeCommandCenter = React.useCallback(() => {
+    setCommandOpen(false);
+    setCommandQuery("");
+  }, []);
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("native-shell", nativeShell);
@@ -580,26 +845,51 @@ export function App(): React.JSX.Element {
         ? connection.message
         : "Opening the selected chat",
       targetSessionId: requestedSession,
+      lastEventAtUnixMs: null,
     }));
     let bootstrapped = false;
+    let currentSession: ProjectChatState | null = null;
     const pendingEvents: ProjectChatEvent[] = [];
     const applyLiveEvent = (event: ProjectChatEvent) => {
       if (!current) return;
       if (event.kind === "delta" || event.kind === "snapshot") {
-        setLiveConnection({ phase: "live", message: null, targetSessionId: requestedSession });
-        setLiveChat((snapshot) => {
-          if (!snapshot && event.kind !== "snapshot") return snapshot;
-          try {
-            return event.kind === "snapshot" ? event.snapshot : applyProjectChatEvent(snapshot!, event);
-          } catch {
-            setLiveConnection({
-              phase: "resyncing",
-              message: "Session state changed; refreshing the snapshot",
-              targetSessionId: requestedSession,
-            });
-            retryTimer = setTimeout(() => setReconnectAttempt((attempt) => attempt + 1), 80);
-            return snapshot;
-          }
+        try {
+          if (event.kind === "snapshot") currentSession = event.snapshot;
+          else if (currentSession) currentSession = applyProjectChatEvent(currentSession, event);
+          else throw new Error("delta before snapshot");
+          setLiveChat(currentSession);
+          setLiveConnection({
+            phase: "live",
+            message: null,
+            targetSessionId: requestedSession,
+            lastEventAtUnixMs: Date.now(),
+          });
+        } catch {
+          setLiveConnection({
+            phase: "resyncing",
+            message: "Session state changed; refreshing the snapshot",
+            targetSessionId: requestedSession,
+            lastEventAtUnixMs: null,
+          });
+          retryTimer = setTimeout(() => setReconnectAttempt((attempt) => attempt + 1), 80);
+        }
+      }
+      if (event.kind === "heartbeat") {
+        if (!currentSession || currentSession.session.revision !== event.currentRevision) {
+          setLiveConnection({
+            phase: "resyncing",
+            message: "The local conversation has a newer revision; refreshing the snapshot",
+            targetSessionId: requestedSession,
+            lastEventAtUnixMs: null,
+          });
+          retryTimer = setTimeout(() => setReconnectAttempt((attempt) => attempt + 1), 80);
+          return;
+        }
+        setLiveConnection({
+          phase: "live",
+          message: null,
+          targetSessionId: requestedSession,
+          lastEventAtUnixMs: Date.now(),
         });
       }
       if (event.kind === "resyncRequired") {
@@ -607,6 +897,7 @@ export function App(): React.JSX.Element {
           phase: "resyncing",
           message: "Refreshing after an update gap",
           targetSessionId: requestedSession,
+          lastEventAtUnixMs: null,
         });
         retryTimer = setTimeout(() => setReconnectAttempt((attempt) => attempt + 1), 80);
       }
@@ -615,6 +906,7 @@ export function App(): React.JSX.Element {
           phase: "error",
           message: event.error.messageKey,
           targetSessionId: requestedSession,
+          lastEventAtUnixMs: null,
         });
         if (event.error.retryable) retryTimer = setTimeout(() => setReconnectAttempt((attempt) => attempt + 1), 500);
       }
@@ -654,11 +946,13 @@ export function App(): React.JSX.Element {
           deferredEvents.push(event);
         }
       }
-      setLiveChat(initialSession);
+      currentSession = initialSession;
+      setLiveChat(currentSession);
       setLiveConnection({
         phase: "live",
         message: null,
         targetSessionId: initialSession.session.sessionId,
+        lastEventAtUnixMs: Date.now(),
       });
       bootstrapped = true;
       for (const event of deferredEvents) applyLiveEvent(event);
@@ -687,6 +981,7 @@ export function App(): React.JSX.Element {
         phase: "error",
         message: error instanceof Error ? error.message : "Local Node unavailable",
         targetSessionId: requestedSession,
+        lastEventAtUnixMs: null,
       });
       retryTimer = setTimeout(() => setReconnectAttempt((attempt) => attempt + 1), 750);
     });
@@ -718,12 +1013,45 @@ export function App(): React.JSX.Element {
     else setAnnouncement("Agent started working.");
   }, [liveChat, nativeShell]);
 
+  React.useEffect(() => {
+    if (
+      !nativeShell
+      || liveConnection.phase !== "live"
+      || liveConnection.lastEventAtUnixMs === null
+    ) return;
+    const expectedFreshness = liveConnection.lastEventAtUnixMs;
+    const remaining = Math.max(
+      0,
+      LIVE_WATCH_STALE_AFTER_MS - (Date.now() - expectedFreshness),
+    );
+    const timer = window.setTimeout(() => {
+      const current = liveConnectionRef.current;
+      if (
+        current.phase !== "live"
+        || current.lastEventAtUnixMs !== expectedFreshness
+      ) return;
+      setLiveConnection({
+        phase: "resyncing",
+        message: "The local conversation stopped reporting freshness; reconnecting",
+        targetSessionId: current.targetSessionId,
+        lastEventAtUnixMs: null,
+      });
+      setReconnectAttempt((attempt) => attempt + 1);
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [liveConnection.lastEventAtUnixMs, liveConnection.phase, nativeShell]);
+
   const persistCurrentDraft = React.useCallback(async (): Promise<boolean> => {
     const client = liveClientRef.current;
-    const projectId = liveChat?.session.projectId;
-    if (!nativeShell || !client || !projectId || !draftCommand) return true;
+    if (!nativeShell || !client || !liveChat || !draftCommand) return true;
+    const projectId = liveChat.session.projectId;
     const sessionId = liveChat.session.sessionId;
     const text = draft;
+    const pendingSentDraft = pendingSentDraftsRef.current[sessionId];
+    if (
+      pendingSentDraft?.nextCommandId === draftCommand
+      && pendingSentDraft.text === text
+    ) return true;
     const revision = (draftRevisionsRef.current[sessionId] ?? 0) + 1;
     draftRevisionsRef.current[sessionId] = revision;
     const operation = async (): Promise<boolean> => {
@@ -751,7 +1079,7 @@ export function App(): React.JSX.Element {
           revision,
         });
         if (currentDraftCommandsRef.current[sessionId] !== draftCommand) return true;
-        if (receipt.state.endsWith("already_accepted")) {
+        if (receipt.state === "composer_draft_write_state_already_accepted") {
           delete persistedDraftCommandsRef.current[sessionId];
           draftRevisionsRef.current[sessionId] = 0;
           const nextCommand = crypto.randomUUID();
@@ -761,7 +1089,7 @@ export function App(): React.JSX.Element {
             ...commands,
             [sessionId]: nextCommand,
           }));
-        }
+        } else if (receipt.state !== "composer_draft_write_state_saved") return false;
         return true;
       } catch (error) {
         setAnnouncement(error instanceof Error ? error.message : "The draft could not be saved.");
@@ -919,14 +1247,22 @@ export function App(): React.JSX.Element {
     if (conversation && surface.kind === "chat") conversation.scrollTop = conversation.scrollHeight;
   }, [liveChat, snapshot, selectedLocalMessages.length, surface.kind]);
 
-  const selectSession = (sessionId: string) => {
-    void persistCurrentDraft();
+  const selectSession = async (sessionId: string) => {
+    if (sessionId === selectedSession) return;
+    const navigationSequence = ++navigationSequenceRef.current;
+    const saved = await persistCurrentDraft();
+    if (navigationSequence !== navigationSequenceRef.current) return;
+    if (!saved) {
+      setAnnouncement("The current draft was not saved. This chat remains open.");
+      return;
+    }
     if (nativeShell && liveChat?.session.sessionId !== sessionId) {
       setLiveChat(null);
       setLiveConnection({
         phase: "opening",
         message: "Opening the selected chat",
         targetSessionId: sessionId,
+        lastEventAtUnixMs: null,
       });
     }
     setSelectedSession(sessionId);
@@ -954,67 +1290,127 @@ export function App(): React.JSX.Element {
   };
 
   const startNewChat = async (projectId?: string) => {
-    if (nativeShell && projectId && liveClientRef.current) {
-      try {
-        await persistCurrentDraft();
-        const created = await liveClientRef.current.createChat(projectId);
-        setLiveChat(null);
-        setLiveConnection({
-          phase: "opening",
-          message: "Opening the new chat",
-          targetSessionId: created.sessionId,
-        });
-        setSelectedSession(created.sessionId);
-        setAnnouncement("New project chat created.");
-        requestAnimationFrame(() => composerRef.current?.focus());
-      } catch (error) {
-        setAnnouncement(error instanceof Error ? error.message : "Could not create the chat.");
+    if (creatingChatRef.current) return;
+    creatingChatRef.current = true;
+    setCreatingChat(true);
+    try {
+      if (nativeShell && liveClientRef.current) {
+        const navigationSequence = ++navigationSequenceRef.current;
+        try {
+          if (!(await persistCurrentDraft())) {
+            setAnnouncement("The current draft was not saved. A new chat was not created.");
+            return;
+          }
+          if (navigationSequence !== navigationSequenceRef.current) return;
+          const created = await liveClientRef.current.createChat(projectId ?? null);
+          if (navigationSequence !== navigationSequenceRef.current) {
+            setReconnectAttempt((attempt) => attempt + 1);
+            return;
+          }
+          setLiveChat(null);
+          setLiveConnection({
+            phase: "opening",
+            message: "Opening the new chat",
+            targetSessionId: created.sessionId,
+            lastEventAtUnixMs: null,
+          });
+          setSelectedSession(created.sessionId);
+          setAnnouncement(projectId ? "New project chat created." : "New standalone chat created.");
+          requestAnimationFrame(() => composerRef.current?.focus());
+        } catch (error) {
+          setAnnouncement(error instanceof Error ? error.message : "Could not create the chat.");
+        }
+        return;
       }
-      return;
+      const sessionId = `local-chat-${nextLocalSessionIdRef.current++}`;
+      setLocalSessions((sessions) => [...sessions, { id: sessionId, title: "Untitled chat", meta: formatClock(Date.now()), projectId }]);
+      setFixturesBySession((fixtures) => ({ ...fixtures, [sessionId]: "empty" }));
+      setDraftsBySession((drafts) => ({ ...drafts, [sessionId]: "" }));
+      setSelectedSession(sessionId);
+      setSurface({ kind: "chat" });
+      setComposerPopover(null);
+      setAnnouncement(projectId ? "New project chat preview opened." : "New standalone chat preview opened.");
+      requestAnimationFrame(() => composerRef.current?.focus());
+    } finally {
+      creatingChatRef.current = false;
+      setCreatingChat(false);
     }
-    if (nativeShell) {
-      setAnnouncement("Standalone chats are not available in M01.");
-      return;
-    }
-    const sessionId = `local-chat-${nextLocalSessionIdRef.current++}`;
-    setLocalSessions((sessions) => [...sessions, { id: sessionId, title: "Untitled chat", meta: formatClock(Date.now()), projectId }]);
-    setFixturesBySession((fixtures) => ({ ...fixtures, [sessionId]: "empty" }));
-    setDraftsBySession((drafts) => ({ ...drafts, [sessionId]: "" }));
-    setSelectedSession(sessionId);
-    setSurface({ kind: "chat" });
-    setComposerPopover(null);
-    setAnnouncement(projectId ? "New project chat preview opened." : "New standalone chat preview opened.");
-    requestAnimationFrame(() => composerRef.current?.focus());
   };
 
   const sendDraft = async () => {
-    const content = draft.trim();
+    const originalDraft = draft;
+    const content = originalDraft.trim();
     if (!content) return;
     if (nativeShell) {
-      if (!nativeConversationReady || !liveChat || !liveClientRef.current || !liveChat.session.projectId) {
+      if (!nativeConversationReady || !liveChat || !liveClientRef.current) {
         setAnnouncement("Wait until the selected chat finishes opening.");
         return;
       }
+      const sessionId = liveChat.session.sessionId;
+      if (sendingSessionsRef.current.has(sessionId)) return;
+      const steering = liveChat.session.activeTurnId !== null;
+      if (steering && steeringMode !== "native") {
+        setAnnouncement("This agent cannot accept a clarification while it is working.");
+        return;
+      }
+      const sentCommandId = draftCommand ?? crypto.randomUUID();
+      const nextCommandId = crypto.randomUUID();
+      const priorRevision = draftRevisionsRef.current[sessionId] ?? 0;
+      pendingSentDraftsRef.current[sessionId] = { text: originalDraft, nextCommandId };
+      currentDraftCommandsRef.current[sessionId] = nextCommandId;
+      draftRevisionsRef.current[sessionId] = 0;
+      setDraftCommandsBySession((commands) => ({ ...commands, [sessionId]: nextCommandId }));
+      sendingSessionsRef.current.add(sessionId);
+      setSendingSessions(new Set(sendingSessionsRef.current));
       try {
         await liveClientRef.current.sendTurn({
           projectId: liveChat.session.projectId,
-          sessionId: liveChat.session.sessionId,
+          sessionId,
           revision: liveChat.session.revision,
           text: content,
-          commandId: draftCommand ?? crypto.randomUUID(),
+          // Provider controls configure a new turn. A native clarification is
+          // delivered inside the already-running provider turn and therefore
+          // cannot truthfully change its model, speed or permission envelope.
+          runtimeControls: steering ? [] : selectedRuntimeControls,
+          commandId: sentCommandId,
+          deliveryMode: steering ? "steer_now" : "new_turn",
+          activeTurnId: liveChat.session.activeTurnId,
         });
-        setDraft("");
-        delete persistedDraftCommandsRef.current[liveChat.session.sessionId];
-        draftRevisionsRef.current[liveChat.session.sessionId] = 0;
-        const nextCommand = crypto.randomUUID();
-        currentDraftCommandsRef.current[liveChat.session.sessionId] = nextCommand;
-        setDraftCommandsBySession((commands) => ({
-          ...commands,
-          [liveChat.session.sessionId]: nextCommand,
-        }));
-        setAnnouncement("Message accepted by the local Node.");
+        if (persistedDraftCommandsRef.current[sessionId] === sentCommandId) {
+          delete persistedDraftCommandsRef.current[sessionId];
+        }
+        if (pendingSentDraftsRef.current[sessionId]?.nextCommandId === nextCommandId) {
+          delete pendingSentDraftsRef.current[sessionId];
+        }
+        if (
+          currentDraftCommandsRef.current[sessionId] === nextCommandId
+          && draftsBySessionRef.current[sessionId] === originalDraft
+        ) {
+          setDraftsBySession((drafts) => drafts[sessionId] === originalDraft
+            ? { ...drafts, [sessionId]: "" }
+            : drafts);
+        }
+        setAnnouncement(steering
+          ? "Clarification accepted; the current run will continue with it."
+          : "Message accepted by the local Node.");
       } catch (error) {
+        if (
+          currentDraftCommandsRef.current[sessionId] === nextCommandId
+          && draftsBySessionRef.current[sessionId] === originalDraft
+        ) {
+          currentDraftCommandsRef.current[sessionId] = sentCommandId;
+          draftRevisionsRef.current[sessionId] = priorRevision;
+          setDraftCommandsBySession((commands) => commands[sessionId] === nextCommandId
+            ? { ...commands, [sessionId]: sentCommandId }
+            : commands);
+        }
+        if (pendingSentDraftsRef.current[sessionId]?.nextCommandId === nextCommandId) {
+          delete pendingSentDraftsRef.current[sessionId];
+        }
         setAnnouncement(error instanceof Error ? error.message : "The message was not accepted.");
+      } finally {
+        sendingSessionsRef.current.delete(sessionId);
+        setSendingSessions(new Set(sendingSessionsRef.current));
       }
       return;
     }
@@ -1037,7 +1433,7 @@ export function App(): React.JSX.Element {
 
   const stopGeneration = async () => {
     if (nativeShell) {
-      if (!nativeConversationReady || !liveChat?.session.projectId || !liveChat.session.activeTurnId || !liveClientRef.current) {
+      if (!nativeConversationReady || !liveChat || !liveChat.session.activeTurnId || !liveClientRef.current) {
         setAnnouncement("Stop is unavailable until the selected chat is live.");
         return;
       }
@@ -1058,7 +1454,7 @@ export function App(): React.JSX.Element {
   };
 
   const retryTimedOutTurn = async () => {
-    if (!nativeShell || !nativeConversationReady || !liveChat?.session.projectId || !liveClientRef.current) return;
+    if (!nativeShell || !nativeConversationReady || !liveChat || !liveClientRef.current) return;
     const timedOutTurn = [...liveChat.turns].reverse().find((turn) => turn.role.endsWith("_agent") && turn.state.endsWith("_timed_out")) ?? null;
     const terminalIndex = timedOutTurn ? liveChat.turns.findIndex((turn) => turn.turnId === timedOutTurn.turnId) : -1;
     const userTurn = terminalIndex > 0
@@ -1077,6 +1473,7 @@ export function App(): React.JSX.Element {
         sessionId: liveChat.session.sessionId,
         revision: liveChat.session.revision,
         text: userTurn.text,
+        runtimeControls: selectedRuntimeControls,
         commandId,
       });
       setAnnouncement("Retry accepted by the local Node.");
@@ -1127,6 +1524,22 @@ export function App(): React.JSX.Element {
   const displaySnapshot = nativeShell ? liveSnapshot(liveChat, liveConnection) : snapshot;
   const messages = [...(displaySnapshot?.messages ?? []), ...(nativeShell ? [] : selectedLocalMessages)];
   const planExpanded = planPinned || planHovered;
+  const commandNeedle = commandQuery.trim().toLocaleLowerCase();
+  const commandMatches = (label: string) => label.toLocaleLowerCase().includes(commandNeedle);
+  const commandChats = allSessions.filter((session) => commandMatches(session.title));
+  const showNewChatCommand = (!nativeShell || selectedProject)
+    && commandMatches(selectedProject ? "New chat in current project" : "New standalone chat");
+  const showAccessCommand = (!nativeShell || accessControl !== null)
+    && commandMatches("Agent access settings permissions full access auto approve");
+  const showRuntimeCommand = commandMatches("Runtime settings provider model reasoning speed Codex");
+  const showResourcesCommand = resourcesAvailable && commandMatches("Open workspace resources");
+  const showPreviewCommand = resourcesAvailable && commandMatches("Open local preview browser");
+  const commandHasResults = commandChats.length > 0
+    || showNewChatCommand
+    || showAccessCommand
+    || showRuntimeCommand
+    || showResourcesCommand
+    || showPreviewCommand;
 
   return (
     <div className={`workbench${sidebarOpen ? "" : " sidebar-collapsed"}${resourcesOpen ? "" : " resources-collapsed"}${resourcesAvailable ? "" : " resources-unavailable"}`}>
@@ -1173,7 +1586,7 @@ export function App(): React.JSX.Element {
         <aside className="project-sidebar" aria-label="Project and chat navigation">
           <div ref={projectMenuRef} className="sidebar-heading">
             <button type="button" className="sidebar-title" aria-label="Projects list"><span>Projects</span><CaretDown size={14} aria-hidden="true" /></button>
-            {!nativeShell && <IconButton
+            <IconButton
               buttonRef={projectMenuTriggerRef}
               label="New project"
               icon={Plus}
@@ -1183,19 +1596,21 @@ export function App(): React.JSX.Element {
                 setComposerPopover(null);
                 setNewProjectMenuOpen((open) => !open);
               }}
-            />}
-            {!nativeShell && newProjectMenuOpen && (
+            />
+            {newProjectMenuOpen && (
               <div className="project-create-menu" role="dialog" aria-label="Create or add project">
                 <strong>New project</strong>
-                <button ref={projectMenuFirstRef} type="button" onClick={() => createProjectPreview("empty")}>
+                <button ref={projectMenuFirstRef} type="button" disabled={nativeShell} onClick={() => createProjectPreview("empty")}>
                   <FolderPlus size={17} aria-hidden="true" />
-                  <span><strong>Create empty project</strong><small>Use the default projects folder</small></span>
+                  <span><strong>Create empty project</strong><small>{nativeShell ? "Available with workspace management" : "Use the default projects folder"}</small></span>
                 </button>
-                <button type="button" onClick={() => createProjectPreview("existing")}>
+                <button type="button" disabled={nativeShell} onClick={() => createProjectPreview("existing")}>
                   <FolderOpen size={17} aria-hidden="true" />
-                  <span><strong>Add existing folder</strong><small>Choose a folder as the project</small></span>
+                  <span><strong>Add existing folder</strong><small>{nativeShell ? "Available with workspace management" : "Choose a folder as the project"}</small></span>
                 </button>
-                <p>Folder changes arrive with the real workspace in M02. This checkpoint previews the flow locally.</p>
+                <p>{nativeShell
+                  ? "Project folders are not connected in M01 yet. Nothing will be created silently."
+                  : "Folder changes arrive with the real workspace in M02. This checkpoint previews the flow locally."}</p>
               </div>
             )}
           </div>
@@ -1212,6 +1627,7 @@ export function App(): React.JSX.Element {
                       className="new-chat-trigger"
                       aria-label={`New chat in ${project.title}`}
                       title={`New chat in ${project.title}`}
+                      disabled={creatingChat}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -1227,7 +1643,8 @@ export function App(): React.JSX.Element {
                         type="button"
                         key={session.id}
                         className={selectedSession === session.id ? "chat-row is-active" : "chat-row"}
-                        onClick={() => selectSession(session.id)}
+                        aria-current={selectedSession === session.id ? "page" : undefined}
+                        onClick={() => void selectSession(session.id)}
                       >
                         <span>{session.title}</span><small>{session.meta}</small>
                       </button>
@@ -1237,10 +1654,10 @@ export function App(): React.JSX.Element {
               ))}
             </div>
 
-            {!nativeShell && <section className="recent-chats" aria-labelledby="recent-chats-heading">
+            <section className="recent-chats" aria-labelledby="recent-chats-heading">
               <div className="recent-heading">
                 <h2 id="recent-chats-heading">Recent</h2>
-                <button type="button" className="new-chat-trigger" aria-label="New recent chat" title="New recent chat" onClick={() => startNewChat()}>
+                <button type="button" className="new-chat-trigger" aria-label="New recent chat" title="New recent chat" disabled={creatingChat} onClick={() => startNewChat()}>
                   <Plus size={15} aria-hidden="true" />
                 </button>
               </div>
@@ -1249,12 +1666,14 @@ export function App(): React.JSX.Element {
                   type="button"
                   key={session.id}
                   className={selectedSession === session.id ? "recent-row is-active" : "recent-row"}
-                  onClick={() => selectSession(session.id)}
+                  aria-current={selectedSession === session.id ? "page" : undefined}
+                  onClick={() => void selectSession(session.id)}
                 >
                   <span>{session.title}</span><small>{session.meta}</small>
                 </button>
               ))}
-            </section>}
+              {standaloneSessions.length === 0 && <p className="recent-empty">No standalone chats yet</p>}
+            </section>
           </div>
         </aside>
       )}
@@ -1293,7 +1712,7 @@ export function App(): React.JSX.Element {
                     ) : messages.length ? (
                       messages.map((message) => <Message key={message.id} message={message} />)
                     ) : (
-                      <EmptyConversation onSuggestion={useSuggestion} />
+                      <EmptyConversation onSuggestion={useSuggestion} projectScoped={Boolean(selectedProject)} />
                     )}
                   </>
                 ) : (
@@ -1341,8 +1760,8 @@ export function App(): React.JSX.Element {
                         ariaHasPopup="dialog"
                         onClick={() => setComposerPopover((open) => open === "plugins" ? null : "plugins")}
                       />}
-                      {nativeShell ? (
-                        <span className="composer-setting is-static"><ShieldCheck size={14} aria-hidden="true" />Read-only</span>
+                      {nativeShell && accessControl === null ? (
+                        <span className="composer-setting is-static"><ShieldCheck size={14} aria-hidden="true" />Access unavailable</span>
                       ) : <button
                         ref={accessTriggerRef}
                         type="button"
@@ -1350,9 +1769,13 @@ export function App(): React.JSX.Element {
                         aria-expanded={composerPopover === "access"}
                         aria-controls="composer-access-popover"
                         aria-haspopup="dialog"
+                        disabled={runtimeControlsLocked}
+                        title={runtimeControlsLocked ? "Available after the current run finishes" : undefined}
                         onClick={() => setComposerPopover((open) => open === "access" ? null : "access")}
                       >
-                        <ShieldCheck size={14} aria-hidden="true" />{accessMode === "full" ? "Full access" : "Auto-approve"}<CaretDown size={11} aria-hidden="true" />
+                        <ShieldCheck size={14} aria-hidden="true" />{nativeShell
+                          ? selectedAccessChoice?.label ?? "Agent access"
+                          : accessMode === "full" ? "Full access" : "Auto-approve"}<CaretDown size={11} aria-hidden="true" />
                       </button>}
                     </div>
                     <div className="composer-send">
@@ -1364,15 +1787,18 @@ export function App(): React.JSX.Element {
                         aria-controls="composer-runtime-popover"
                         aria-haspopup="dialog"
                         aria-label={`Agent runtime: ${runtimeName}${runtimeModeLabel ? `, ${runtimeModeLabel}` : ""}`}
+                        disabled={runtimeControlsLocked}
+                        title={runtimeControlsLocked ? "Available after the current run finishes" : undefined}
                         onClick={() => setComposerPopover((open) => open === "runtime" ? null : "runtime")}
                       >
                         <span>{runtimeName}</span>{runtimeModeLabel && <small>{runtimeModeLabel}</small>}<CaretDown size={11} aria-hidden="true" />
                       </button>
                       <IconButton label="Voice input — available in a later milestone" icon={Microphone} disabled />
-                      {displaySnapshot?.canStop ? (
+                      {(!displaySnapshot?.canStop || steeringMode === "native") && (
+                        <button type="button" className="send-button" onClick={sendDraft} disabled={!draft.trim() || (nativeShell && (!nativeConversationReady || sendingSessions.has(selectedSession)))} aria-label="Send message" title="Send with Ctrl Enter"><ArrowUp size={17} weight="bold" /></button>
+                      )}
+                      {displaySnapshot?.canStop && (
                         <button type="button" className="send-button stop-button" onClick={stopGeneration} aria-label={`Stop generation for session "${selectedTitle}"`} title="Stop generation"><Stop size={15} weight="fill" /></button>
-                      ) : (
-                        <button type="button" className="send-button" onClick={sendDraft} disabled={!draft.trim() || (nativeShell && !nativeConversationReady)} aria-label="Send message" title="Send with Ctrl Enter"><ArrowUp size={17} weight="bold" /></button>
                       )}
                     </div>
                   </div>
@@ -1391,11 +1817,35 @@ export function App(): React.JSX.Element {
                     <button type="button" disabled><Plug size={14} />Browse plugins<span>Later</span></button>
                   </div>
                 )}
-                {!nativeShell && composerPopover === "access" && (
+                {composerPopover === "access" && (!nativeShell || accessControl !== null) && (
                   <div id="composer-access-popover" className="composer-popover popover-left popover-access" role="dialog" aria-label="Agent access">
                     <strong>Agent access</strong>
-                    <button ref={accessFirstRef} type="button" className={accessMode === "full" ? "is-selected" : ""} onClick={() => { setAccessMode("full"); setComposerPopover(null); accessTriggerRef.current?.focus(); }}><ShieldCheck size={14} />Full access{accessMode === "full" && <CheckCircle size={14} />}</button>
-                    <button type="button" className={accessMode === "auto" ? "is-selected" : ""} onClick={() => { setAccessMode("auto"); setComposerPopover(null); accessTriggerRef.current?.focus(); }}><Command size={14} />Auto-approve{accessMode === "auto" && <CheckCircle size={14} />}</button>
+                    {nativeShell ? accessControl?.choices.map((choice, index) => {
+                      const selected = choice.id === selectedAccessChoice?.id;
+                      return (
+                        <button
+                          ref={index === 0 ? accessFirstRef : undefined}
+                          type="button"
+                          className={selected ? "is-selected" : ""}
+                          key={choice.id}
+                          title={choice.description ?? undefined}
+                          onClick={() => {
+                            setRuntimeSelections((selections) => reconcileRuntimeSelections(
+                              advertisedRuntimeControls,
+                              { ...selections, [accessControl.id]: choice.id },
+                            ));
+                            setComposerPopover(null);
+                            accessTriggerRef.current?.focus();
+                          }}
+                        >
+                          {choice.id === "full_access" ? <ShieldCheck size={14} /> : <Command size={14} />}
+                          {choice.label}{selected && <CheckCircle size={14} />}
+                        </button>
+                      );
+                    }) : <>
+                      <button ref={accessFirstRef} type="button" className={accessMode === "full" ? "is-selected" : ""} onClick={() => { setAccessMode("full"); setComposerPopover(null); accessTriggerRef.current?.focus(); }}><ShieldCheck size={14} />Full access{accessMode === "full" && <CheckCircle size={14} />}</button>
+                      <button type="button" className={accessMode === "auto" ? "is-selected" : ""} onClick={() => { setAccessMode("auto"); setComposerPopover(null); accessTriggerRef.current?.focus(); }}><Command size={14} />Auto-approve{accessMode === "auto" && <CheckCircle size={14} />}</button>
+                    </>}
                   </div>
                 )}
                 {composerPopover === "runtime" && (
@@ -1403,8 +1853,63 @@ export function App(): React.JSX.Element {
                     <strong>Agent runtime</strong>
                     <div className="runtime-row"><span><Robot size={14} />Source</span><b>{runtimeSourceLabel}</b></div>
                     {!nativeShell && <div className="runtime-row"><span><Brain size={14} />Model</span><b>Provider default</b></div>}
-                    {!nativeShell && <div className="runtime-choice"><span><Gauge size={14} />Reasoning</span><div><button ref={runtimeFirstRef} type="button" className={reasoning === "medium" ? "is-selected" : ""} onClick={() => setReasoning("medium")}>Medium</button><button type="button" className={reasoning === "high" ? "is-selected" : ""} onClick={() => setReasoning("high")}>High</button></div></div>}
-                    {nativeShell && <p className="runtime-capability-note">{runtimeAdapterId
+                    {!nativeShell && <div className="runtime-choice"><span><Gauge size={14} />Reasoning</span><div><button ref={(node) => { runtimeFirstRef.current = node; }} type="button" className={reasoning === "medium" ? "is-selected" : ""} onClick={() => setReasoning("medium")}>Medium</button><button type="button" className={reasoning === "high" ? "is-selected" : ""} onClick={() => setReasoning("high")}>High</button></div></div>}
+                    {nativeShell && runtimeControls.map((control, index) => {
+                      const availableChoices = control.choices.filter((choice) => runtimeChoiceAvailable(choice, effectiveRuntimeSelections));
+                      const selectedChoice = availableChoices.find(
+                        (choice) => choice.id === effectiveRuntimeSelections[control.id],
+                      ) ?? null;
+                      const expanded = expandedRuntimeControl === control.id;
+                      const optionListId = `runtime-options-${control.id.replace(/[^a-z0-9_-]/gi, "-")}`;
+                      return (
+                        <div className={`runtime-control${expanded ? " is-expanded" : ""}`} key={control.id}>
+                          <button
+                            ref={(node) => {
+                              runtimeControlTriggerRefs.current[control.id] = node;
+                              if (index === 0) runtimeFirstRef.current = node;
+                            }}
+                            type="button"
+                            className="runtime-control__trigger"
+                            aria-label={`${control.label}: ${selectedChoice?.label ?? "Unavailable"}`}
+                            aria-haspopup="listbox"
+                            aria-expanded={expanded}
+                            aria-controls={optionListId}
+                            onClick={() => setExpandedRuntimeControl((current) => current === control.id ? null : control.id)}
+                          >
+                            <span><Gauge size={14} />{control.label}</span>
+                            <b>{selectedChoice?.label ?? "Unavailable"}<CaretDown size={11} aria-hidden="true" /></b>
+                          </button>
+                          {expanded && (
+                            <div id={optionListId} className="runtime-option-list" role="listbox" aria-label={`${control.label} options`}>
+                              {availableChoices.map((choice) => {
+                                const selected = choice.id === selectedChoice?.id;
+                                return (
+                                  <button
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selected}
+                                    className={selected ? "is-selected" : ""}
+                                    key={choice.id}
+                                    title={choice.description ?? undefined}
+                                    onClick={() => {
+                                      setRuntimeSelections((selections) => reconcileRuntimeSelections(
+                                        advertisedRuntimeControls,
+                                        { ...selections, [control.id]: choice.id },
+                                      ));
+                                      setExpandedRuntimeControl(null);
+                                      requestAnimationFrame(() => runtimeControlTriggerRefs.current[control.id]?.focus());
+                                    }}
+                                  >
+                                    <span>{choice.label}</span>{selected && <CheckCircle size={13} aria-hidden="true" />}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {nativeShell && runtimeControls.length === 0 && <p className="runtime-capability-note">{runtimeAdapterId
                       ? "This runtime did not publish selectable model, reasoning or speed options. Dennett will show them here only when the active provider reports real choices."
                       : "No runtime descriptor is available yet."}</p>}
                   </div>
@@ -1493,18 +1998,32 @@ export function App(): React.JSX.Element {
       {commandOpen && (
         <div className="dialog-backdrop" onMouseDown={closeCommandCenter}>
           <div ref={commandDialogRef} className="command-dialog" role="dialog" aria-modal="true" aria-label="Command Center" onKeyDown={trapCommandFocus} onMouseDown={(event) => event.stopPropagation()}>
-            <label><MagnifyingGlass size={18} aria-hidden="true" /><input ref={commandRef} placeholder="Search chats, settings or commands…" aria-label="Command Center search" /></label>
+            <label><MagnifyingGlass size={18} aria-hidden="true" /><input ref={commandRef} value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder="Search chats, settings or commands…" aria-label="Command Center search" /></label>
             <div className="command-results">
-              <span>QUICK ACTIONS</span>
-              {(!nativeShell || selectedProject) && <button
+              {commandChats.length > 0 && <><span>CHATS</span>{commandChats.map((session) => (
+                <button
+                  type="button"
+                  key={session.id}
+                  aria-current={selectedSession === session.id ? "page" : undefined}
+                  onClick={() => { closeCommandCenter(); void selectSession(session.id); }}
+                >
+                  <ChatsCircle size={16} />{session.title}
+                </button>
+              ))}</>}
+              {(showNewChatCommand || showAccessCommand || showRuntimeCommand || showResourcesCommand || showPreviewCommand) && <span>QUICK ACTIONS</span>}
+              {showNewChatCommand && <button
                 type="button"
                 aria-label={selectedProject ? "New chat in current project" : "New standalone chat"}
+                disabled={creatingChat}
                 onClick={() => { closeCommandCenter(); startNewChat(selectedProject?.id); }}
               >
                 <Plus size={16} />{selectedProject ? "New chat in current project" : "New standalone chat"}<kbd>Enter</kbd>
               </button>}
-              {resourcesAvailable && <button type="button" onClick={() => { closeCommandCenter(); setResourcesOpen(true); }}><Browsers size={16} />Open workspace resources</button>}
-              {resourcesAvailable && <button type="button" onClick={() => { closeCommandCenter(); setResourcesOpen(true); openSurface({ kind: "browser", title: "Dennett", subtitle: "127.0.0.1:5173" }); }}><Globe size={16} />Open local preview</button>}
+              {showAccessCommand && <button type="button" onClick={() => { closeCommandCenter(); setComposerPopover("access"); }}><ShieldCheck size={16} />Agent access settings</button>}
+              {showRuntimeCommand && <button type="button" onClick={() => { closeCommandCenter(); setComposerPopover("runtime"); }}><Brain size={16} />Runtime settings</button>}
+              {showResourcesCommand && <button type="button" onClick={() => { closeCommandCenter(); setResourcesOpen(true); }}><Browsers size={16} />Open workspace resources</button>}
+              {showPreviewCommand && <button type="button" onClick={() => { closeCommandCenter(); setResourcesOpen(true); openSurface({ kind: "browser", title: "Dennett", subtitle: "127.0.0.1:5173" }); }}><Globe size={16} />Open local preview</button>}
+              {!commandHasResults && <p role="status">No matching chats or actions.</p>}
             </div>
           </div>
         </div>

@@ -133,6 +133,10 @@ where
     tokio::fs::create_dir_all(&config.data_dir)
         .await
         .map_err(TransportError::from)?;
+    let standalone_workspace = config.data_dir.join("standalone-workspace");
+    tokio::fs::create_dir_all(&standalone_workspace)
+        .await
+        .map_err(TransportError::from)?;
     let _instance_lock = NodeInstanceLock::acquire(&config.data_dir)?;
     let endpoint = LocalEndpoint::for_installation(config.installation_id.clone())?;
     let store = Arc::new(SqliteControlStore::open(config.data_dir.join("control.sqlite3")).await?);
@@ -153,9 +157,7 @@ where
     let drafts = ComposerDraftApplication::new(coordinator.clone(), store.clone(), locks);
     let runtime: Arc<dyn AgentRuntimePort> = match config.agent_runtime {
         AgentRuntimeSelection::Fake => Arc::new(FakeAgentRuntime),
-        AgentRuntimeSelection::Codex => {
-            Arc::new(runtime_host::HostedAgentRuntime::start(&config.project_root).await?)
-        }
+        AgentRuntimeSelection::Codex => Arc::new(runtime_host::HostedAgentRuntime::start().await?),
     };
     let runtime_descriptor = runtime.describe().await?;
     let mut system_snapshot = SystemSnapshot::empty(config.authority_epoch);
@@ -173,6 +175,7 @@ where
                 project_id,
                 display_name,
                 workspace_path: config.project_root.to_string_lossy().into_owned(),
+                standalone_workspace_path: standalone_workspace.to_string_lossy().into_owned(),
             },
         )
         .with_continuations(store.clone())

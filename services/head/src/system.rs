@@ -78,6 +78,7 @@ impl SystemSnapshot {
                 runtime.capabilities.continuation as u8,
                 runtime.capabilities.scoped_cancellation as u8,
                 runtime.capabilities.deadlines as u8,
+                runtime.capabilities.steering as u8,
             ]);
             for schema in &runtime.capabilities.native_extension_schemas {
                 update_text(&mut hash, schema);
@@ -130,6 +131,7 @@ pub enum SystemStateError {
 #[async_trait]
 pub trait SystemWatchSubscription: Send {
     fn take_initial(&mut self) -> Option<SystemWatchFrame>;
+    fn heartbeat(&mut self) -> Option<SystemWatchFrame>;
     async fn recv(&mut self) -> Result<Option<SystemWatchFrame>, SystemStateError>;
 }
 
@@ -230,6 +232,17 @@ struct ProjectionSubscription {
 impl SystemWatchSubscription for ProjectionSubscription {
     fn take_initial(&mut self) -> Option<SystemWatchFrame> {
         self.initial.take()
+    }
+
+    fn heartbeat(&mut self) -> Option<SystemWatchFrame> {
+        if self.blocked {
+            return None;
+        }
+        self.sequence += 1;
+        Some(WatchFrame::Heartbeat {
+            cursor: self.cursor(),
+            current_revision: self.revision,
+        })
     }
 
     async fn recv(&mut self) -> Result<Option<SystemWatchFrame>, SystemStateError> {
@@ -370,6 +383,13 @@ mod tests {
                 ..
             })
         ));
+        assert!(matches!(
+            subscription.heartbeat(),
+            Some(WatchFrame::Heartbeat {
+                current_revision: 1,
+                cursor: WatchCursor { sequence: 2, .. },
+            })
+        ));
 
         projection
             .apply(vec![SystemMutation::Select {
@@ -383,7 +403,7 @@ mod tests {
             Some(WatchFrame::Delta {
                 base_revision: 1,
                 new_revision: 2,
-                cursor: WatchCursor { sequence: 2, .. },
+                cursor: WatchCursor { sequence: 3, .. },
                 ..
             })
         ));

@@ -50,6 +50,7 @@ fn request(session_id: &str, turn_id: &str) -> RuntimeTurnRequest {
         prompt: "private test prompt".to_owned(),
         workspace_path: "C:/synthetic/project".to_owned(),
         context_handles: Vec::new(),
+        runtime_controls: Vec::new(),
         continuation: None,
         deadline: RuntimeDeadline::after(Duration::from_secs(5))
             .expect("test deadline should be valid"),

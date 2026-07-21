@@ -2,9 +2,11 @@ use async_trait::async_trait;
 use dennett_agent_core::{
     AgentRequest, AgentResponse, AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest,
     CancellationAcknowledgement, NativeExtension, OpaqueContinuation, RuntimeActivityStatus,
-    RuntimeCapabilities, RuntimeDeadline, RuntimeDescriptor, RuntimeError, RuntimeErrorCode,
-    RuntimeEvent, RuntimeEventKind, RuntimeEventStream, RuntimeKind, RuntimeTerminal,
+    RuntimeCapabilities, RuntimeControlChoice, RuntimeControlCondition, RuntimeControlDescriptor,
+    RuntimeDeadline, RuntimeDescriptor, RuntimeError, RuntimeErrorCode, RuntimeEvent,
+    RuntimeEventKind, RuntimeEventStream, RuntimeKind, RuntimeSteeringMode, RuntimeTerminal,
     RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, RuntimeUsage,
+    SteerRuntimeTurnRequest, SteeringAcknowledgement,
 };
 use dennett_kernel::{DennettError, DennettResult};
 use serde_json::{Value, json};
@@ -90,8 +92,8 @@ impl Drop for RuntimeHostInner {
 }
 
 impl HostedAgentRuntime {
-    pub async fn start(project_root: &Path) -> Result<Self, RuntimeHostStartError> {
-        let script = locate_host_script(project_root)?;
+    pub async fn start() -> Result<Self, RuntimeHostStartError> {
+        let script = locate_host_script()?;
         let node = std::env::var_os(RUNTIME_NODE_EXECUTABLE_ENV)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("node"));
@@ -176,6 +178,7 @@ impl HostedAgentRuntime {
         .await;
         if write_result.is_err() {
             self.inner.pending.lock().await.remove(&request_id);
+            fail_host(&self.inner).await;
             return Err(RuntimeError::retryable(
                 RuntimeErrorCode::ProviderUnavailable,
             ));
@@ -184,6 +187,10 @@ impl HostedAgentRuntime {
             Ok(Ok(result)) => result,
             Ok(Err(_)) | Err(_) => {
                 self.inner.pending.lock().await.remove(&request_id);
+                // A timed-out control request has an unknown external result.
+                // Fence the dedicated host before callers may persist failure
+                // or retry against a replacement runtime.
+                fail_host(&self.inner).await;
                 Err(RuntimeError::retryable(
                     RuntimeErrorCode::ProviderUnavailable,
                 ))
@@ -225,6 +232,7 @@ impl AgentRuntimePort for HostedAgentRuntime {
                     .to_string_lossy()
                     .into_owned(),
                 context_handles: request.context_handles,
+                runtime_controls: Vec::new(),
                 continuation: None,
                 deadline,
             })
@@ -287,6 +295,10 @@ impl AgentRuntimePort for HostedAgentRuntime {
             "prompt": request.prompt,
             "workspacePath": request.workspace_path,
             "contextHandles": request.context_handles,
+            "runtimeControls": request.runtime_controls.iter().map(|selection| json!({
+                "controlId": selection.control_id,
+                "choiceId": selection.choice_id,
+            })).collect::<Vec<_>>(),
             "timeoutMs": u64::try_from(request.deadline.timeout().as_millis())
                 .unwrap_or(u64::MAX),
             "continuation": continuation,
@@ -329,6 +341,27 @@ impl AgentRuntimePort for HostedAgentRuntime {
             self.call(
                 "cancel_turn",
                 json!({ "sessionId": request.session_id, "turnId": request.turn_id }),
+            )
+            .await?,
+            &expected,
+        )
+    }
+
+    async fn steer_turn(
+        &self,
+        request: SteerRuntimeTurnRequest,
+    ) -> Result<SteeringAcknowledgement, RuntimeError> {
+        request.validate()?;
+        let expected = request.clone();
+        parse_steering(
+            self.call(
+                "steer_turn",
+                json!({
+                    "sessionId": request.session_id,
+                    "turnId": request.turn_id,
+                    "messageId": request.message_id,
+                    "text": request.text,
+                }),
             )
             .await?,
             &expected,
@@ -447,7 +480,7 @@ where
     }
 }
 
-async fn dispatch_host_message(inner: &RuntimeHostInner, line: &str) {
+async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
     let Ok(message) = serde_json::from_str::<Value>(line) else {
         fail_host(inner).await;
         return;
@@ -485,13 +518,7 @@ async fn dispatch_host_message(inner: &RuntimeHostInner, line: &str) {
             };
             let key = (event.session_id.clone(), event.turn_id.clone());
             let terminal = matches!(event.kind, RuntimeEventKind::Terminal(_));
-            let sender = inner.turns.lock().await.get(&key).cloned();
-            if let Some(sender) = sender {
-                let _ = sender.send(Ok(event)).await;
-            }
-            if terminal {
-                inner.turns.lock().await.remove(&key);
-            }
+            try_deliver_turn_message(inner, &key, Ok(event), terminal).await;
         }
         Some("runtime_error") => {
             let Some(session_id) = message.get("sessionId").and_then(Value::as_str) else {
@@ -506,14 +533,8 @@ async fn dispatch_host_message(inner: &RuntimeHostInner, line: &str) {
                 || RuntimeError::new(RuntimeErrorCode::ProtocolViolation),
                 parse_error,
             );
-            if let Some(sender) = inner
-                .turns
-                .lock()
-                .await
-                .remove(&(session_id.to_owned(), turn_id.to_owned()))
-            {
-                let _ = sender.send(Err(error)).await;
-            }
+            let key = (session_id.to_owned(), turn_id.to_owned());
+            try_deliver_turn_message(inner, &key, Err(error), true).await;
         }
         _ => fail_host(inner).await,
     }
@@ -535,7 +556,70 @@ async fn fail_host(inner: &RuntimeHostInner) {
         .map(|(_, sender)| sender)
         .collect::<Vec<_>>();
     for sender in senders {
-        let _ = sender.send(Err(error.clone())).await;
+        let _ = sender.try_send(Err(error.clone()));
+    }
+}
+
+async fn try_deliver_turn_message(
+    inner: &Arc<RuntimeHostInner>,
+    key: &TurnKey,
+    message: Result<RuntimeEvent, RuntimeError>,
+    terminal: bool,
+) {
+    use tokio::sync::mpsc::error::TrySendError;
+
+    let sender = inner.turns.lock().await.get(key).cloned();
+    let Some(sender) = sender else {
+        return;
+    };
+    match sender.try_send(message) {
+        Ok(()) if terminal => {
+            inner.turns.lock().await.remove(key);
+        }
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => {
+            let sender = inner.turns.lock().await.remove(key);
+            if let Some(sender) = sender {
+                let runtime = HostedAgentRuntime {
+                    inner: inner.clone(),
+                };
+                let cancellation = CancelRuntimeTurnRequest {
+                    session_id: key.0.clone(),
+                    turn_id: key.1.clone(),
+                };
+                let inner = inner.clone();
+                tokio::spawn(async move {
+                    if runtime.cancel_turn(cancellation).await.is_err() {
+                        let _ = sender.try_send(Err(RuntimeError::retryable(
+                            RuntimeErrorCode::ProviderFailure,
+                        )));
+                        fail_host(&inner).await;
+                        return;
+                    }
+                    let _ = sender
+                        .send(Err(RuntimeError::retryable(
+                            RuntimeErrorCode::ProviderFailure,
+                        )))
+                        .await;
+                });
+            }
+        }
+        Err(TrySendError::Closed(_)) => {
+            inner.turns.lock().await.remove(key);
+            let runtime = HostedAgentRuntime {
+                inner: inner.clone(),
+            };
+            let cancellation = CancelRuntimeTurnRequest {
+                session_id: key.0.clone(),
+                turn_id: key.1.clone(),
+            };
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                if runtime.cancel_turn(cancellation).await.is_err() {
+                    fail_host(&inner).await;
+                }
+            });
+        }
     }
 }
 
@@ -562,6 +646,17 @@ fn parse_descriptor(value: Value) -> Result<RuntimeDescriptor, RuntimeError> {
                 .ok_or_else(|| RuntimeError::new(RuntimeErrorCode::ProtocolViolation))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let controls = value
+        .get("controls")
+        .and_then(Value::as_array)
+        .map(|controls| {
+            controls
+                .iter()
+                .map(parse_control_descriptor)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     Ok(RuntimeDescriptor {
         adapter_id,
         runtime_kind,
@@ -570,8 +665,68 @@ fn parse_descriptor(value: Value) -> Result<RuntimeDescriptor, RuntimeError> {
             continuation: required_bool(capabilities, "continuation")?,
             scoped_cancellation: required_bool(capabilities, "scopedCancellation")?,
             deadlines: required_bool(capabilities, "deadlines")?,
+            steering: match required_string(capabilities, "steering")?.as_str() {
+                "unsupported" => RuntimeSteeringMode::Unsupported,
+                "native" => RuntimeSteeringMode::Native,
+                "interrupt_and_resume" => RuntimeSteeringMode::InterruptAndResume,
+                _ => return Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation)),
+            },
             native_extension_schemas: schemas,
         },
+        controls,
+    })
+}
+
+fn parse_control_descriptor(value: &Value) -> Result<RuntimeControlDescriptor, RuntimeError> {
+    let choices = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RuntimeError::new(RuntimeErrorCode::ProtocolViolation))?
+        .iter()
+        .map(|choice| {
+            let available_when = choice
+                .get("availableWhen")
+                .and_then(Value::as_array)
+                .ok_or_else(|| RuntimeError::new(RuntimeErrorCode::ProtocolViolation))?
+                .iter()
+                .map(|condition| {
+                    let choice_ids = condition
+                        .get("choiceIds")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| RuntimeError::new(RuntimeErrorCode::ProtocolViolation))?
+                        .iter()
+                        .map(|choice_id| {
+                            choice_id
+                                .as_str()
+                                .filter(|choice_id| !choice_id.trim().is_empty())
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    RuntimeError::new(RuntimeErrorCode::ProtocolViolation)
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(RuntimeControlCondition {
+                        control_id: required_string(condition, "controlId")?,
+                        choice_ids,
+                    })
+                })
+                .collect::<Result<Vec<_>, RuntimeError>>()?;
+            Ok(RuntimeControlChoice {
+                id: required_string(choice, "id")?,
+                label: required_string(choice, "label")?,
+                description: choice
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                available_when,
+            })
+        })
+        .collect::<Result<Vec<_>, RuntimeError>>()?;
+    Ok(RuntimeControlDescriptor {
+        id: required_string(value, "id")?,
+        label: required_string(value, "label")?,
+        default_choice_id: required_string(value, "defaultChoiceId")?,
+        choices,
     })
 }
 
@@ -731,6 +886,24 @@ fn parse_cancellation(
     })
 }
 
+fn parse_steering(
+    value: Value,
+    expected: &SteerRuntimeTurnRequest,
+) -> Result<SteeringAcknowledgement, RuntimeError> {
+    let acknowledgement = SteeringAcknowledgement {
+        session_id: required_string(&value, "sessionId")?,
+        turn_id: required_string(&value, "turnId")?,
+        message_id: required_string(&value, "messageId")?,
+    };
+    if acknowledgement.session_id != expected.session_id
+        || acknowledgement.turn_id != expected.turn_id
+        || acknowledgement.message_id != expected.message_id
+    {
+        return Err(RuntimeError::new(RuntimeErrorCode::ScopeMismatch));
+    }
+    Ok(acknowledgement)
+}
+
 fn parse_error(value: &Value) -> RuntimeError {
     let code = match value.get("code").and_then(Value::as_str) {
         Some("invalid_request") => RuntimeErrorCode::InvalidRequest,
@@ -777,25 +950,46 @@ fn required_u64(value: &Value, field: &str) -> Result<u64, RuntimeError> {
         .ok_or_else(|| RuntimeError::new(RuntimeErrorCode::ProtocolViolation))
 }
 
-fn locate_host_script(project_root: &Path) -> Result<PathBuf, RuntimeHostStartError> {
-    if let Some(path) = std::env::var_os(RUNTIME_HOST_SCRIPT_ENV).map(PathBuf::from) {
-        return path
-            .is_file()
-            .then_some(path)
-            .ok_or(RuntimeHostStartError::HostMissing);
+fn locate_host_script() -> Result<PathBuf, RuntimeHostStartError> {
+    configured_host_script(std::env::var_os(RUNTIME_HOST_SCRIPT_ENV))
+}
+
+fn configured_host_script(path: Option<OsString>) -> Result<PathBuf, RuntimeHostStartError> {
+    let path = path
+        .map(PathBuf::from)
+        .ok_or(RuntimeHostStartError::HostMissing)?;
+    if !path.is_absolute() || !path.is_file() {
+        return Err(RuntimeHostStartError::HostMissing);
     }
-    let mut roots = project_root
-        .ancestors()
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
-    if let Ok(current) = std::env::current_dir() {
-        roots.extend(current.ancestors().map(Path::to_path_buf));
-    }
-    roots
-        .into_iter()
-        .map(|root| root.join("services/adapter-host-node/dist/index.js"))
-        .find(|candidate| candidate.is_file())
-        .ok_or(RuntimeHostStartError::HostMissing)
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| RuntimeHostStartError::HostMissing)?;
+    Ok(subprocess_compatible_path(canonical))
+}
+
+#[cfg(windows)]
+fn subprocess_compatible_path(path: PathBuf) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const VERBATIM_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const UNC_PREFIX: &[u16] = &[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+    let encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let Some(remainder) = encoded.strip_prefix(VERBATIM_PREFIX) else {
+        return path;
+    };
+    let normalized = if let Some(unc) = remainder.strip_prefix(UNC_PREFIX) {
+        let mut value = vec![b'\\' as u16, b'\\' as u16];
+        value.extend_from_slice(unc);
+        value
+    } else {
+        remainder.to_vec()
+    };
+    PathBuf::from(OsString::from_wide(&normalized))
+}
+
+#[cfg(not(windows))]
+fn subprocess_compatible_path(path: PathBuf) -> PathBuf {
+    path
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -811,6 +1005,20 @@ pub enum RuntimeHostStartError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_host_requires_an_explicit_absolute_trusted_path() {
+        assert_eq!(
+            configured_host_script(None),
+            Err(RuntimeHostStartError::HostMissing)
+        );
+        assert_eq!(
+            configured_host_script(Some(OsString::from(
+                "services/adapter-host-node/dist/index.js"
+            ))),
+            Err(RuntimeHostStartError::HostMissing)
+        );
+    }
 
     #[tokio::test]
     async fn host_frames_are_bounded_before_allocation_can_grow_without_limit() {
@@ -829,6 +1037,139 @@ mod tests {
                 .expect("frame"),
             b"{\"v\":1}".to_vec()
         );
+    }
+
+    #[tokio::test]
+    async fn a_full_turn_queue_never_blocks_the_shared_host_reader() {
+        let temp = tempfile::tempdir().expect("temporary runtime host");
+        let script = temp.path().join("overflow-runtime-host.mjs");
+        let cancel_marker = temp.path().join("cancel-observed");
+        let cancel_marker_json = serde_json::to_string(&cancel_marker.to_string_lossy())
+            .expect("encode cancellation marker");
+        std::fs::write(
+            &script,
+            r#"
+import fs from "node:fs";
+import readline from "node:readline";
+const cancelMarker = __CANCEL_MARKER__;
+const write = value => process.stdout.write(JSON.stringify(value) + "\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method === "health") {
+    write({ v: 1, id: request.id, result: { status: "healthy", protocolVersion: 1 } });
+  } else if (request.method === "cancel_turn") {
+    fs.writeFileSync(cancelMarker, "cancelled");
+    write({ v: 1, id: request.id, result: {
+      sessionId: request.params.sessionId,
+      turnId: request.params.turnId,
+      disposition: { type: "requested" }
+    }});
+  }
+});
+"#
+            .replace("__CANCEL_MARKER__", &cancel_marker_json),
+        )
+        .expect("write overflow fixture");
+        let script = configured_host_script(Some(script.into_os_string()))
+            .expect("canonical overflow fixture");
+        let runtime = HostedAgentRuntime::start_process(Path::new("node"), &script)
+            .await
+            .expect("start overflow fixture");
+        let inner = runtime.inner.clone();
+        let key = ("session-a".to_owned(), "turn-a".to_owned());
+        let (sender, mut receiver) = mpsc::channel(1);
+        sender
+            .send(Ok(test_warning_event(&key, 1)))
+            .await
+            .expect("prime bounded turn queue");
+        inner.turns.lock().await.insert(key.clone(), sender);
+
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            try_deliver_turn_message(&inner, &key, Ok(test_warning_event(&key, 2)), false),
+        )
+        .await
+        .expect("full turn queue must be detached without blocking");
+        assert!(!inner.turns.lock().await.contains_key(&key));
+        assert!(receiver.recv().await.is_some());
+        let overflow = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("overflow failure delivery timeout")
+            .expect("explicit overflow failure");
+        assert!(matches!(
+            overflow,
+            Err(RuntimeError {
+                code: RuntimeErrorCode::ProviderFailure,
+                retryable: true,
+                recoverable: true,
+            })
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !cancel_marker.is_file() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("overflow must cancel the provider turn");
+    }
+
+    #[tokio::test]
+    async fn a_failed_overflow_cancellation_fences_the_runtime_host() {
+        let temp = tempfile::tempdir().expect("temporary runtime host");
+        let script = temp.path().join("overflow-cancel-failure-runtime-host.mjs");
+        std::fs::write(
+            &script,
+            r#"
+import readline from "node:readline";
+const write = value => process.stdout.write(JSON.stringify(value) + "\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method === "health") {
+    write({ v: 1, id: request.id, result: { status: "healthy", protocolVersion: 1 } });
+  } else if (request.method === "cancel_turn") {
+    write({ v: 1, id: request.id, error: {
+      code: "provider_failure", retryable: true, recoverable: true
+    }});
+  }
+});
+"#,
+        )
+        .expect("write failed-cancel fixture");
+        let script = configured_host_script(Some(script.into_os_string()))
+            .expect("canonical failed-cancel fixture");
+        let runtime = HostedAgentRuntime::start_process(Path::new("node"), &script)
+            .await
+            .expect("start failed-cancel fixture");
+        let inner = runtime.inner.clone();
+        let key = ("session-fenced".to_owned(), "turn-fenced".to_owned());
+        let (sender, mut receiver) = mpsc::channel(1);
+        sender
+            .send(Ok(test_warning_event(&key, 1)))
+            .await
+            .expect("prime bounded turn queue");
+        inner.turns.lock().await.insert(key.clone(), sender);
+
+        try_deliver_turn_message(&inner, &key, Ok(test_warning_event(&key, 2)), false).await;
+        assert!(receiver.recv().await.is_some());
+        let _ = tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await;
+
+        let error = tokio::time::timeout(Duration::from_secs(1), runtime.describe())
+            .await
+            .expect("fenced host must fail promptly")
+            .expect_err("failed overflow cancellation must fence the host");
+        assert_eq!(error.code, RuntimeErrorCode::ProviderUnavailable);
+    }
+
+    fn test_warning_event(key: &TurnKey, sequence: u64) -> RuntimeEvent {
+        RuntimeEvent {
+            session_id: key.0.clone(),
+            turn_id: key.1.clone(),
+            sequence,
+            kind: RuntimeEventKind::Warning {
+                code: "test".to_owned(),
+            },
+            native_extensions: Vec::new(),
+        }
     }
 
     #[test]
@@ -865,26 +1206,43 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   } else if (request.method === "describe") {
     write({ v: 1, id: request.id, result: {
       adapterId: "fixture.runtime", runtimeKind: "native_agent",
-      capabilities: { streaming: true, continuation: true, scopedCancellation: true, deadlines: true, nativeExtensionSchemas: [] }
+      capabilities: { streaming: true, continuation: true, scopedCancellation: true, deadlines: true, steering: "native", nativeExtensionSchemas: [] },
+      controls: [{ id: "model", label: "Model", defaultChoiceId: "fixture-model", choices: [
+        { id: "fixture-model", label: "Fixture model", availableWhen: [] }
+      ] }]
     }});
   } else if (request.method === "start_turn") {
     const p = request.params;
+    if (p.runtimeControls?.[0]?.controlId !== "model" || p.runtimeControls?.[0]?.choiceId !== "fixture-model") {
+      write({ v: 1, id: request.id, error: { code: "invalid_request", retryable: false, recoverable: false } });
+      return;
+    }
     write({ v: 1, id: request.id, result: { started: true } });
     write({ v: 1, event: "runtime_event", payload: { sessionId: p.sessionId, turnId: p.turnId, sequence: 1, kind: { type: "started", continuation: { adapterId: "fixture.runtime", handle: "thread-a" } }, nativeExtensions: [] }});
     write({ v: 1, event: "runtime_event", payload: { sessionId: p.sessionId, turnId: p.turnId, sequence: 2, kind: { type: "text_delta", text: "fixture answer" }, nativeExtensions: [] }});
     write({ v: 1, event: "runtime_event", payload: { sessionId: p.sessionId, turnId: p.turnId, sequence: 3, kind: { type: "terminal", outcome: { type: "completed" }, continuation: { adapterId: "fixture.runtime", handle: "thread-a" } }, nativeExtensions: [] }});
   } else if (request.method === "cancel_turn") {
     write({ v: 1, id: request.id, result: { sessionId: request.params.sessionId, turnId: request.params.turnId, disposition: { type: "requested" } } });
+  } else if (request.method === "steer_turn") {
+    write({ v: 1, id: request.id, result: {
+      sessionId: request.params.sessionId,
+      turnId: request.params.turnId,
+      messageId: request.params.messageId
+    } });
   }
 });
 "#,
         )
         .expect("write runtime fixture");
+        let script = configured_host_script(Some(script.into_os_string()))
+            .expect("canonical runtime fixture");
         let runtime = HostedAgentRuntime::start_process(Path::new("node"), &script)
             .await
             .expect("start fixture runtime");
         let descriptor = runtime.describe().await.expect("describe runtime");
         assert_eq!(descriptor.adapter_id, "fixture.runtime");
+        assert_eq!(descriptor.controls[0].label, "Model");
+        assert_eq!(descriptor.controls[0].choices[0].label, "Fixture model");
         let mut turn = runtime
             .start_turn(RuntimeTurnRequest {
                 session_id: "session-a".to_owned(),
@@ -892,11 +1250,31 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
                 prompt: "private prompt".to_owned(),
                 workspace_path: temp.path().to_string_lossy().into_owned(),
                 context_handles: Vec::new(),
+                runtime_controls: vec![dennett_agent_core::RuntimeControlSelection {
+                    control_id: "model".to_owned(),
+                    choice_id: "fixture-model".to_owned(),
+                }],
                 continuation: None,
                 deadline: RuntimeDeadline::after(Duration::from_secs(1)).expect("deadline"),
             })
             .await
             .expect("start turn");
+        assert_eq!(
+            runtime
+                .steer_turn(SteerRuntimeTurnRequest {
+                    session_id: "session-a".to_owned(),
+                    turn_id: "turn-a".to_owned(),
+                    message_id: "message-a".to_owned(),
+                    text: "new constraint".to_owned(),
+                })
+                .await
+                .expect("steer active turn"),
+            SteeringAcknowledgement {
+                session_id: "session-a".to_owned(),
+                turn_id: "turn-a".to_owned(),
+                message_id: "message-a".to_owned(),
+            }
+        );
         let mut kinds = Vec::new();
         while let Some(event) = turn.next_event().await {
             kinds.push(event.expect("runtime event").kind);

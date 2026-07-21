@@ -6,11 +6,11 @@ use super::{
 use dennett_local_ipc::protocol::dennett::control::v1::{
     ComposerDraft, ComposerDraftWriteState, SessionMetadataUpdate, SessionMutation,
     SessionSnapshot, SessionState, SessionWatchFrame, TurnActivitySnapshot, TurnActivityStatus,
-    TurnRole, TurnSnapshot, TurnState, session_mutation, session_watch_frame, turn_snapshot,
-    turn_terminal,
+    TurnDeliveryMode, TurnRole, TurnSnapshot, TurnState, session_mutation, session_watch_frame,
+    turn_snapshot, turn_terminal,
 };
 use dennett_local_ipc::protocol::dennett::sync::v1::ResyncReason;
-use dennett_local_ipc::{AuthenticatedSessionWatch, ClientCommand};
+use dennett_local_ipc::{AuthenticatedSessionWatch, ClientCommand, ClientSendTurnRequest};
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
@@ -50,7 +50,7 @@ pub struct CloseProjectChatRequest {
 pub struct CreateChatRequest {
     pub correlation_id: String,
     pub command_id: String,
-    pub project_id: String,
+    pub project_id: Option<String>,
     pub title: String,
 }
 
@@ -66,10 +66,30 @@ pub struct CreateChatResponse {
 pub struct SendProjectTurnRequest {
     pub correlation_id: String,
     pub command_id: String,
-    pub project_id: String,
+    pub project_id: Option<String>,
     pub session_id: String,
     pub expected_revision: Option<String>,
     pub text: String,
+    #[serde(default)]
+    pub runtime_controls: Vec<DesktopRuntimeControlSelection>,
+    #[serde(default)]
+    pub delivery_mode: DesktopTurnDeliveryMode,
+    pub expected_active_turn_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopTurnDeliveryMode {
+    #[default]
+    NewTurn,
+    SteerNow,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRuntimeControlSelection {
+    pub control_id: String,
+    pub choice_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,7 +104,7 @@ pub struct SendProjectTurnResponse {
 pub struct CancelProjectTurnRequest {
     pub correlation_id: String,
     pub command_id: String,
-    pub project_id: String,
+    pub project_id: Option<String>,
     pub session_id: String,
     pub turn_id: String,
 }
@@ -103,7 +123,7 @@ pub struct DesktopComposerDraft {
 pub struct SaveComposerDraftRequest {
     pub correlation_id: String,
     pub operation_id: String,
-    pub project_id: String,
+    pub project_id: Option<String>,
     pub session_id: String,
     pub command_id: String,
     pub text: String,
@@ -123,7 +143,7 @@ pub struct SaveComposerDraftResponse {
 pub struct DiscardComposerDraftRequest {
     pub correlation_id: String,
     pub operation_id: String,
-    pub project_id: String,
+    pub project_id: Option<String>,
     pub session_id: String,
     pub command_id: String,
 }
@@ -183,6 +203,7 @@ pub struct DesktopTurn {
     pub text: String,
     pub activities: Vec<DesktopTurnActivity>,
     pub outcome: Option<DesktopTurnOutcome>,
+    pub created_revision: Option<String>,
     pub created_at_unix_ms: Option<i64>,
     pub completed_at_unix_ms: Option<i64>,
 }
@@ -194,6 +215,8 @@ pub struct DesktopTurnActivity {
     pub phase: String,
     pub message: Option<String>,
     pub status: String,
+    pub created_revision: Option<String>,
+    pub created_at_unix_ms: Option<i64>,
     pub updated_at_unix_ms: Option<i64>,
     pub native_extensions: Vec<DesktopNativeExtension>,
 }
@@ -259,6 +282,19 @@ impl DesktopBridge {
         if let Some(session_id) = request.session_id.as_deref() {
             validate_identity(session_id, &request.correlation_id, true)?;
         }
+        let subscription_id = uuid::Uuid::now_v7().to_string();
+        let (cancel, mut cancel_rx) = watch::channel(false);
+        let key = format!("conversation:{window_label}");
+        // Claim the window before any asynchronous bootstrap work. A later Open
+        // supersedes this claim immediately, so an older request can never finish
+        // last and replace the newer watch.
+        self.replace_subscription(
+            key.clone(),
+            ActiveSubscription {
+                subscription_id: subscription_id.clone(),
+                cancel,
+            },
+        );
         let data_dir = self.inner.data_dir.clone().ok_or_else(|| {
             UiSafeError::new(
                 "desktop_data_directory_unavailable",
@@ -296,28 +332,25 @@ impl DesktopBridge {
             .watch_session(session_id, None)
             .await
             .map_err(|error| UiSafeError::from_client(&error, &request.correlation_id))?;
-        let subscription_id = uuid::Uuid::now_v7().to_string();
         let session = take_initial(&mut stream, &subscription_id, &request.correlation_id).await?;
-        let project_id = session
-            .session
-            .project_id
-            .clone()
-            .ok_or_else(|| malformed("session_project_missing", &request.correlation_id))?;
         let draft = client
-            .get_composer_draft(project_id, session.session.session_id.clone())
+            .get_composer_draft(
+                session.session.project_id.clone().unwrap_or_default(),
+                session.session.session_id.clone(),
+            )
             .await
             .map_err(|error| UiSafeError::from_client(&error, &request.correlation_id))?
             .as_ref()
             .map(draft_to_desktop);
-        let (cancel, mut cancel_rx) = watch::channel(false);
-        let key = format!("conversation:{window_label}");
-        self.replace_subscription(
-            key.clone(),
-            ActiveSubscription {
-                subscription_id: subscription_id.clone(),
-                cancel,
-            },
-        );
+        if !self.subscription_is_current(&key, &subscription_id) || *cancel_rx.borrow() {
+            return Err(UiSafeError::new(
+                "desktop_subscription_superseded",
+                "desktop.subscription_superseded",
+                true,
+                false,
+                &request.correlation_id,
+            ));
+        }
         let bridge = self.clone();
         let task_subscription_id = subscription_id.clone();
         tauri::async_runtime::spawn(async move {
@@ -389,7 +422,7 @@ impl DesktopBridge {
         let accepted = client
             .create_session(
                 command(&request.command_id, &request.correlation_id, None)?,
-                request.project_id,
+                request.project_id.unwrap_or_default(),
                 request.title,
             )
             .await
@@ -406,7 +439,7 @@ impl DesktopBridge {
         fields(
             dennett.component = "dennett-desktop-shell",
             dennett.protocol.version = 1_u64,
-            dennett.project.id = %request.project_id,
+            dennett.project.id = request.project_id.as_deref().unwrap_or(""),
             dennett.session.id = %request.session_id,
             dennett.command.id = %request.command_id,
             correlation_id = %request.correlation_id,
@@ -420,6 +453,19 @@ impl DesktopBridge {
         if request.text.trim().is_empty() {
             return Err(malformed("message_empty", &request.correlation_id));
         }
+        if request.runtime_controls.len() > 32 {
+            return Err(malformed("runtime_controls_invalid", &request.correlation_id));
+        }
+        let mut control_ids = std::collections::HashSet::new();
+        if request.runtime_controls.iter().any(|selection| {
+            selection.control_id.trim().is_empty()
+                || selection.choice_id.trim().is_empty()
+                || selection.control_id.len() > 128
+                || selection.choice_id.len() > 128
+                || !control_ids.insert(selection.control_id.as_str())
+        }) {
+            return Err(malformed("runtime_controls_invalid", &request.correlation_id));
+        }
         let expected = request
             .expected_revision
             .as_deref()
@@ -428,13 +474,23 @@ impl DesktopBridge {
             .map_err(|_| malformed("revision_invalid", &request.correlation_id))?;
         let mut client = self.command_client(&request.correlation_id).await?;
         let accepted = client
-            .send_turn(
-                command(&request.command_id, &request.correlation_id, expected)?,
-                request.project_id,
-                request.session_id,
-                request.text,
-                Vec::new(),
-            )
+            .send_turn(ClientSendTurnRequest {
+                command: command(&request.command_id, &request.correlation_id, expected)?,
+                project_id: request.project_id.unwrap_or_default(),
+                session_id: request.session_id,
+                text: request.text,
+                attachments: Vec::new(),
+                runtime_controls: request
+                    .runtime_controls
+                    .into_iter()
+                    .map(|selection| (selection.control_id, selection.choice_id))
+                    .collect(),
+                delivery_mode: match request.delivery_mode {
+                    DesktopTurnDeliveryMode::NewTurn => TurnDeliveryMode::NewTurn,
+                    DesktopTurnDeliveryMode::SteerNow => TurnDeliveryMode::SteerNow,
+                },
+                expected_active_turn_id: request.expected_active_turn_id,
+            })
             .await
             .map_err(|error| UiSafeError::from_client(&error, &request.correlation_id))?;
         Ok(SendProjectTurnResponse {
@@ -452,7 +508,7 @@ impl DesktopBridge {
         client
             .cancel_turn(
                 command(&request.command_id, &request.correlation_id, None)?,
-                request.project_id,
+                request.project_id.unwrap_or_default(),
                 request.session_id,
                 request.turn_id,
             )
@@ -471,7 +527,7 @@ impl DesktopBridge {
             .save_composer_draft(
                 command(&request.operation_id, &request.correlation_id, None)?,
                 ComposerDraft {
-                    project_id: request.project_id,
+                    project_id: request.project_id.unwrap_or_default(),
                     session_id: request.session_id,
                     command_id: request.command_id,
                     text: request.text,
@@ -481,13 +537,13 @@ impl DesktopBridge {
             )
             .await
             .map_err(|error| UiSafeError::from_client(&error, &request.correlation_id))?;
+        let state = ComposerDraftWriteState::try_from(receipt.state)
+            .ok()
+            .filter(|state| *state != ComposerDraftWriteState::Unspecified)
+            .ok_or_else(|| malformed("draft_write_state_unknown", &request.correlation_id))?;
         Ok(SaveComposerDraftResponse {
             command_id: receipt.command_id,
-            state: ComposerDraftWriteState::try_from(receipt.state)
-                .map_or("composer_draft_write_state_unknown", |state| {
-                    state.as_str_name()
-                })
-                .to_ascii_lowercase(),
+            state: state.as_str_name().to_ascii_lowercase(),
         })
     }
 
@@ -501,7 +557,7 @@ impl DesktopBridge {
         let discarded = client
             .discard_composer_draft(
                 command(&request.operation_id, &request.correlation_id, None)?,
-                request.project_id,
+                request.project_id.unwrap_or_default(),
                 request.session_id,
                 request.command_id,
             )
@@ -699,6 +755,8 @@ fn turn_to_desktop(turn: &TurnSnapshot) -> DesktopTurn {
         text: turn.text.clone(),
         activities: turn.activities.iter().map(activity_to_desktop).collect(),
         outcome: turn.outcome.as_ref().map(snapshot_outcome),
+        created_revision: (turn.created_revision != 0)
+            .then(|| turn.created_revision.to_string()),
         created_at_unix_ms: timestamp_ms(turn.created_at.as_ref()),
         completed_at_unix_ms: timestamp_ms(turn.completed_at.as_ref()),
     }
@@ -712,6 +770,9 @@ fn activity_to_desktop(activity: &TurnActivitySnapshot) -> DesktopTurnActivity {
         status: TurnActivityStatus::try_from(activity.status)
             .map_or("turn_activity_status_unknown", |value| value.as_str_name())
             .to_ascii_lowercase(),
+        created_revision: (activity.created_revision != 0)
+            .then(|| activity.created_revision.to_string()),
+        created_at_unix_ms: timestamp_ms(activity.created_at.as_ref()),
         updated_at_unix_ms: timestamp_ms(activity.updated_at.as_ref()),
         native_extensions: activity
             .native_extensions

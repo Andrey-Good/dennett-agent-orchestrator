@@ -52,7 +52,7 @@
       "expected": [
         "Deterministic tests exercise the adapter without a live model call",
         "Provider-specific SDK event types do not escape the Node adapter host",
-        "The canary pins SDK and CLI 0.144.5, the built-in OpenAI provider and exact ChatGPT login status while removing API-key and custom-provider environment variables",
+        "The canary pins SDK and CLI 0.144.6, the built-in OpenAI provider and exact ChatGPT login status while removing API-key and custom-provider environment variables",
         "Tool, file-change, MCP and web-search stream items fail the canary instead of being accepted as connectivity evidence",
         "Malformed event ordering, identities, item fields, usage and late iterator cleanup fail closed with normalized diagnostics",
         "Logs and fixtures contain no authentication token, prompt text or private response content",
@@ -327,6 +327,7 @@
         "target_suite": "desktop bridge and Node draft recovery",
         "status": "automated",
         "test_paths": [
+          "apps/desktop/src/App.native.test.tsx",
           "apps/desktop/src/lib/projectChatBridge.test.ts",
           "services/node/tests/desktop_conversation_e2e.rs",
           "adapters/storage/sqlite/src/lib.rs"
@@ -462,8 +463,14 @@
       "work_package_refs": ["WP-M01-007"],
       "expected": [
         "A user creates a project session and receives an ordered streamed fake response in Project Chat",
-        "Provider activity and the streamed answer are presented separately, elapsed work time is visible, Markdown is rendered, and message clock times remain fixed",
-        "Runtime controls show only the active adapter and choices that the provider actually advertises; unavailable choices and resource placeholders are absent",
+        "Concise provider commentary and effect activity remain in provider order, low-level reasoning is not exposed, and only the final completed agent message becomes the answer",
+        "Provider activity and the final answer are presented separately with readable spacing, elapsed work time, rendered Markdown and fixed message clock times",
+        "Runtime controls use compact application-styled menus and show only the active adapter and choices that the provider actually advertises; unavailable choices and resource placeholders are absent",
+        "Access, model, reasoning and speed selections cross the renderer, Tauri, authenticated IPC, Head and adapter boundary and configure the submitted Codex turn",
+        "Codex Auto-approve and Full access choices map to enforced non-interactive sandbox settings rather than presentation-only labels",
+        "A standalone Recent chat is durably listed with no project identity and runs in the Node-owned scratch workspace",
+        "An in-flight clarification is durably recorded, fenced to the exact active agent turn and delivered through native Codex turn/steer without cancellation or a replacement turn",
+        "Provider commentary and effects remain on the correct side of an in-flight clarification, and Stop terminalizes any unfinished activity indicator",
         "The terminal Result Envelope and matching Memory Event share the submitted command identity",
         "Stop reaches an authoritative cancelled state and is not lost",
         "After the desktop window closes and reopens, Node remains alive and the same session is restored",
@@ -478,6 +485,12 @@
           "services/node/tests/desktop_lifecycle.rs",
           "services/node/tests/codex_live_e2e.rs",
           "services/head/tests/conversation_application.rs",
+          "services/node/src/runtime_host.rs",
+          "adapters/transport/local-ipc/src/service.rs",
+          "services/adapter-host-node/src/codex-model-catalog.test.ts",
+          "services/adapter-host-node/src/codex-cli.test.ts",
+          "services/adapter-host-node/src/codex-app-server-client.test.ts",
+          "services/adapter-host-node/src/codex-runtime-adapter.test.ts",
           "apps/desktop/src/lib/projectChatBridge.test.ts",
           "apps/desktop/src/App.native.test.tsx"
         ]

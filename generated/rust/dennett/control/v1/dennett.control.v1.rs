@@ -160,6 +160,7 @@ impl ProjectState {
 pub struct SessionSummary {
     #[prost(string, tag="1")]
     pub session_id: ::prost::alloc::string::String,
+    /// Empty for a standalone session backed by the Node-owned scratch workspace.
     #[prost(string, tag="2")]
     pub project_id: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
@@ -213,6 +214,10 @@ pub struct TurnSnapshot {
     pub completed_at: ::core::option::Option<::prost_types::Timestamp>,
     #[prost(message, repeated, tag="10")]
     pub activities: ::prost::alloc::vec::Vec<TurnActivitySnapshot>,
+    /// Canonical session revision that created this turn; unlike wall time it is
+    /// a total order and remains stable after restart.
+    #[prost(uint64, tag="11")]
+    pub created_revision: u64,
     #[prost(oneof="turn_snapshot::Outcome", tags="6, 7")]
     pub outcome: ::core::option::Option<turn_snapshot::Outcome>,
 }
@@ -240,6 +245,12 @@ pub struct TurnActivitySnapshot {
     pub updated_at: ::core::option::Option<::prost_types::Timestamp>,
     #[prost(message, repeated, tag="6")]
     pub native_extensions: ::prost::alloc::vec::Vec<NativeExtensionPayload>,
+    /// Stable first-observed time used to preserve causal placement across updates.
+    #[prost(message, optional, tag="7")]
+    pub created_at: ::core::option::Option<::prost_types::Timestamp>,
+    /// Canonical session revision that first created this activity.
+    #[prost(uint64, tag="8")]
+    pub created_revision: u64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NativeExtensionPayload {
@@ -365,6 +376,7 @@ pub mod session_watch_frame {
 pub struct CreateSessionRequest {
     #[prost(message, optional, tag="1")]
     pub command: ::core::option::Option<super::super::common::v1::CommandMetadata>,
+    /// Empty creates a standalone session.
     #[prost(string, tag="2")]
     pub project_id: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
@@ -405,6 +417,21 @@ pub struct SendTurnRequest {
     pub text: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="5")]
     pub attachments: ::prost::alloc::vec::Vec<ContextAttachment>,
+    #[prost(message, repeated, tag="6")]
+    pub runtime_controls: ::prost::alloc::vec::Vec<RuntimeControlSelection>,
+    /// Unspecified is treated as NEW_TURN for backward compatibility.
+    #[prost(enumeration="TurnDeliveryMode", tag="7")]
+    pub delivery_mode: i32,
+    /// Required for STEER_NOW so a stale client cannot steer a newer active turn.
+    #[prost(string, tag="8")]
+    pub expected_active_turn_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RuntimeControlSelection {
+    #[prost(string, tag="1")]
+    pub control_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub choice_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SendTurnAccepted {
@@ -699,6 +726,35 @@ impl TurnState {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
+pub enum TurnDeliveryMode {
+    Unspecified = 0,
+    NewTurn = 1,
+    SteerNow = 2,
+}
+impl TurnDeliveryMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "TURN_DELIVERY_MODE_UNSPECIFIED",
+            Self::NewTurn => "TURN_DELIVERY_MODE_NEW_TURN",
+            Self::SteerNow => "TURN_DELIVERY_MODE_STEER_NOW",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "TURN_DELIVERY_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "TURN_DELIVERY_MODE_NEW_TURN" => Some(Self::NewTurn),
+            "TURN_DELIVERY_MODE_STEER_NOW" => Some(Self::SteerNow),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
 pub enum TurnActivityStatus {
     Unspecified = 0,
     Started = 1,
@@ -852,7 +908,7 @@ pub struct BootstrapSnapshot {
     #[prost(message, optional, tag="9")]
     pub runtime: ::core::option::Option<RuntimeSummary>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RuntimeSummary {
     #[prost(string, tag="1")]
     pub adapter_id: ::prost::alloc::string::String,
@@ -868,6 +924,40 @@ pub struct RuntimeSummary {
     pub deadlines: bool,
     #[prost(string, repeated, tag="7")]
     pub native_extension_schemas: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="8")]
+    pub controls: ::prost::alloc::vec::Vec<RuntimeControlDescriptor>,
+    /// unsupported | native | interrupt_and_resume
+    #[prost(string, tag="9")]
+    pub steering: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RuntimeControlCondition {
+    #[prost(string, tag="1")]
+    pub control_id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag="2")]
+    pub choice_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeControlChoice {
+    #[prost(string, tag="1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="3")]
+    pub description: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub available_when: ::prost::alloc::vec::Vec<RuntimeControlCondition>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeControlDescriptor {
+    #[prost(string, tag="1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub default_choice_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub choices: ::prost::alloc::vec::Vec<RuntimeControlChoice>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BootstrapResponse {

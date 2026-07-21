@@ -1,5 +1,5 @@
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -51,6 +51,47 @@ const commandId = "00000000-0000-7000-8000-000000000030";
 const userTurnId = "00000000-0000-7000-8000-000000000040";
 const agentTurnId = "00000000-0000-7000-8000-000000000050";
 
+const runtimeControls = [
+  {
+    id: "dennett.access_mode",
+    label: "Agent access",
+    defaultChoiceId: "auto_approve",
+    choices: [
+      { id: "auto_approve", label: "Auto-approve", description: "Project sandbox", availableWhen: [] },
+      { id: "full_access", label: "Full access", description: "Unrestricted commands", availableWhen: [] },
+    ],
+  },
+  {
+    id: "model",
+    label: "Model",
+    defaultChoiceId: "gpt-new",
+    choices: [
+      { id: "gpt-new", label: "GPT New", description: null, availableWhen: [] },
+      { id: "gpt-small", label: "GPT Small", description: null, availableWhen: [] },
+    ],
+  },
+  {
+    id: "reasoning_effort",
+    label: "Reasoning",
+    defaultChoiceId: "provider_default",
+    choices: [
+      { id: "provider_default", label: "Model default", description: null, availableWhen: [] },
+      { id: "low", label: "Low", description: null, availableWhen: [{ controlId: "model", choiceIds: ["gpt-new", "gpt-small"] }] },
+      { id: "high", label: "High", description: null, availableWhen: [{ controlId: "model", choiceIds: ["gpt-new"] }] },
+      { id: "ultra", label: "Ultra", description: null, availableWhen: [{ controlId: "model", choiceIds: ["gpt-new"] }] },
+    ],
+  },
+  {
+    id: "service_tier",
+    label: "Speed",
+    defaultChoiceId: "provider_default",
+    choices: [
+      { id: "provider_default", label: "Standard", description: null, availableWhen: [] },
+      { id: "fast", label: "Fast", description: null, availableWhen: [{ controlId: "model", choiceIds: ["gpt-new"] }] },
+    ],
+  },
+];
+
 const sessionSummary = {
   sessionId,
   projectId,
@@ -82,13 +123,36 @@ const timedOutSession = {
       role: "turn_role_agent",
       state: "turn_state_timed_out",
       text: "## Result\n\n- Retained partial answer",
-      activities: [{
-        activityId: "activity-1",
-        phase: "command",
-        message: null,
-        status: "turn_activity_status_completed",
-        updatedAtUnixMs: 1_750_000_015_000,
-      }],
+      activities: [
+        {
+          activityId: "reasoning-private",
+          phase: "reasoning_summary",
+          message: "Low-level provider reasoning must stay hidden",
+          status: "turn_activity_status_completed",
+          updatedAtUnixMs: 1_750_000_003_000,
+        },
+        {
+          activityId: "commentary-1",
+          phase: "commentary",
+          message: "Checking the project boundary.",
+          status: "turn_activity_status_completed",
+          updatedAtUnixMs: 1_750_000_005_000,
+        },
+        {
+          activityId: "activity-1",
+          phase: "command",
+          message: null,
+          status: "turn_activity_status_completed",
+          updatedAtUnixMs: 1_750_000_015_000,
+        },
+        {
+          activityId: "commentary-final",
+          phase: "commentary",
+          message: "Retained partial answer",
+          status: "turn_activity_status_completed",
+          updatedAtUnixMs: 1_750_000_025_000,
+        },
+      ],
       outcome: { kind: "result", summary: "Retained partial answer", partial: true },
       createdAtUnixMs: 1_750_000_000_001,
       completedAtUnixMs: 1_750_000_026_001,
@@ -132,6 +196,9 @@ const system = {
     continuation: true,
     scopedCancellation: true,
     deadlines: true,
+    steering: "native",
+    nativeExtensionSchemas: [],
+    controls: runtimeControls,
   },
 };
 
@@ -177,8 +244,13 @@ describe("native Project Chat recovery", () => {
     expect(await screen.findByText("Timed out")).toBeVisible();
     expect(screen.getByText("Retained partial answer")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Result" })).toBeVisible();
-    expect(screen.getByText("Ran command")).toBeVisible();
-    expect(screen.getByText("Timed out after 26s")).toBeVisible();
+    const commentary = screen.getByText("Checking the project boundary.");
+    const commandActivity = screen.getByText("Ran command");
+    const elapsed = screen.getByText("Timed out after 26s");
+    expect(commentary.compareDocumentPosition(commandActivity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(commandActivity.compareDocumentPosition(elapsed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("Low-level provider reasoning must stay hidden")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("Retained partial answer")).toHaveLength(1);
     expect(screen.queryByText("now")).not.toBeInTheDocument();
     const createdTime = new Date(1_750_000_000_001).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const completedTime = new Date(1_750_000_026_001).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -187,10 +259,24 @@ describe("native Project Chat recovery", () => {
     expect(screen.getByLabelText("agent message")).not.toHaveTextContent(completedTime);
     expect(screen.queryByLabelText("Workspace resources")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Plugins" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Agent runtime: Codex, Native agent/i }));
-    expect(screen.getByText(/did not publish selectable model, reasoning or speed options/i)).toBeVisible();
-    expect(screen.queryByText("Provider default")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Medium" })).not.toBeInTheDocument();
+    const access = screen.getByRole("button", { name: "Auto-approve" });
+    await user.click(access);
+    const accessDialog = screen.getByRole("dialog", { name: "Agent access" });
+    await user.click(within(accessDialog).getByRole("button", { name: "Full access" }));
+    expect(screen.getByRole("button", { name: "Full access" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Agent runtime: Codex/i }));
+    await user.click(screen.getByRole("button", { name: "Model: GPT New" }));
+    await user.click(screen.getByRole("option", { name: "GPT Small" }));
+    expect(screen.getByRole("button", { name: "Reasoning: Model default" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Speed: Standard" }));
+    expect(screen.queryByRole("option", { name: "Fast" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Model: GPT Small" }));
+    await user.click(screen.getByRole("option", { name: "GPT New" }));
+    await user.click(screen.getByRole("button", { name: "Reasoning: Model default" }));
+    await user.click(screen.getByRole("option", { name: "Ultra" }));
+    await user.click(screen.getByRole("button", { name: "Speed: Standard" }));
+    await user.click(screen.getByRole("option", { name: "Fast" }));
+    expect(screen.getByRole("button", { name: /Agent runtime: Codex, GPT New · Ultra · Fast/i })).toBeVisible();
     const retry = screen.getByRole("button", { name: "Retry" });
     await user.click(retry);
 
@@ -202,6 +288,12 @@ describe("native Project Chat recovery", () => {
           sessionId,
           expectedRevision: "4",
           text: "Retry the owner request",
+          runtimeControls: [
+            { controlId: "dennett.access_mode", choiceId: "full_access" },
+            { controlId: "model", choiceId: "gpt-new" },
+            { controlId: "reasoning_effort", choiceId: "ultra" },
+            { controlId: "service_tier", choiceId: "fast" },
+          ],
         },
       });
       const request = (call?.[1] as { request: { commandId: string } }).request;
@@ -218,6 +310,483 @@ describe("native Project Chat recovery", () => {
       const secondCommand = (retries[1][1] as { request: { commandId: string } }).request.commandId;
       expect(secondCommand).toBe(firstCommand);
     });
+  });
+
+  it("sends an in-flight clarification to the exact active Codex turn without cancelling it", async () => {
+    const activeSummary = {
+      ...sessionSummary,
+      state: "session_state_running",
+      revision: "3",
+      activeTurnId: agentTurnId,
+    };
+    const activeSession = {
+      session: activeSummary,
+      fingerprint: "active-steer-fingerprint",
+      turns: [
+        {
+          ...timedOutSession.turns[0],
+          text: "Start the long task",
+        },
+        {
+          ...timedOutSession.turns[1],
+          state: "turn_state_streaming",
+          text: "",
+          activities: [{
+            activityId: "active-command",
+            phase: "command",
+            message: null,
+            status: "turn_activity_status_started",
+            updatedAtUnixMs: 1_750_000_005_000,
+          }],
+          outcome: null,
+          completedAtUnixMs: null,
+        },
+      ],
+    };
+    const activeSystem = { ...system, revision: "3", recentSessions: [activeSummary] };
+    tauri.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "native-steer-correlation",
+          subscriptionId: "native-steer-subscription",
+          system: activeSystem,
+          session: activeSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      if (command === "save_composer_draft") {
+        const request = args?.request as { commandId: string };
+        return { commandId: request.commandId, state: "composer_draft_write_state_saved" };
+      }
+      if (command === "send_project_turn") {
+        const request = args?.request as Record<string, unknown>;
+        return { commandId: request.commandId, turnId: agentTurnId };
+      }
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByLabelText("Message to project agent");
+    expect(screen.getByRole("button", { name: `Stop generation for session "${sessionSummary.title}"` })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Auto-approve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Agent runtime: Codex/i })).toBeDisabled();
+    await user.type(composer, "Use the new constraint too");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => {
+      const call = tauri.invoke.mock.calls.find(([command]) => command === "send_project_turn");
+      expect(call?.[1]).toMatchObject({
+        request: {
+          projectId,
+          sessionId,
+          expectedRevision: "3",
+          text: "Use the new constraint too",
+          runtimeControls: [],
+          deliveryMode: "steer_now",
+          expectedActiveTurnId: agentTurnId,
+        },
+      });
+    });
+    expect(tauri.invoke.mock.calls.some(([command]) => command === "cancel_project_turn")).toBe(false);
+  });
+
+  it("keeps the next typed clarification while the previous delivery receipt is pending", async () => {
+    const activeSummary = {
+      ...sessionSummary,
+      state: "session_state_running",
+      revision: "3",
+      activeTurnId: agentTurnId,
+    };
+    const activeSession = {
+      session: activeSummary,
+      fingerprint: "pending-steer-fingerprint",
+      turns: [
+        { ...timedOutSession.turns[0], text: "Start the long task" },
+        {
+          ...timedOutSession.turns[1],
+          state: "turn_state_streaming",
+          text: "",
+          activities: [],
+          outcome: null,
+          completedAtUnixMs: null,
+        },
+      ],
+    };
+    let resolveFirstSend: ((value: { commandId: string; turnId: string }) => void) | undefined;
+    let sendCount = 0;
+    tauri.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "native-pending-steer-correlation",
+          subscriptionId: "native-pending-steer-subscription",
+          system: { ...system, revision: "3", recentSessions: [activeSummary] },
+          session: activeSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      if (command === "save_composer_draft") {
+        const request = args?.request as { commandId: string };
+        return { commandId: request.commandId, state: "composer_draft_write_state_saved" };
+      }
+      if (command === "send_project_turn") {
+        const request = (args?.request ?? {}) as { commandId: string };
+        sendCount += 1;
+        if (sendCount === 1) {
+          return new Promise<{ commandId: string; turnId: string }>((resolve) => {
+            resolveFirstSend = resolve;
+          });
+        }
+        return { commandId: request.commandId, turnId: agentTurnId };
+      }
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByLabelText("Message to project agent");
+    await user.type(composer, "first clarification");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(resolveFirstSend).toBeTypeOf("function"));
+    const firstSend = tauri.invoke.mock.calls.find(([command]) => command === "send_project_turn");
+    const firstCommandId = (firstSend?.[1] as { request: { commandId: string } }).request.commandId;
+
+    await user.clear(composer);
+    await user.type(composer, "second clarification");
+    await act(async () => resolveFirstSend?.({ commandId: firstCommandId, turnId: agentTurnId }));
+    await waitFor(() => expect(composer).toHaveValue("second clarification"));
+
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(
+      tauri.invoke.mock.calls.filter(([command]) => command === "send_project_turn"),
+    ).toHaveLength(2));
+    const sends = tauri.invoke.mock.calls.filter(([command]) => command === "send_project_turn");
+    expect(sends[1]?.[1]).toMatchObject({ request: { text: "second clarification" } });
+    const secondCommandId = (sends[1]?.[1] as { request: { commandId: string } }).request.commandId;
+    expect(secondCommandId).not.toBe(firstCommandId);
+  });
+
+  it("renders owner updates, an in-flight clarification, later work, and the final answer in causal order", async () => {
+    const steerTurnId = "00000000-0000-7000-8000-000000000051";
+    const orderedSession = {
+      session: { ...sessionSummary, revision: "8" },
+      fingerprint: "ordered-steer-fingerprint",
+      turns: [
+        {
+          ...timedOutSession.turns[0],
+          text: "Begin the task",
+          createdRevision: "2",
+          createdAtUnixMs: 1_750_000_000_000,
+        },
+        {
+          ...timedOutSession.turns[1],
+          state: "turn_state_completed",
+          text: "## Final answer\n\n- Completed with the clarification",
+          createdRevision: "2",
+          activities: [
+            {
+              activityId: "before-steer",
+              phase: "commentary",
+              message: "First I will inspect the workspace.",
+              status: "turn_activity_status_completed",
+              createdRevision: "3",
+              createdAtUnixMs: 1_750_000_010_000,
+              updatedAtUnixMs: 1_750_000_010_000,
+            },
+            {
+              activityId: "after-steer-command",
+              phase: "command",
+              message: null,
+              status: "turn_activity_status_completed",
+              createdRevision: "6",
+              createdAtUnixMs: 1_750_000_010_000,
+              updatedAtUnixMs: 1_750_000_020_000,
+            },
+            {
+              activityId: "after-steer",
+              phase: "commentary",
+              message: "I included the new constraint.",
+              status: "turn_activity_status_completed",
+              createdRevision: "7",
+              createdAtUnixMs: 1_750_000_010_000,
+              updatedAtUnixMs: 1_750_000_022_000,
+            },
+          ],
+          outcome: { kind: "result", summary: "Completed with the clarification", partial: false },
+          createdAtUnixMs: 1_750_000_000_001,
+          completedAtUnixMs: 1_750_000_030_001,
+        },
+        {
+          turnId: steerTurnId,
+          commandId: "00000000-0000-7000-8000-000000000031",
+          role: "turn_role_user",
+          state: "turn_state_completed",
+          text: "Also include the new constraint",
+          activities: [],
+          outcome: null,
+          createdRevision: "4",
+          createdAtUnixMs: 1_750_000_010_000,
+          completedAtUnixMs: 1_750_000_010_001,
+        },
+      ],
+    };
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "native-order-correlation",
+          subscriptionId: "native-order-subscription",
+          system: { ...system, revision: "8" },
+          session: orderedSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    render(<App />);
+
+    const before = await screen.findByText("First I will inspect the workspace.");
+    const steer = screen.getByText("Also include the new constraint");
+    const command = screen.getByText("Ran command");
+    const after = screen.getByText("I included the new constraint.");
+    const summary = screen.getByText("Worked for 30s");
+    const final = screen.getByRole("heading", { name: "Final answer" });
+    expect(before.compareDocumentPosition(steer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(steer.compareDocumentPosition(command) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(command.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(after.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(summary.compareDocumentPosition(final) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps an empty pre-steer segment in order and shows failed delivery", async () => {
+    const failedSteerId = "00000000-0000-7000-8000-000000000052";
+    const activeSummary = {
+      ...sessionSummary,
+      state: "session_state_running",
+      revision: "5",
+      activeTurnId: agentTurnId,
+    };
+    const failedSteerSession = {
+      session: activeSummary,
+      fingerprint: "failed-steer-order-fingerprint",
+      turns: [
+        {
+          ...timedOutSession.turns[0],
+          text: "Begin without an initial update",
+          createdAtUnixMs: 1_750_000_000_000,
+        },
+        {
+          ...timedOutSession.turns[1],
+          state: "turn_state_streaming",
+          text: "",
+          activities: [{
+            activityId: "after-failed-steer",
+            phase: "commentary",
+            message: "Work continued after the delivery attempt.",
+            status: "turn_activity_status_completed",
+            updatedAtUnixMs: 1_750_000_020_000,
+          }],
+          outcome: null,
+          createdAtUnixMs: 1_750_000_000_001,
+          completedAtUnixMs: null,
+        },
+        {
+          turnId: failedSteerId,
+          commandId: "00000000-0000-7000-8000-000000000032",
+          role: "turn_role_user",
+          state: "turn_state_failed",
+          text: "Use a constraint that could not be delivered",
+          activities: [],
+          outcome: {
+            kind: "error",
+            error: {
+              code: "provider_unavailable",
+              messageKey: "session.steer_failed",
+              correlationId: "",
+              retryable: true,
+              userActionRequired: false,
+              detailsHandle: null,
+              currentRevision: null,
+            },
+          },
+          createdAtUnixMs: 1_750_000_010_000,
+          completedAtUnixMs: 1_750_000_012_000,
+        },
+      ],
+    };
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "failed-steer-order-correlation",
+          subscriptionId: "failed-steer-order-subscription",
+          system: { ...system, revision: "5", recentSessions: [activeSummary] },
+          session: failedSteerSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    render(<App />);
+
+    const steer = await screen.findByText("Use a constraint that could not be delivered");
+    const after = screen.getByText("Work continued after the delivery attempt.");
+    expect(screen.getByText("Clarification delivery could not be confirmed")).toBeVisible();
+    expect(steer.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("creates a real standalone chat from Recent and opens it outside every project", async () => {
+    const standaloneSessionId = "00000000-0000-7000-8000-000000000023";
+    const standaloneSummary = {
+      ...sessionSummary,
+      sessionId: standaloneSessionId,
+      projectId: null,
+      title: "Untitled chat",
+      revision: "1",
+      activeTurnId: null,
+    };
+    const standaloneSystem = {
+      ...system,
+      revision: "5",
+      recentSessions: [sessionSummary, standaloneSummary],
+      activeProjectId: null,
+      activeSessionId: standaloneSessionId,
+    };
+    const standaloneSession = {
+      session: standaloneSummary,
+      fingerprint: "standalone-fingerprint",
+      turns: [],
+    };
+    tauri.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        const request = args?.request as { sessionId: string | null };
+        const standalone = request.sessionId === standaloneSessionId;
+        return {
+          correlationId: standalone ? "standalone-open" : "project-open",
+          subscriptionId: standalone ? "standalone-subscription" : "project-subscription",
+          system: standalone ? standaloneSystem : system,
+          session: standalone ? standaloneSession : timedOutSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      if (command === "create_chat") return { sessionId: standaloneSessionId };
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByText("Timed out");
+    await user.hover(screen.getByRole("heading", { name: "Recent" }));
+    await user.click(screen.getByRole("button", { name: "New recent chat" }));
+
+    await waitFor(() => {
+      const call = tauri.invoke.mock.calls.find(([command]) => command === "create_chat");
+      expect(call?.[1]).toMatchObject({ request: { projectId: null, title: "Untitled chat" } });
+    });
+    expect(await screen.findByRole("heading", { name: "Start a conversation" })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
+    expect(screen.getByRole("button", { name: /Untitled chat/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("single-flights rapid standalone-chat creation", async () => {
+    let resolveCreate: ((value: { sessionId: string }) => void) | undefined;
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "native-single-flight-correlation",
+          subscriptionId: crypto.randomUUID(),
+          system,
+          session: timedOutSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      if (command === "create_chat") {
+        return new Promise<{ sessionId: string }>((resolve) => { resolveCreate = resolve; });
+      }
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    render(<App />);
+    await screen.findByText("Timed out");
+    const create = screen.getByRole("button", { name: "New recent chat" });
+
+    fireEvent.click(create);
+    fireEvent.click(create);
+    await waitFor(() => expect(
+      tauri.invoke.mock.calls.filter(([command]) => command === "create_chat"),
+    ).toHaveLength(1));
+    await act(async () => resolveCreate?.({ sessionId: "00000000-0000-7000-8000-000000000023" }));
+  });
+
+  it("terminalizes unfinished activity after Stop instead of leaving a running spinner", async () => {
+    const cancelledSession = {
+      session: { ...sessionSummary, revision: "6" },
+      fingerprint: "cancelled-activity-fingerprint",
+      turns: [
+        timedOutSession.turns[0],
+        {
+          ...timedOutSession.turns[1],
+          state: "turn_state_cancelled",
+          text: "Partial result",
+          activities: [{
+            activityId: "cancelled-command",
+            phase: "command",
+            message: null,
+            status: "turn_activity_status_started",
+            updatedAtUnixMs: 1_750_000_010_000,
+          }],
+          outcome: { kind: "result", summary: "Partial result", partial: true },
+          completedAtUnixMs: 1_750_000_013_001,
+        },
+      ],
+    };
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "native-cancelled-correlation",
+          subscriptionId: "native-cancelled-subscription",
+          system: { ...system, revision: "6" },
+          session: cancelledSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    render(<App />);
+
+    expect(await screen.findByText("Command stopped")).toBeVisible();
+    expect(screen.queryByText("Running command")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Agent work").querySelector(".spin")).toBeNull();
+  });
+
+  it("keeps project and standalone-chat actions visible without pretending unsupported storage exists", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Timed out");
+
+    expect(screen.getByRole("button", { name: "New chat in Dennett native test" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recent" })).toBeVisible();
+    expect(screen.getByText("No standalone chats yet")).toBeVisible();
+    expect(screen.getByRole("button", { name: "New recent chat" })).toBeInTheDocument();
+
+    const newProject = screen.getByRole("button", { name: "New project" });
+    newProject.focus();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Create or add project" });
+    expect(within(dialog).getByRole("button", { name: /Create empty project/i })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: /Add existing folder/i })).toBeDisabled();
+    expect(within(dialog).getByText(/not connected in M01/i)).toBeVisible();
   });
 
   it("does not let a late save receipt erase the next draft", async () => {
@@ -337,6 +906,122 @@ describe("native Project Chat recovery", () => {
     });
   });
 
+  it("does not leave a chat whose draft failed to save", async () => {
+    const systemWithTwoChats = {
+      ...system,
+      recentSessions: [sessionSummary, secondSessionSummary],
+    };
+    tauri.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        const request = args?.request as { sessionId: string | null };
+        if (request.sessionId === secondSessionId) throw new Error("must not open second chat");
+        return {
+          correlationId: "native-switch-save-correlation",
+          subscriptionId: "native-switch-save-subscription",
+          system: systemWithTwoChats,
+          session: timedOutSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      if (command === "save_composer_draft") throw new Error("storage unavailable");
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByLabelText("Message to project agent");
+    await user.type(composer, "must remain in this chat");
+    await user.click(screen.getByRole("button", { name: /Second chat/ }));
+
+    expect(await screen.findByText("The current draft was not saved. This chat remains open.")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Timeout recovery/ })).toHaveAttribute("aria-current", "page");
+    expect(tauri.invoke.mock.calls.filter(([command, args]) => (
+      command === "open_project_chat"
+      && (args as { request?: { sessionId?: string | null } } | undefined)?.request?.sessionId === secondSessionId
+    ))).toHaveLength(0);
+  });
+
+  it("does not let a late new-chat response replace a newer navigation", async () => {
+    const createdSessionId = "00000000-0000-7000-8000-000000000022";
+    const systemWithTwoChats = {
+      ...system,
+      recentSessions: [sessionSummary, secondSessionSummary],
+    };
+    let resolveCreate: ((value: { sessionId: string }) => void) | undefined;
+    tauri.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        const request = args?.request as { sessionId: string | null };
+        const openedSession = request.sessionId === secondSessionId ? secondSession : timedOutSession;
+        return {
+          correlationId: "native-create-race-correlation",
+          subscriptionId: crypto.randomUUID(),
+          system: systemWithTwoChats,
+          session: openedSession,
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      if (command === "create_chat") {
+        return new Promise<{ sessionId: string }>((resolve) => { resolveCreate = resolve; });
+      }
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByText("Timed out");
+    await user.keyboard("{Control>}k{/Control}");
+    await user.click(screen.getByRole("button", { name: "New chat in current project" }));
+    await waitFor(() => expect(resolveCreate).toBeTypeOf("function"));
+    await user.click(screen.getByRole("button", { name: /Second chat/ }));
+    const opensBeforeCreateCompletes = tauri.invoke.mock.calls.filter(([command]) => command === "open_project_chat").length;
+    await act(async () => { resolveCreate?.({ sessionId: createdSessionId }); });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Second chat/ })).toHaveAttribute("aria-current", "page");
+    });
+    expect(tauri.invoke.mock.calls.some(([command, args]) => (
+      command === "open_project_chat"
+      && (args as { request?: { sessionId?: string | null } } | undefined)?.request?.sessionId === createdSessionId
+    ))).toBe(false);
+    await waitFor(() => {
+      expect(tauri.invoke.mock.calls.filter(([command]) => command === "open_project_chat").length)
+        .toBeGreaterThan(opensBeforeCreateCompletes);
+    });
+  });
+
+  it("shows a newly active turn instead of Retry from an older timeout", async () => {
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "native-new-active-correlation",
+          subscriptionId: "native-new-active-subscription",
+          system,
+          session: {
+            ...timedOutSession,
+            session: {
+              ...timedOutSession.session,
+              revision: "5",
+              state: "session_state_running",
+              activeTurnId: "00000000-0000-7000-8000-000000000099",
+            },
+          },
+          draft: null,
+        };
+      }
+      if (command === "close_project_chat") return true;
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    render(<App />);
+
+    expect(await screen.findByText("Working")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
   it("keeps stale messages read-only while a watch gap is resynchronizing", async () => {
     let holdReconnect = false;
     tauri.invoke.mockImplementation(async (command: string) => {
@@ -375,6 +1060,86 @@ describe("native Project Chat recovery", () => {
     expect(screen.getByText("Retained partial answer")).toBeVisible();
     expect(screen.getByLabelText("Message to project agent")).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("uses heartbeats for freshness and reconnects a silently stalled watch", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let openCount = 0;
+      tauri.invoke.mockImplementation(async (command: string) => {
+        if (command === "native_mica_available") return true;
+        if (command === "open_project_chat") {
+          openCount += 1;
+          // The initial unscoped bootstrap is followed by one scoped watch for
+          // the active session. Only a later freshness reconnect is stalled.
+          if (openCount > 2) return new Promise(() => undefined);
+          return {
+            correlationId: "native-heartbeat-correlation",
+            subscriptionId: "native-heartbeat-subscription",
+            system,
+            session: timedOutSession,
+            draft: null,
+          };
+        }
+        if (command === "close_project_chat") return true;
+        throw new Error(`Unexpected native command: ${command}`);
+      });
+      render(<App />);
+      expect(await screen.findByText("Timed out")).toBeVisible();
+      await waitFor(() => expect(openCount).toBe(2));
+      const handler = tauri.channelHandlers.at(-1);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      act(() => handler?.({
+        kind: "heartbeat",
+        subscriptionId: "native-heartbeat-subscription",
+        cursor: { streamId: "stream", sequence: "2", authorityEpoch: "7" },
+        currentRevision: "4",
+      }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(screen.getByText("Live")).toBeVisible();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_001); });
+      expect(screen.getByText("Refreshing")).toBeVisible();
+      expect(screen.getByLabelText("Message to project agent")).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resynchronizes when a heartbeat reports an unseen revision", async () => {
+    render(<App />);
+    await screen.findByText("Timed out");
+    await waitFor(() => {
+      expect(tauri.invoke.mock.calls.filter(([command]) => command === "open_project_chat").length).toBeGreaterThanOrEqual(2);
+    });
+    const handler = tauri.channelHandlers.at(-1);
+
+    act(() => handler?.({
+      kind: "heartbeat",
+      subscriptionId: "native-timeout-subscription",
+      cursor: { streamId: "stream", sequence: "2", authorityEpoch: "7" },
+      currentRevision: "5",
+    }));
+
+    expect(screen.getByText("Refreshing")).toBeVisible();
+    expect(screen.getByText("Read only")).toBeVisible();
+    expect(screen.getByLabelText("Message to project agent")).toBeDisabled();
+  });
+
+  it("opens provider-enforced access settings from the native Command Center", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Timed out");
+
+    await user.keyboard("{Control>}k{/Control}");
+    const search = screen.getByRole("textbox", { name: "Command Center search" });
+    await user.type(search, "access");
+
+    await user.click(screen.getByRole("button", { name: "Agent access settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Agent access" });
+    expect(within(dialog).getByRole("button", { name: "Auto-approve" })).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Full access" })).toBeVisible();
   });
 
   it("discards a possibly committed draft when its save receipt was lost", async () => {
@@ -435,6 +1200,51 @@ describe("native Project Chat recovery", () => {
     await user.click(screen.getByRole("button", { name: "Close window" }));
     expect(await screen.findByText("The draft was not saved. The window remains open.")).toBeVisible();
     expect(tauri.closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("restores the same visibly unsent draft after the renderer restarts", async () => {
+    const restoredCommandId = "00000000-0000-7000-8000-000000000031";
+    tauri.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "native_mica_available") return true;
+      if (command === "open_project_chat") {
+        return {
+          correlationId: "native-restored-draft-correlation",
+          subscriptionId: crypto.randomUUID(),
+          system,
+          session: timedOutSession,
+          draft: {
+            commandId: restoredCommandId,
+            text: "unsent after restart",
+            revision: "3",
+            updatedAtUnixMs: 1_750_000_030_000,
+          },
+        };
+      }
+      if (command === "close_project_chat") return true;
+      if (command === "save_composer_draft") {
+        return { commandId: restoredCommandId, state: "composer_draft_write_state_saved" };
+      }
+      if (command === "send_project_turn") {
+        const request = args?.request as Record<string, unknown>;
+        return { commandId: request.commandId, turnId: "00000000-0000-7000-8000-000000000062" };
+      }
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+
+    const first = render(<App />);
+    expect(await screen.findByLabelText("Message to project agent")).toHaveValue("unsent after restart");
+    expect(screen.getAllByLabelText(/message$/i).some((message) => message.textContent?.includes("unsent after restart"))).toBe(false);
+    first.unmount();
+
+    const user = userEvent.setup();
+    render(<App />);
+    const restored = await screen.findByLabelText("Message to project agent");
+    expect(restored).toHaveValue("unsent after restart");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => {
+      const send = tauri.invoke.mock.calls.find(([command]) => command === "send_project_turn");
+      expect(send?.[1]).toMatchObject({ request: { commandId: restoredCommandId, text: "unsent after restart" } });
+    });
   });
 
   it("intercepts an operating-system close request before closing", async () => {

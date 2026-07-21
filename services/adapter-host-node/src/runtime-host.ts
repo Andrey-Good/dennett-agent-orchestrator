@@ -5,7 +5,9 @@ import {
   RuntimeAdapterError,
   type RuntimeEvent,
   type RuntimeEventKind,
+  type RuntimeControlSelection,
   type RuntimeTurnRequest,
+  type SteerRuntimeTurnRequest,
 } from "./runtime-contract.js";
 
 const PROTOCOL_VERSION = 1;
@@ -41,14 +43,23 @@ function parseContinuation(value: unknown): OpaqueContinuation | undefined {
 function parseStartRequest(value: unknown): RuntimeTurnRequest {
   const request = record(value);
   const contextHandles = request.contextHandles ?? [];
+  const runtimeControls = request.runtimeControls ?? [];
   if (
     !Array.isArray(contextHandles) ||
     contextHandles.some((handle) => typeof handle !== "string") ||
+    !Array.isArray(runtimeControls) ||
     !Number.isSafeInteger(request.timeoutMs) ||
     (request.timeoutMs as number) <= 0
   ) {
     throw new RuntimeAdapterError("invalid_request");
   }
+  const parsedRuntimeControls = runtimeControls.map((value) => {
+    const selection = record(value);
+    return {
+      controlId: string(selection.controlId),
+      choiceId: string(selection.choiceId),
+    } satisfies RuntimeControlSelection;
+  });
   return {
     sessionId: string(request.sessionId),
     turnId: string(request.turnId),
@@ -56,6 +67,7 @@ function parseStartRequest(value: unknown): RuntimeTurnRequest {
     workspacePath: string(request.workspacePath),
     timeoutMs: request.timeoutMs as number,
     contextHandles: contextHandles as string[],
+    runtimeControls: parsedRuntimeControls,
     continuation: parseContinuation(request.continuation),
   };
 }
@@ -65,6 +77,16 @@ function parseCancelRequest(value: unknown): CancelRuntimeTurnRequest {
   return {
     sessionId: string(request.sessionId),
     turnId: string(request.turnId),
+  };
+}
+
+function parseSteerRequest(value: unknown): SteerRuntimeTurnRequest {
+  const request = record(value);
+  return {
+    sessionId: string(request.sessionId),
+    turnId: string(request.turnId),
+    messageId: string(request.messageId),
+    text: string(request.text),
   };
 }
 
@@ -188,6 +210,11 @@ export class RuntimeHost {
           await this.result(id, await this.adapter.cancelTurn(cancellation));
           return;
         }
+        case "steer_turn": {
+          const steer = parseSteerRequest(request.params);
+          await this.result(id, await this.adapter.steerTurn(steer));
+          return;
+        }
         default:
           throw new RuntimeAdapterError("unsupported");
       }
@@ -199,6 +226,7 @@ export class RuntimeHost {
   async close(): Promise<void> {
     const active = [...this.#active.values()];
     await Promise.allSettled(active.map((request) => this.adapter.cancelTurn(request)));
+    await this.adapter.close?.();
   }
 
   private async result(id: string, result: unknown): Promise<void> {

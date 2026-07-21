@@ -15,7 +15,7 @@ pub use auth::{HandshakePolicy, SessionRegistry};
 #[cfg(feature = "client")]
 pub use client::{
     AuthenticatedSessionWatch, AuthenticatedSystemClient, AuthenticatedSystemWatch, ClientCommand,
-    ClientConfig, ClientError,
+    ClientConfig, ClientError, ClientSendTurnRequest,
 };
 #[cfg(feature = "server")]
 pub use service::{

@@ -200,15 +200,14 @@ describe("Project Chat workbench", () => {
 
     const composer = screen.getByRole("textbox", { name: "Message to project agent" });
     const sidebar = screen.getByRole("complementary", { name: "Project and chat navigation" });
-    await user.type(composer, "Unsent owner draft");
+    fireEvent.change(composer, { target: { value: "Unsent owner draft" } });
     await user.click(within(sidebar).getByRole("button", { name: /M01 protocol epoch/ }));
     expect(composer).toHaveValue("");
-    await user.type(composer, "Protocol-only draft");
+    fireEvent.change(composer, { target: { value: "Protocol-only draft" } });
     await user.click(within(sidebar).getByRole("button", { name: /Project Chat owner checkpoint/ }));
     expect(composer).toHaveValue("Unsent owner draft");
 
-    await user.clear(composer);
-    await user.type(composer, "Only visible in the owner checkpoint");
+    fireEvent.change(composer, { target: { value: "Only visible in the owner checkpoint" } });
     fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true });
     expect(await screen.findByText("Only visible in the owner checkpoint")).toBeVisible();
 
@@ -222,7 +221,7 @@ describe("Project Chat workbench", () => {
     await user.hover(within(sidebar).getByRole("heading", { name: "Recent" }));
     await user.click(within(sidebar).getByRole("button", { name: "New recent chat" }));
     expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
-    expect(await screen.findByRole("heading", { name: "Start with the project" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Start a conversation" })).toBeVisible();
     expect(screen.queryByText("Only visible in the owner checkpoint")).not.toBeInTheDocument();
     expect(within(sidebar).getByRole("button", { name: /Untitled chat/ })).toBeVisible();
   });
@@ -253,7 +252,7 @@ describe("Project Chat workbench", () => {
     const composer = screen.getByRole("textbox", { name: "Message to project agent" });
 
     await user.click(composer);
-    await user.type(composer, "Review the second owner checkpoint");
+    fireEvent.change(composer, { target: { value: "Review the second owner checkpoint" } });
     await act(async () => { fireEvent.keyDown(window, { key: "k", ctrlKey: true }); });
 
     expect(screen.getByRole("dialog", { name: "Command Center" })).toBeVisible();
@@ -264,6 +263,11 @@ describe("Project Chat workbench", () => {
     expect(lastCommand).toHaveFocus();
     fireEvent.keyDown(lastCommand, { key: "Tab" });
     expect(commandSearch).toHaveFocus();
+    await user.type(commandSearch, "protocol");
+    const commandDialog = screen.getByRole("dialog", { name: "Command Center" });
+    expect(within(commandDialog).getByRole("button", { name: /M01 protocol epoch/ })).toBeVisible();
+    expect(within(commandDialog).queryByRole("button", { name: "Open local preview" })).not.toBeInTheDocument();
+    await user.clear(commandSearch);
     await act(async () => { fireEvent.keyDown(window, { key: "Escape" }); });
     expect(screen.queryByRole("dialog", { name: "Command Center" })).not.toBeInTheDocument();
     expect(composer).toHaveFocus();

@@ -3,7 +3,7 @@
 Изолирует Node/TypeScript SDK и provider-specific extensions. Не хранит canonical state и не владеет permissions.
 
 `@modelcontextprotocol/sdk` is a development-only type-resolution workaround
-for `@openai/codex-sdk@0.144.5`: the published Codex declaration file imports
+for `@openai/codex-sdk@0.144.6`: the published Codex declaration file imports
 its MCP `ContentBlock` type, while the package currently lists that module only
 as a development dependency. Runtime code does not import the MCP SDK.
 
