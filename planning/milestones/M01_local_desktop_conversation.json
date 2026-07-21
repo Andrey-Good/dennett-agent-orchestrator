@@ -2,7 +2,7 @@
   "version": 1,
   "id": "M01",
   "title": "Local desktop conversation",
-  "status": "QUALIFYING",
+  "status": "ACCEPTED",
   "outcome": "A user opens Dennett Desktop, creates or resumes a local project conversation, receives a streaming response from a replaceable agent runtime, can stop the active turn, and sees the authoritative session restored after the UI restarts.",
   "non_goals": [
     "editing project files, reviewing diffs, running project tests or performing Git actions, which belong to M02",

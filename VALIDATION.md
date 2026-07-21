@@ -1,6 +1,6 @@
 # Repository Validation Report
 
-**Updated:** 2026-07-17
+**Updated:** 2026-07-21
 
 ## Executed on Windows
 
@@ -57,9 +57,37 @@
 The exact resolved versions are printed and validated by `just doctor`. On Windows, Rust commands
 load the installed Visual Studio Build Tools environment automatically.
 
-## Deferred beyond M00
+## M01 owner acceptance
 
-- Native Tauri/mobile packaging and Docker-backed service integration are later milestones.
-- Nightly matrices, release signing and production provider credentials are later milestones.
+- The owner exercised the native Dennett application throughout qualification and explicitly
+  accepted WP-M01-007 and milestone M01 on 2026-07-21.
+- M01 has 7 `MERGED` Work Packages and 22 catalogued acceptance cases. Its lifecycle is now
+  `ACCEPTED`; generated views report no current milestone until the next refined milestone is
+  promoted.
+- `mise exec -- just check` passed on merge-ready commit `5565e57`, covering repository,
+  documentation, planning, Rust, Python, TypeScript, protocol and generated-artifact gates.
+- The same complete gate passed again after the lifecycle transition to `ACCEPTED`; the
+  generated milestone plan reports that no milestone is currently active or qualifying.
+- GitHub Protocol Compatibility run `29840909681`, Fast Gate run `29840909727` and Windows
+  Desktop IPC run `29840910310` passed on merge-ready commit `5565e57` before PR #20 merged
+  as `29ede78`.
+- The qualified desktop boundary includes 59 renderer tests, 15 Tauri shell tests, 13 SQLite
+  tests, 14 Head conversation integration tests, 61 adapter-host tests and 4 real-process
+  desktop conversation tests.
+- Both ignored live Codex tests were run explicitly with the owner's ChatGPT subscription:
+  the session continued after Node restart, and a clarification changed the same active Codex
+  turn without hidden cancellation or replacement.
+- A detached R2 closure review of executable commit `24da00f` returned PASS with no open
+  P0-P2 findings and independently repeated the atomic SQLite regression, all Head conversation
+  tests and all adapter-host tests.
+
+## Deferred beyond M01
+
+- Project file edits, diff review, project tests and Git operations belong to M02.
+- Managed background Tasks, Runs and multi-agent control surfaces belong to M03.
+- Project-folder create/import and chat rename or safe deletion need separate bounded Work
+  Packages with Node-owned authority and recovery semantics.
+- Providers other than Codex, local models, installers, remote sync, voice, ambient interaction,
+  nightly matrices, release signing and sustained adversarial campaigns remain later work.
 
 The repository does not claim production readiness.
