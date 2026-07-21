@@ -13,6 +13,7 @@
       "24da00f54918a1b776c7329658ae0a21918edec7"
     ],
     "merge_ready_at": "2026-07-21",
+    "merged_at": "2026-07-21",
     "changed_files": [
       "AGENTS.md",
       "adapters/storage/sqlite/**",
