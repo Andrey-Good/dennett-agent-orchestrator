@@ -419,15 +419,31 @@ impl SessionEventStore for SqliteControlStore {
         &self,
         session_id: SessionId,
     ) -> Result<Vec<CommittedSessionEvent>, SessionJournalError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| SessionJournalError::StorageUnavailable)?;
         let rows = sqlx::query(
             "SELECT event_id, session_id, revision, payload_version, command_id, body_json, event_sha256, \
                     committed_at_unix_ms \
              FROM session_events WHERE session_id = ? ORDER BY revision",
         )
         .bind(session_id.0.to_string())
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *transaction)
         .await
         .map_err(|_| SessionJournalError::StorageUnavailable)?;
+        let head =
+            sqlx::query_scalar::<_, i64>("SELECT revision FROM session_heads WHERE session_id = ?")
+                .bind(session_id.0.to_string())
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| SessionJournalError::StorageUnavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| SessionJournalError::StorageUnavailable)?;
+
         let events = rows
             .into_iter()
             .map(parse_event)
@@ -442,12 +458,6 @@ impl SessionEventStore for SqliteControlStore {
                 ));
             }
         }
-        let head =
-            sqlx::query_scalar::<_, i64>("SELECT revision FROM session_heads WHERE session_id = ?")
-                .bind(session_id.0.to_string())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|_| SessionJournalError::StorageUnavailable)?;
         let event_revision = events.last().map_or(0, |event| event.revision);
         let head_revision = head
             .map(|revision| {
@@ -856,9 +866,14 @@ mod tests {
     use super::*;
     use dennett_contracts::TurnId;
     use dennett_memory_core::session::{
-        SafeSessionError, SessionJournal, SessionResult, SessionTurnOutcome, SessionTurnState,
+        SafeSessionError, SessionActivityStatus, SessionJournal, SessionResult, SessionTurnOutcome,
+        SessionTurnState,
     };
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn database_path(temp: &TempDir) -> std::path::PathBuf {
@@ -1011,6 +1026,103 @@ mod tests {
             assert_eq!(snapshot.turns.last().expect("agent turn").text, "partial");
         }
         reopened.verify_integrity().await.expect("integrity check");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_reads_are_atomic_while_progress_is_appended() {
+        let temp = TempDir::new().expect("temporary directory");
+        let store = SqliteControlStore::open(database_path(&temp))
+            .await
+            .expect("open store");
+        let journal = SessionJournal::new(Arc::new(store));
+        let session_id = SessionId::new();
+        let command_id = CommandId::new();
+        let turn_id = TurnId::new();
+        journal
+            .append(pending(
+                session_id,
+                Some(CommandId::new()),
+                SessionEventBody::SessionCreated {
+                    project_id: Some(ProjectId::new()),
+                    title: "concurrent read".to_owned(),
+                },
+                1,
+            ))
+            .await
+            .expect("create session");
+        journal
+            .append(pending(
+                session_id,
+                Some(command_id),
+                SessionEventBody::TurnAccepted {
+                    user_turn_id: TurnId::new(),
+                    agent_turn_id: turn_id,
+                    command_id,
+                    text: "run".to_owned(),
+                },
+                2,
+            ))
+            .await
+            .expect("accept turn");
+
+        let writer = journal.clone();
+        let start = Arc::new(tokio::sync::Barrier::new(2));
+        let writer_active = Arc::new(AtomicBool::new(false));
+        let writer_start = start.clone();
+        let writer_state = writer_active.clone();
+        let append = tokio::spawn(async move {
+            writer_state.store(true, Ordering::Release);
+            writer_start.wait().await;
+            for index in 0..100 {
+                writer
+                    .append(pending(
+                        session_id,
+                        None,
+                        SessionEventBody::AgentActivityUpserted {
+                            turn_id,
+                            activity_id: "command".to_owned(),
+                            phase: "running".to_owned(),
+                            message: Some(format!("progress {index}")),
+                            status: if index == 0 {
+                                SessionActivityStatus::Started
+                            } else {
+                                SessionActivityStatus::Updated
+                            },
+                            native_extensions: Vec::new(),
+                        },
+                        3 + index,
+                    ))
+                    .await
+                    .expect("append progress");
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            writer_state.store(false, Ordering::Release);
+        });
+        start.wait().await;
+        let mut observed_intermediate_revision = false;
+        while writer_active.load(Ordering::Acquire) {
+            let snapshot = journal
+                .restore(session_id)
+                .await
+                .expect("coherent snapshot");
+            assert!(snapshot.session.revision >= 2);
+            observed_intermediate_revision |= (3..102).contains(&snapshot.session.revision);
+            tokio::task::yield_now().await;
+        }
+        append.await.expect("writer task");
+        assert!(
+            observed_intermediate_revision,
+            "reader must observe a coherent snapshot while the writer is active"
+        );
+        assert_eq!(
+            journal
+                .restore(session_id)
+                .await
+                .expect("final snapshot")
+                .session
+                .revision,
+            102
+        );
     }
 
     #[tokio::test]

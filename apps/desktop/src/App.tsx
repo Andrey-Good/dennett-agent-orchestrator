@@ -13,6 +13,7 @@ import {
   CheckCircle,
   CircleNotch,
   Command,
+  Copy,
   DownloadSimple,
   FileCode,
   FileText,
@@ -381,27 +382,44 @@ function ActivityTimeline({ message }: { message: ChatMessage }): React.JSX.Elem
   );
 }
 
-function Message({ message }: { message: ChatMessage }): React.JSX.Element {
+function messageCopyText(message: ChatMessage): string {
+  const visibleBullets = message.author === "agent" ? undefined : message.bullets;
+  return [message.paragraphs.join("\n\n"), visibleBullets?.map((item) => `- ${item}`).join("\n")]
+    .filter((part) => part?.trim())
+    .join("\n\n");
+}
+
+function Message({ message, onCopy }: { message: ChatMessage; onCopy: (author: ChatMessage["author"], text: string) => void }): React.JSX.Element {
+  const copyText = messageCopyText(message);
   return (
     <article className={`message message--${message.author}`} aria-label={`${message.author} message`}>
-      <div className="message-copy">
-        <ActivityTimeline message={message} />
-        {message.author === "agent" ? (
-          message.paragraphs.join("\n\n").length > 0 && (
-            <div className="message-markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-                {message.paragraphs.join("\n\n")}
-              </ReactMarkdown>
-            </div>
-          )
-        ) : message.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-        {message.author !== "agent" && message.bullets && (
-          <ul>{message.bullets.map((item) => <li key={item}>{item}</li>)}</ul>
-        )}
-        {message.deliveryError && (
-          <span className="message-delivery-error"><WarningCircle size={13} aria-hidden="true" />{message.deliveryError}</span>
-        )}
-        <span className="message-time">{message.timestamp}</span>
+      <div className="message-block">
+        <div className="message-copy">
+          <ActivityTimeline message={message} />
+          {message.author === "agent" ? (
+            message.paragraphs.join("\n\n").length > 0 && (
+              <div className="message-markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+                  {message.paragraphs.join("\n\n")}
+                </ReactMarkdown>
+              </div>
+            )
+          ) : message.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+          {message.author !== "agent" && message.bullets && (
+            <ul>{message.bullets.map((item) => <li key={item}>{item}</li>)}</ul>
+          )}
+          {message.deliveryError && (
+            <span className="message-delivery-error"><WarningCircle size={13} aria-hidden="true" />{message.deliveryError}</span>
+          )}
+        </div>
+        <div className="message-footer">
+          <span className="message-time">{message.timestamp}</span>
+          {copyText && (
+            <button type="button" className="message-copy-button" aria-label={`Copy ${message.author} message`} title="Copy message" onClick={() => onCopy(message.author, copyText)}>
+              <Copy size={14} aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
     </article>
   );
@@ -1643,6 +1661,20 @@ export function App(): React.JSX.Element {
     setAnnouncement(`Opened ${next.kind === "chat" ? "chat" : next.title}.`);
   };
 
+  const copyMessage = async (author: ChatMessage["author"], text: string) => {
+    try {
+      if (nativeShell) {
+        const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+        await writeText(text);
+      } else {
+        await navigator.clipboard.writeText(text);
+      }
+      setAnnouncement(`${author === "agent" ? "Agent" : "User"} message copied.`);
+    } catch {
+      setAnnouncement("Clipboard access is unavailable.");
+    }
+  };
+
   const runWindowAction = async (action: "minimize" | "maximize" | "close") => {
     if (!nativeShell) return;
     if (action === "close") {
@@ -1872,7 +1904,7 @@ export function App(): React.JSX.Element {
                     {displaySnapshot.state === "loading" ? (
                       <div className="loading-lines" role="status" aria-label="Loading conversation content"><span /><span /><span /></div>
                     ) : messages.length ? (
-                      messages.map((message) => <Message key={message.id} message={message} />)
+                      messages.map((message) => <Message key={message.id} message={message} onCopy={(author, text) => void copyMessage(author, text)} />)
                     ) : (
                       <EmptyConversation onSuggestion={useSuggestion} projectScoped={Boolean(selectedProject)} chatAvailable={!nativeShell || liveChat !== null} />
                     )}

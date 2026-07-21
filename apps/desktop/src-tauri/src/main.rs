@@ -139,6 +139,7 @@ async fn discard_composer_draft(
 fn main() {
     dennett_observability::init("dennett-desktop-shell");
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let data_dir = app.path().app_local_data_dir().ok();
             app.manage(DesktopBridge::new(data_dir));

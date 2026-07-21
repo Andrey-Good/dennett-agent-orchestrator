@@ -9,6 +9,7 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
+    "clipboard-manager:allow-write-text",
     "allow-native-mica-available",
     "allow-open-system-watch",
     "allow-close-system-watch",

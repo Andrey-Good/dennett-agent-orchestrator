@@ -32,6 +32,11 @@ const tauri = vi.hoisted(() => {
     }),
   };
 });
+const nativeClipboard = vi.hoisted(() => ({
+  writeText: vi.fn<(text: string) => Promise<void>>(async () => undefined),
+}));
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => nativeClipboard);
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: tauri.TestChannel,
@@ -239,6 +244,7 @@ describe("native Project Chat recovery", () => {
     tauri.minimizeWindow.mockClear();
     tauri.maximizeWindow.mockClear();
     tauri.onCloseRequested.mockClear();
+    nativeClipboard.writeText.mockClear();
     tauri.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === "native_mica_available") return true;
       if (command === "open_project_chat") {
@@ -263,6 +269,21 @@ describe("native Project Chat recovery", () => {
   afterEach(() => {
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
     document.documentElement.classList.remove("native-shell", "native-mica-unavailable");
+  });
+
+  it("copies visible user and agent content through the native system clipboard", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByText("Retained partial answer")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Copy user message" }));
+    await user.click(screen.getByRole("button", { name: "Copy agent message" }));
+
+    await waitFor(() => expect(nativeClipboard.writeText).toHaveBeenNthCalledWith(1, "Retry the owner request"));
+    expect(nativeClipboard.writeText.mock.calls[1]?.[0]).toContain("## Result");
+    expect(nativeClipboard.writeText.mock.calls[1]?.[0]).not.toContain("Low-level provider reasoning must stay hidden");
+    const userMessage = screen.getByLabelText("user message");
+    expect(userMessage.querySelector(".message-copy")).not.toContainElement(userMessage.querySelector(".message-time"));
   });
 
   it("shows retained partial output and retries the same request through a new stable command", async () => {

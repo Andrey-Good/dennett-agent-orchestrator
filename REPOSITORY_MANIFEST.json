@@ -190,8 +190,8 @@
     },
     {
       "path": "adapters/storage/sqlite/src/lib.rs",
-      "bytes": 53210,
-      "sha256": "8332a1375f445120e210b97d7439cbe9147022737c228dfd525c91b8bf834a70"
+      "bytes": 57327,
+      "sha256": "1fe33f00999ae489575f9ab4fc341ba7694a602bba117474a1af18dbb5646612"
     },
     {
       "path": "adapters/transport/README.md",
@@ -265,8 +265,8 @@
     },
     {
       "path": "apps/desktop/package.json",
-      "bytes": 1246,
-      "sha256": "43adf1c2e70e6ca25d1991be0ba3b01ee638f69998787314528a386e9803b10e"
+      "bytes": 1299,
+      "sha256": "e5075b06891b23efa9c76dae50027bbc9bad43558163138f8e8692b44a4331a9"
     },
     {
       "path": "apps/desktop/src-tauri/.gitignore",
@@ -275,13 +275,13 @@
     },
     {
       "path": "apps/desktop/src-tauri/Cargo.lock",
-      "bytes": 131051,
-      "sha256": "7aef7672d435d33cf62651e52f1c797423f00ff16908706390fd05bdb2e3ad8e"
+      "bytes": 140540,
+      "sha256": "f9f07243285209bca309ffb82135b7f7e101e58a9f34719aa6e84dff4dc29cd8"
     },
     {
       "path": "apps/desktop/src-tauri/Cargo.toml",
-      "bytes": 1013,
-      "sha256": "e081e1418b87663376bc44d35c84f377674483a0f50c325bcea00d33ac2a7cc4"
+      "bytes": 1050,
+      "sha256": "5f462e88e447b68ddfed46e7d0a2dab23d559f5afa5a5f1711222bceac6f6a7e"
     },
     {
       "path": "apps/desktop/src-tauri/build.rs",
@@ -290,8 +290,8 @@
     },
     {
       "path": "apps/desktop/src-tauri/capabilities/default.json",
-      "bytes": 698,
-      "sha256": "d8c485d1892d26a6e466afb4a30be57d496bd2ec47f5e197c9aeedca443dd4a3"
+      "bytes": 740,
+      "sha256": "c486013d52c25b288f8dc1f92f716c9d94a536d9ec38a2531fbd0684ffb3d175"
     },
     {
       "path": "apps/desktop/src-tauri/icons/128x128.png",
@@ -385,8 +385,8 @@
     },
     {
       "path": "apps/desktop/src-tauri/src/main.rs",
-      "bytes": 4990,
-      "sha256": "b2a1f0d626ae29a960cbcdc27dc1a2e00813448163d698a93bda4187ea5f717a"
+      "bytes": 5046,
+      "sha256": "052c25850aa4550dd1733a3a5cc427f82ead70d2f59842c8f642b6812a5cecf1"
     },
     {
       "path": "apps/desktop/src-tauri/src/system_bridge/conversation.rs",
@@ -420,18 +420,18 @@
     },
     {
       "path": "apps/desktop/src/App.native.test.tsx",
-      "bytes": 57934,
-      "sha256": "71aa44c5a5e81305cf9b50f236fbcf974c5ec279b7d00118dc5395f3c03af612"
+      "bytes": 59078,
+      "sha256": "686282956a39f321a8fd341b69f77b99e0516ff94e047a17671c5ed626707184"
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
-      "bytes": 25618,
-      "sha256": "4617090dba74d6754a8575baa6c34531b2a68dc1f98277953286357a1206d19c"
+      "bytes": 26942,
+      "sha256": "d24a6795391b344e5278523456f369d709ae2ed715850be25afb6f7b7bdf1242"
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 105974,
-      "sha256": "35388e8e934bae060c9fabb5a19fec67a16fd748a19dcb0c0c21662b9be55694"
+      "bytes": 107363,
+      "sha256": "f89847f4b46f59ea9b70744f69a42aab7b9aa097435e8249e5769f571543b494"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -470,8 +470,8 @@
     },
     {
       "path": "apps/desktop/src/styles.css",
-      "bytes": 41543,
-      "sha256": "606643c6a09a1b3e82c6cecd50f36733bd41f489a15293b9eaa5d85802d8712e"
+      "bytes": 42256,
+      "sha256": "d9cff4f359f475aefd6dcf4339d6d878cc701293cda9e0fe2489229af36c3f1f"
     },
     {
       "path": "apps/desktop/src/test/setup.ts",
@@ -1510,8 +1510,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 46533,
-      "sha256": "ff0315383d701bd7a9e89f498c0cb2f92b4b33fc66a921140c6ad40a88bfb10b"
+      "bytes": 47239,
+      "sha256": "ae1ccc75b66e8c5d1ddf74dc42e331bf0a3aa4e6e0cb3bfe3a08c9176be6c5e0"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1610,8 +1610,8 @@
     },
     {
       "path": "pnpm-lock.yaml",
-      "bytes": 168615,
-      "sha256": "4989824fb3cdb2dc982d14161dc37ebcb4e041db2c37c1ceba9b45330fb16e78"
+      "bytes": 168982,
+      "sha256": "496e7c2c49702caf1ddb2c2a666acfb66099dbe88f4cbd15760098680ad657f5"
     },
     {
       "path": "pnpm-workspace.yaml",

@@ -60,7 +60,8 @@ describe("Project Chat workbench", () => {
     expect(stylesCss).toContain("--native-workspace-tint: rgba(24, 24, 24, 0.36);");
     expect(stylesCss).toContain("--native-raised-surface: rgba(45, 45, 45, 0.24);");
     expect(stylesCss).toMatch(/html\.native-shell \.composer,[\s\S]*?html\.native-shell \.resource-panel \{[\s\S]*?backdrop-filter: none;/);
-    expect(stylesCss).toContain(".message-copy { width: min(100%, 690px); font-size: 14px;");
+    expect(stylesCss).toContain(".message-block { width: min(100%, 690px); min-width: 0;");
+    expect(stylesCss).toContain(".message-copy { width: 100%; font-size: 14px;");
     expect(stylesCss).toMatch(/\.message--user \.message-copy \{[\s\S]*?border: 0;/);
     expect(stylesCss).toMatch(/\.composer \{[\s\S]*?border: 0;/);
     expect(stylesCss).toMatch(/\.resource-panel \{[\s\S]*?border: 0;/);
@@ -126,6 +127,24 @@ describe("Project Chat workbench", () => {
     const messages = screen.getAllByRole("article");
     expect(messages.some((message) => message.classList.contains("message--user"))).toBe(true);
     expect(messages.some((message) => message.classList.contains("message--agent"))).toBe(true);
+  });
+
+  it("copies user and agent message content without activity chrome", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<App />);
+    await screen.findByText("Codex is checking the renderer. You can steer or stop this session.");
+
+    await user.click(screen.getAllByRole("button", { name: "Copy user message" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Copy agent message" })[0]);
+
+    await waitFor(() => expect(writeText).toHaveBeenNthCalledWith(1, "Rework the checkpoint into a monochrome glass workbench. Keep projects and their chats together, then show standalone chats below them."));
+    expect(writeText.mock.calls[1]?.[0]).toContain("I mapped the corrections to the M01 presentation boundary");
+    expect(writeText.mock.calls[1]?.[0]).not.toContain("Breadcrumbs include the selected chat");
+    const userMessage = screen.getAllByLabelText("user message")[0];
+    expect(userMessage.querySelector(".message-copy")).not.toContainElement(userMessage.querySelector(".message-time"));
+    Reflect.deleteProperty(navigator, "clipboard");
   });
 
   it("places project and chat creation controls beside the collection they affect", async () => {
