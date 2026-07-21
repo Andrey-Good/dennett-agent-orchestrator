@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="520" viewBox="0 0 1500 520" role="img" aria-labelledby="title desc">
+  <title id="title">Credential-free fake conversation path</title>
+  <desc id="desc">Команда проходит через публичный Head use case, provider-neutral runtime port, deterministic fake, Result Envelope и коррелированный Memory Event.</desc>
+  <rect width="1500" height="520" rx="40" fill="#151515"/>
+  <text x="70" y="85" fill="#efefef" font-family="Segoe UI, sans-serif" font-size="36" font-weight="650">Первый исполняемый путь M00</text>
+  <text x="70" y="130" fill="#8f8f8f" font-family="Segoe UI, sans-serif" font-size="22">без API key · без сетевого provider · с проверяемой корреляцией</text>
+  <g font-family="Segoe UI, sans-serif" text-anchor="middle">
+    <g><rect x="55" y="205" width="230" height="130" rx="28" fill="#272727"/><text x="170" y="260" fill="#fff" font-size="25">Command</text><text x="170" y="302" fill="#a8a8a8" font-size="19">project + session IDs</text></g>
+    <g><rect x="350" y="205" width="230" height="130" rx="28" fill="#272727"/><text x="465" y="260" fill="#fff" font-size="25">Head use case</text><text x="465" y="302" fill="#a8a8a8" font-size="19">public boundary</text></g>
+    <g><rect x="645" y="205" width="230" height="130" rx="28" fill="#303030"/><text x="760" y="260" fill="#fff" font-size="25">Fake runtime</text><text x="760" y="302" fill="#a8a8a8" font-size="19">deterministic</text></g>
+    <g><rect x="940" y="205" width="230" height="130" rx="28" fill="#272727"/><text x="1055" y="260" fill="#fff" font-size="25">Result Envelope</text><text x="1055" y="302" fill="#a8a8a8" font-size="19">same command ID</text></g>
+    <g><rect x="1235" y="205" width="230" height="130" rx="28" fill="#353535"/><text x="1350" y="260" fill="#fff" font-size="25">Memory Event</text><text x="1350" y="302" fill="#a8a8a8" font-size="19">committed evidence</text></g>
+  </g>
+  <g stroke="#d7d7d7" stroke-width="3" fill="none" opacity="0.65">
+    <path d="M285 270H350"/><path d="M580 270H645"/><path d="M875 270H940"/><path d="M1170 270H1235"/>
+  </g>
+  <g fill="#d7d7d7" opacity="0.8"><path d="M340 263l12 7-12 7z"/><path d="M635 263l12 7-12 7z"/><path d="M930 263l12 7-12 7z"/><path d="M1225 263l12 7-12 7z"/></g>
+  <text x="70" y="430" fill="#bdbdbd" font-family="Segoe UI, sans-serif" font-size="24">Доказано:</text>
+  <text x="215" y="430" fill="#ededed" font-family="Segoe UI, sans-serif" font-size="24">контракт, порядок и связь результата с памятью.</text>
+  <text x="70" y="470" fill="#bdbdbd" font-family="Segoe UI, sans-serif" font-size="24">Не доказано:</text>
+  <text x="245" y="470" fill="#ededed" font-family="Segoe UI, sans-serif" font-size="24">реальный provider, UI, timeout и восстановление.</text>
+</svg>

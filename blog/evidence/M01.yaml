@@ -1,0 +1,222 @@
+blog_evidence_packet:
+  milestone: M01
+  period:
+    from: 2026-07-18
+    to: 2026-07-21
+  chronology:
+    - "WP-M01-001 proved two streamed Codex turns on one subscription-authenticated thread without an API key."
+    - "WP-M01-002 replaced the unused scaffold with provider-neutral System, Project, Session and Watch contracts."
+    - "WP-M01-003 produced the first Project Chat renderer; owner review rejected colored accents, excess chrome and several incorrect navigation affordances."
+    - "Four owner-direction documents and at least eight numbered native checkpoints converged on achromatic Windows Mica; a custom wallpaper projection and a large CSS blur surface were rejected."
+    - "WP-M01-004 normalized streaming, continuation, scoped Stop, timeout and provider failures behind AgentRuntimePort."
+    - "WP-M01-005 made the embedded Head the canonical session writer and persisted append-only revisioned history in SQLite."
+    - "WP-M01-006 connected Tauri to a persistent Node over authenticated Windows Named Pipes."
+    - "WP-M01-007 connected the complete path, added provider-discovered controls, standalone chats, ordered progress/final Markdown, drafts, resync and restart restoration."
+    - "Live qualification replaced restart-based clarification with native exact-turn Codex steering and terminalized animations after Stop or timeout."
+    - "The final owner pass exposed a browser-only clipboard implementation and a concurrent non-atomic SQLite read; both received native or transactional fixes plus regressions."
+    - "The owner accepted WP-M01-007 and M01 on 2026-07-21; detached closure review returned PASS with no open P0-P2 findings."
+  conversation_evidence:
+    owner_quotes:
+      - "Во первых почему все имеет фиолетовые оттенки. е это не нравиться. Пусть все будет исключительно в градациях серого от белого до черного."
+      - "Визуально это не блюр а просто какое-то засветление. Нет эффекта размытого стекла."
+      - "Кнопка появилась, но она ничего не добавляет в буфер обмена."
+      - "Кстати, было бы хорошо, если бы ты следовал DRY KISS YAGNI подходам, если это не ухудшает качество."
+      - "Меня все устраивает, одобряю."
+    decision_turns:
+      - "The first generated UX was rejected; owner feedback became versioned design evidence instead of informal chat-only taste."
+      - "The owner preferred Figma-first tuning for future substantial screens after code-driven material iteration proved expensive."
+      - "The owner rejected hardcoded runtime menus; controls now come from the active provider descriptor and model catalogue."
+      - "The owner distinguished same-turn clarification from stop-and-restart; the implementation moved to the native Codex App Server steer capability."
+      - "The owner required DRY/KISS/YAGNI without sacrificing planned extensibility; root engineering rules now demand simple internals behind stable replacement seams."
+  input_materials:
+    - planning/milestones/M01_local_desktop_conversation.json
+    - planning/results/WP-M01-001.json
+    - planning/results/WP-M01-002.json
+    - planning/results/WP-M01-003.json
+    - planning/results/WP-M01-004.json
+    - planning/results/WP-M01-005.json
+    - planning/results/WP-M01-006.json
+    - planning/results/WP-M01-007.json
+    - docs/design/WP-M01-003/owner-direction-v2.md
+    - docs/design/WP-M01-003/owner-direction-v3.md
+    - docs/design/WP-M01-003/owner-direction-v4.md
+    - docs/design/WP-M01-003/owner-direction-v5.md
+    - design-qa.md
+    - VALIDATION.md
+  claim_ledger:
+    - id: M01-SUBSCRIPTION-CODEX
+      claim: "The live path used Codex-managed ChatGPT subscription authentication without an API key, proved two turns on one observed thread, and ended M01 pinned to SDK/CLI 0.144.6."
+      sources:
+        - planning/results/WP-M01-001.json
+        - planning/results/WP-M01-004.json
+        - planning/milestones/M01_local_desktop_conversation.json
+        - services/adapter-host-node/package.json
+        - services/adapter-host-node/src/codex-cli.ts
+        - pnpm-lock.yaml
+      proof: "WP-M01-001 and WP-M01-004 preserve the original 0.144.5 canaries; the final milestone record, package manifest and lockfile record the qualification upgrade to 0.144.6."
+    - id: M01-PROTOCOL-EPOCH
+      claim: "The unused scaffold was replaced by provider-neutral System, Project and Session services with authority-fenced watches, exact generated descriptors and a typed steering-compatible epoch."
+      sources:
+        - planning/results/WP-M01-002.json
+        - docs/decisions/ADR-006-m01-protocol-epoch.md
+        - protocols/proto/dennett/control/v1/system.proto
+        - protocols/proto/dennett/control/v1/project.proto
+        - protocols/proto/dennett/control/v1/session.proto
+        - tools/protocol_codegen.py
+      proof: "WP-M01-002 records descriptor-level service/field/oneof/stream checks, deterministic Rust/TypeScript generation and negative compatibility probes; WP-M01-007 records the backward-compatible steering additions."
+    - id: M01-VISUAL-ITERATION
+      claim: "Owner review rejected colored accents, excess chrome, browser-like controls, fake runtime artifacts and several failed blur/wallpaper approaches before accepting an achromatic native Windows Mica hierarchy."
+      sources:
+        - planning/results/WP-M01-003.json
+        - docs/design/WP-M01-003/owner-direction-v2.md
+        - docs/design/WP-M01-003/owner-direction-v3.md
+        - docs/design/WP-M01-003/owner-direction-v4.md
+        - docs/design/WP-M01-003/owner-direction-v5.md
+        - design-qa.md
+      proof: "The owner-direction series is the versioned feedback trail; design-qa.md identifies v7-v10 as rejected wallpaper/material attempts, v11 as the first Mica checkpoint and the later accepted layer/tint contract."
+    - id: M01-RUNTIME-LIFECYCLE
+      claim: "AgentRuntimePort normalizes ordered progress, opaque continuation, scoped idempotent Stop, deadline, cancellation, provider failure and late-event fencing without provider types entering the domain."
+      sources:
+        - planning/results/WP-M01-004.json
+        - crates/dennett-agent-core/src/runtime.rs
+        - crates/dennett-agent-core/tests/runtime_conformance.rs
+        - services/adapter-host-node/src/codex-runtime-adapter.ts
+        - services/adapter-host-node/src/codex-runtime-adapter.test.ts
+      proof: "WP-M01-004 records the conformance set and the successful same-thread canary while explicitly excluding desktop IPC and persistence from that package."
+    - id: M01-DURABLE-SESSION
+      claim: "The embedded Head owns canonical session writes; SQLite stores an append-only revisioned journal, watch state begins with snapshot then monotonic deltas, gaps require resync, and drafts remain non-canonical."
+      sources:
+        - planning/results/WP-M01-005.json
+        - adapters/storage/sqlite/src/lib.rs
+        - adapters/storage/sqlite/migrations/0001_control_store.sql
+        - adapters/storage/sqlite/migrations/0002_m01_runtime_state.sql
+        - services/head/tests/session_restore.rs
+      proof: "WP-M01-005 records rollback, WAL/FULL recovery and restart coverage; WP-M01-007 records durable command admission, continuation handles and monotonic draft revisions added by migration 0002."
+    - id: M01-AUTHENTICATED-IPC
+      claim: "Tauri connects to an independently owned persistent Node over Windows Named Pipes protected by current-user ACLs, bilateral identity checks, one-use bootstrap proof, bounded unauthenticated clients and reconnect/resync behavior."
+      sources:
+        - planning/results/WP-M01-006.json
+        - adapters/transport/local-ipc/src/lib.rs
+        - apps/desktop/src-tauri/src/system_bridge/node_process.rs
+        - apps/desktop/src-tauri/src/system_bridge/conversation.rs
+        - services/node/tests/desktop_lifecycle.rs
+      proof: "WP-M01-006 records the transport and security boundary, negative cases and Windows-only limitation; M01-007 supplies the complete visible conversation over that boundary."
+    - id: M01-PROVIDER-CONTROLS-AND-ACCESS
+      claim: "Model, reasoning and speed choices come from the active Codex descriptor/catalogue; Auto-approve and Full access map to enforced non-interactive sandbox settings rather than decorative UI choices."
+      sources:
+        - planning/results/WP-M01-007.json
+        - planning/milestones/M01_local_desktop_conversation.json
+        - services/adapter-host-node/src/codex-model-catalog.test.ts
+        - services/adapter-host-node/src/codex-workspace.test.ts
+        - services/head/tests/conversation_application.rs
+      proof: "The final Completion Packet records provider discovery and sandbox mapping; the milestone records the live Windows qualification that corrected workspace-write behavior."
+    - id: M01-NATIVE-STEERING
+      claim: "A clarification can be durably delivered to the exact active Codex turn through native App Server steering without hidden Stop, replacement turn or continuation restart."
+      sources:
+        - planning/results/WP-M01-007.json
+        - services/head/tests/conversation_application.rs
+        - services/adapter-host-node/src/codex-app-server-client.test.ts
+        - services/node/tests/codex_live_e2e.rs
+      proof: "The Completion Packet records stable message identity, idempotency and uncertainty fencing; deterministic Head/adapter tests and the explicitly run ignored live IPC test cover same-turn behavior."
+    - id: M01-VISIBLE-CONVERSATION
+      claim: "The accepted slice supports project and standalone chats, ordered safe commentary/effects/final Markdown, scoped Stop, visible timeout, resync, restart restoration, session-isolated drafts and fixed event timestamps."
+      sources:
+        - planning/results/WP-M01-007.json
+        - apps/desktop/src/App.test.tsx
+        - apps/desktop/src/App.native.test.tsx
+        - services/head/tests/conversation_application.rs
+        - services/node/tests/desktop_conversation_e2e.rs
+        - VALIDATION.md
+      proof: "WP-M01-007 enumerates 59 renderer, 14 Head and 4 real-process tests and explicitly distinguishes visible lifecycle states while excluding prompt/response content from telemetry."
+    - id: M01-CLIPBOARD-AND-ATOMIC-READ
+      claim: "Final owner qualification exposed an ineffective browser clipboard path and a non-atomic concurrent SQLite session read; the fixes use the official write-only Tauri plugin and a transactional snapshot with regressions."
+      sources:
+        - planning/results/WP-M01-007.json
+        - apps/desktop/src/App.tsx
+        - apps/desktop/src/App.native.test.tsx
+        - apps/desktop/src-tauri/src/main.rs
+        - apps/desktop/src-tauri/capabilities/default.json
+        - adapters/storage/sqlite/src/lib.rs
+      proof: "The Completion Packet records live Windows clipboard verification and the synchronized atomic-read regression; App.native.test.tsx covers native writeText and SQLite test session_reads_are_atomic_while_progress_is_appended covers the concurrent read."
+    - id: M01-ACCEPTED-SCOPE
+      claim: "M01 is an accepted Windows/Codex local-conversation slice, not a complete Dennett release; project filesystem/Git work, truthful runtime artifacts, other providers, sync, voice, installers and non-Windows certification remain outside it."
+      sources:
+        - planning/results/WP-M01-007.json
+        - planning/milestones/M01_local_desktop_conversation.json
+        - VALIDATION.md
+      proof: "The final Completion Packet and validation record the accepted owner-visible capabilities, explicit deferrals and detached PASS at executable commit 24da00f."
+  visual_evidence:
+    - asset: blog/assets/002/hero-local-conversation.svg
+      source: "M01 accepted topology and Completion Packets"
+      kind: "authored explanatory diagram, not a runtime screenshot"
+    - asset: blog/assets/002/conversation-lifecycle.svg
+      source: "WP-M01-004 and WP-M01-007 lifecycle contracts"
+      kind: "authored lifecycle diagram, not a runtime screenshot"
+    - assets:
+        - blog/assets/002/01-material-iterations.jpg
+        - blog/assets/002/02-shell-before.png
+        - blog/assets/002/03-shell-after.png
+        - blog/assets/002/04-mica-transition.jpg
+      source: docs/design/WP-M01-003
+      kind: "historical intermediate native/renderer evidence; none is labeled as the final accepted screenshot"
+    - metadata: blog/assets/002/metadata.yaml
+  work_packages:
+    - WP-M01-001
+    - WP-M01-002
+    - WP-M01-003
+    - WP-M01-004
+    - WP-M01-005
+    - WP-M01-006
+    - WP-M01-007
+  commits:
+    range: "27a8674..1ffc876"
+    count_after_M00_acceptance: 71
+  pull_requests:
+    range: "#8-#21"
+    feature_merge: "#20"
+    acceptance_record: "#21"
+  tests:
+    catalogued_acceptance_cases: 22
+    renderer: 59
+    tauri_shell: 15
+    sqlite: 13
+    head_conversation: 14
+    adapter_host: 61
+    real_process_desktop: 4
+    explicitly_run_live_codex: 2
+    automated_group_total_before_live_codex: 166
+    full_gate: "mise exec -- just check passed at merge-ready head and after acceptance"
+  observed_metrics:
+    work_packages: 7
+    files_changed_after_M00_acceptance: 211
+    git_insertions_including_generated_clients_and_locks: 58568
+    git_deletions: 2388
+    project_chat_package_commits: 23
+    numbered_native_visual_checkpoints: 8
+  repository_snapshot:
+    status: ACCEPTED
+    accepted_at: 2026-07-21
+    executable_review_commit: 24da00f54918a1b776c7329658ae0a21918edec7
+  owner_decisions:
+    - DEC-0004
+    - DEC-0005
+  rejected_proposals:
+    - "Purple or colored accent UI."
+    - "A browser-like navigation shell and persistent infrastructure labels."
+    - "Fake Results, Subagents, Browser and Sources presented as real runtime truth."
+    - "Custom wallpaper projection as a substitute for Windows Mica."
+    - "Hardcoded model, reasoning and speed menus."
+    - "Stop-and-restart as a substitute for native in-flight clarification."
+    - "WebView clipboard success inferred from browser tests."
+  known_limitations:
+    - "Codex through the owner's ChatGPT subscription is the only real runtime."
+    - "Project-folder create/import and chat rename/deletion are deferred."
+    - "Project file edits, diffs, tests and Git belong to M02."
+    - "Windows is the only native M01 certification path."
+    - "Installers, sync, voice, ambient interaction and sustained adversarial campaigns remain later work."
+  unresolved_questions:
+    - "Can M02 preserve the same durability while real file and Git effects are introduced?"
+    - "Can future providers implement the descriptor and steering seams without changing canonical session history?"
+    - "How much visual iteration can be moved into Figma without losing native-material truth?"
+  privacy_notes:
+    - "Copied design assets contain only repository fixtures and loopback addresses; no private prompt, credential or personal path is present."

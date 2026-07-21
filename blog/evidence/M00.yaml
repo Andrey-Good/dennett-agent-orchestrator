@@ -1,0 +1,147 @@
+blog_evidence_packet:
+  milestone: M00
+  period:
+    from: 2026-07-16
+    to: 2026-07-17
+  chronology:
+    - "Root agent instructions were strengthened and executable M00 batches were refined."
+    - "WP-M00-006 normalized the active product identity to Dennett, removed the placeholder license and added repository metadata checks."
+    - "The owner allowed a narrowly scoped detached-review waiver for WP-M00-006 after tenant policy blocked the approved external review."
+    - "WP-M00-001 pinned the Rust, Python and TypeScript toolchains and proved bootstrap from a clean checkout."
+    - "WP-M00-002 made Protobuf generation deterministic and added stale-output and breaking-change checks."
+    - "WP-M00-004 and WP-M00-005 made Work Packages and the test catalogue machine-checkable."
+    - "WP-M00-007 proved a credential-free fake conversation from Head through Result Envelope to a correlated Memory Event."
+    - "WP-M00-003 established the required Fast Gate and protected main without an administrator bypass."
+    - "WP-M00-008 through WP-M00-010 repaired qualification, current-milestone and accepted-handoff lifecycle projections."
+    - "The owner accepted M00 on 2026-07-17."
+  conversation_evidence:
+    owner_quotes:
+      - "План разработки писал не я, так что тебе было бы хорошо мне его напиминать."
+      - "Что это за ограничение, каковы его цели и не может ли оно портить качество ради экономии?"
+      - "Окей, я одобряю M00"
+    decision_turns:
+      - "The owner required a non-programmer explanation of M00 before acceptance; the milestone was reframed as a trustable engineering floor rather than repository bureaucracy."
+      - "The owner challenged diff-line budgets; they remained review tripwires, not quality targets, and generated code/locks were explicitly separated from avoidable complexity."
+  input_materials:
+    - planning/milestones/M00_repository_and_contracts.json
+    - VALIDATION.md
+  claim_ledger:
+    - id: M00-IDENTITY-AND-WAIVER
+      claim: "The active repository identity became Dennett, the placeholder license was removed, repository metadata became deterministic, and detached semantic review was waived only for WP-M00-006 after the approved external review was blocked."
+      sources:
+        - planning/results/WP-M00-006.json
+        - tools/generate_repository_metadata.py
+        - REPOSITORY_MANIFEST.json
+      proof: "WP-M00-006 records the identity/metadata outcome, commit set, NoLicenseSelected owner boundary and the package-local waiver limitation."
+    - id: M00-BOOTSTRAP
+      claim: "Pinned Rust, Node/pnpm, Python/uv, Buf, protoc and just versions can bootstrap and pass the language baselines from a clean checkout without an interactive prompt."
+      sources:
+        - planning/results/WP-M00-001.json
+        - mise.toml
+        - tools/bootstrap.py
+        - tools/tests/test_bootstrap.py
+        - VALIDATION.md
+      proof: "The Completion Packet lists the exact versions, detached-clean-checkout commands and commit 3f3fba2 that made repeated bootstrap non-interactive."
+    - id: M00-PROTOCOLS
+      claim: "Committed Rust and TypeScript protocol clients are generated deterministically and checked for stale output, strict lint-debt drift and wire-breaking changes."
+      sources:
+        - planning/results/WP-M00-002.json
+        - protocols/buf.yaml
+        - protocols/buf.gen.yaml
+        - tools/protocol_codegen.py
+        - tools/tests/test_protocol_codegen.py
+      proof: "WP-M00-002 records the clean detached generation check, exact grandfathered lint fingerprint, negative breaking probe and checker-owned WIRE_JSON baseline."
+    - id: M00-PLANNING-AND-CATALOGUE
+      claim: "Work Packages and five generated test-catalogue views became machine-checkable, including lifecycle projections for qualification, no-current-milestone and accepted handoff."
+      sources:
+        - planning/results/WP-M00-004.json
+        - planning/results/WP-M00-005.json
+        - planning/results/WP-M00-008.json
+        - planning/results/WP-M00-009.json
+        - planning/results/WP-M00-010.json
+        - tools/verify_planning.py
+        - tools/generate_test_catalogue.py
+        - tools/tests/test_generate_test_catalogue.py
+      proof: "The five Completion Packets record schema validation, deterministic catalogue/coverage/release-gate/debt/current-milestone projections and the repaired ACCEPTED handoff rules."
+    - id: M00-FAKE-VERTICAL-PATH
+      claim: "A credential-free public Head use case carries project/session/command identity through FakeAgentRuntime, returns a Result Envelope and appends the correlated Memory Event."
+      sources:
+        - planning/results/WP-M00-007.json
+        - services/head/tests/fake_chat.rs
+        - VALIDATION.md
+      proof: "TEST-FAKE-CHAT-001 and just demo-fake record the emitted command, result and memory-event identifiers against a fresh in-memory event log."
+    - id: M00-FAST-GATE
+      claim: "Pull requests and pushes to main run one required Fast Gate, and classic branch protection required the up-to-date context without administrator bypass during M00 qualification."
+      sources:
+        - planning/results/WP-M00-003.json
+        - .github/workflows/ci.yml
+        - VALIDATION.md
+      proof: "WP-M00-003 records the exact local sequence and saved branch-protection rule 80381387; VALIDATION.md records the corresponding GitHub runs and required context."
+    - id: M00-DIFF-BUDGETS
+      claim: "max_diff_lines remained a package estimate/review tripwire rather than a target that could override correctness; generated locks and clients were accounted for explicitly."
+      sources:
+        - planning/milestones/M00_repository_and_contracts.json
+        - planning/results/WP-M00-001.json
+        - docs/implementation/03_WORK_PACKAGE_SYSTEM.md
+      proof: "The milestone stores per-package estimates and explicitly attributes most bootstrap diff volume to generated lockfiles; the owner decision in conversation_evidence rejects optimizing the counter at the expense of quality."
+    - id: M00-ACCEPTANCE-SNAPSHOT
+      claim: "M00 closed with ten MERGED Work Packages, sixteen catalogue cases, three vertical slices and ACCEPTED status on 2026-07-17 after the complete gate and fake demo passed."
+      sources:
+        - planning/milestones/M00_repository_and_contracts.json
+        - tests/catalog/foundations.seed.json
+        - VALIDATION.md
+      proof: "The milestone lifecycle and validation record distinguish repository foundation from product functionality and retain the fake-runtime limitation."
+  visual_evidence:
+    - asset: blog/assets/001/hero-foundation.svg
+      source: "M00 milestone, Work Package count and test catalogue"
+      kind: "authored explanatory diagram, not a runtime screenshot"
+    - asset: blog/assets/001/fake-conversation-path.svg
+      source: "WP-M00-007 Completion Packet and services/head/tests/fake_chat.rs"
+      kind: "authored contract-flow diagram, not a runtime screenshot"
+    - metadata: blog/assets/001/metadata.yaml
+  work_packages:
+    - WP-M00-001
+    - WP-M00-002
+    - WP-M00-003
+    - WP-M00-004
+    - WP-M00-005
+    - WP-M00-006
+    - WP-M00-007
+    - WP-M00-008
+    - WP-M00-009
+    - WP-M00-010
+  commits:
+    range: "c2f42aa..2e9a77d"
+    count_after_initial_repository_commit: 52
+  pull_requests:
+    range: "#1-#7"
+  tests:
+    catalogued_acceptance_cases: 16
+    full_gate: "just check passed before and after acceptance"
+    live_or_demo:
+      - "just demo-fake"
+      - "cargo test -p dennett-head"
+  observed_metrics:
+    vertical_slices: 3
+    work_packages: 10
+    files_changed_from_initial_repository_commit: 246
+    git_insertions_including_generated_and_renamed_material: 21039
+    git_deletions_including_identity_rename: 8514
+  repository_snapshot:
+    status: ACCEPTED
+    accepted_at: 2026-07-17
+  owner_decisions:
+    - DEC-0001
+    - DEC-0002
+    - DEC-0003
+  rejected_proposals:
+    - "Treating an arbitrary maximum diff size as an optimization objective."
+    - "Claiming M00 as product functionality; its only user-like path used a deterministic fake runtime."
+  known_limitations:
+    - "No real cloud runtime, production UI or production memory retrieval belonged to M00."
+    - "The fake path covered deterministic success, not injected runtime or memory failures."
+    - "Nightly matrices, signing and native packaging were intentionally outside the Fast Gate."
+  unresolved_questions:
+    - "Could the first real Codex-backed desktop conversation preserve these contracts under restart, cancellation and provider failure?"
+  privacy_notes:
+    - "No credentials, local paths or private prompt content are included."

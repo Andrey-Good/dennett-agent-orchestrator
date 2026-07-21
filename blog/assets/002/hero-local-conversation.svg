@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">M01: чат, который должен пережить закрытое окно</title>
+  <desc id="desc">Схематическое окно Dennett поверх цепочки Desktop, Node, Head, Codex и SQLite, с остановкой, уточнением и восстановлением.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101010"/><stop offset="1" stop-color="#2b2b2b"/></linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.15"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.05"/></linearGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <circle cx="230" cy="160" r="260" fill="#fff" opacity="0.05" filter="url(#blur)"/>
+  <text x="90" y="105" fill="#919191" font-family="Segoe UI, sans-serif" font-size="28">DENNETT · M01 · 18–21 JULY 2026</text>
+  <text x="90" y="185" fill="#f6f6f6" font-family="Segoe UI, sans-serif" font-size="58" font-weight="650">Чат, который должен</text>
+  <text x="90" y="252" fill="#f6f6f6" font-family="Segoe UI, sans-serif" font-size="58" font-weight="650">пережить закрытое окно</text>
+  <rect x="90" y="330" width="1420" height="430" rx="46" fill="url(#glass)" stroke="#fff" stroke-opacity="0.16"/>
+  <rect x="90" y="330" width="310" height="430" rx="46" fill="#fff" opacity="0.045"/>
+  <line x1="400" y1="365" x2="400" y2="725" stroke="#fff" stroke-opacity="0.12"/>
+  <g font-family="Segoe UI, sans-serif">
+    <text x="140" y="405" fill="#888" font-size="21">PROJECTS</text>
+    <text x="140" y="458" fill="#f0f0f0" font-size="25">dennett-agent-orchestrator</text>
+    <rect x="128" y="490" width="238" height="58" rx="20" fill="#fff" opacity="0.13"/>
+    <text x="150" y="527" fill="#fff" font-size="22">Local conversation</text>
+    <text x="455" y="405" fill="#b8b8b8" font-size="21">WORKED FOR 39s</text>
+    <text x="455" y="463" fill="#f5f5f5" font-size="27">Проверяю состояние проекта и сохраняю результат.</text>
+    <text x="455" y="515" fill="#b7b7b7" font-size="22">⌘  Ran command</text>
+    <text x="455" y="572" fill="#f5f5f5" font-size="27">История восстановится даже после перезапуска UI.</text>
+    <rect x="455" y="640" width="805" height="84" rx="30" fill="#2d2d2d" opacity="0.72"/>
+    <text x="490" y="692" fill="#c7c7c7" font-size="24">Уточнить задачу во время активного turn…</text>
+    <rect x="1295" y="372" width="175" height="320" rx="32" fill="#2d2d2d" opacity="0.67"/>
+    <text x="1325" y="420" fill="#fff" font-size="22">Runtime</text>
+    <text x="1325" y="476" fill="#aaa" font-size="19">Codex</text>
+    <text x="1325" y="525" fill="#aaa" font-size="19">reasoning</text>
+    <text x="1325" y="574" fill="#aaa" font-size="19">speed</text>
+    <text x="1325" y="623" fill="#aaa" font-size="19">Full access</text>
+  </g>
+  <g font-family="Segoe UI, sans-serif" font-size="21" fill="#d3d3d3">
+    <text x="135" y="842">Desktop</text><text x="390" y="842">Node</text><text x="620" y="842">Head</text><text x="840" y="842">Codex</text><text x="1085" y="842">SQLite</text><text x="1325" y="842">restore</text>
+  </g>
+  <line x1="190" y1="790" x2="1370" y2="790" stroke="#fff" stroke-opacity="0.2" stroke-width="3"/>
+  <g fill="#f0f0f0"><circle cx="190" cy="790" r="7"/><circle cx="445" cy="790" r="7"/><circle cx="665" cy="790" r="7"/><circle cx="885" cy="790" r="7"/><circle cx="1130" cy="790" r="7"/><circle cx="1370" cy="790" r="7"/></g>
+</svg>

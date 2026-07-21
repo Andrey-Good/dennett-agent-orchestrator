@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">M00: репозиторий учится не верить словам</title>
+  <desc id="desc">Диаграмма фундамента M00: десять Work Packages, шестнадцать каталогизированных тестов, воспроизводимый bootstrap, протоколы, планирование, Fast Gate и fake conversation.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d0d0d"/>
+      <stop offset="1" stop-color="#242424"/>
+    </linearGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="14"/></filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <circle cx="1240" cy="180" r="210" fill="#ffffff" opacity="0.06" filter="url(#soft)"/>
+  <text x="100" y="130" fill="#8f8f8f" font-family="Segoe UI, sans-serif" font-size="32">DENNETT · M00 · 16–17 JULY 2026</text>
+  <text x="100" y="220" fill="#f4f4f4" font-family="Segoe UI, sans-serif" font-size="66" font-weight="650">Репозиторий научился</text>
+  <text x="100" y="300" fill="#f4f4f4" font-family="Segoe UI, sans-serif" font-size="66" font-weight="650">не верить мне на слово</text>
+  <text x="104" y="365" fill="#b9b9b9" font-family="Segoe UI, sans-serif" font-size="28">Сначала доказательства. Потом настоящий provider.</text>
+  <g font-family="Segoe UI, sans-serif">
+    <rect x="100" y="455" width="300" height="190" rx="34" fill="#ffffff" opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="140" y="530" fill="#ffffff" font-size="56" font-weight="700">10</text>
+    <text x="140" y="580" fill="#c7c7c7" font-size="25">Work Packages</text>
+    <text x="140" y="615" fill="#888888" font-size="20">all merged</text>
+    <rect x="440" y="455" width="300" height="190" rx="34" fill="#ffffff" opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="480" y="530" fill="#ffffff" font-size="56" font-weight="700">16</text>
+    <text x="480" y="580" fill="#c7c7c7" font-size="25">acceptance cases</text>
+    <text x="480" y="615" fill="#888888" font-size="20">catalogued in M00</text>
+    <rect x="780" y="455" width="300" height="190" rx="34" fill="#ffffff" opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="820" y="530" fill="#ffffff" font-size="56" font-weight="700">52</text>
+    <text x="820" y="580" fill="#c7c7c7" font-size="25">commits</text>
+    <text x="820" y="615" fill="#888888" font-size="20">after repository launch</text>
+    <rect x="1120" y="455" width="380" height="190" rx="34" fill="#ffffff" opacity="0.11" stroke="#ffffff" stroke-opacity="0.22"/>
+    <text x="1160" y="530" fill="#ffffff" font-size="42" font-weight="700">fake → evidence</text>
+    <text x="1160" y="580" fill="#c7c7c7" font-size="25">Result Envelope</text>
+    <text x="1160" y="615" fill="#888888" font-size="20">correlated Memory Event</text>
+  </g>
+  <line x1="100" y1="750" x2="1500" y2="750" stroke="#ffffff" stroke-opacity="0.16"/>
+  <g fill="#cfcfcf" font-family="Segoe UI, sans-serif" font-size="23">
+    <text x="100" y="810">bootstrap</text>
+    <text x="390" y="810">generated protocols</text>
+    <text x="790" y="810">machine-checked plan</text>
+    <text x="1190" y="810">protected main</text>
+  </g>
+  <g fill="#f0f0f0">
+    <circle cx="120" cy="748" r="8"/><circle cx="430" cy="748" r="8"/><circle cx="830" cy="748" r="8"/><circle cx="1230" cy="748" r="8"/>
+  </g>
+</svg>
