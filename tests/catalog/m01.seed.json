@@ -52,7 +52,7 @@
       "expected": [
         "Deterministic tests exercise the adapter without a live model call",
         "Provider-specific SDK event types do not escape the Node adapter host",
-        "The canary pins SDK and CLI 0.144.5, the built-in OpenAI provider and exact ChatGPT login status while removing API-key and custom-provider environment variables",
+        "The canary pins SDK and CLI 0.144.6, the built-in OpenAI provider and exact ChatGPT login status while removing API-key and custom-provider environment variables",
         "Tool, file-change, MCP and web-search stream items fail the canary instead of being accepted as connectivity evidence",
         "Malformed event ordering, identities, item fields, usage and late iterator cleanup fail closed with normalized diagnostics",
         "Logs and fixtures contain no authentication token, prompt text or private response content",
@@ -152,10 +152,11 @@
       "domains": ["agents", "providers", "streaming"],
       "levels": ["unit", "contract"],
       "requirement_refs": ["SPEC-41:ProviderAdapter", "M01:StreamingCancelTimeout"],
-      "work_package_refs": ["WP-M01-004"],
+      "work_package_refs": ["WP-M01-004", "WP-M01-007"],
       "expected": [
         "Every stream starts, advances monotonically and reaches at most one terminal outcome",
         "Text, progress, usage and completion events are normalized independently of the provider SDK",
+        "Bounded versioned provider-native activity metadata survives the adapter, Head journal and desktop boundary without becoming a core behavior dependency",
         "Late or malformed events are rejected without inventing completion",
         "The scripted fake and Codex adapter execute the same conformance cases"
       ],
@@ -309,7 +310,7 @@
     {
       "id": "TEST-DESKTOP-DRAFT-RECOVERY-001",
       "title": "Unsent desktop draft survives UI restart without becoming canonical memory",
-      "status": "specified",
+      "status": "automated",
       "priority": "high",
       "risk": "R2",
       "domains": ["desktop", "sessions", "recovery"],
@@ -323,9 +324,14 @@
         "Discarding the draft does not mutate authoritative project history"
       ],
       "implementation": {
-        "target_suite": "desktop draft persistence",
-        "status": "planned",
-        "test_paths": []
+        "target_suite": "desktop bridge and Node draft recovery",
+        "status": "automated",
+        "test_paths": [
+          "apps/desktop/src/App.native.test.tsx",
+          "apps/desktop/src/lib/projectChatBridge.test.ts",
+          "services/node/tests/desktop_conversation_e2e.rs",
+          "adapters/storage/sqlite/src/lib.rs"
+        ]
       },
       "owner": "desktop"
     },
@@ -448,7 +454,7 @@
     {
       "id": "TEST-M01-DESKTOP-CONVERSATION-E2E-001",
       "title": "Local desktop conversation completes and restores end to end",
-      "status": "specified",
+      "status": "manual",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "node", "head", "agents", "memory"],
@@ -457,22 +463,44 @@
       "work_package_refs": ["WP-M01-007"],
       "expected": [
         "A user creates a project session and receives an ordered streamed fake response in Project Chat",
+        "Concise provider commentary and effect activity remain in provider order, low-level reasoning is not exposed, and only the final completed agent message becomes the answer",
+        "Provider activity and the final answer are presented separately with readable spacing, elapsed work time, rendered Markdown and fixed message clock times",
+        "Runtime controls use compact application-styled menus and show only the active adapter and choices that the provider actually advertises; unavailable choices and resource placeholders are absent",
+        "Access, model, reasoning and speed selections cross the renderer, Tauri, authenticated IPC, Head and adapter boundary and configure the submitted Codex turn",
+        "Codex Auto-approve and Full access choices map to enforced non-interactive sandbox settings rather than presentation-only labels",
+        "A standalone Recent chat is durably listed with no project identity and runs in the Node-owned scratch workspace",
+        "An in-flight clarification is durably recorded, fenced to the exact active agent turn and delivered through native Codex turn/steer without cancellation or a replacement turn",
+        "Provider commentary and effects remain on the correct side of an in-flight clarification, and Stop terminalizes any unfinished activity indicator",
         "The terminal Result Envelope and matching Memory Event share the submitted command identity",
         "Stop reaches an authoritative cancelled state and is not lost",
         "After the desktop window closes and reopens, Node remains alive and the same session is restored",
-        "The same application path can select the live Codex adapter without changing UI or core contracts"
+        "The same application path can select the live Codex adapter without changing UI or core contracts",
+        "Automated tests qualify each renderer, Tauri, IPC, Node, Head and runtime boundary; the final joined native-window path is accepted through the required live owner demo"
       ],
       "implementation": {
-        "target_suite": "desktop E2E",
-        "status": "planned",
-        "test_paths": []
+        "target_suite": "layered deterministic qualification plus native owner demo and opt-in Codex canary",
+        "status": "manual",
+        "test_paths": [
+          "services/node/tests/desktop_conversation_e2e.rs",
+          "services/node/tests/desktop_lifecycle.rs",
+          "services/node/tests/codex_live_e2e.rs",
+          "services/head/tests/conversation_application.rs",
+          "services/node/src/runtime_host.rs",
+          "adapters/transport/local-ipc/src/service.rs",
+          "services/adapter-host-node/src/codex-model-catalog.test.ts",
+          "services/adapter-host-node/src/codex-cli.test.ts",
+          "services/adapter-host-node/src/codex-app-server-client.test.ts",
+          "services/adapter-host-node/src/codex-runtime-adapter.test.ts",
+          "apps/desktop/src/lib/projectChatBridge.test.ts",
+          "apps/desktop/src/App.native.test.tsx"
+        ]
       },
       "owner": "quality"
     },
     {
       "id": "TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001",
       "title": "Provider timeout is visible recoverable and never shown as success",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["desktop", "agents", "providers", "recovery"],
@@ -486,16 +514,20 @@
         "A late provider event cannot replace the visible terminal timeout"
       ],
       "implementation": {
-        "target_suite": "desktop E2E",
-        "status": "planned",
-        "test_paths": []
+        "target_suite": "Head deadline and native Project Chat recovery",
+        "status": "automated",
+        "test_paths": [
+          "services/head/tests/conversation_application.rs",
+          "apps/desktop/src/App.native.test.tsx",
+          "apps/desktop/src/lib/projectChatBridge.test.ts"
+        ]
       },
       "owner": "quality"
     },
     {
       "id": "TEST-M01-TRACE-CORRELATION-001",
       "title": "One privacy-aware trace joins the complete M01 turn",
-      "status": "specified",
+      "status": "automated",
       "priority": "high",
       "risk": "R2",
       "domains": ["observability", "desktop", "agents", "memory"],
@@ -510,8 +542,12 @@
       ],
       "implementation": {
         "target_suite": "M01 integration observability",
-        "status": "planned",
-        "test_paths": []
+        "status": "automated",
+        "test_paths": [
+          "services/head/tests/conversation_application.rs",
+          "adapters/transport/local-ipc/src/service.rs",
+          "apps/desktop/src-tauri/src/system_bridge/conversation.rs"
+        ]
       },
       "owner": "observability"
     }

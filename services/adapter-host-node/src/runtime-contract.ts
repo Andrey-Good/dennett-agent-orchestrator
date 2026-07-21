@@ -61,13 +61,39 @@ export interface RuntimeCapabilities {
   continuation: boolean;
   scopedCancellation: boolean;
   deadlines: boolean;
+  steering: "unsupported" | "native" | "interrupt_and_resume";
   nativeExtensionSchemas: string[];
+}
+
+export interface RuntimeControlCondition {
+  controlId: string;
+  choiceIds: string[];
+}
+
+export interface RuntimeControlChoice {
+  id: string;
+  label: string;
+  description?: string;
+  availableWhen: RuntimeControlCondition[];
+}
+
+export interface RuntimeControlDescriptor {
+  id: string;
+  label: string;
+  defaultChoiceId: string;
+  choices: RuntimeControlChoice[];
 }
 
 export interface RuntimeDescriptor {
   adapterId: string;
   runtimeKind: "native_agent" | "generic_loop";
   capabilities: RuntimeCapabilities;
+  controls: RuntimeControlDescriptor[];
+}
+
+export interface RuntimeControlSelection {
+  controlId: string;
+  choiceId: string;
 }
 
 export interface RuntimeTurnRequest {
@@ -76,12 +102,27 @@ export interface RuntimeTurnRequest {
   prompt: string;
   workspacePath: string;
   timeoutMs: number;
+  contextHandles?: string[];
+  runtimeControls?: RuntimeControlSelection[];
   continuation?: OpaqueContinuation;
 }
 
 export interface CancelRuntimeTurnRequest {
   sessionId: string;
   turnId: string;
+}
+
+export interface SteerRuntimeTurnRequest {
+  sessionId: string;
+  turnId: string;
+  messageId: string;
+  text: string;
+}
+
+export interface SteeringAcknowledgement {
+  sessionId: string;
+  turnId: string;
+  messageId: string;
 }
 
 export type RuntimeTerminalKind =
@@ -109,6 +150,12 @@ export interface RuntimeUsage {
   reasoningOutputTokens: number;
 }
 
+export type RuntimeActivityStatus =
+  | "started"
+  | "updated"
+  | "completed"
+  | "failed";
+
 export type RuntimeTerminalOutcome =
   | { type: "completed" }
   | { type: "cancelled"; partial: boolean }
@@ -124,7 +171,13 @@ export type RuntimeTerminalOutcome =
 export type RuntimeEventKind =
   | { type: "started"; continuation?: OpaqueContinuation }
   | { type: "text_delta"; text: string }
-  | { type: "progress"; phase: string; message?: string }
+  | {
+      type: "progress";
+      activityId?: string;
+      phase: string;
+      message?: string;
+      status: RuntimeActivityStatus;
+    }
   | { type: "usage"; usage: RuntimeUsage }
   | { type: "warning"; code: string }
   | {
@@ -148,9 +201,13 @@ export interface RuntimeTurn {
 export interface AgentRuntimeAdapter {
   describe(): Promise<RuntimeDescriptor>;
   startTurn(request: RuntimeTurnRequest): Promise<RuntimeTurn>;
+  steerTurn(
+    request: SteerRuntimeTurnRequest,
+  ): Promise<SteeringAcknowledgement>;
   cancelTurn(
     request: CancelRuntimeTurnRequest,
   ): Promise<CancellationAcknowledgement>;
+  close?(): Promise<void>;
 }
 
 export function validateRuntimeTurnRequest(request: RuntimeTurnRequest): void {
@@ -164,12 +221,40 @@ export function validateRuntimeTurnRequest(request: RuntimeTurnRequest): void {
   ) {
     throw new RuntimeAdapterError("invalid_request");
   }
+  const runtimeControls = request.runtimeControls ?? [];
+  const controlIds = new Set<string>();
+  if (runtimeControls.length > 32) {
+    throw new RuntimeAdapterError("invalid_request");
+  }
+  for (const { controlId, choiceId } of runtimeControls) {
+    if (
+      controlId.trim().length === 0 ||
+      choiceId.trim().length === 0 ||
+      controlId.length > 128 ||
+      choiceId.length > 128 ||
+      controlIds.has(controlId)
+    ) {
+      throw new RuntimeAdapterError("invalid_request");
+    }
+    controlIds.add(controlId);
+  }
 }
 
 export function validateCancelRequest(request: CancelRuntimeTurnRequest): void {
   if (
     request.sessionId.trim().length === 0 ||
     request.turnId.trim().length === 0
+  ) {
+    throw new RuntimeAdapterError("invalid_request");
+  }
+}
+
+export function validateSteerRequest(request: SteerRuntimeTurnRequest): void {
+  if (
+    request.sessionId.trim().length === 0 ||
+    request.turnId.trim().length === 0 ||
+    request.messageId.trim().length === 0 ||
+    request.text.trim().length === 0
   ) {
     throw new RuntimeAdapterError("invalid_request");
   }

@@ -74,7 +74,24 @@ EXPECTED_ENUM_VALUES: dict[str, tuple[tuple[str, int], ...]] = {
         ("RESYNC_REASON_AUTHORITY_EPOCH_CHANGED", 3),
         ("RESYNC_REASON_STREAM_REPLACED", 4),
         ("RESYNC_REASON_SNAPSHOT_INVALID", 5),
-    )
+    ),
+    ".dennett.control.v1.ComposerDraftWriteState": (
+        ("COMPOSER_DRAFT_WRITE_STATE_UNSPECIFIED", 0),
+        ("COMPOSER_DRAFT_WRITE_STATE_SAVED", 1),
+        ("COMPOSER_DRAFT_WRITE_STATE_ALREADY_ACCEPTED", 2),
+    ),
+    ".dennett.control.v1.TurnActivityStatus": (
+        ("TURN_ACTIVITY_STATUS_UNSPECIFIED", 0),
+        ("TURN_ACTIVITY_STATUS_STARTED", 1),
+        ("TURN_ACTIVITY_STATUS_UPDATED", 2),
+        ("TURN_ACTIVITY_STATUS_COMPLETED", 3),
+        ("TURN_ACTIVITY_STATUS_FAILED", 4),
+    ),
+    ".dennett.control.v1.TurnDeliveryMode": (
+        ("TURN_DELIVERY_MODE_UNSPECIFIED", 0),
+        ("TURN_DELIVERY_MODE_NEW_TURN", 1),
+        ("TURN_DELIVERY_MODE_STEER_NOW", 2),
+    ),
 }
 EXPECTED_SERVICE_METHODS: dict[str, tuple[MethodContract, ...]] = {
     ".dennett.control.v1.SystemService": (
@@ -158,6 +175,27 @@ EXPECTED_SERVICE_METHODS: dict[str, tuple[MethodContract, ...]] = {
             ".dennett.control.v1.WatchSessionResponse",
             False,
             True,
+        ),
+        (
+            "GetComposerDraft",
+            ".dennett.control.v1.GetComposerDraftRequest",
+            ".dennett.control.v1.GetComposerDraftResponse",
+            False,
+            False,
+        ),
+        (
+            "SaveComposerDraft",
+            ".dennett.control.v1.SaveComposerDraftRequest",
+            ".dennett.control.v1.SaveComposerDraftResponse",
+            False,
+            False,
+        ),
+        (
+            "DiscardComposerDraft",
+            ".dennett.control.v1.DiscardComposerDraftRequest",
+            ".dennett.control.v1.DiscardComposerDraftResponse",
+            False,
+            False,
         ),
     ),
 }
@@ -290,6 +328,62 @@ EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
         ),
         _field("client_session_id", 3, "TYPE_STRING"),
     ),
+    ".dennett.control.v1.ComposerDraft": (
+        _field("project_id", 1, "TYPE_STRING"),
+        _field("session_id", 2, "TYPE_STRING"),
+        _field("command_id", 3, "TYPE_STRING"),
+        _field("text", 4, "TYPE_STRING"),
+        _field("updated_at", 5, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field("revision", 6, "TYPE_UINT64"),
+    ),
+    ".dennett.control.v1.GetComposerDraftRequest": (
+        _field("project_id", 1, "TYPE_STRING"),
+        _field("session_id", 2, "TYPE_STRING"),
+        _field("client_session_id", 3, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.ComposerDraftMissing": (
+        _field("session_id", 1, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.SaveComposerDraftRequest": (
+        _field(
+            "operation",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field(
+            "draft",
+            2,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.ComposerDraft",
+        ),
+    ),
+    ".dennett.control.v1.ComposerDraftWriteReceipt": (
+        _field("session_id", 1, "TYPE_STRING"),
+        _field("command_id", 2, "TYPE_STRING"),
+        _field("persisted_at", 3, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field(
+            "state",
+            4,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ComposerDraftWriteState",
+        ),
+    ),
+    ".dennett.control.v1.DiscardComposerDraftRequest": (
+        _field(
+            "operation",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("session_id", 3, "TYPE_STRING"),
+        _field("draft_command_id", 4, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.ComposerDraftDiscarded": (
+        _field("session_id", 1, "TYPE_STRING"),
+        _field("existed", 2, "TYPE_BOOL"),
+    ),
     ".dennett.control.v1.SessionDelta": (
         _field("base_revision", 1, "TYPE_UINT64"),
         _field("new_revision", 2, "TYPE_UINT64"),
@@ -300,6 +394,7 @@ EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
             label="LABEL_REPEATED",
             type_name=".dennett.control.v1.SessionMutation",
         ),
+        _field("committed_at", 4, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
     ),
     ".dennett.control.v1.SessionSnapshot": (
         _field(
@@ -315,6 +410,78 @@ EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
             "TYPE_MESSAGE",
             label="LABEL_REPEATED",
             type_name=".dennett.control.v1.TurnSnapshot",
+        ),
+    ),
+    ".dennett.control.v1.TurnSnapshot": (
+        _field("turn_id", 1, "TYPE_STRING"),
+        _field("command_id", 2, "TYPE_STRING"),
+        _field("role", 3, "TYPE_ENUM", type_name=".dennett.control.v1.TurnRole"),
+        _field("state", 4, "TYPE_ENUM", type_name=".dennett.control.v1.TurnState"),
+        _field("text", 5, "TYPE_STRING"),
+        _field(
+            "result",
+            6,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.ResultEnvelope",
+            oneof_index=0,
+        ),
+        _field(
+            "error",
+            7,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.ErrorEnvelope",
+            oneof_index=0,
+        ),
+        _field("created_at", 8, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field("completed_at", 9, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field(
+            "activities",
+            10,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.TurnActivitySnapshot",
+        ),
+        _field("created_revision", 11, "TYPE_UINT64"),
+    ),
+    ".dennett.control.v1.TurnActivitySnapshot": (
+        _field("activity_id", 1, "TYPE_STRING"),
+        _field("phase", 2, "TYPE_STRING"),
+        _field(
+            "message",
+            3,
+            "TYPE_STRING",
+            oneof_index=0,
+            proto3_optional=True,
+        ),
+        _field(
+            "status",
+            4,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.TurnActivityStatus",
+        ),
+        _field("updated_at", 5, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field(
+            "native_extensions",
+            6,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.NativeExtensionPayload",
+        ),
+        _field("created_at", 7, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+        _field("created_revision", 8, "TYPE_UINT64"),
+    ),
+    ".dennett.control.v1.NativeExtensionPayload": (
+        _field("namespace", 1, "TYPE_STRING"),
+        _field("schema_version", 2, "TYPE_STRING"),
+        _field("json_value", 3, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.TurnActivityUpsert": (
+        _field("turn_id", 1, "TYPE_STRING"),
+        _field(
+            "activity",
+            2,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.TurnActivitySnapshot",
         ),
     ),
     ".dennett.control.v1.ServerWelcome": (
@@ -370,6 +537,93 @@ EXPECTED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
             "TYPE_ENUM",
             type_name=".dennett.control.v1.HealthState",
         ),
+        _field(
+            "runtime",
+            9,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.RuntimeSummary",
+        ),
+    ),
+    ".dennett.control.v1.RuntimeSummary": (
+        _field("adapter_id", 1, "TYPE_STRING"),
+        _field("runtime_kind", 2, "TYPE_STRING"),
+        _field("streaming", 3, "TYPE_BOOL"),
+        _field("continuation", 4, "TYPE_BOOL"),
+        _field("scoped_cancellation", 5, "TYPE_BOOL"),
+        _field("deadlines", 6, "TYPE_BOOL"),
+        _field("native_extension_schemas", 7, "TYPE_STRING", label="LABEL_REPEATED"),
+        _field(
+            "controls",
+            8,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlDescriptor",
+        ),
+        _field("steering", 9, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.RuntimeControlCondition": (
+        _field("control_id", 1, "TYPE_STRING"),
+        _field("choice_ids", 2, "TYPE_STRING", label="LABEL_REPEATED"),
+    ),
+    ".dennett.control.v1.RuntimeControlChoice": (
+        _field("id", 1, "TYPE_STRING"),
+        _field("label", 2, "TYPE_STRING"),
+        _field("description", 3, "TYPE_STRING", oneof_index=0, proto3_optional=True),
+        _field(
+            "available_when",
+            4,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlCondition",
+        ),
+    ),
+    ".dennett.control.v1.RuntimeControlDescriptor": (
+        _field("id", 1, "TYPE_STRING"),
+        _field("label", 2, "TYPE_STRING"),
+        _field("default_choice_id", 3, "TYPE_STRING"),
+        _field(
+            "choices",
+            4,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlChoice",
+        ),
+    ),
+    ".dennett.control.v1.SendTurnRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("session_id", 3, "TYPE_STRING"),
+        _field("text", 4, "TYPE_STRING"),
+        _field(
+            "attachments",
+            5,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.ContextAttachment",
+        ),
+        _field(
+            "runtime_controls",
+            6,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.RuntimeControlSelection",
+        ),
+        _field(
+            "delivery_mode",
+            7,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.TurnDeliveryMode",
+        ),
+        _field("expected_active_turn_id", 8, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.RuntimeControlSelection": (
+        _field("control_id", 1, "TYPE_STRING"),
+        _field("choice_id", 2, "TYPE_STRING"),
     ),
     ".dennett.control.v1.SystemSnapshot": (
         _field(
@@ -583,6 +837,67 @@ EXPECTED_ONEOFS: dict[str, dict[str, tuple[FieldContract, ...]]] = {
             ),
         )
     },
+    ".dennett.control.v1.GetComposerDraftResponse": {
+        "outcome": (
+            _field(
+                "draft",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ComposerDraft",
+                oneof_index=0,
+            ),
+            _field(
+                "missing",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ComposerDraftMissing",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.SaveComposerDraftResponse": {
+        "outcome": (
+            _field(
+                "saved",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ComposerDraftWriteReceipt",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.DiscardComposerDraftResponse": {
+        "outcome": (
+            _field(
+                "discarded",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ComposerDraftDiscarded",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.common.v1.ErrorEnvelope",
+                oneof_index=0,
+            ),
+        )
+    },
     ".dennett.control.v1.TurnSnapshot": {
         "outcome": (
             _field(
@@ -647,6 +962,13 @@ EXPECTED_ONEOFS: dict[str, dict[str, tuple[FieldContract, ...]]] = {
                 4,
                 "TYPE_MESSAGE",
                 type_name=".dennett.control.v1.SessionMetadataUpdate",
+                oneof_index=0,
+            ),
+            _field(
+                "upsert_turn_activity",
+                5,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.TurnActivityUpsert",
                 oneof_index=0,
             ),
         )

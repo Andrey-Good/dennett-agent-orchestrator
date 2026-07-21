@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M01-007",
+    "status": "completed",
+    "summary": "Qualified and owner-approved the complete M01 local desktop conversation: the native Project Chat now creates project and standalone chats, streams ordered provider progress and final Markdown through authenticated Node and Head boundaries, restores authoritative sessions and unsent drafts, exposes provider-discovered controls, supports scoped Stop and same-turn Codex clarification, and presents timeout, cancellation and resynchronization honestly.",
+    "commits": [
+      "d42e8e032ae94c5237c67b4ee0885a32abd920d5",
+      "febd98a189da8450705db8de3542dbeed12f72e9",
+      "58444f59559e95ea0d9da4e50602acb6406e1245",
+      "f1662cfeb2b94d4cddae088d291fb5976a23dcc4",
+      "a93bb19edb91c205aa8700722e0844510bf26f9d",
+      "24da00f54918a1b776c7329658ae0a21918edec7"
+    ],
+    "merge_ready_at": "2026-07-21",
+    "changed_files": [
+      "AGENTS.md",
+      "adapters/storage/sqlite/**",
+      "adapters/transport/local-ipc/**",
+      "apps/desktop/**",
+      "crates/dennett-agent-core/**",
+      "crates/dennett-memory-core/**",
+      "crates/dennett-sync-core/**",
+      "protocols/proto/dennett/control/v1/**",
+      "generated/rust/dennett/control/v1/**",
+      "generated/ts/dennett/control/v1/**",
+      "services/adapter-host-node/**",
+      "services/head/**",
+      "services/node/**",
+      "tests/catalog/m01.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M01_local_desktop_conversation.json",
+      "planning/results/WP-M01-007.json",
+      "tools/protocol_codegen.py",
+      "Cargo.toml",
+      "Cargo.lock",
+      "pnpm-lock.yaml",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "M01:UserOutcome",
+      "M01:ExitGate",
+      "ARCH-83:FirstVerticalSlice",
+      "SPEC-60:ProjectChat",
+      "TEST-M01-DESKTOP-CONVERSATION-E2E-001",
+      "TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001",
+      "TEST-M01-TRACE-CORRELATION-001",
+      "TEST-DESKTOP-DRAFT-RECOVERY-001"
+    ],
+    "tests": {
+      "passed": [
+        "59 desktop component and native-bridge tests cover copy, fixed timestamps, ordered commentary/effects/final Markdown, provider controls, access enforcement, standalone chats, Stop terminalization, timeout retry, resync, fresh-profile recovery and durable drafts",
+        "15 Tauri shell tests cover safe conversation DTO conversion, profile-matched Node selection, protocol-v1 steering compatibility, lifecycle boundaries and the write-only native clipboard integration",
+        "13 SQLite adapter tests cover schema migration, durable admission, continuations, monotonic drafts, restart recovery and atomic session snapshots during concurrent progress append",
+        "14 Head conversation integration tests cover exact-turn native steering, standalone scratch workspaces, ordered deltas, scoped and retried Stop, provider controls, visible timeout with late-event fencing and privacy-safe joined traces",
+        "61 adapter-host tests cover subscription-authenticated Codex discovery, provider-dependent model/reasoning/speed controls, non-interactive sandbox mapping, bounded App Server framing, same-turn steering, ordered safe activity and terminal output, cancellation, timeout and continuation",
+        "4 Windows real-process desktop conversation tests cover restored drafts and completed turns across Node restart, durable standalone chats, concurrent same-turn steering and draft discard without canonical history mutation",
+        "2 ignored live Codex subscription tests were run explicitly and passed: the same Codex session continued after Node restart, and an in-flight clarification changed the same active turn without replacement or hidden Stop",
+        "mise exec -- just check and every WP-M01-007 required command passed at executable head 24da00f54918a1b776c7329658ae0a21918edec7",
+        "GitHub Protocol Compatibility run 29837796324, Fast Gate run 29837796449 and Windows Desktop IPC run 29837796402 completed successfully at executable head 24da00f54918a1b776c7329658ae0a21918edec7",
+        "the owner exercised the native application, verified the final Copy repair and explicitly accepted WP-M01-007 and M01 on 2026-07-21"
+      ],
+      "not_run": [
+        "release installers, signing, cross-platform native certification, long-duration soak, fuzzing and resource-exhaustion campaigns remain release-wide hardening",
+        "provider adapters other than Codex and local models remain unavailable by owner constraint and are represented by provider-neutral ports plus deterministic fakes"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Detached R2 implementation review produced bounded reliability repairs during the package. Final detached read-only closure review of exact executable commit 24da00f54918a1b776c7329658ae0a21918edec7 against base a1b35da8b6714abdd390d022b8f95c6c9eb36af4 returned PASS with no open P0-P2 findings after independently passing the atomic SQLite snapshot regression, all 14 Head conversation tests and all 61 adapter-host tests.",
+      "findings_closed": [
+        "Moved command admission ahead of provider effects and made accepted commands, continuation handles and composer draft revisions durable across restart",
+        "Sanitized the adapter-host process environment, bounded framing and notification queues, preserved typed native extensions and made runtime readiness truthful",
+        "Closed renderer navigation, resync, draft-save, window-close and late-response races with deterministic regression tests",
+        "Discovered model, reasoning and speed choices from the active Codex subscription runtime and mapped Auto-approve and Full access to enforced non-interactive sandbox settings",
+        "Implemented durable exact-turn native Codex steering with stable message identity, idempotent delivery and uncertainty fencing without hidden Stop or replacement turns",
+        "Reconstructed provider chronology from canonical timestamps, hid low-level reasoning, separated final Markdown output and terminalized unfinished activity on cancellation or timeout",
+        "Handled fresh profiles, surviving protocol-v1 Nodes and debug/release Node binary selection without false connection failure",
+        "Replaced the ineffective WebView clipboard path with the official write-only Tauri clipboard plugin and verified the Windows clipboard in the live native app",
+        "Made SQLite session reads transactional snapshots and added a synchronized concurrent regression for progress appended during load"
+      ],
+      "findings_open": []
+    },
+    "migrations": [
+      "SQLite migration 0002_m01_runtime_state.sql adds durable command admission, provider continuation and monotonic composer-draft state without rewriting canonical session history",
+      "backward-compatible M01 SessionService and SystemService additions carry chat creation, drafts, runtime controls, native steering and conversation watches; generated Rust and TypeScript clients were regenerated together"
+    ],
+    "observability_changes": [
+      "one privacy-aware trace joins installation, component, project, session, command, runtime turn, provider and terminal memory-event identifiers for completed, failed and cancelled turns",
+      "visible client state distinguishes opening, ready, working, stopping, timed out, cancelled, refreshing, stale and failed states without prompt or response content in metric labels",
+      "provider and IPC diagnostics retain safe error classes, protocol versions and correlation identifiers while excluding credentials, private payloads and native continuation contents"
+    ],
+    "known_limitations": [
+      "Codex through the owner's ChatGPT subscription is the only real runtime in M01; later providers and local models require new adapters and conformance qualification",
+      "project-folder creation and existing-folder import are intentionally deferred; current project scope comes from the configured Node project root",
+      "chat rename and deletion are intentionally deferred until distinct Node-owned presentation-rename and safe data-deletion commands define authority, recovery and confirmation semantics",
+      "project file editing, diffs, tests and Git actions belong to M02; managed background Runs and multi-agent UI belong to M03",
+      "Windows is the native M01 certification path; other desktop transports and installers remain later work"
+    ],
+    "follow_up_candidates": [
+      "M02 project file change, diff, test and Git vertical slice",
+      "bounded Node-owned chat rename and safe presentation/data deletion Work Package",
+      "project folder create/import Work Package",
+      "Figma-first visual polish before later substantial interface changes",
+      "release-wide deep persistence, soak, fuzzing and resource-exhaustion qualification",
+      "additional provider and local-model adapters when access becomes available"
+    ],
+    "owner_decision_required": false
+  }
+}

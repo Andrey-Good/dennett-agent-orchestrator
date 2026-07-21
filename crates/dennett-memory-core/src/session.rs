@@ -7,6 +7,8 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 pub const SESSION_EVENT_PAYLOAD_VERSION: u32 = 1;
+const MAX_NATIVE_EXTENSIONS_PER_ACTIVITY: usize = 16;
+const MAX_NATIVE_EXTENSION_PAYLOAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +37,22 @@ pub enum SessionTurnState {
     Cancelled,
     TimedOut,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionActivityStatus {
+    Started,
+    Updated,
+    Completed,
+    Failed,
+}
+
+impl SessionActivityStatus {
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed)
+    }
 }
 
 impl SessionTurnState {
@@ -72,7 +90,10 @@ pub enum SessionTurnOutcome {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProjectSession {
     pub session_id: SessionId,
-    pub project_id: ProjectId,
+    /// Project scope is absent for a standalone session. Standalone sessions
+    /// execute in the Node-owned scratch workspace and never inherit access to
+    /// the configured project implicitly.
+    pub project_id: Option<ProjectId>,
     pub title: String,
     pub state: ProjectSessionState,
     pub revision: u64,
@@ -87,9 +108,34 @@ pub struct SessionTurn {
     pub role: SessionTurnRole,
     pub state: SessionTurnState,
     pub text: String,
+    pub activities: Vec<SessionTurnActivity>,
     pub outcome: Option<SessionTurnOutcome>,
+    #[serde(default)]
+    pub created_revision: u64,
     pub created_at_unix_ms: u64,
     pub completed_at_unix_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SessionTurnActivity {
+    pub activity_id: String,
+    pub phase: String,
+    pub message: Option<String>,
+    pub status: SessionActivityStatus,
+    #[serde(default)]
+    pub created_revision: u64,
+    #[serde(default)]
+    pub created_at_unix_ms: u64,
+    pub updated_at_unix_ms: u64,
+    #[serde(default)]
+    pub native_extensions: Vec<SessionNativeExtension>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SessionNativeExtension {
+    pub namespace: String,
+    pub schema_version: String,
+    pub json_value: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -103,7 +149,7 @@ pub struct ProjectSessionSnapshot {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEventBody {
     SessionCreated {
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         title: String,
     },
     TurnAccepted {
@@ -112,9 +158,30 @@ pub enum SessionEventBody {
         command_id: CommandId,
         text: String,
     },
+    UserSteerRequested {
+        user_turn_id: TurnId,
+        agent_turn_id: TurnId,
+        command_id: CommandId,
+        text: String,
+    },
+    UserSteerFinished {
+        user_turn_id: TurnId,
+        agent_turn_id: TurnId,
+        state: SessionTurnState,
+        error: Option<SafeSessionError>,
+    },
     AgentTextAppended {
         turn_id: TurnId,
         text: String,
+    },
+    AgentActivityUpserted {
+        turn_id: TurnId,
+        activity_id: String,
+        phase: String,
+        message: Option<String>,
+        status: SessionActivityStatus,
+        #[serde(default)]
+        native_extensions: Vec<SessionNativeExtension>,
     },
     TurnFinished {
         turn_id: TurnId,
@@ -392,7 +459,9 @@ fn apply_event(
                 role: SessionTurnRole::User,
                 state: SessionTurnState::Completed,
                 text: text.clone(),
+                activities: Vec::new(),
                 outcome: None,
+                created_revision: event.revision,
                 created_at_unix_ms: event.committed_at_unix_ms,
                 completed_at_unix_ms: Some(event.committed_at_unix_ms),
             });
@@ -402,12 +471,106 @@ fn apply_event(
                 role: SessionTurnRole::Agent,
                 state: SessionTurnState::Accepted,
                 text: String::new(),
+                activities: Vec::new(),
                 outcome: None,
+                created_revision: event.revision,
                 created_at_unix_ms: event.committed_at_unix_ms,
                 completed_at_unix_ms: None,
             });
             snapshot.session.active_turn_id = Some(*agent_turn_id);
             snapshot.session.state = ProjectSessionState::Running;
+        }
+        SessionEventBody::UserSteerRequested {
+            user_turn_id,
+            agent_turn_id,
+            command_id,
+            text,
+        } => {
+            if event.command_id != Some(*command_id) {
+                return Err(SessionJournalError::InvalidTransition(
+                    "steer command identity does not match its event envelope",
+                ));
+            }
+            if snapshot.session.active_turn_id != Some(*agent_turn_id) {
+                return Err(SessionJournalError::InvalidTransition(
+                    "steer must target the active agent turn",
+                ));
+            }
+            if text.trim().is_empty()
+                || snapshot
+                    .turns
+                    .iter()
+                    .any(|turn| turn.turn_id == *user_turn_id)
+            {
+                return Err(SessionJournalError::InvalidTransition(
+                    "steer message is empty or reuses a turn identity",
+                ));
+            }
+            let agent = snapshot
+                .turns
+                .iter()
+                .find(|turn| turn.turn_id == *agent_turn_id)
+                .ok_or(SessionJournalError::InvalidTransition(
+                    "active steer target is missing",
+                ))?;
+            if agent.role != SessionTurnRole::Agent || agent.state.is_terminal() {
+                return Err(SessionJournalError::InvalidTransition(
+                    "steer target must be a non-terminal agent turn",
+                ));
+            }
+            snapshot.turns.push(SessionTurn {
+                turn_id: *user_turn_id,
+                command_id: *command_id,
+                role: SessionTurnRole::User,
+                state: SessionTurnState::Accepted,
+                text: text.clone(),
+                activities: Vec::new(),
+                outcome: None,
+                created_revision: event.revision,
+                created_at_unix_ms: event.committed_at_unix_ms,
+                completed_at_unix_ms: None,
+            });
+        }
+        SessionEventBody::UserSteerFinished {
+            user_turn_id,
+            agent_turn_id,
+            state,
+            error,
+        } => {
+            if !matches!(
+                state,
+                SessionTurnState::Completed | SessionTurnState::Failed
+            ) || (*state == SessionTurnState::Completed && error.is_some())
+                || (*state == SessionTurnState::Failed && error.is_none())
+            {
+                return Err(SessionJournalError::InvalidTransition(
+                    "steer terminal state and error do not match",
+                ));
+            }
+            if !snapshot
+                .turns
+                .iter()
+                .any(|turn| turn.turn_id == *agent_turn_id && turn.role == SessionTurnRole::Agent)
+            {
+                return Err(SessionJournalError::InvalidTransition(
+                    "steer target agent turn is missing",
+                ));
+            }
+            let user = snapshot
+                .turns
+                .iter_mut()
+                .find(|turn| turn.turn_id == *user_turn_id)
+                .ok_or(SessionJournalError::InvalidTransition(
+                    "steer user turn is missing",
+                ))?;
+            if user.role != SessionTurnRole::User || user.state != SessionTurnState::Accepted {
+                return Err(SessionJournalError::InvalidTransition(
+                    "only a pending user steer can finish",
+                ));
+            }
+            user.state = *state;
+            user.outcome = error.clone().map(SessionTurnOutcome::Error);
+            user.completed_at_unix_ms = Some(event.committed_at_unix_ms);
         }
         SessionEventBody::AgentTextAppended { turn_id, text } => {
             if snapshot.session.active_turn_id != Some(*turn_id) {
@@ -433,6 +596,97 @@ fn apply_event(
                 ));
             }
             turn.text.push_str(text);
+            turn.state = SessionTurnState::Streaming;
+        }
+        SessionEventBody::AgentActivityUpserted {
+            turn_id,
+            activity_id,
+            phase,
+            message,
+            status,
+            native_extensions,
+        } => {
+            if snapshot.session.active_turn_id != Some(*turn_id) {
+                return Err(SessionJournalError::InvalidTransition(
+                    "activity can only update the active agent turn",
+                ));
+            }
+            if activity_id.trim().is_empty()
+                || phase.trim().is_empty()
+                || message
+                    .as_ref()
+                    .is_some_and(|value| value.trim().is_empty())
+            {
+                return Err(SessionJournalError::InvalidTransition(
+                    "activity fields must be non-empty",
+                ));
+            }
+            let mut extension_keys = HashSet::new();
+            if native_extensions.len() > MAX_NATIVE_EXTENSIONS_PER_ACTIVITY
+                || native_extensions.iter().any(|extension| {
+                    extension.namespace.trim().is_empty()
+                        || extension.schema_version.trim().is_empty()
+                        || extension.json_value.is_empty()
+                        || extension.json_value.len() > MAX_NATIVE_EXTENSION_PAYLOAD_BYTES
+                        || serde_json::from_str::<serde_json::Value>(&extension.json_value)
+                            .ok()
+                            .is_none_or(|value| !value.is_object())
+                        || !extension_keys.insert((
+                            extension.namespace.as_str(),
+                            extension.schema_version.as_str(),
+                        ))
+                })
+            {
+                return Err(SessionJournalError::InvalidTransition(
+                    "activity native extension is invalid",
+                ));
+            }
+            let turn = snapshot
+                .turns
+                .iter_mut()
+                .find(|turn| turn.turn_id == *turn_id)
+                .ok_or(SessionJournalError::InvalidTransition(
+                    "active turn is missing",
+                ))?;
+            if turn.role != SessionTurnRole::Agent || turn.state.is_terminal() {
+                return Err(SessionJournalError::InvalidTransition(
+                    "only a non-terminal agent turn can report activity",
+                ));
+            }
+            if let Some(existing) = turn
+                .activities
+                .iter_mut()
+                .find(|activity| activity.activity_id == *activity_id)
+            {
+                if existing.phase != *phase
+                    || existing.status.is_terminal()
+                    || !valid_activity_transition(existing.status, *status)
+                {
+                    return Err(SessionJournalError::InvalidTransition(
+                        "activity update violates its lifecycle",
+                    ));
+                }
+                existing.message.clone_from(message);
+                existing.status = *status;
+                existing.updated_at_unix_ms = event.committed_at_unix_ms;
+                existing.native_extensions.clone_from(native_extensions);
+            } else {
+                if *status == SessionActivityStatus::Updated {
+                    return Err(SessionJournalError::InvalidTransition(
+                        "activity update requires an existing activity",
+                    ));
+                }
+                turn.activities.push(SessionTurnActivity {
+                    activity_id: activity_id.clone(),
+                    phase: phase.clone(),
+                    message: message.clone(),
+                    status: *status,
+                    created_revision: event.revision,
+                    created_at_unix_ms: event.committed_at_unix_ms,
+                    updated_at_unix_ms: event.committed_at_unix_ms,
+                    native_extensions: native_extensions.clone(),
+                });
+            }
             turn.state = SessionTurnState::Streaming;
         }
         SessionEventBody::TurnFinished {
@@ -485,6 +739,31 @@ fn apply_event(
     snapshot.session.revision = event.revision;
     snapshot.session.last_activity_unix_ms = event.committed_at_unix_ms;
     Ok(())
+}
+
+fn valid_activity_transition(current: SessionActivityStatus, next: SessionActivityStatus) -> bool {
+    matches!(
+        (current, next),
+        (
+            SessionActivityStatus::Started,
+            SessionActivityStatus::Updated
+        ) | (
+            SessionActivityStatus::Started,
+            SessionActivityStatus::Completed
+        ) | (
+            SessionActivityStatus::Started,
+            SessionActivityStatus::Failed
+        ) | (
+            SessionActivityStatus::Updated,
+            SessionActivityStatus::Updated
+        ) | (
+            SessionActivityStatus::Updated,
+            SessionActivityStatus::Completed
+        ) | (
+            SessionActivityStatus::Updated,
+            SessionActivityStatus::Failed
+        )
+    )
 }
 
 fn snapshot_fingerprint(
@@ -618,7 +897,7 @@ mod tests {
                 session_id,
                 Some(create_command),
                 SessionEventBody::SessionCreated {
-                    project_id,
+                    project_id: Some(project_id),
                     title: "Recovery".to_owned(),
                 },
                 1,
@@ -647,11 +926,51 @@ mod tests {
             .append(pending(
                 session_id,
                 None,
+                SessionEventBody::AgentActivityUpserted {
+                    turn_id: agent_turn_id,
+                    activity_id: "reasoning-1".to_owned(),
+                    phase: "reasoning_summary".to_owned(),
+                    message: Some("Inspecting the request".to_owned()),
+                    status: SessionActivityStatus::Started,
+                    native_extensions: vec![SessionNativeExtension {
+                        namespace: "fixture.activity".to_owned(),
+                        schema_version: "1".to_owned(),
+                        json_value: r#"{"status":"started"}"#.to_owned(),
+                    }],
+                },
+                3,
+            ))
+            .await
+            .expect("start activity");
+        journal
+            .append(pending(
+                session_id,
+                None,
+                SessionEventBody::AgentActivityUpserted {
+                    turn_id: agent_turn_id,
+                    activity_id: "reasoning-1".to_owned(),
+                    phase: "reasoning_summary".to_owned(),
+                    message: Some("Request inspected".to_owned()),
+                    status: SessionActivityStatus::Completed,
+                    native_extensions: vec![SessionNativeExtension {
+                        namespace: "fixture.activity".to_owned(),
+                        schema_version: "1".to_owned(),
+                        json_value: r#"{"status":"completed"}"#.to_owned(),
+                    }],
+                },
+                4,
+            ))
+            .await
+            .expect("complete activity");
+        journal
+            .append(pending(
+                session_id,
+                None,
                 SessionEventBody::AgentTextAppended {
                     turn_id: agent_turn_id,
                     text: "Done".to_owned(),
                 },
-                3,
+                5,
             ))
             .await
             .expect("append text");
@@ -670,7 +989,7 @@ mod tests {
                     state: SessionTurnState::Completed,
                     outcome: Some(SessionTurnOutcome::Result(result.clone())),
                 },
-                4,
+                6,
             ))
             .await
             .expect("finish turn");
@@ -678,14 +997,128 @@ mod tests {
         let first = journal.restore(session_id).await.expect("restore session");
         let second = journal.restore(session_id).await.expect("restore again");
         assert_eq!(first, second);
-        assert_eq!(first.session.revision, 4);
+        assert_eq!(first.session.revision, 6);
         assert_eq!(first.session.state, ProjectSessionState::Idle);
         assert_eq!(first.session.active_turn_id, None);
         assert_eq!(first.turns.len(), 2);
         assert_eq!(first.turns[1].text, "Done");
         assert_eq!(
+            first.turns[1].activities,
+            vec![SessionTurnActivity {
+                activity_id: "reasoning-1".to_owned(),
+                phase: "reasoning_summary".to_owned(),
+                message: Some("Request inspected".to_owned()),
+                status: SessionActivityStatus::Completed,
+                created_revision: 3,
+                created_at_unix_ms: 3,
+                updated_at_unix_ms: 4,
+                native_extensions: vec![SessionNativeExtension {
+                    namespace: "fixture.activity".to_owned(),
+                    schema_version: "1".to_owned(),
+                    json_value: r#"{"status":"completed"}"#.to_owned(),
+                }],
+            }]
+        );
+        assert_eq!(
             first.turns[1].outcome,
             Some(SessionTurnOutcome::Result(result))
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_lifecycle_rejects_missing_start_and_terminal_rewrite() {
+        let journal = SessionJournal::new(Arc::new(InMemorySessionEventStore::default()));
+        let session_id = SessionId::new();
+        journal
+            .append(pending(
+                session_id,
+                Some(CommandId::new()),
+                SessionEventBody::SessionCreated {
+                    project_id: Some(ProjectId::new()),
+                    title: "Activity lifecycle".to_owned(),
+                },
+                1,
+            ))
+            .await
+            .expect("create session");
+        let command_id = CommandId::new();
+        let agent_turn_id = TurnId::new();
+        journal
+            .append(pending(
+                session_id,
+                Some(command_id),
+                SessionEventBody::TurnAccepted {
+                    user_turn_id: TurnId::new(),
+                    agent_turn_id,
+                    command_id,
+                    text: "Work".to_owned(),
+                },
+                2,
+            ))
+            .await
+            .expect("accept turn");
+
+        let update_without_start = journal
+            .append(pending(
+                session_id,
+                None,
+                SessionEventBody::AgentActivityUpserted {
+                    turn_id: agent_turn_id,
+                    activity_id: "command-1".to_owned(),
+                    phase: "command".to_owned(),
+                    message: None,
+                    status: SessionActivityStatus::Updated,
+                    native_extensions: Vec::new(),
+                },
+                3,
+            ))
+            .await;
+        assert!(matches!(
+            update_without_start,
+            Err(SessionJournalError::InvalidTransition(_))
+        ));
+
+        journal
+            .append(pending(
+                session_id,
+                None,
+                SessionEventBody::AgentActivityUpserted {
+                    turn_id: agent_turn_id,
+                    activity_id: "command-1".to_owned(),
+                    phase: "command".to_owned(),
+                    message: None,
+                    status: SessionActivityStatus::Completed,
+                    native_extensions: Vec::new(),
+                },
+                3,
+            ))
+            .await
+            .expect("terminal-only provider activity is valid");
+
+        let terminal_rewrite = journal
+            .append(pending(
+                session_id,
+                None,
+                SessionEventBody::AgentActivityUpserted {
+                    turn_id: agent_turn_id,
+                    activity_id: "command-1".to_owned(),
+                    phase: "command".to_owned(),
+                    message: None,
+                    status: SessionActivityStatus::Failed,
+                    native_extensions: Vec::new(),
+                },
+                4,
+            ))
+            .await;
+        assert!(matches!(
+            terminal_rewrite,
+            Err(SessionJournalError::InvalidTransition(_))
+        ));
+        let restored = journal.restore(session_id).await.expect("restore");
+        assert_eq!(restored.session.revision, 3);
+        assert_eq!(
+            restored.turns[1].activities[0].status,
+            SessionActivityStatus::Completed
         );
     }
 
@@ -698,7 +1131,7 @@ mod tests {
             session_id,
             Some(command_id),
             SessionEventBody::SessionCreated {
-                project_id: ProjectId::new(),
+                project_id: Some(ProjectId::new()),
                 title: "Original".to_owned(),
             },
             1,
@@ -721,7 +1154,7 @@ mod tests {
             session_id,
             Some(command_id),
             SessionEventBody::SessionCreated {
-                project_id: ProjectId::new(),
+                project_id: Some(ProjectId::new()),
                 title: "Changed".to_owned(),
             },
             1,
@@ -741,7 +1174,7 @@ mod tests {
                 session_id,
                 Some(CommandId::new()),
                 SessionEventBody::SessionCreated {
-                    project_id: ProjectId::new(),
+                    project_id: Some(ProjectId::new()),
                     title: "Cancel".to_owned(),
                 },
                 1,
@@ -801,5 +1234,95 @@ mod tests {
                 .revision,
             3
         );
+    }
+
+    #[tokio::test]
+    async fn native_steer_is_a_durable_user_turn_without_replacing_the_active_agent_turn() {
+        let journal = SessionJournal::new(Arc::new(InMemorySessionEventStore::default()));
+        let session_id = SessionId::new();
+        let project_id = ProjectId::new();
+        journal
+            .append(pending(
+                session_id,
+                Some(CommandId::new()),
+                SessionEventBody::SessionCreated {
+                    project_id: Some(project_id),
+                    title: "Steer".to_owned(),
+                },
+                1,
+            ))
+            .await
+            .expect("create session");
+        let initial_command = CommandId::new();
+        let agent_turn_id = TurnId::new();
+        journal
+            .append(pending(
+                session_id,
+                Some(initial_command),
+                SessionEventBody::TurnAccepted {
+                    user_turn_id: TurnId::new(),
+                    agent_turn_id,
+                    command_id: initial_command,
+                    text: "Start".to_owned(),
+                },
+                2,
+            ))
+            .await
+            .expect("start agent turn");
+
+        let steer_command = CommandId::new();
+        let steer_user_turn_id = TurnId::new();
+        let requested = journal
+            .append(pending(
+                session_id,
+                Some(steer_command),
+                SessionEventBody::UserSteerRequested {
+                    user_turn_id: steer_user_turn_id,
+                    agent_turn_id,
+                    command_id: steer_command,
+                    text: "Keep working and include the new constraint".to_owned(),
+                },
+                3,
+            ))
+            .await
+            .expect("persist steer before provider delivery");
+        assert_eq!(
+            requested.snapshot.session.active_turn_id,
+            Some(agent_turn_id)
+        );
+        assert_eq!(
+            requested.snapshot.session.state,
+            ProjectSessionState::Running
+        );
+        assert_eq!(requested.snapshot.turns.len(), 3);
+        assert_eq!(requested.snapshot.turns[2].role, SessionTurnRole::User);
+        assert_eq!(
+            requested.snapshot.turns[2].state,
+            SessionTurnState::Accepted
+        );
+
+        let delivered = journal
+            .append(pending(
+                session_id,
+                None,
+                SessionEventBody::UserSteerFinished {
+                    user_turn_id: steer_user_turn_id,
+                    agent_turn_id,
+                    state: SessionTurnState::Completed,
+                    error: None,
+                },
+                4,
+            ))
+            .await
+            .expect("record provider acknowledgement");
+        assert_eq!(
+            delivered.snapshot.session.active_turn_id,
+            Some(agent_turn_id)
+        );
+        assert_eq!(
+            delivered.snapshot.turns[2].state,
+            SessionTurnState::Completed
+        );
+        assert_eq!(delivered.snapshot.turns[2].completed_at_unix_ms, Some(4));
     }
 }

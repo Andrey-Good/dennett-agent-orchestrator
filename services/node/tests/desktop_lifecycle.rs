@@ -1,7 +1,7 @@
 #![cfg(windows)]
 
 use dennett_local_ipc::{AuthenticatedSystemClient, ClientConfig};
-use dennett_node::{AUTHORITY_EPOCH_ENV, INSTALLATION_ID_ENV};
+use dennett_node::{AGENT_RUNTIME_ENV, AUTHORITY_EPOCH_ENV, INSTALLATION_ID_ENV};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -50,6 +50,7 @@ async fn desktop_disconnect_does_not_stop_node_and_a_new_session_reconnects() {
     let child = Command::new(env!("CARGO_BIN_EXE_dennett-node"))
         .env(INSTALLATION_ID_ENV, &installation_id)
         .env(AUTHORITY_EPOCH_ENV, "17")
+        .env(AGENT_RUNTIME_ENV, "fake")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -58,8 +59,7 @@ async fn desktop_disconnect_does_not_stop_node_and_a_new_session_reconnects() {
     let mut node = ChildGuard(child);
 
     let first = connect(&installation_id, "desktop-session-one").await;
-    assert_eq!(first.bootstrap().authority_epoch, 17);
-    assert_eq!(first.bootstrap().revision, 1);
+    assert_usable_bootstrap(first.bootstrap(), 17);
     drop(first);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -69,8 +69,7 @@ async fn desktop_disconnect_does_not_stop_node_and_a_new_session_reconnects() {
     );
 
     let second = connect(&installation_id, "desktop-session-two").await;
-    assert_eq!(second.bootstrap().authority_epoch, 17);
-    assert_eq!(second.bootstrap().revision, 1);
+    assert_usable_bootstrap(second.bootstrap(), 17);
     assert!(
         node.0.try_wait().expect("query Node process").is_none(),
         "Node must remain alive after a fresh authenticated UI session"
@@ -106,12 +105,23 @@ async fn abrupt_desktop_launcher_exit_leaves_node_available_for_reconnect() {
     let process_id = read_process_id(&pid_file).await;
     let _node = DetachedProcessGuard(process_id);
     let first = connect(&installation_id, "desktop-after-launcher-crash").await;
-    assert_eq!(first.bootstrap().authority_epoch, 23);
+    assert_usable_bootstrap(first.bootstrap(), 23);
     drop(first);
 
     let second = connect(&installation_id, "desktop-reconnected").await;
-    assert_eq!(second.bootstrap().authority_epoch, 23);
-    assert_eq!(second.bootstrap().revision, 1);
+    assert_usable_bootstrap(second.bootstrap(), 23);
+}
+
+fn assert_usable_bootstrap(
+    bootstrap: &dennett_local_ipc::protocol::dennett::control::v1::BootstrapSnapshot,
+    authority_epoch: u64,
+) {
+    assert_eq!(bootstrap.authority_epoch, authority_epoch);
+    assert!(bootstrap.revision >= 2);
+    assert_eq!(bootstrap.projects.len(), 1);
+    assert_eq!(bootstrap.recent_sessions.len(), 1);
+    assert!(!bootstrap.active_project_id.is_empty());
+    assert!(!bootstrap.active_session_id.is_empty());
 }
 
 #[test]
@@ -126,6 +136,7 @@ fn crash_launcher_helper() {
     let child = Command::new(env!("CARGO_BIN_EXE_dennett-node"))
         .env(INSTALLATION_ID_ENV, installation_id)
         .env(AUTHORITY_EPOCH_ENV, "23")
+        .env(AGENT_RUNTIME_ENV, "fake")
         .current_dir(data_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

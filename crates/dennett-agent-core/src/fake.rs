@@ -1,9 +1,9 @@
 use crate::runtime::{
     AgentRequest, AgentResponse, AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest,
-    CancellationAcknowledgement, OpaqueContinuation, RuntimeCapabilities, RuntimeDescriptor,
-    RuntimeError, RuntimeErrorCode, RuntimeEvent, RuntimeEventKind, RuntimeEventStream,
-    RuntimeKind, RuntimeTerminal, RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurn,
-    RuntimeTurnRequest, RuntimeUsage,
+    CancellationAcknowledgement, NativeExtension, OpaqueContinuation, RuntimeActivityStatus,
+    RuntimeCapabilities, RuntimeDescriptor, RuntimeError, RuntimeErrorCode, RuntimeEvent,
+    RuntimeEventKind, RuntimeEventStream, RuntimeKind, RuntimeSteeringMode, RuntimeTerminal,
+    RuntimeTerminalKind, RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, RuntimeUsage,
 };
 use async_trait::async_trait;
 use dennett_kernel::DennettResult;
@@ -26,6 +26,22 @@ impl AgentRuntimePort for FakeAgentRuntime {
             evidence_handles: request.context_handles,
         })
     }
+
+    async fn describe(&self) -> Result<RuntimeDescriptor, RuntimeError> {
+        Ok(RuntimeDescriptor {
+            adapter_id: FAKE_ADAPTER_ID.to_owned(),
+            runtime_kind: RuntimeKind::GenericLoop,
+            capabilities: RuntimeCapabilities {
+                streaming: false,
+                continuation: false,
+                scoped_cancellation: false,
+                deadlines: false,
+                steering: RuntimeSteeringMode::Unsupported,
+                native_extension_schemas: Vec::new(),
+            },
+            controls: Vec::new(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,6 +50,11 @@ pub enum FakeRuntimeStep {
     Progress {
         phase: String,
         message: Option<String>,
+    },
+    ProgressWithNativeExtension {
+        phase: String,
+        message: Option<String>,
+        extension: NativeExtension,
     },
     Usage(RuntimeUsage),
     Advance(Duration),
@@ -113,8 +134,10 @@ impl AgentRuntimePort for ScriptedFakeAgentRuntime {
                 continuation: true,
                 scoped_cancellation: true,
                 deadlines: true,
+                steering: RuntimeSteeringMode::InterruptAndResume,
                 native_extension_schemas: Vec::new(),
             },
+            controls: Vec::new(),
         })
     }
 
@@ -209,12 +232,20 @@ struct ScriptedFakeEventStream {
 
 impl ScriptedFakeEventStream {
     fn event(&mut self, kind: RuntimeEventKind) -> RuntimeEvent {
+        self.event_with_extensions(kind, Vec::new())
+    }
+
+    fn event_with_extensions(
+        &mut self,
+        kind: RuntimeEventKind,
+        native_extensions: Vec<NativeExtension>,
+    ) -> RuntimeEvent {
         let event = RuntimeEvent {
             session_id: self.key.session_id.clone(),
             turn_id: self.key.turn_id.clone(),
             sequence: self.next_sequence,
             kind,
-            native_extensions: Vec::new(),
+            native_extensions,
         };
         self.next_sequence += 1;
         event
@@ -301,8 +332,26 @@ impl RuntimeEventStream for ScriptedFakeEventStream {
                     self.emitted_text |= !text.is_empty();
                     RuntimeEventKind::TextDelta { text }
                 }
-                FakeRuntimeStep::Progress { phase, message } => {
-                    RuntimeEventKind::Progress { phase, message }
+                FakeRuntimeStep::Progress { phase, message } => RuntimeEventKind::Progress {
+                    activity_id: None,
+                    phase,
+                    message,
+                    status: RuntimeActivityStatus::Completed,
+                },
+                FakeRuntimeStep::ProgressWithNativeExtension {
+                    phase,
+                    message,
+                    extension,
+                } => {
+                    return Some(Ok(self.event_with_extensions(
+                        RuntimeEventKind::Progress {
+                            activity_id: None,
+                            phase,
+                            message,
+                            status: RuntimeActivityStatus::Completed,
+                        },
+                        vec![extension],
+                    )));
                 }
                 FakeRuntimeStep::Usage(usage) => RuntimeEventKind::Usage(usage),
                 FakeRuntimeStep::Advance(duration) => {

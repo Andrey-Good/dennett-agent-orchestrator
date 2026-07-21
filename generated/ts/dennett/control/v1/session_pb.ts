@@ -17,7 +17,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/control/v1/session.proto.
  */
 export const file_dennett_control_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvc2Vzc2lvbi5wcm90bxISZGVubmV0dC5jb250cm9sLnYxItgBCg5TZXNzaW9uU3VtbWFyeRISCgpzZXNzaW9uX2lkGAEgASgJEhIKCnByb2plY3RfaWQYAiABKAkSDQoFdGl0bGUYAyABKAkSLwoFc3RhdGUYBCABKA4yIC5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblN0YXRlEhAKCHJldmlzaW9uGAUgASgEEhYKDmFjdGl2ZV90dXJuX2lkGAYgASgJEjQKEGxhc3RfYWN0aXZpdHlfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIlAKEUNvbnRleHRBdHRhY2htZW50EiwKBnNvdXJjZRgBIAEoCzIcLmRlbm5ldHQuY29tbW9uLnYxLlN0YWJsZVJlZhINCgVsYWJlbBgCIAEoCSK4AQoOUmVzdWx0RW52ZWxvcGUSEgoKY29tbWFuZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJEg8KB3N1bW1hcnkYAyABKAkSDwoHcGFydGlhbBgEIAEoCBIvCglhcnRpZmFjdHMYBSADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYSLgoIZXZpZGVuY2UYBiADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYi8QIKDFR1cm5TbmFwc2hvdBIPCgd0dXJuX2lkGAEgASgJEhIKCmNvbW1hbmRfaWQYAiABKAkSKgoEcm9sZRgDIAEoDjIcLmRlbm5ldHQuY29udHJvbC52MS5UdXJuUm9sZRIsCgVzdGF0ZRgEIAEoDjIdLmRlbm5ldHQuY29udHJvbC52MS5UdXJuU3RhdGUSDAoEdGV4dBgFIAEoCRI0CgZyZXN1bHQYBiABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUmVzdWx0RW52ZWxvcGVIABIxCgVlcnJvchgHIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIABIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIwCgxjb21wbGV0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgkKB291dGNvbWUilQEKD1Nlc3Npb25TbmFwc2hvdBIzCgdzZXNzaW9uGAEgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5EhwKFHNuYXBzaG90X2ZpbmdlcnByaW50GAIgASgMEi8KBXR1cm5zGAMgAygLMiAuZGVubmV0dC5jb250cm9sLnYxLlR1cm5TbmFwc2hvdCIvCg5UdXJuVGV4dEFwcGVuZBIPCgd0dXJuX2lkGAEgASgJEgwKBHRleHQYAiABKAkiwQEKDFR1cm5UZXJtaW5hbBIPCgd0dXJuX2lkGAEgASgJEiwKBXN0YXRlGAIgASgOMh0uZGVubmV0dC5jb250cm9sLnYxLlR1cm5TdGF0ZRI0CgZyZXN1bHQYAyABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUmVzdWx0RW52ZWxvcGVIABIxCgVlcnJvchgEIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIqUBChVTZXNzaW9uTWV0YWRhdGFVcGRhdGUSEgoFdGl0bGUYASABKAlIAIgBARI0CgVzdGF0ZRgCIAEoDjIgLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uU3RhdGVIAYgBARIbCg5hY3RpdmVfdHVybl9pZBgDIAEoCUgCiAEBQggKBl90aXRsZUIICgZfc3RhdGVCEQoPX2FjdGl2ZV90dXJuX2lkIpQCCg9TZXNzaW9uTXV0YXRpb24SNwoLdXBzZXJ0X3R1cm4YASABKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuVHVyblNuYXBzaG90SAASPgoQYXBwZW5kX3R1cm5fdGV4dBgCIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5UdXJuVGV4dEFwcGVuZEgAEjcKC2ZpbmlzaF90dXJuGAMgASgLMiAuZGVubmV0dC5jb250cm9sLnYxLlR1cm5UZXJtaW5hbEgAEkMKDnVwZGF0ZV9zZXNzaW9uGAQgASgLMikuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25NZXRhZGF0YVVwZGF0ZUgAQgoKCG11dGF0aW9uInMKDFNlc3Npb25EZWx0YRIVCg1iYXNlX3JldmlzaW9uGAEgASgEEhQKDG5ld19yZXZpc2lvbhgCIAEoBBI2CgltdXRhdGlvbnMYAyADKAsyIy5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbk11dGF0aW9uItsCChFTZXNzaW9uV2F0Y2hGcmFtZRIsCgZjdXJzb3IYASABKAsyHC5kZW5uZXR0LnN5bmMudjEuV2F0Y2hDdXJzb3ISNwoIc25hcHNob3QYAiABKAsyIy5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblNuYXBzaG90SAASMQoFZGVsdGEYAyABKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbkRlbHRhSAASNAoJaGVhcnRiZWF0GAQgASgLMh8uZGVubmV0dC5zeW5jLnYxLldhdGNoSGVhcnRiZWF0SAASOgoPcmVzeW5jX3JlcXVpcmVkGAUgASgLMh8uZGVubmV0dC5zeW5jLnYxLlJlc3luY1JlcXVpcmVkSAASMQoFZXJyb3IYBiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCBwoFZnJhbWUibgoUQ3JlYXRlU2Vzc2lvblJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEg0KBXRpdGxlGAMgASgJImAKFUNyZWF0ZVNlc3Npb25BY2NlcHRlZBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZEFjY2VwdGVkEhIKCnNlc3Npb25faWQYAiABKAkilAEKFUNyZWF0ZVNlc3Npb25SZXNwb25zZRI9CghhY2NlcHRlZBgBIAEoCzIpLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uQWNjZXB0ZWRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIrgBCg9TZW5kVHVyblJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEhIKCnNlc3Npb25faWQYAyABKAkSDAoEdGV4dBgEIAEoCRI6CgthdHRhY2htZW50cxgFIAMoCzIlLmRlbm5ldHQuY29udHJvbC52MS5Db250ZXh0QXR0YWNobWVudCJYChBTZW5kVHVybkFjY2VwdGVkEjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kQWNjZXB0ZWQSDwoHdHVybl9pZBgCIAEoCSKKAQoQU2VuZFR1cm5SZXNwb25zZRI4CghhY2NlcHRlZBgBIAEoCzIkLmRlbm5ldHQuY29udHJvbC52MS5TZW5kVHVybkFjY2VwdGVkSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSKBAQoRQ2FuY2VsVHVyblJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEhIKCnNlc3Npb25faWQYAyABKAkSDwoHdHVybl9pZBgEIAEoCSKKAQoSQ2FuY2VsVHVyblJlc3BvbnNlEjYKCGFjY2VwdGVkGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZEFjY2VwdGVkSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSJ0ChNXYXRjaFNlc3Npb25SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBARIZChFjbGllbnRfc2Vzc2lvbl9pZBgDIAEoCUIRCg9fa25vd25fcmV2aXNpb24iTAoUV2F0Y2hTZXNzaW9uUmVzcG9uc2USNAoFZnJhbWUYASABKAsyJS5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbldhdGNoRnJhbWUqsQEKDFNlc3Npb25TdGF0ZRIdChlTRVNTSU9OX1NUQVRFX1VOU1BFQ0lGSUVEEAASFgoSU0VTU0lPTl9TVEFURV9JRExFEAESGQoVU0VTU0lPTl9TVEFURV9SVU5OSU5HEAISGQoVU0VTU0lPTl9TVEFURV9XQUlUSU5HEAMSGAoUU0VTU0lPTl9TVEFURV9GQUlMRUQQBBIaChZTRVNTSU9OX1NUQVRFX0FSQ0hJVkVEEAUqZAoIVHVyblJvbGUSGQoVVFVSTl9ST0xFX1VOU1BFQ0lGSUVEEAASEgoOVFVSTl9ST0xFX1VTRVIQARITCg9UVVJOX1JPTEVfQUdFTlQQAhIUChBUVVJOX1JPTEVfU1lTVEVNEAMqvwEKCVR1cm5TdGF0ZRIaChZUVVJOX1NUQVRFX1VOU1BFQ0lGSUVEEAASFwoTVFVSTl9TVEFURV9BQ0NFUFRFRBABEhgKFFRVUk5fU1RBVEVfU1RSRUFNSU5HEAISGAoUVFVSTl9TVEFURV9DT01QTEVURUQQAxIYChRUVVJOX1NUQVRFX0NBTkNFTExFRBAEEhgKFFRVUk5fU1RBVEVfVElNRURfT1VUEAUSFQoRVFVSTl9TVEFURV9GQUlMRUQQBjKPAwoOU2Vzc2lvblNlcnZpY2USZAoNQ3JlYXRlU2Vzc2lvbhIoLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uUmVxdWVzdBopLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVTZXNzaW9uUmVzcG9uc2USVQoIU2VuZFR1cm4SIy5kZW5uZXR0LmNvbnRyb2wudjEuU2VuZFR1cm5SZXF1ZXN0GiQuZGVubmV0dC5jb250cm9sLnYxLlNlbmRUdXJuUmVzcG9uc2USWwoKQ2FuY2VsVHVybhIlLmRlbm5ldHQuY29udHJvbC52MS5DYW5jZWxUdXJuUmVxdWVzdBomLmRlbm5ldHQuY29udHJvbC52MS5DYW5jZWxUdXJuUmVzcG9uc2USYwoMV2F0Y2hTZXNzaW9uEicuZGVubmV0dC5jb250cm9sLnYxLldhdGNoU2Vzc2lvblJlcXVlc3QaKC5kZW5uZXR0LmNvbnRyb2wudjEuV2F0Y2hTZXNzaW9uUmVzcG9uc2UwAWIGcHJvdG8z", [file_dennett_common_v1_common, file_dennett_sync_v1_watch, file_google_protobuf_timestamp]);
+  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvc2Vzc2lvbi5wcm90bxISZGVubmV0dC5jb250cm9sLnYxItgBCg5TZXNzaW9uU3VtbWFyeRISCgpzZXNzaW9uX2lkGAEgASgJEhIKCnByb2plY3RfaWQYAiABKAkSDQoFdGl0bGUYAyABKAkSLwoFc3RhdGUYBCABKA4yIC5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblN0YXRlEhAKCHJldmlzaW9uGAUgASgEEhYKDmFjdGl2ZV90dXJuX2lkGAYgASgJEjQKEGxhc3RfYWN0aXZpdHlfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIlAKEUNvbnRleHRBdHRhY2htZW50EiwKBnNvdXJjZRgBIAEoCzIcLmRlbm5ldHQuY29tbW9uLnYxLlN0YWJsZVJlZhINCgVsYWJlbBgCIAEoCSK4AQoOUmVzdWx0RW52ZWxvcGUSEgoKY29tbWFuZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJEg8KB3N1bW1hcnkYAyABKAkSDwoHcGFydGlhbBgEIAEoCBIvCglhcnRpZmFjdHMYBSADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYSLgoIZXZpZGVuY2UYBiADKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYiyQMKDFR1cm5TbmFwc2hvdBIPCgd0dXJuX2lkGAEgASgJEhIKCmNvbW1hbmRfaWQYAiABKAkSKgoEcm9sZRgDIAEoDjIcLmRlbm5ldHQuY29udHJvbC52MS5UdXJuUm9sZRIsCgVzdGF0ZRgEIAEoDjIdLmRlbm5ldHQuY29udHJvbC52MS5UdXJuU3RhdGUSDAoEdGV4dBgFIAEoCRI0CgZyZXN1bHQYBiABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUmVzdWx0RW52ZWxvcGVIABIxCgVlcnJvchgHIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIABIuCgpjcmVhdGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIwCgxjb21wbGV0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjwKCmFjdGl2aXRpZXMYCiADKAsyKC5kZW5uZXR0LmNvbnRyb2wudjEuVHVybkFjdGl2aXR5U25hcHNob3QSGAoQY3JlYXRlZF9yZXZpc2lvbhgLIAEoBEIJCgdvdXRjb21lItUCChRUdXJuQWN0aXZpdHlTbmFwc2hvdBITCgthY3Rpdml0eV9pZBgBIAEoCRINCgVwaGFzZRgCIAEoCRIUCgdtZXNzYWdlGAMgASgJSACIAQESNgoGc3RhdHVzGAQgASgOMiYuZGVubmV0dC5jb250cm9sLnYxLlR1cm5BY3Rpdml0eVN0YXR1cxIuCgp1cGRhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBJFChFuYXRpdmVfZXh0ZW5zaW9ucxgGIAMoCzIqLmRlbm5ldHQuY29udHJvbC52MS5OYXRpdmVFeHRlbnNpb25QYXlsb2FkEi4KCmNyZWF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhgKEGNyZWF0ZWRfcmV2aXNpb24YCCABKARCCgoIX21lc3NhZ2UiVwoWTmF0aXZlRXh0ZW5zaW9uUGF5bG9hZBIRCgluYW1lc3BhY2UYASABKAkSFgoOc2NoZW1hX3ZlcnNpb24YAiABKAkSEgoKanNvbl92YWx1ZRgDIAEoCSKVAQoPU2Vzc2lvblNuYXBzaG90EjMKB3Nlc3Npb24YASABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvblN1bW1hcnkSHAoUc25hcHNob3RfZmluZ2VycHJpbnQYAiABKAwSLwoFdHVybnMYAyADKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuVHVyblNuYXBzaG90Ii8KDlR1cm5UZXh0QXBwZW5kEg8KB3R1cm5faWQYASABKAkSDAoEdGV4dBgCIAEoCSLBAQoMVHVyblRlcm1pbmFsEg8KB3R1cm5faWQYASABKAkSLAoFc3RhdGUYAiABKA4yHS5kZW5uZXR0LmNvbnRyb2wudjEuVHVyblN0YXRlEjQKBnJlc3VsdBgDIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5SZXN1bHRFbnZlbG9wZUgAEjEKBWVycm9yGAQgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUiYQoSVHVybkFjdGl2aXR5VXBzZXJ0Eg8KB3R1cm5faWQYASABKAkSOgoIYWN0aXZpdHkYAiABKAsyKC5kZW5uZXR0LmNvbnRyb2wudjEuVHVybkFjdGl2aXR5U25hcHNob3QipQEKFVNlc3Npb25NZXRhZGF0YVVwZGF0ZRISCgV0aXRsZRgBIAEoCUgAiAEBEjQKBXN0YXRlGAIgASgOMiAuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdGF0ZUgBiAEBEhsKDmFjdGl2ZV90dXJuX2lkGAMgASgJSAKIAQFCCAoGX3RpdGxlQggKBl9zdGF0ZUIRCg9fYWN0aXZlX3R1cm5faWQi3AIKD1Nlc3Npb25NdXRhdGlvbhI3Cgt1cHNlcnRfdHVybhgBIAEoCzIgLmRlbm5ldHQuY29udHJvbC52MS5UdXJuU25hcHNob3RIABI+ChBhcHBlbmRfdHVybl90ZXh0GAIgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlR1cm5UZXh0QXBwZW5kSAASNwoLZmluaXNoX3R1cm4YAyABKAsyIC5kZW5uZXR0LmNvbnRyb2wudjEuVHVyblRlcm1pbmFsSAASQwoOdXBkYXRlX3Nlc3Npb24YBCABKAsyKS5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbk1ldGFkYXRhVXBkYXRlSAASRgoUdXBzZXJ0X3R1cm5fYWN0aXZpdHkYBSABKAsyJi5kZW5uZXR0LmNvbnRyb2wudjEuVHVybkFjdGl2aXR5VXBzZXJ0SABCCgoIbXV0YXRpb24ipQEKDFNlc3Npb25EZWx0YRIVCg1iYXNlX3JldmlzaW9uGAEgASgEEhQKDG5ld19yZXZpc2lvbhgCIAEoBBI2CgltdXRhdGlvbnMYAyADKAsyIy5kZW5uZXR0LmNvbnRyb2wudjEuU2Vzc2lvbk11dGF0aW9uEjAKDGNvbW1pdHRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi2wIKEVNlc3Npb25XYXRjaEZyYW1lEiwKBmN1cnNvchgBIAEoCzIcLmRlbm5ldHQuc3luYy52MS5XYXRjaEN1cnNvchI3CghzbmFwc2hvdBgCIAEoCzIjLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uU25hcHNob3RIABIxCgVkZWx0YRgDIAEoCzIgLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uRGVsdGFIABI0CgloZWFydGJlYXQYBCABKAsyHy5kZW5uZXR0LnN5bmMudjEuV2F0Y2hIZWFydGJlYXRIABI6Cg9yZXN5bmNfcmVxdWlyZWQYBSABKAsyHy5kZW5uZXR0LnN5bmMudjEuUmVzeW5jUmVxdWlyZWRIABIxCgVlcnJvchgGIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIHCgVmcmFtZSJuChRDcmVhdGVTZXNzaW9uUmVxdWVzdBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZE1ldGFkYXRhEhIKCnByb2plY3RfaWQYAiABKAkSDQoFdGl0bGUYAyABKAkiYAoVQ3JlYXRlU2Vzc2lvbkFjY2VwdGVkEjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kQWNjZXB0ZWQSEgoKc2Vzc2lvbl9pZBgCIAEoCSKUAQoVQ3JlYXRlU2Vzc2lvblJlc3BvbnNlEj0KCGFjY2VwdGVkGAEgASgLMikuZGVubmV0dC5jb250cm9sLnYxLkNyZWF0ZVNlc3Npb25BY2NlcHRlZEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUi3QIKD1NlbmRUdXJuUmVxdWVzdBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZE1ldGFkYXRhEhIKCnByb2plY3RfaWQYAiABKAkSEgoKc2Vzc2lvbl9pZBgDIAEoCRIMCgR0ZXh0GAQgASgJEjoKC2F0dGFjaG1lbnRzGAUgAygLMiUuZGVubmV0dC5jb250cm9sLnYxLkNvbnRleHRBdHRhY2htZW50EkUKEHJ1bnRpbWVfY29udHJvbHMYBiADKAsyKy5kZW5uZXR0LmNvbnRyb2wudjEuUnVudGltZUNvbnRyb2xTZWxlY3Rpb24SOwoNZGVsaXZlcnlfbW9kZRgHIAEoDjIkLmRlbm5ldHQuY29udHJvbC52MS5UdXJuRGVsaXZlcnlNb2RlEh8KF2V4cGVjdGVkX2FjdGl2ZV90dXJuX2lkGAggASgJIkAKF1J1bnRpbWVDb250cm9sU2VsZWN0aW9uEhIKCmNvbnRyb2xfaWQYASABKAkSEQoJY2hvaWNlX2lkGAIgASgJIlgKEFNlbmRUdXJuQWNjZXB0ZWQSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRBY2NlcHRlZBIPCgd0dXJuX2lkGAIgASgJIooBChBTZW5kVHVyblJlc3BvbnNlEjgKCGFjY2VwdGVkGAEgASgLMiQuZGVubmV0dC5jb250cm9sLnYxLlNlbmRUdXJuQWNjZXB0ZWRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIoEBChFDYW5jZWxUdXJuUmVxdWVzdBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZE1ldGFkYXRhEhIKCnByb2plY3RfaWQYAiABKAkSEgoKc2Vzc2lvbl9pZBgDIAEoCRIPCgd0dXJuX2lkGAQgASgJIooBChJDYW5jZWxUdXJuUmVzcG9uc2USNgoIYWNjZXB0ZWQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kQWNjZXB0ZWRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lInQKE1dhdGNoU2Vzc2lvblJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIbCg5rbm93bl9yZXZpc2lvbhgCIAEoBEgAiAEBEhkKEWNsaWVudF9zZXNzaW9uX2lkGAMgASgJQhEKD19rbm93bl9yZXZpc2lvbiJMChRXYXRjaFNlc3Npb25SZXNwb25zZRI0CgVmcmFtZRgBIAEoCzIlLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uV2F0Y2hGcmFtZSKbAQoNQ29tcG9zZXJEcmFmdBISCgpwcm9qZWN0X2lkGAEgASgJEhIKCnNlc3Npb25faWQYAiABKAkSEgoKY29tbWFuZF9pZBgDIAEoCRIMCgR0ZXh0GAQgASgJEi4KCnVwZGF0ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhAKCHJldmlzaW9uGAYgASgEIlwKF0dldENvbXBvc2VyRHJhZnRSZXF1ZXN0EhIKCnByb2plY3RfaWQYASABKAkSEgoKc2Vzc2lvbl9pZBgCIAEoCRIZChFjbGllbnRfc2Vzc2lvbl9pZBgDIAEoCSIqChRDb21wb3NlckRyYWZ0TWlzc2luZxISCgpzZXNzaW9uX2lkGAEgASgJIskBChhHZXRDb21wb3NlckRyYWZ0UmVzcG9uc2USMgoFZHJhZnQYASABKAsyIS5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcG9zZXJEcmFmdEgAEjsKB21pc3NpbmcYAiABKAsyKC5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcG9zZXJEcmFmdE1pc3NpbmdIABIxCgVlcnJvchgDIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIoMBChhTYXZlQ29tcG9zZXJEcmFmdFJlcXVlc3QSNQoJb3BlcmF0aW9uGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZE1ldGFkYXRhEjAKBWRyYWZ0GAIgASgLMiEuZGVubmV0dC5jb250cm9sLnYxLkNvbXBvc2VyRHJhZnQisQEKGUNvbXBvc2VyRHJhZnRXcml0ZVJlY2VpcHQSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEjAKDHBlcnNpc3RlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASOgoFc3RhdGUYBCABKA4yKy5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcG9zZXJEcmFmdFdyaXRlU3RhdGUimQEKGVNhdmVDb21wb3NlckRyYWZ0UmVzcG9uc2USPgoFc2F2ZWQYASABKAsyLS5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcG9zZXJEcmFmdFdyaXRlUmVjZWlwdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUilgEKG0Rpc2NhcmRDb21wb3NlckRyYWZ0UmVxdWVzdBI1CglvcGVyYXRpb24YASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kTWV0YWRhdGESEgoKcHJvamVjdF9pZBgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJEhgKEGRyYWZ0X2NvbW1hbmRfaWQYBCABKAkiPQoWQ29tcG9zZXJEcmFmdERpc2NhcmRlZBISCgpzZXNzaW9uX2lkGAEgASgJEg8KB2V4aXN0ZWQYAiABKAginQEKHERpc2NhcmRDb21wb3NlckRyYWZ0UmVzcG9uc2USPwoJZGlzY2FyZGVkGAEgASgLMiouZGVubmV0dC5jb250cm9sLnYxLkNvbXBvc2VyRHJhZnREaXNjYXJkZWRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lKrEBCgxTZXNzaW9uU3RhdGUSHQoZU0VTU0lPTl9TVEFURV9VTlNQRUNJRklFRBAAEhYKElNFU1NJT05fU1RBVEVfSURMRRABEhkKFVNFU1NJT05fU1RBVEVfUlVOTklORxACEhkKFVNFU1NJT05fU1RBVEVfV0FJVElORxADEhgKFFNFU1NJT05fU1RBVEVfRkFJTEVEEAQSGgoWU0VTU0lPTl9TVEFURV9BUkNISVZFRBAFKmQKCFR1cm5Sb2xlEhkKFVRVUk5fUk9MRV9VTlNQRUNJRklFRBAAEhIKDlRVUk5fUk9MRV9VU0VSEAESEwoPVFVSTl9ST0xFX0FHRU5UEAISFAoQVFVSTl9ST0xFX1NZU1RFTRADKr8BCglUdXJuU3RhdGUSGgoWVFVSTl9TVEFURV9VTlNQRUNJRklFRBAAEhcKE1RVUk5fU1RBVEVfQUNDRVBURUQQARIYChRUVVJOX1NUQVRFX1NUUkVBTUlORxACEhgKFFRVUk5fU1RBVEVfQ09NUExFVEVEEAMSGAoUVFVSTl9TVEFURV9DQU5DRUxMRUQQBBIYChRUVVJOX1NUQVRFX1RJTUVEX09VVBAFEhUKEVRVUk5fU1RBVEVfRkFJTEVEEAYqeQoQVHVybkRlbGl2ZXJ5TW9kZRIiCh5UVVJOX0RFTElWRVJZX01PREVfVU5TUEVDSUZJRUQQABIfChtUVVJOX0RFTElWRVJZX01PREVfTkVXX1RVUk4QARIgChxUVVJOX0RFTElWRVJZX01PREVfU1RFRVJfTk9XEAIqwwEKElR1cm5BY3Rpdml0eVN0YXR1cxIkCiBUVVJOX0FDVElWSVRZX1NUQVRVU19VTlNQRUNJRklFRBAAEiAKHFRVUk5fQUNUSVZJVFlfU1RBVFVTX1NUQVJURUQQARIgChxUVVJOX0FDVElWSVRZX1NUQVRVU19VUERBVEVEEAISIgoeVFVSTl9BQ1RJVklUWV9TVEFUVVNfQ09NUExFVEVEEAMSHwobVFVSTl9BQ1RJVklUWV9TVEFUVVNfRkFJTEVEEAQqnAEKF0NvbXBvc2VyRHJhZnRXcml0ZVN0YXRlEioKJkNPTVBPU0VSX0RSQUZUX1dSSVRFX1NUQVRFX1VOU1BFQ0lGSUVEEAASJAogQ09NUE9TRVJfRFJBRlRfV1JJVEVfU1RBVEVfU0FWRUQQARIvCitDT01QT1NFUl9EUkFGVF9XUklURV9TVEFURV9BTFJFQURZX0FDQ0VQVEVEEAIy6wUKDlNlc3Npb25TZXJ2aWNlEmQKDUNyZWF0ZVNlc3Npb24SKC5kZW5uZXR0LmNvbnRyb2wudjEuQ3JlYXRlU2Vzc2lvblJlcXVlc3QaKS5kZW5uZXR0LmNvbnRyb2wudjEuQ3JlYXRlU2Vzc2lvblJlc3BvbnNlElUKCFNlbmRUdXJuEiMuZGVubmV0dC5jb250cm9sLnYxLlNlbmRUdXJuUmVxdWVzdBokLmRlbm5ldHQuY29udHJvbC52MS5TZW5kVHVyblJlc3BvbnNlElsKCkNhbmNlbFR1cm4SJS5kZW5uZXR0LmNvbnRyb2wudjEuQ2FuY2VsVHVyblJlcXVlc3QaJi5kZW5uZXR0LmNvbnRyb2wudjEuQ2FuY2VsVHVyblJlc3BvbnNlEmMKDFdhdGNoU2Vzc2lvbhInLmRlbm5ldHQuY29udHJvbC52MS5XYXRjaFNlc3Npb25SZXF1ZXN0GiguZGVubmV0dC5jb250cm9sLnYxLldhdGNoU2Vzc2lvblJlc3BvbnNlMAESbQoQR2V0Q29tcG9zZXJEcmFmdBIrLmRlbm5ldHQuY29udHJvbC52MS5HZXRDb21wb3NlckRyYWZ0UmVxdWVzdBosLmRlbm5ldHQuY29udHJvbC52MS5HZXRDb21wb3NlckRyYWZ0UmVzcG9uc2UScAoRU2F2ZUNvbXBvc2VyRHJhZnQSLC5kZW5uZXR0LmNvbnRyb2wudjEuU2F2ZUNvbXBvc2VyRHJhZnRSZXF1ZXN0Gi0uZGVubmV0dC5jb250cm9sLnYxLlNhdmVDb21wb3NlckRyYWZ0UmVzcG9uc2USeQoURGlzY2FyZENvbXBvc2VyRHJhZnQSLy5kZW5uZXR0LmNvbnRyb2wudjEuRGlzY2FyZENvbXBvc2VyRHJhZnRSZXF1ZXN0GjAuZGVubmV0dC5jb250cm9sLnYxLkRpc2NhcmRDb21wb3NlckRyYWZ0UmVzcG9uc2ViBnByb3RvMw", [file_dennett_common_v1_common, file_dennett_sync_v1_watch, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message dennett.control.v1.SessionSummary
@@ -29,6 +29,8 @@ export type SessionSummary = Message<"dennett.control.v1.SessionSummary"> & {
   sessionId: string;
 
   /**
+   * Empty for a standalone session backed by the Node-owned scratch workspace.
+   *
    * @generated from field: string project_id = 2;
    */
   projectId: string;
@@ -185,6 +187,19 @@ export type TurnSnapshot = Message<"dennett.control.v1.TurnSnapshot"> & {
    * @generated from field: google.protobuf.Timestamp completed_at = 9;
    */
   completedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: repeated dennett.control.v1.TurnActivitySnapshot activities = 10;
+   */
+  activities: TurnActivitySnapshot[];
+
+  /**
+   * Canonical session revision that created this turn; unlike wall time it is
+   * a total order and remains stable after restart.
+   *
+   * @generated from field: uint64 created_revision = 11;
+   */
+  createdRevision: bigint;
 };
 
 /**
@@ -193,6 +208,89 @@ export type TurnSnapshot = Message<"dennett.control.v1.TurnSnapshot"> & {
  */
 export const TurnSnapshotSchema: GenMessage<TurnSnapshot> = /*@__PURE__*/
   messageDesc(file_dennett_control_v1_session, 3);
+
+/**
+ * @generated from message dennett.control.v1.TurnActivitySnapshot
+ */
+export type TurnActivitySnapshot = Message<"dennett.control.v1.TurnActivitySnapshot"> & {
+  /**
+   * @generated from field: string activity_id = 1;
+   */
+  activityId: string;
+
+  /**
+   * @generated from field: string phase = 2;
+   */
+  phase: string;
+
+  /**
+   * @generated from field: optional string message = 3;
+   */
+  message?: string | undefined;
+
+  /**
+   * @generated from field: dennett.control.v1.TurnActivityStatus status = 4;
+   */
+  status: TurnActivityStatus;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 5;
+   */
+  updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: repeated dennett.control.v1.NativeExtensionPayload native_extensions = 6;
+   */
+  nativeExtensions: NativeExtensionPayload[];
+
+  /**
+   * Stable first-observed time used to preserve causal placement across updates.
+   *
+   * @generated from field: google.protobuf.Timestamp created_at = 7;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * Canonical session revision that first created this activity.
+   *
+   * @generated from field: uint64 created_revision = 8;
+   */
+  createdRevision: bigint;
+};
+
+/**
+ * Describes the message dennett.control.v1.TurnActivitySnapshot.
+ * Use `create(TurnActivitySnapshotSchema)` to create a new message.
+ */
+export const TurnActivitySnapshotSchema: GenMessage<TurnActivitySnapshot> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 4);
+
+/**
+ * @generated from message dennett.control.v1.NativeExtensionPayload
+ */
+export type NativeExtensionPayload = Message<"dennett.control.v1.NativeExtensionPayload"> & {
+  /**
+   * @generated from field: string namespace = 1;
+   */
+  namespace: string;
+
+  /**
+   * @generated from field: string schema_version = 2;
+   */
+  schemaVersion: string;
+
+  /**
+   * @generated from field: string json_value = 3;
+   */
+  jsonValue: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.NativeExtensionPayload.
+ * Use `create(NativeExtensionPayloadSchema)` to create a new message.
+ */
+export const NativeExtensionPayloadSchema: GenMessage<NativeExtensionPayload> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 5);
 
 /**
  * @generated from message dennett.control.v1.SessionSnapshot
@@ -219,7 +317,7 @@ export type SessionSnapshot = Message<"dennett.control.v1.SessionSnapshot"> & {
  * Use `create(SessionSnapshotSchema)` to create a new message.
  */
 export const SessionSnapshotSchema: GenMessage<SessionSnapshot> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 4);
+  messageDesc(file_dennett_control_v1_session, 6);
 
 /**
  * @generated from message dennett.control.v1.TurnTextAppend
@@ -241,7 +339,7 @@ export type TurnTextAppend = Message<"dennett.control.v1.TurnTextAppend"> & {
  * Use `create(TurnTextAppendSchema)` to create a new message.
  */
 export const TurnTextAppendSchema: GenMessage<TurnTextAppend> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 5);
+  messageDesc(file_dennett_control_v1_session, 7);
 
 /**
  * @generated from message dennett.control.v1.TurnTerminal
@@ -280,7 +378,29 @@ export type TurnTerminal = Message<"dennett.control.v1.TurnTerminal"> & {
  * Use `create(TurnTerminalSchema)` to create a new message.
  */
 export const TurnTerminalSchema: GenMessage<TurnTerminal> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 6);
+  messageDesc(file_dennett_control_v1_session, 8);
+
+/**
+ * @generated from message dennett.control.v1.TurnActivityUpsert
+ */
+export type TurnActivityUpsert = Message<"dennett.control.v1.TurnActivityUpsert"> & {
+  /**
+   * @generated from field: string turn_id = 1;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: dennett.control.v1.TurnActivitySnapshot activity = 2;
+   */
+  activity?: TurnActivitySnapshot | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.TurnActivityUpsert.
+ * Use `create(TurnActivityUpsertSchema)` to create a new message.
+ */
+export const TurnActivityUpsertSchema: GenMessage<TurnActivityUpsert> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 9);
 
 /**
  * @generated from message dennett.control.v1.SessionMetadataUpdate
@@ -309,7 +429,7 @@ export type SessionMetadataUpdate = Message<"dennett.control.v1.SessionMetadataU
  * Use `create(SessionMetadataUpdateSchema)` to create a new message.
  */
 export const SessionMetadataUpdateSchema: GenMessage<SessionMetadataUpdate> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 7);
+  messageDesc(file_dennett_control_v1_session, 10);
 
 /**
  * @generated from message dennett.control.v1.SessionMutation
@@ -342,6 +462,12 @@ export type SessionMutation = Message<"dennett.control.v1.SessionMutation"> & {
      */
     value: SessionMetadataUpdate;
     case: "updateSession";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.TurnActivityUpsert upsert_turn_activity = 5;
+     */
+    value: TurnActivityUpsert;
+    case: "upsertTurnActivity";
   } | { case: undefined; value?: undefined };
 };
 
@@ -350,7 +476,7 @@ export type SessionMutation = Message<"dennett.control.v1.SessionMutation"> & {
  * Use `create(SessionMutationSchema)` to create a new message.
  */
 export const SessionMutationSchema: GenMessage<SessionMutation> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 8);
+  messageDesc(file_dennett_control_v1_session, 11);
 
 /**
  * @generated from message dennett.control.v1.SessionDelta
@@ -372,6 +498,13 @@ export type SessionDelta = Message<"dennett.control.v1.SessionDelta"> & {
    * @generated from field: repeated dennett.control.v1.SessionMutation mutations = 3;
    */
   mutations: SessionMutation[];
+
+  /**
+   * Authoritative commit time shared by every mutation in this journal event.
+   *
+   * @generated from field: google.protobuf.Timestamp committed_at = 4;
+   */
+  committedAt?: Timestamp | undefined;
 };
 
 /**
@@ -379,7 +512,7 @@ export type SessionDelta = Message<"dennett.control.v1.SessionDelta"> & {
  * Use `create(SessionDeltaSchema)` to create a new message.
  */
 export const SessionDeltaSchema: GenMessage<SessionDelta> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 9);
+  messageDesc(file_dennett_control_v1_session, 12);
 
 /**
  * @generated from message dennett.control.v1.SessionWatchFrame
@@ -434,7 +567,7 @@ export type SessionWatchFrame = Message<"dennett.control.v1.SessionWatchFrame"> 
  * Use `create(SessionWatchFrameSchema)` to create a new message.
  */
 export const SessionWatchFrameSchema: GenMessage<SessionWatchFrame> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 10);
+  messageDesc(file_dennett_control_v1_session, 13);
 
 /**
  * @generated from message dennett.control.v1.CreateSessionRequest
@@ -446,6 +579,8 @@ export type CreateSessionRequest = Message<"dennett.control.v1.CreateSessionRequ
   command?: CommandMetadata | undefined;
 
   /**
+   * Empty creates a standalone session.
+   *
    * @generated from field: string project_id = 2;
    */
   projectId: string;
@@ -461,7 +596,7 @@ export type CreateSessionRequest = Message<"dennett.control.v1.CreateSessionRequ
  * Use `create(CreateSessionRequestSchema)` to create a new message.
  */
 export const CreateSessionRequestSchema: GenMessage<CreateSessionRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 11);
+  messageDesc(file_dennett_control_v1_session, 14);
 
 /**
  * CreateSessionAccepted allocates identity but does not claim session completion.
@@ -485,7 +620,7 @@ export type CreateSessionAccepted = Message<"dennett.control.v1.CreateSessionAcc
  * Use `create(CreateSessionAcceptedSchema)` to create a new message.
  */
 export const CreateSessionAcceptedSchema: GenMessage<CreateSessionAccepted> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 12);
+  messageDesc(file_dennett_control_v1_session, 15);
 
 /**
  * @generated from message dennett.control.v1.CreateSessionResponse
@@ -514,7 +649,7 @@ export type CreateSessionResponse = Message<"dennett.control.v1.CreateSessionRes
  * Use `create(CreateSessionResponseSchema)` to create a new message.
  */
 export const CreateSessionResponseSchema: GenMessage<CreateSessionResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 13);
+  messageDesc(file_dennett_control_v1_session, 16);
 
 /**
  * @generated from message dennett.control.v1.SendTurnRequest
@@ -544,6 +679,25 @@ export type SendTurnRequest = Message<"dennett.control.v1.SendTurnRequest"> & {
    * @generated from field: repeated dennett.control.v1.ContextAttachment attachments = 5;
    */
   attachments: ContextAttachment[];
+
+  /**
+   * @generated from field: repeated dennett.control.v1.RuntimeControlSelection runtime_controls = 6;
+   */
+  runtimeControls: RuntimeControlSelection[];
+
+  /**
+   * Unspecified is treated as NEW_TURN for backward compatibility.
+   *
+   * @generated from field: dennett.control.v1.TurnDeliveryMode delivery_mode = 7;
+   */
+  deliveryMode: TurnDeliveryMode;
+
+  /**
+   * Required for STEER_NOW so a stale client cannot steer a newer active turn.
+   *
+   * @generated from field: string expected_active_turn_id = 8;
+   */
+  expectedActiveTurnId: string;
 };
 
 /**
@@ -551,7 +705,29 @@ export type SendTurnRequest = Message<"dennett.control.v1.SendTurnRequest"> & {
  * Use `create(SendTurnRequestSchema)` to create a new message.
  */
 export const SendTurnRequestSchema: GenMessage<SendTurnRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 14);
+  messageDesc(file_dennett_control_v1_session, 17);
+
+/**
+ * @generated from message dennett.control.v1.RuntimeControlSelection
+ */
+export type RuntimeControlSelection = Message<"dennett.control.v1.RuntimeControlSelection"> & {
+  /**
+   * @generated from field: string control_id = 1;
+   */
+  controlId: string;
+
+  /**
+   * @generated from field: string choice_id = 2;
+   */
+  choiceId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.RuntimeControlSelection.
+ * Use `create(RuntimeControlSelectionSchema)` to create a new message.
+ */
+export const RuntimeControlSelectionSchema: GenMessage<RuntimeControlSelection> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 18);
 
 /**
  * @generated from message dennett.control.v1.SendTurnAccepted
@@ -573,7 +749,7 @@ export type SendTurnAccepted = Message<"dennett.control.v1.SendTurnAccepted"> & 
  * Use `create(SendTurnAcceptedSchema)` to create a new message.
  */
 export const SendTurnAcceptedSchema: GenMessage<SendTurnAccepted> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 15);
+  messageDesc(file_dennett_control_v1_session, 19);
 
 /**
  * @generated from message dennett.control.v1.SendTurnResponse
@@ -602,7 +778,7 @@ export type SendTurnResponse = Message<"dennett.control.v1.SendTurnResponse"> & 
  * Use `create(SendTurnResponseSchema)` to create a new message.
  */
 export const SendTurnResponseSchema: GenMessage<SendTurnResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 16);
+  messageDesc(file_dennett_control_v1_session, 20);
 
 /**
  * @generated from message dennett.control.v1.CancelTurnRequest
@@ -634,7 +810,7 @@ export type CancelTurnRequest = Message<"dennett.control.v1.CancelTurnRequest"> 
  * Use `create(CancelTurnRequestSchema)` to create a new message.
  */
 export const CancelTurnRequestSchema: GenMessage<CancelTurnRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 17);
+  messageDesc(file_dennett_control_v1_session, 21);
 
 /**
  * @generated from message dennett.control.v1.CancelTurnResponse
@@ -663,7 +839,7 @@ export type CancelTurnResponse = Message<"dennett.control.v1.CancelTurnResponse"
  * Use `create(CancelTurnResponseSchema)` to create a new message.
  */
 export const CancelTurnResponseSchema: GenMessage<CancelTurnResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 18);
+  messageDesc(file_dennett_control_v1_session, 22);
 
 /**
  * @generated from message dennett.control.v1.WatchSessionRequest
@@ -692,7 +868,7 @@ export type WatchSessionRequest = Message<"dennett.control.v1.WatchSessionReques
  * Use `create(WatchSessionRequestSchema)` to create a new message.
  */
 export const WatchSessionRequestSchema: GenMessage<WatchSessionRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 19);
+  messageDesc(file_dennett_control_v1_session, 23);
 
 /**
  * @generated from message dennett.control.v1.WatchSessionResponse
@@ -709,7 +885,302 @@ export type WatchSessionResponse = Message<"dennett.control.v1.WatchSessionRespo
  * Use `create(WatchSessionResponseSchema)` to create a new message.
  */
 export const WatchSessionResponseSchema: GenMessage<WatchSessionResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_session, 20);
+  messageDesc(file_dennett_control_v1_session, 24);
+
+/**
+ * ComposerDraft is durable client-local state. It never enters the canonical
+ * session event journal. command_id is retained when the draft becomes SendTurn.
+ *
+ * @generated from message dennett.control.v1.ComposerDraft
+ */
+export type ComposerDraft = Message<"dennett.control.v1.ComposerDraft"> & {
+  /**
+   * @generated from field: string project_id = 1;
+   */
+  projectId: string;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string command_id = 3;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: string text = 4;
+   */
+  text: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 5;
+   */
+  updatedAt?: Timestamp | undefined;
+
+  /**
+   * Monotonic within one stable draft command. Older saves are ignored.
+   *
+   * @generated from field: uint64 revision = 6;
+   */
+  revision: bigint;
+};
+
+/**
+ * Describes the message dennett.control.v1.ComposerDraft.
+ * Use `create(ComposerDraftSchema)` to create a new message.
+ */
+export const ComposerDraftSchema: GenMessage<ComposerDraft> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 25);
+
+/**
+ * @generated from message dennett.control.v1.GetComposerDraftRequest
+ */
+export type GetComposerDraftRequest = Message<"dennett.control.v1.GetComposerDraftRequest"> & {
+  /**
+   * @generated from field: string project_id = 1;
+   */
+  projectId: string;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string client_session_id = 3;
+   */
+  clientSessionId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.GetComposerDraftRequest.
+ * Use `create(GetComposerDraftRequestSchema)` to create a new message.
+ */
+export const GetComposerDraftRequestSchema: GenMessage<GetComposerDraftRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 26);
+
+/**
+ * @generated from message dennett.control.v1.ComposerDraftMissing
+ */
+export type ComposerDraftMissing = Message<"dennett.control.v1.ComposerDraftMissing"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.ComposerDraftMissing.
+ * Use `create(ComposerDraftMissingSchema)` to create a new message.
+ */
+export const ComposerDraftMissingSchema: GenMessage<ComposerDraftMissing> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 27);
+
+/**
+ * @generated from message dennett.control.v1.GetComposerDraftResponse
+ */
+export type GetComposerDraftResponse = Message<"dennett.control.v1.GetComposerDraftResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.GetComposerDraftResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.ComposerDraft draft = 1;
+     */
+    value: ComposerDraft;
+    case: "draft";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.ComposerDraftMissing missing = 2;
+     */
+    value: ComposerDraftMissing;
+    case: "missing";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 3;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.GetComposerDraftResponse.
+ * Use `create(GetComposerDraftResponseSchema)` to create a new message.
+ */
+export const GetComposerDraftResponseSchema: GenMessage<GetComposerDraftResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 28);
+
+/**
+ * @generated from message dennett.control.v1.SaveComposerDraftRequest
+ */
+export type SaveComposerDraftRequest = Message<"dennett.control.v1.SaveComposerDraftRequest"> & {
+  /**
+   * operation.command_id identifies this save; draft.command_id remains stable
+   * across saves and is later reused by SendTurn.
+   *
+   * @generated from field: dennett.common.v1.CommandMetadata operation = 1;
+   */
+  operation?: CommandMetadata | undefined;
+
+  /**
+   * @generated from field: dennett.control.v1.ComposerDraft draft = 2;
+   */
+  draft?: ComposerDraft | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.SaveComposerDraftRequest.
+ * Use `create(SaveComposerDraftRequestSchema)` to create a new message.
+ */
+export const SaveComposerDraftRequestSchema: GenMessage<SaveComposerDraftRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 29);
+
+/**
+ * @generated from message dennett.control.v1.ComposerDraftWriteReceipt
+ */
+export type ComposerDraftWriteReceipt = Message<"dennett.control.v1.ComposerDraftWriteReceipt"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string command_id = 2;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp persisted_at = 3;
+   */
+  persistedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: dennett.control.v1.ComposerDraftWriteState state = 4;
+   */
+  state: ComposerDraftWriteState;
+};
+
+/**
+ * Describes the message dennett.control.v1.ComposerDraftWriteReceipt.
+ * Use `create(ComposerDraftWriteReceiptSchema)` to create a new message.
+ */
+export const ComposerDraftWriteReceiptSchema: GenMessage<ComposerDraftWriteReceipt> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 30);
+
+/**
+ * @generated from message dennett.control.v1.SaveComposerDraftResponse
+ */
+export type SaveComposerDraftResponse = Message<"dennett.control.v1.SaveComposerDraftResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.SaveComposerDraftResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.ComposerDraftWriteReceipt saved = 1;
+     */
+    value: ComposerDraftWriteReceipt;
+    case: "saved";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.SaveComposerDraftResponse.
+ * Use `create(SaveComposerDraftResponseSchema)` to create a new message.
+ */
+export const SaveComposerDraftResponseSchema: GenMessage<SaveComposerDraftResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 31);
+
+/**
+ * @generated from message dennett.control.v1.DiscardComposerDraftRequest
+ */
+export type DiscardComposerDraftRequest = Message<"dennett.control.v1.DiscardComposerDraftRequest"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandMetadata operation = 1;
+   */
+  operation?: CommandMetadata | undefined;
+
+  /**
+   * @generated from field: string project_id = 2;
+   */
+  projectId: string;
+
+  /**
+   * @generated from field: string session_id = 3;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string draft_command_id = 4;
+   */
+  draftCommandId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.DiscardComposerDraftRequest.
+ * Use `create(DiscardComposerDraftRequestSchema)` to create a new message.
+ */
+export const DiscardComposerDraftRequestSchema: GenMessage<DiscardComposerDraftRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 32);
+
+/**
+ * @generated from message dennett.control.v1.ComposerDraftDiscarded
+ */
+export type ComposerDraftDiscarded = Message<"dennett.control.v1.ComposerDraftDiscarded"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: bool existed = 2;
+   */
+  existed: boolean;
+};
+
+/**
+ * Describes the message dennett.control.v1.ComposerDraftDiscarded.
+ * Use `create(ComposerDraftDiscardedSchema)` to create a new message.
+ */
+export const ComposerDraftDiscardedSchema: GenMessage<ComposerDraftDiscarded> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 33);
+
+/**
+ * @generated from message dennett.control.v1.DiscardComposerDraftResponse
+ */
+export type DiscardComposerDraftResponse = Message<"dennett.control.v1.DiscardComposerDraftResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.DiscardComposerDraftResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.ComposerDraftDiscarded discarded = 1;
+     */
+    value: ComposerDraftDiscarded;
+    case: "discarded";
+  } | {
+    /**
+     * @generated from field: dennett.common.v1.ErrorEnvelope error = 2;
+     */
+    value: ErrorEnvelope;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.DiscardComposerDraftResponse.
+ * Use `create(DiscardComposerDraftResponseSchema)` to create a new message.
+ */
+export const DiscardComposerDraftResponseSchema: GenMessage<DiscardComposerDraftResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_session, 34);
 
 /**
  * @generated from enum dennett.control.v1.SessionState
@@ -830,6 +1301,94 @@ export const TurnStateSchema: GenEnum<TurnState> = /*@__PURE__*/
   enumDesc(file_dennett_control_v1_session, 2);
 
 /**
+ * @generated from enum dennett.control.v1.TurnDeliveryMode
+ */
+export enum TurnDeliveryMode {
+  /**
+   * @generated from enum value: TURN_DELIVERY_MODE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: TURN_DELIVERY_MODE_NEW_TURN = 1;
+   */
+  NEW_TURN = 1,
+
+  /**
+   * @generated from enum value: TURN_DELIVERY_MODE_STEER_NOW = 2;
+   */
+  STEER_NOW = 2,
+}
+
+/**
+ * Describes the enum dennett.control.v1.TurnDeliveryMode.
+ */
+export const TurnDeliveryModeSchema: GenEnum<TurnDeliveryMode> = /*@__PURE__*/
+  enumDesc(file_dennett_control_v1_session, 3);
+
+/**
+ * @generated from enum dennett.control.v1.TurnActivityStatus
+ */
+export enum TurnActivityStatus {
+  /**
+   * @generated from enum value: TURN_ACTIVITY_STATUS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: TURN_ACTIVITY_STATUS_STARTED = 1;
+   */
+  STARTED = 1,
+
+  /**
+   * @generated from enum value: TURN_ACTIVITY_STATUS_UPDATED = 2;
+   */
+  UPDATED = 2,
+
+  /**
+   * @generated from enum value: TURN_ACTIVITY_STATUS_COMPLETED = 3;
+   */
+  COMPLETED = 3,
+
+  /**
+   * @generated from enum value: TURN_ACTIVITY_STATUS_FAILED = 4;
+   */
+  FAILED = 4,
+}
+
+/**
+ * Describes the enum dennett.control.v1.TurnActivityStatus.
+ */
+export const TurnActivityStatusSchema: GenEnum<TurnActivityStatus> = /*@__PURE__*/
+  enumDesc(file_dennett_control_v1_session, 4);
+
+/**
+ * @generated from enum dennett.control.v1.ComposerDraftWriteState
+ */
+export enum ComposerDraftWriteState {
+  /**
+   * @generated from enum value: COMPOSER_DRAFT_WRITE_STATE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: COMPOSER_DRAFT_WRITE_STATE_SAVED = 1;
+   */
+  SAVED = 1,
+
+  /**
+   * @generated from enum value: COMPOSER_DRAFT_WRITE_STATE_ALREADY_ACCEPTED = 2;
+   */
+  ALREADY_ACCEPTED = 2,
+}
+
+/**
+ * Describes the enum dennett.control.v1.ComposerDraftWriteState.
+ */
+export const ComposerDraftWriteStateSchema: GenEnum<ComposerDraftWriteState> = /*@__PURE__*/
+  enumDesc(file_dennett_control_v1_session, 5);
+
+/**
  * @generated from service dennett.control.v1.SessionService
  */
 export const SessionService: GenService<{
@@ -864,6 +1423,30 @@ export const SessionService: GenService<{
     methodKind: "server_streaming";
     input: typeof WatchSessionRequestSchema;
     output: typeof WatchSessionResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.SessionService.GetComposerDraft
+   */
+  getComposerDraft: {
+    methodKind: "unary";
+    input: typeof GetComposerDraftRequestSchema;
+    output: typeof GetComposerDraftResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.SessionService.SaveComposerDraft
+   */
+  saveComposerDraft: {
+    methodKind: "unary";
+    input: typeof SaveComposerDraftRequestSchema;
+    output: typeof SaveComposerDraftResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.SessionService.DiscardComposerDraft
+   */
+  discardComposerDraft: {
+    methodKind: "unary";
+    input: typeof DiscardComposerDraftRequestSchema;
+    output: typeof DiscardComposerDraftResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_dennett_control_v1_session, 0);

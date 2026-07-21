@@ -13,14 +13,19 @@ import {
   OpaqueContinuation,
   RuntimeAdapterError,
   type RuntimeDescriptor,
+  type RuntimeControlDescriptor,
+  type RuntimeControlSelection,
   type RuntimeEvent,
   type RuntimeEventKind,
   type RuntimeNativeExtension,
   type RuntimeTerminalKind,
   type RuntimeTurn,
   type RuntimeTurnRequest,
+  type SteerRuntimeTurnRequest,
+  type SteeringAcknowledgement,
   validateCancelRequest,
   validateRuntimeTurnRequest,
+  validateSteerRequest,
 } from "./runtime-contract.js";
 
 export const CODEX_RUNTIME_ADAPTER_ID = "openai.codex.sdk";
@@ -30,10 +35,13 @@ export const DEFAULT_CODEX_THREAD_OPTIONS: Readonly<
   approvalPolicy: "never",
   networkAccessEnabled: false,
   sandboxMode: "read-only",
+  skipGitRepoCheck: true,
   webSearchMode: "disabled",
 };
-const CODEX_NATIVE_EXTENSION_SCHEMA = "openai.codex.item-status@0.144.5";
+const CODEX_NATIVE_EXTENSION_SCHEMA = "openai.codex.item-status@0.144.6";
 const MAX_TERMINAL_HISTORY = 256;
+const MAX_PROVIDER_ITEMS_PER_TURN = 4_096;
+const MAX_PROVIDER_ITEM_TEXT_BYTES = 768 * 1024;
 const ITERATOR_CLOSE_TIMEOUT_MS = 1_000;
 
 export interface CodexThreadLike {
@@ -42,24 +50,44 @@ export interface CodexThreadLike {
     input: Input,
     options?: TurnOptions,
   ): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
+  steer?(input: Input, clientMessageId: string): Promise<void>;
+  interrupt?(): Promise<void>;
 }
 
 export interface CodexClientLike {
   startThread(options?: ThreadOptions): CodexThreadLike;
   resumeThread(id: string, options?: ThreadOptions): CodexThreadLike;
+  close?(): Promise<void>;
 }
 
 export interface CodexRuntimeAdapterOptions {
   threadOptions?: Readonly<Omit<ThreadOptions, "workingDirectory">>;
   terminalHistoryLimit?: number;
+  steering?: "native" | "unsupported";
+  controls?: readonly RuntimeControlDescriptor[];
+  resolveRuntimeControls?: (
+    selections: readonly RuntimeControlSelection[],
+  ) => {
+    client: CodexClientLike;
+    threadOptions?: Readonly<Omit<ThreadOptions, "workingDirectory">>;
+  };
 }
 
 type StopReason = "cancelled" | "timed_out";
 
 interface ActiveTurn {
   controller: AbortController;
+  client: CodexClientLike;
+  thread: CodexThreadLike;
   deadlineTimer?: ReturnType<typeof setTimeout>;
   stopReason?: StopReason;
+  stopPromise?: Promise<void>;
+  stopFailure?: RuntimeAdapterError;
+}
+
+interface ProviderItemLifecycle {
+  itemType: string;
+  terminal: boolean;
 }
 
 class ManagedRuntimeEventStream
@@ -183,9 +211,64 @@ function safeItemExtension(item: Record<string, unknown>): RuntimeNativeExtensio
   }
   return {
     namespace: "openai.codex.item-status",
-    schemaVersion: "0.144.5",
+    schemaVersion: "0.144.6",
     payload,
   };
+}
+
+function boundedActivityMessage(value: string): string | undefined {
+  const normalized = value.trim();
+  if (normalized.length === 0) return undefined;
+  return normalized.length <= 2_000
+    ? normalized
+    : `${normalized.slice(0, 1_999)}…`;
+}
+
+function activityMessage(item: Record<string, unknown>): string | undefined {
+  switch (item.type) {
+    case "agent_message":
+      return typeof item.text === "string"
+        ? boundedActivityMessage(item.text)
+        : undefined;
+    case "command_execution":
+    case "mcp_tool_call":
+    case "web_search":
+    case "file_change":
+      return undefined;
+    case "todo_list": {
+      if (!Array.isArray(item.items)) return undefined;
+      const current = item.items.flatMap((todo) =>
+        isRecord(todo) && typeof todo.text === "string" && todo.completed !== true
+          ? [todo.text]
+          : []
+      );
+      return boundedActivityMessage(current.join(" · "));
+    }
+    default:
+      return undefined;
+  }
+}
+
+function activityPhase(itemType: unknown): string {
+  switch (itemType) {
+    case "agent_message": return "commentary";
+    case "command_execution": return "command";
+    case "mcp_tool_call": return "tool";
+    case "web_search": return "web_search";
+    case "file_change": return "workspace";
+    case "todo_list": return "plan";
+    default: throw new RuntimeAdapterError("protocol_violation");
+  }
+}
+
+function activityStatus(
+  eventType: "item.started" | "item.updated" | "item.completed",
+  item: Record<string, unknown>,
+): "started" | "updated" | "completed" | "failed" {
+  if (item.status === "failed") return "failed";
+  if (eventType === "item.started") return "started";
+  if (eventType === "item.updated") return "updated";
+  return "completed";
 }
 
 async function raceWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -256,8 +339,12 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
         continuation: true,
         scopedCancellation: true,
         deadlines: true,
+        steering: this.options.steering ?? "unsupported",
         nativeExtensionSchemas: [CODEX_NATIVE_EXTENSION_SCHEMA],
       },
+      controls: this.options.controls
+        ? structuredClone(Array.from(this.options.controls))
+        : [],
     };
   }
 
@@ -268,19 +355,22 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       throw new RuntimeAdapterError("invalid_request");
     }
 
+    const binding = this.options.resolveRuntimeControls?.(request.runtimeControls ?? []);
+    const client = binding?.client ?? this.client;
     const threadOptions: ThreadOptions = {
       ...DEFAULT_CODEX_THREAD_OPTIONS,
       ...this.options.threadOptions,
+      ...binding?.threadOptions,
       workingDirectory: request.workspacePath,
     };
     let thread: CodexThreadLike;
     try {
       thread = request.continuation
-        ? this.client.resumeThread(
+        ? client.resumeThread(
             request.continuation.handleFor(CODEX_RUNTIME_ADAPTER_ID),
             threadOptions,
           )
-        : this.client.startThread(threadOptions);
+        : client.startThread(threadOptions);
     } catch {
       throw new RuntimeAdapterError(
         request.continuation
@@ -291,21 +381,59 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       );
     }
 
-    const active: ActiveTurn = { controller: new AbortController() };
+    const active: ActiveTurn = {
+      controller: new AbortController(),
+      client,
+      thread,
+    };
     this.#activeTurns.set(key, active);
     active.deadlineTimer = setTimeout(() => {
       if (this.#activeTurns.get(key) !== active) {
         return;
       }
-      active.stopReason ??= "timed_out";
-      active.controller.abort();
-      this.rememberTerminal(key, active.stopReason, active);
+      void this.stopActive(active, "timed_out").then(
+        () => this.rememberTerminal(key, "timed_out", active),
+        () => this.rememberTerminal(key, "failed", active),
+      );
     }, request.timeoutMs);
     const events = new ManagedRuntimeEventStream(
       this.streamTurn(key, request, thread, active),
       () => this.disposeUnstarted(key, active),
     );
     return { events };
+  }
+
+  async steerTurn(
+    request: SteerRuntimeTurnRequest,
+  ): Promise<SteeringAcknowledgement> {
+    validateSteerRequest(request);
+    const active = this.#activeTurns.get(turnKey(request.sessionId, request.turnId));
+    if (!active || active.stopReason) {
+      throw new RuntimeAdapterError("scope_mismatch", false, true);
+    }
+    if (this.options.steering !== "native" || !active.thread.steer) {
+      throw new RuntimeAdapterError("unsupported");
+    }
+    try {
+      await active.thread.steer(request.text, request.messageId);
+    } catch (error: unknown) {
+      if (error instanceof RuntimeAdapterError) throw error;
+      const classified = classifyProviderFailure(error);
+      throw new RuntimeAdapterError(
+        classified.code === "provider_failure" ? "provider_failure" : "provider_unavailable",
+        classified.retryable,
+        classified.recoverable,
+      );
+    }
+    // A provider acknowledgement remains authoritative even if the event
+    // stream terminalizes the turn before this RPC continuation resumes.
+    // Re-checking the local active map here would turn an accepted steer into
+    // a false failure at exactly that boundary.
+    return {
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      messageId: request.messageId,
+    };
   }
 
   async cancelTurn(
@@ -316,12 +444,13 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     const active = this.#activeTurns.get(key);
     let disposition: CancellationAcknowledgement["disposition"];
     if (active?.stopReason === "cancelled") {
+      await active.stopPromise;
       disposition = { type: "already_requested" };
     } else if (active?.stopReason === "timed_out") {
+      await active.stopPromise;
       disposition = { type: "already_terminal", terminal: "timed_out" };
     } else if (active) {
-      active.stopReason = "cancelled";
-      active.controller.abort();
+      await this.stopActive(active, "cancelled");
       disposition = { type: "requested" };
     } else {
       const terminal = this.#terminalTurns.get(key);
@@ -334,6 +463,37 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       turnId: request.turnId,
       disposition,
     };
+  }
+
+  async close(): Promise<void> {
+    await Promise.allSettled(
+      [...this.#activeTurns.values()].map((active) =>
+        this.stopActive(active, "cancelled")
+      ),
+    );
+    await this.client.close?.();
+  }
+
+  private stopActive(active: ActiveTurn, reason: StopReason): Promise<void> {
+    active.stopReason ??= reason;
+    active.stopPromise ??= (async () => {
+      try {
+        await active.thread.interrupt?.();
+      } catch {
+        // A provider control failure is uncertain. Fence the bound client
+        // before unblocking the local stream and publishing a terminal state.
+        try {
+          if (!active.client.close) throw new Error("provider client cannot be fenced");
+          await active.client.close();
+        } catch {
+          active.stopFailure = new RuntimeAdapterError("provider_unavailable", true, true);
+        }
+      } finally {
+        active.controller.abort();
+      }
+      if (active.stopFailure) throw active.stopFailure;
+    })();
+    return active.stopPromise;
   }
 
   private rememberTerminal(
@@ -387,10 +547,13 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     } = { phase: "awaiting_thread" };
     let continuation = request.continuation;
     let emittedText = false;
+    let finalResponseEmitted = false;
+    let lastCompletedAgentMessage: string | undefined;
     let terminalKind: RuntimeTerminalKind | undefined;
     let iterator: AsyncIterator<ThreadEvent> | undefined;
     let exhausted = false;
     const itemText = new Map<string, string>();
+    const itemLifecycles = new Map<string, ProviderItemLifecycle>();
 
     const event = (
       kind: RuntimeEventKind,
@@ -434,6 +597,18 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
         },
         ...(continuation ? { continuation } : {}),
       });
+    };
+    const finalResponseEvent = (): RuntimeEvent | undefined => {
+      if (
+        finalResponseEmitted
+        || lastCompletedAgentMessage === undefined
+        || lastCompletedAgentMessage.length === 0
+      ) {
+        return undefined;
+      }
+      finalResponseEmitted = true;
+      emittedText = true;
+      return event({ type: "text_delta", text: lastCompletedAgentMessage });
     };
 
     try {
@@ -508,33 +683,93 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
             }
             const runtimeItem = item as unknown as Record<string, unknown>;
             const itemType = runtimeItem.type;
-            if (itemType === "agent_message" || itemType === "reasoning") {
+            if (!isNonEmptyString(itemType)) {
+              throw new RuntimeAdapterError("protocol_violation");
+            }
+            const itemId = runtimeItem.id as string;
+            const priorLifecycle = itemLifecycles.get(itemId);
+            if (!priorLifecycle && itemLifecycles.size >= MAX_PROVIDER_ITEMS_PER_TURN) {
+              throw new RuntimeAdapterError("provider_failure", false, true);
+            }
+            if (raw.type === "item.started") {
+              if (priorLifecycle || runtimeItem.status === "completed" || runtimeItem.status === "failed") {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+              itemLifecycles.set(itemId, { itemType, terminal: false });
+            } else if (raw.type === "item.updated") {
+              if (
+                !priorLifecycle
+                || priorLifecycle.terminal
+                || priorLifecycle.itemType !== itemType
+                || runtimeItem.status === "completed"
+                || runtimeItem.status === "failed"
+              ) {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+            } else {
+              if (
+                priorLifecycle?.terminal
+                || (priorLifecycle && priorLifecycle.itemType !== itemType)
+                || runtimeItem.status === "in_progress"
+                || runtimeItem.status === "running"
+              ) {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+              itemLifecycles.set(itemId, { itemType, terminal: true });
+            }
+            if (itemType === "agent_message") {
               if (typeof runtimeItem.text !== "string") {
                 throw new RuntimeAdapterError("protocol_violation");
               }
-              const itemId = runtimeItem.id as string;
+              if (Buffer.byteLength(runtimeItem.text, "utf8") > MAX_PROVIDER_ITEM_TEXT_BYTES) {
+                throw new RuntimeAdapterError("provider_failure", false, true);
+              }
               const previous = itemText.get(itemId) ?? "";
               if (!runtimeItem.text.startsWith(previous)) {
                 throw new RuntimeAdapterError("protocol_violation");
               }
-              const delta = runtimeItem.text.slice(previous.length);
               itemText.set(itemId, runtimeItem.text);
-              if (delta.length > 0) {
-                if (itemType === "agent_message") {
+              const phase = runtimeItem.phase;
+              if (phase === "final_answer") {
+                const delta = runtimeItem.text.slice(previous.length);
+                if (delta.length > 0) {
                   emittedText = true;
                   yield event({ type: "text_delta", text: delta });
-                } else {
-                  yield event({
-                    type: "progress",
-                    phase: "reasoning_summary",
-                    message: delta,
-                  });
                 }
+                if (raw.type === "item.completed") itemText.delete(itemId);
+                break;
               }
+              if (phase !== "commentary" && phase !== null && phase !== undefined) {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+              if (phase !== "commentary" && raw.type === "item.completed") {
+                lastCompletedAgentMessage = runtimeItem.text;
+              }
+              const message = activityMessage(runtimeItem);
+              yield event(
+                {
+                  type: "progress",
+                  activityId: itemId,
+                  phase: activityPhase(itemType),
+                  ...(message === undefined ? {} : { message }),
+                  status: activityStatus(raw.type, runtimeItem),
+                },
+                [safeItemExtension(runtimeItem)],
+              );
+              if (raw.type === "item.completed") itemText.delete(itemId);
               break;
             }
             if (itemType === "error") {
               yield event({ type: "warning", code: "provider_item_error" });
+              break;
+            }
+            if (itemType === "reasoning") {
+              if (typeof runtimeItem.text !== "string") {
+                throw new RuntimeAdapterError("protocol_violation");
+              }
+              // Codex reasoning items are intentionally retained only inside the
+              // provider session. The owner-facing work log uses concise agent
+              // commentary and effect summaries rather than low-level reasoning.
               break;
             }
             if (
@@ -544,15 +779,14 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
               itemType === "file_change" ||
               itemType === "todo_list"
             ) {
+              const message = activityMessage(runtimeItem);
               yield event(
                 {
                   type: "progress",
-                  phase:
-                    itemType === "file_change"
-                      ? "workspace"
-                      : itemType === "todo_list"
-                        ? "plan"
-                        : "tool",
+                  activityId: runtimeItem.id as string,
+                  phase: activityPhase(itemType),
+                  ...(message === undefined ? {} : { message }),
+                  status: activityStatus(raw.type, runtimeItem),
                 },
                 [safeItemExtension(runtimeItem)],
               );
@@ -561,25 +795,34 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
             throw new RuntimeAdapterError("protocol_violation");
           }
           case "turn.completed":
-            if (lifecycle.phase !== "streaming" || !isValidUsage(raw.usage)) {
+            if (
+              lifecycle.phase !== "streaming" ||
+              (raw.usage !== undefined && !isValidUsage(raw.usage))
+            ) {
               throw new RuntimeAdapterError("protocol_violation");
             }
-            const usage = event({
-              type: "usage",
-              usage: {
-                inputTokens: raw.usage.input_tokens,
-                cachedInputTokens: raw.usage.cached_input_tokens,
-                outputTokens: raw.usage.output_tokens,
-                reasoningOutputTokens: raw.usage.reasoning_output_tokens,
-              },
-            });
+            const finalResponse = finalResponseEvent();
+            const usage = isValidUsage(raw.usage)
+              ? event({
+                  type: "usage",
+                  usage: {
+                    inputTokens: raw.usage.input_tokens,
+                    cachedInputTokens: raw.usage.cached_input_tokens,
+                    outputTokens: raw.usage.output_tokens,
+                    reasoningOutputTokens: raw.usage.reasoning_output_tokens,
+                  },
+                })
+              : undefined;
             claimTerminal("completed");
             const completion = event({
               type: "terminal",
               outcome: { type: "completed" },
               ...(continuation ? { continuation } : {}),
             });
-            yield usage;
+            if (finalResponse) {
+              yield finalResponse;
+            }
+            if (usage) yield usage;
             yield completion;
             break;
           case "turn.failed": {
@@ -587,6 +830,10 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
               throw new RuntimeAdapterError("protocol_violation");
             }
             const classified = classifyProviderFailure(raw.error);
+            const finalResponse = finalResponseEvent();
+            if (finalResponse) {
+              yield finalResponse;
+            }
             yield failed(
               classified.code,
               classified.retryable,
@@ -598,6 +845,7 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
             const classified = classifyProviderFailure(raw);
             const startEvent =
               lifecycle.phase === "awaiting_thread" ? started() : undefined;
+            const finalResponse = finalResponseEvent();
             const terminalEvent = failed(
               request.continuation && isMissingContinuationFailure(raw)
                 ? "continuation_unavailable"
@@ -607,6 +855,9 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
             );
             if (startEvent) {
               yield startEvent;
+            }
+            if (finalResponse) {
+              yield finalResponse;
             }
             yield terminalEvent;
             break;
@@ -626,9 +877,16 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       if (lifecycle.phase !== "terminal") {
         const startEvent =
           lifecycle.phase === "awaiting_thread" ? started() : undefined;
+        const finalResponse = finalResponseEvent();
         let terminalEvent: RuntimeEvent;
-        if (active.stopReason) {
+        if (active.stopReason && !active.stopFailure) {
           terminalEvent = stopped(active.stopReason);
+        } else if (active.stopFailure) {
+          terminalEvent = failed(
+            active.stopFailure.code,
+            active.stopFailure.retryable,
+            active.stopFailure.recoverable,
+          );
         } else if (error instanceof RuntimeAdapterError) {
           terminalEvent = failed(
             error.code,
@@ -647,6 +905,9 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
         }
         if (startEvent) {
           yield startEvent;
+        }
+        if (finalResponse) {
+          yield finalResponse;
         }
         yield terminalEvent;
       }

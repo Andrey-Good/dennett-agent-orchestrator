@@ -1,12 +1,18 @@
 //! WAL-backed SQLite control-store adapter for local Dennett profiles.
 
 use async_trait::async_trait;
+use dennett_agent_core::{OpaqueContinuation, RuntimeContinuationError};
 use dennett_contracts::{CommandId, ProjectId, SessionEventId, SessionId};
 use dennett_memory_core::session::{
     CommittedSessionEvent, PendingSessionEvent, SESSION_EVENT_PAYLOAD_VERSION, SessionEventBody,
     SessionEventStore, SessionJournalError,
 };
-use dennett_sync_core::draft::{DraftCacheError, DraftCachePort, DraftRecord};
+use dennett_sync_core::admission::{
+    CommandAdmissionError, CommandAdmissionPort, CommandAdmissionReceipt, CommandAdmissionRequest,
+};
+use dennett_sync_core::draft::{
+    DraftCacheError, DraftCachePort, DraftCacheSaveOutcome, DraftRecord,
+};
 use sha2::{Digest, Sha256};
 use sqlx::{
     Row, SqlitePool,
@@ -15,10 +21,13 @@ use sqlx::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
     },
 };
-use std::{path::Path, time::Duration};
+use std::{
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
 
-pub const CONTROL_SCHEMA_VERSION: u32 = 1;
+pub const CONTROL_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone)]
 pub struct SqliteControlStore {
@@ -120,6 +129,15 @@ async fn schema_version_for(pool: &SqlitePool) -> Result<u32, SessionJournalErro
         .await
         .map_err(|_| SessionJournalError::StorageUnavailable)?;
     u32::try_from(version).map_err(|_| SessionJournalError::MigrationFailure)
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 async fn has_unversioned_application_tables(
@@ -401,15 +419,31 @@ impl SessionEventStore for SqliteControlStore {
         &self,
         session_id: SessionId,
     ) -> Result<Vec<CommittedSessionEvent>, SessionJournalError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| SessionJournalError::StorageUnavailable)?;
         let rows = sqlx::query(
             "SELECT event_id, session_id, revision, payload_version, command_id, body_json, event_sha256, \
                     committed_at_unix_ms \
              FROM session_events WHERE session_id = ? ORDER BY revision",
         )
         .bind(session_id.0.to_string())
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *transaction)
         .await
         .map_err(|_| SessionJournalError::StorageUnavailable)?;
+        let head =
+            sqlx::query_scalar::<_, i64>("SELECT revision FROM session_heads WHERE session_id = ?")
+                .bind(session_id.0.to_string())
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| SessionJournalError::StorageUnavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| SessionJournalError::StorageUnavailable)?;
+
         let events = rows
             .into_iter()
             .map(parse_event)
@@ -424,12 +458,6 @@ impl SessionEventStore for SqliteControlStore {
                 ));
             }
         }
-        let head =
-            sqlx::query_scalar::<_, i64>("SELECT revision FROM session_heads WHERE session_id = ?")
-                .bind(session_id.0.to_string())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|_| SessionJournalError::StorageUnavailable)?;
         let event_revision = events.last().map_or(0, |event| event.revision);
         let head_revision = head
             .map(|revision| {
@@ -478,58 +506,252 @@ impl SessionEventStore for SqliteControlStore {
 }
 
 #[async_trait]
-impl DraftCachePort for SqliteControlStore {
-    async fn save(&self, draft: DraftRecord) -> Result<(), DraftCacheError> {
-        let existing = sqlx::query_scalar::<_, String>(
-            "SELECT command_id FROM client_drafts WHERE session_id = ?",
+impl CommandAdmissionPort for SqliteControlStore {
+    async fn admit(
+        &self,
+        request: CommandAdmissionRequest,
+    ) -> Result<CommandAdmissionReceipt, CommandAdmissionError> {
+        request.validate()?;
+        let command_id = request.command_id.0.to_string();
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| CommandAdmissionError::StorageUnavailable)?;
+        let rows = sqlx::query(
+            "SELECT accepted_revision, command_id, idempotency_key, operation_kind, intent_sha256 \
+             FROM command_admissions WHERE command_id = ? OR idempotency_key = ?",
         )
-        .bind(draft.session_id.0.to_string())
+        .bind(&command_id)
+        .bind(&request.idempotency_key)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| CommandAdmissionError::StorageUnavailable)?;
+        if rows.len() > 1 {
+            return Err(CommandAdmissionError::IntegrityFailure);
+        }
+        if let Some(row) = rows.first() {
+            let accepted_revision = u64::try_from(
+                row.try_get::<i64, _>("accepted_revision")
+                    .map_err(|_| CommandAdmissionError::IntegrityFailure)?,
+            )
+            .map_err(|_| CommandAdmissionError::IntegrityFailure)?;
+            let existing_command: String = row
+                .try_get("command_id")
+                .map_err(|_| CommandAdmissionError::IntegrityFailure)?;
+            let existing_key: String = row
+                .try_get("idempotency_key")
+                .map_err(|_| CommandAdmissionError::IntegrityFailure)?;
+            let existing_kind: String = row
+                .try_get("operation_kind")
+                .map_err(|_| CommandAdmissionError::IntegrityFailure)?;
+            let existing_intent: Vec<u8> = row
+                .try_get("intent_sha256")
+                .map_err(|_| CommandAdmissionError::IntegrityFailure)?;
+            if existing_command != command_id
+                || existing_key != request.idempotency_key
+                || existing_kind != request.operation_kind
+                || existing_intent.as_slice() != request.intent_hash
+            {
+                return Err(CommandAdmissionError::IdempotencyConflict);
+            }
+            return Ok(admission_receipt(&request, accepted_revision));
+        }
+        let accepted_revision = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO command_admissions(\
+                command_id, idempotency_key, correlation_id, operation_kind, intent_sha256, admitted_at_unix_ms\
+             ) VALUES (?, ?, ?, ?, ?, ?) RETURNING accepted_revision",
+        )
+        .bind(&command_id)
+        .bind(&request.idempotency_key)
+        .bind(&request.correlation_id)
+        .bind(&request.operation_kind)
+        .bind(request.intent_hash.as_slice())
+        .bind(
+            i64::try_from(request.admitted_at_unix_ms)
+                .map_err(|_| CommandAdmissionError::InvalidRequest)?,
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| CommandAdmissionError::StorageUnavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| CommandAdmissionError::StorageUnavailable)?;
+        let accepted_revision = u64::try_from(accepted_revision)
+            .map_err(|_| CommandAdmissionError::IntegrityFailure)?;
+        Ok(admission_receipt(&request, accepted_revision))
+    }
+}
+
+fn admission_receipt(
+    request: &CommandAdmissionRequest,
+    accepted_revision: u64,
+) -> CommandAdmissionReceipt {
+    CommandAdmissionReceipt {
+        command_id: request.command_id,
+        operation_id: request.command_id,
+        correlation_id: request.correlation_id.clone(),
+        accepted_revision,
+    }
+}
+
+#[async_trait]
+impl dennett_agent_core::RuntimeContinuationPort for SqliteControlStore {
+    async fn load(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<OpaqueContinuation>, RuntimeContinuationError> {
+        if session_id.trim().is_empty() {
+            return Err(RuntimeContinuationError::InvalidRequest);
+        }
+        let row = sqlx::query(
+            "SELECT adapter_id, opaque_handle FROM runtime_continuations WHERE session_id = ?",
+        )
+        .bind(session_id)
         .fetch_optional(&self.pool)
         .await
+        .map_err(|_| RuntimeContinuationError::StorageUnavailable)?;
+        row.map(|row| {
+            let adapter_id: String = row
+                .try_get("adapter_id")
+                .map_err(|_| RuntimeContinuationError::IntegrityFailure)?;
+            let handle: String = row
+                .try_get("opaque_handle")
+                .map_err(|_| RuntimeContinuationError::IntegrityFailure)?;
+            OpaqueContinuation::new(adapter_id, handle)
+                .map_err(|_| RuntimeContinuationError::IntegrityFailure)
+        })
+        .transpose()
+    }
+
+    async fn save(
+        &self,
+        session_id: &str,
+        continuation: &OpaqueContinuation,
+    ) -> Result<(), RuntimeContinuationError> {
+        if session_id.trim().is_empty() {
+            return Err(RuntimeContinuationError::InvalidRequest);
+        }
+        let adapter_id = continuation.adapter_id();
+        let handle = continuation
+            .handle_for(adapter_id)
+            .map_err(|_| RuntimeContinuationError::IntegrityFailure)?;
+        sqlx::query(
+            "INSERT INTO runtime_continuations(session_id, adapter_id, opaque_handle, updated_at_unix_ms) \
+             VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET \
+             adapter_id = excluded.adapter_id, opaque_handle = excluded.opaque_handle, \
+             updated_at_unix_ms = excluded.updated_at_unix_ms",
+        )
+        .bind(session_id)
+        .bind(adapter_id)
+        .bind(handle)
+        .bind(
+            i64::try_from(unix_time_ms())
+                .map_err(|_| RuntimeContinuationError::StorageUnavailable)?,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|_| RuntimeContinuationError::StorageUnavailable)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DraftCachePort for SqliteControlStore {
+    async fn save(&self, draft: DraftRecord) -> Result<DraftCacheSaveOutcome, DraftCacheError> {
+        if draft.revision == 0 {
+            return Err(DraftCacheError::StorageUnavailable);
+        }
+        let session_id = draft.session_id.0.to_string();
+        let command_id = draft.command_id.0.to_string();
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        let tombstone_owner = sqlx::query_scalar::<_, String>(
+            "SELECT session_id FROM discarded_draft_commands WHERE command_id = ?",
+        )
+        .bind(&command_id)
+        .fetch_optional(&mut *transaction)
+        .await
         .map_err(|_| DraftCacheError::StorageUnavailable)?;
-        if existing
-            .as_deref()
-            .is_some_and(|value| value != draft.command_id.0.to_string())
-        {
-            return Err(DraftCacheError::StableCommandMismatch);
+        if let Some(owner) = tombstone_owner {
+            return if owner == session_id {
+                Ok(DraftCacheSaveOutcome::Discarded)
+            } else {
+                Err(DraftCacheError::StableCommandMismatch)
+            };
+        }
+        let existing =
+            sqlx::query("SELECT command_id, revision FROM client_drafts WHERE session_id = ?")
+                .bind(&session_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        if let Some(row) = existing {
+            let existing_command: String = row
+                .try_get("command_id")
+                .map_err(|_| DraftCacheError::StorageUnavailable)?;
+            let existing_revision: i64 = row
+                .try_get("revision")
+                .map_err(|_| DraftCacheError::StorageUnavailable)?;
+            if existing_command != command_id {
+                return Err(DraftCacheError::StableCommandMismatch);
+            }
+            if u64::try_from(existing_revision).map_err(|_| DraftCacheError::StorageUnavailable)?
+                >= draft.revision
+            {
+                return Ok(DraftCacheSaveOutcome::StaleIgnored);
+            }
         }
         let command_owner = sqlx::query_scalar::<_, String>(
             "SELECT session_id FROM client_drafts WHERE command_id = ?",
         )
-        .bind(draft.command_id.0.to_string())
-        .fetch_optional(&self.pool)
+        .bind(&command_id)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| DraftCacheError::StorageUnavailable)?;
         if command_owner
             .as_deref()
-            .is_some_and(|value| value != draft.session_id.0.to_string())
+            .is_some_and(|value| value != session_id)
         {
             return Err(DraftCacheError::StableCommandMismatch);
         }
         sqlx::query(
-            "INSERT INTO client_drafts(session_id, project_id, command_id, text, updated_at_unix_ms) \
-             VALUES (?, ?, ?, ?, ?) \
+            "INSERT INTO client_drafts(session_id, project_id, command_id, text, updated_at_unix_ms, revision) \
+             VALUES (?, ?, ?, ?, ?, ?) \
              ON CONFLICT(session_id) DO UPDATE SET \
                project_id = excluded.project_id, text = excluded.text, \
-               updated_at_unix_ms = excluded.updated_at_unix_ms",
+               updated_at_unix_ms = excluded.updated_at_unix_ms, revision = excluded.revision",
         )
-        .bind(draft.session_id.0.to_string())
-        .bind(draft.project_id.0.to_string())
-        .bind(draft.command_id.0.to_string())
+        .bind(&session_id)
+        .bind(
+            draft
+                .project_id
+                .map_or_else(String::new, |project_id| project_id.0.to_string()),
+        )
+        .bind(&command_id)
         .bind(draft.text)
         .bind(
             i64::try_from(draft.updated_at_unix_ms)
                 .map_err(|_| DraftCacheError::StorageUnavailable)?,
         )
-        .execute(&self.pool)
+        .bind(i64::try_from(draft.revision).map_err(|_| DraftCacheError::StorageUnavailable)?)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| DraftCacheError::StorageUnavailable)?;
-        Ok(())
+        transaction
+            .commit()
+            .await
+            .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        Ok(DraftCacheSaveOutcome::Saved)
     }
 
     async fn load(&self, session_id: SessionId) -> Result<Option<DraftRecord>, DraftCacheError> {
         let row = sqlx::query(
-            "SELECT project_id, session_id, command_id, text, updated_at_unix_ms \
+            "SELECT project_id, session_id, command_id, text, updated_at_unix_ms, revision \
              FROM client_drafts WHERE session_id = ?",
         )
         .bind(session_id.0.to_string())
@@ -550,10 +772,14 @@ impl DraftCachePort for SqliteControlStore {
                 .try_get("updated_at_unix_ms")
                 .map_err(|_| DraftCacheError::StorageUnavailable)?;
             Ok(DraftRecord {
-                project_id: ProjectId(
-                    Uuid::parse_str(&project_id)
-                        .map_err(|_| DraftCacheError::StorageUnavailable)?,
-                ),
+                project_id: if project_id.is_empty() {
+                    None
+                } else {
+                    Some(ProjectId(
+                        Uuid::parse_str(&project_id)
+                            .map_err(|_| DraftCacheError::StorageUnavailable)?,
+                    ))
+                },
                 session_id: SessionId(
                     Uuid::parse_str(&session_id)
                         .map_err(|_| DraftCacheError::StorageUnavailable)?,
@@ -565,6 +791,11 @@ impl DraftCachePort for SqliteControlStore {
                 text: row
                     .try_get("text")
                     .map_err(|_| DraftCacheError::StorageUnavailable)?,
+                revision: u64::try_from(
+                    row.try_get::<i64, _>("revision")
+                        .map_err(|_| DraftCacheError::StorageUnavailable)?,
+                )
+                .map_err(|_| DraftCacheError::StorageUnavailable)?,
                 updated_at_unix_ms: u64::try_from(updated_at)
                     .map_err(|_| DraftCacheError::StorageUnavailable)?,
             })
@@ -572,13 +803,61 @@ impl DraftCachePort for SqliteControlStore {
         .transpose()
     }
 
-    async fn discard(&self, session_id: SessionId) -> Result<(), DraftCacheError> {
-        sqlx::query("DELETE FROM client_drafts WHERE session_id = ?")
-            .bind(session_id.0.to_string())
-            .execute(&self.pool)
+    async fn discard(
+        &self,
+        session_id: SessionId,
+        command_id: CommandId,
+    ) -> Result<bool, DraftCacheError> {
+        let session_id = session_id.0.to_string();
+        let command_id = command_id.0.to_string();
+        let mut transaction = self
+            .pool
+            .begin()
             .await
             .map_err(|_| DraftCacheError::StorageUnavailable)?;
-        Ok(())
+        let existing = sqlx::query_scalar::<_, String>(
+            "SELECT command_id FROM client_drafts WHERE session_id = ?",
+        )
+        .bind(&session_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        if existing.as_deref().is_some_and(|value| value != command_id) {
+            return Err(DraftCacheError::StableCommandMismatch);
+        }
+        let tombstone_owner = sqlx::query_scalar::<_, String>(
+            "SELECT session_id FROM discarded_draft_commands WHERE command_id = ?",
+        )
+        .bind(&command_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        if tombstone_owner
+            .as_deref()
+            .is_some_and(|value| value != session_id)
+        {
+            return Err(DraftCacheError::StableCommandMismatch);
+        }
+        let deleted = sqlx::query("DELETE FROM client_drafts WHERE session_id = ?")
+            .bind(&session_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        sqlx::query(
+            "INSERT INTO discarded_draft_commands(command_id, session_id, discarded_at_unix_ms) \
+             VALUES (?, ?, ?) ON CONFLICT(command_id) DO NOTHING",
+        )
+        .bind(&command_id)
+        .bind(&session_id)
+        .bind(i64::try_from(unix_time_ms()).map_err(|_| DraftCacheError::StorageUnavailable)?)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| DraftCacheError::StorageUnavailable)?;
+        Ok(deleted.rows_affected() != 0)
     }
 }
 
@@ -587,9 +866,14 @@ mod tests {
     use super::*;
     use dennett_contracts::TurnId;
     use dennett_memory_core::session::{
-        SafeSessionError, SessionJournal, SessionResult, SessionTurnOutcome, SessionTurnState,
+        SafeSessionError, SessionActivityStatus, SessionJournal, SessionResult, SessionTurnOutcome,
+        SessionTurnState,
     };
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn database_path(temp: &TempDir) -> std::path::PathBuf {
@@ -622,7 +906,7 @@ mod tests {
                 session_id,
                 Some(CommandId::new()),
                 SessionEventBody::SessionCreated {
-                    project_id: ProjectId::new(),
+                    project_id: Some(ProjectId::new()),
                     title: format!("{state:?}"),
                 },
                 time,
@@ -702,7 +986,10 @@ mod tests {
         let temp = TempDir::new().expect("temporary directory");
         let path = database_path(&temp);
         let store = SqliteControlStore::open(&path).await.expect("open store");
-        assert_eq!(store.schema_version().await.expect("schema version"), 1);
+        assert_eq!(
+            store.schema_version().await.expect("schema version"),
+            CONTROL_SCHEMA_VERSION
+        );
         assert_eq!(store.journal_mode().await.expect("journal mode"), "wal");
         assert_eq!(
             sqlx::query_scalar::<_, i64>("PRAGMA synchronous")
@@ -741,6 +1028,103 @@ mod tests {
         reopened.verify_integrity().await.expect("integrity check");
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_reads_are_atomic_while_progress_is_appended() {
+        let temp = TempDir::new().expect("temporary directory");
+        let store = SqliteControlStore::open(database_path(&temp))
+            .await
+            .expect("open store");
+        let journal = SessionJournal::new(Arc::new(store));
+        let session_id = SessionId::new();
+        let command_id = CommandId::new();
+        let turn_id = TurnId::new();
+        journal
+            .append(pending(
+                session_id,
+                Some(CommandId::new()),
+                SessionEventBody::SessionCreated {
+                    project_id: Some(ProjectId::new()),
+                    title: "concurrent read".to_owned(),
+                },
+                1,
+            ))
+            .await
+            .expect("create session");
+        journal
+            .append(pending(
+                session_id,
+                Some(command_id),
+                SessionEventBody::TurnAccepted {
+                    user_turn_id: TurnId::new(),
+                    agent_turn_id: turn_id,
+                    command_id,
+                    text: "run".to_owned(),
+                },
+                2,
+            ))
+            .await
+            .expect("accept turn");
+
+        let writer = journal.clone();
+        let start = Arc::new(tokio::sync::Barrier::new(2));
+        let writer_active = Arc::new(AtomicBool::new(false));
+        let writer_start = start.clone();
+        let writer_state = writer_active.clone();
+        let append = tokio::spawn(async move {
+            writer_state.store(true, Ordering::Release);
+            writer_start.wait().await;
+            for index in 0..100 {
+                writer
+                    .append(pending(
+                        session_id,
+                        None,
+                        SessionEventBody::AgentActivityUpserted {
+                            turn_id,
+                            activity_id: "command".to_owned(),
+                            phase: "running".to_owned(),
+                            message: Some(format!("progress {index}")),
+                            status: if index == 0 {
+                                SessionActivityStatus::Started
+                            } else {
+                                SessionActivityStatus::Updated
+                            },
+                            native_extensions: Vec::new(),
+                        },
+                        3 + index,
+                    ))
+                    .await
+                    .expect("append progress");
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            writer_state.store(false, Ordering::Release);
+        });
+        start.wait().await;
+        let mut observed_intermediate_revision = false;
+        while writer_active.load(Ordering::Acquire) {
+            let snapshot = journal
+                .restore(session_id)
+                .await
+                .expect("coherent snapshot");
+            assert!(snapshot.session.revision >= 2);
+            observed_intermediate_revision |= (3..102).contains(&snapshot.session.revision);
+            tokio::task::yield_now().await;
+        }
+        append.await.expect("writer task");
+        assert!(
+            observed_intermediate_revision,
+            "reader must observe a coherent snapshot while the writer is active"
+        );
+        assert_eq!(
+            journal
+                .restore(session_id)
+                .await
+                .expect("final snapshot")
+                .session
+                .revision,
+            102
+        );
+    }
+
     #[tokio::test]
     async fn revision_conflict_rolls_back_without_creating_a_session_head() {
         let temp = TempDir::new().expect("temporary directory");
@@ -755,7 +1139,7 @@ mod tests {
                     session_id,
                     Some(CommandId::new()),
                     SessionEventBody::SessionCreated {
-                        project_id: ProjectId::new(),
+                        project_id: Some(ProjectId::new()),
                         title: "conflict".to_owned(),
                     },
                     1,
@@ -799,7 +1183,7 @@ mod tests {
                     session_id,
                     Some(CommandId::new()),
                     SessionEventBody::SessionCreated {
-                        project_id: ProjectId::new(),
+                        project_id: Some(ProjectId::new()),
                         title: "rollback".to_owned(),
                     },
                     1,
@@ -828,7 +1212,7 @@ mod tests {
                 session_id,
                 Some(CommandId::new()),
                 SessionEventBody::SessionCreated {
-                    project_id: ProjectId::new(),
+                    project_id: Some(ProjectId::new()),
                     title: "integrity".to_owned(),
                 },
                 1,
@@ -863,7 +1247,7 @@ mod tests {
                 session_id,
                 Some(CommandId::new()),
                 SessionEventBody::SessionCreated {
-                    project_id: ProjectId::new(),
+                    project_id: Some(ProjectId::new()),
                     title: "future payload".to_owned(),
                 },
                 1,
@@ -932,7 +1316,7 @@ mod tests {
             SqliteControlStore::open(&path).await,
             Err(SessionJournalError::UnsupportedSchemaVersion {
                 found: 99,
-                supported: 1,
+                supported: CONTROL_SCHEMA_VERSION,
             })
         ));
         let raw = SqlitePoolOptions::new()
@@ -985,7 +1369,7 @@ mod tests {
                     session_id,
                     Some(CommandId::new()),
                     SessionEventBody::SessionCreated {
-                        project_id: ProjectId::new(),
+                        project_id: Some(ProjectId::new()),
                         title: "crash committed".to_owned(),
                     },
                     1,
@@ -1029,10 +1413,11 @@ mod tests {
         let path = database_path(&temp);
         let store = SqliteControlStore::open(&path).await.expect("open store");
         let draft = DraftRecord {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             session_id: SessionId::new(),
             command_id: CommandId::new(),
             text: "unsent".to_owned(),
+            revision: 1,
             updated_at_unix_ms: 42,
         };
         store.save(draft.clone()).await.expect("save draft");
@@ -1061,15 +1446,85 @@ mod tests {
                 .is_empty()
         );
         reopened
-            .discard(draft.session_id)
+            .discard(draft.session_id, draft.command_id)
             .await
             .expect("discard draft");
+        assert_eq!(
+            reopened
+                .save(DraftRecord {
+                    text: "late stale save".to_owned(),
+                    revision: 2,
+                    ..draft.clone()
+                })
+                .await
+                .expect("classify late save"),
+            DraftCacheSaveOutcome::Discarded
+        );
         assert_eq!(
             reopened
                 .load(draft.session_id)
                 .await
                 .expect("load discarded"),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn command_admission_survives_restart_and_rejects_changed_intent() {
+        let temp = TempDir::new().expect("temporary directory");
+        let path = database_path(&temp);
+        let command_id = CommandId::new();
+        let request = CommandAdmissionRequest {
+            command_id,
+            idempotency_key: "stable-key".to_owned(),
+            correlation_id: "first-correlation".to_owned(),
+            operation_kind: "send_turn".to_owned(),
+            intent_hash: [7; 32],
+            admitted_at_unix_ms: 42,
+        };
+        let store = SqliteControlStore::open(&path).await.expect("open store");
+        let first = store.admit(request.clone()).await.expect("admit command");
+        store.close().await;
+
+        let reopened = SqliteControlStore::open(&path).await.expect("reopen store");
+        let replay = reopened
+            .admit(CommandAdmissionRequest {
+                correlation_id: "retry-correlation".to_owned(),
+                ..request.clone()
+            })
+            .await
+            .expect("replay command");
+        assert_eq!(first.accepted_revision, replay.accepted_revision);
+        assert_eq!(replay.correlation_id, "retry-correlation");
+        assert_eq!(
+            reopened
+                .admit(CommandAdmissionRequest {
+                    intent_hash: [8; 32],
+                    ..request
+                })
+                .await,
+            Err(CommandAdmissionError::IdempotencyConflict)
+        );
+    }
+
+    #[tokio::test]
+    async fn opaque_runtime_continuation_survives_restart() {
+        let temp = TempDir::new().expect("temporary directory");
+        let path = database_path(&temp);
+        let continuation =
+            OpaqueContinuation::new("runtime.adapter", "opaque-thread").expect("continuation");
+        let store = SqliteControlStore::open(&path).await.expect("open store");
+        dennett_agent_core::RuntimeContinuationPort::save(&store, "session-a", &continuation)
+            .await
+            .expect("save continuation");
+        store.close().await;
+
+        let reopened = SqliteControlStore::open(&path).await.expect("reopen store");
+        assert_eq!(
+            dennett_agent_core::RuntimeContinuationPort::load(&reopened, "session-a")
+                .await
+                .expect("load continuation"),
+            Some(continuation)
         );
     }
 }

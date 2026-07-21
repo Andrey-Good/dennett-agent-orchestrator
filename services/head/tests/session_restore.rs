@@ -19,15 +19,21 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
         .expect("open control store");
     let coordinator = SessionCoordinator::new(SessionJournal::new(Arc::new(store.clone())), 1, 8);
     let created = coordinator
-        .create_session(CommandId::new(), project_id, "Recovered".to_owned(), 1)
+        .create_session(
+            CommandId::new(),
+            Some(project_id),
+            "Recovered".to_owned(),
+            1,
+        )
         .await
         .expect("create session");
     let session_id = created.snapshot.session.session_id;
     let draft = DraftRecord {
-        project_id,
+        project_id: Some(project_id),
         session_id,
         command_id: CommandId::new(),
         text: "resume after restart".to_owned(),
+        revision: 1,
         updated_at_unix_ms: 2,
     };
     store
@@ -51,9 +57,10 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
     let accepted = coordinator
         .accept_turn(
             restored_draft.command_id,
-            project_id,
+            Some(project_id),
             session_id,
             restored_draft.text.clone(),
+            None,
             3,
         )
         .await
@@ -61,9 +68,10 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
     let retry = coordinator
         .accept_turn(
             restored_draft.command_id,
-            project_id,
+            Some(project_id),
             session_id,
             restored_draft.text,
+            None,
             3,
         )
         .await
@@ -71,7 +79,7 @@ async fn embedded_head_restores_session_and_sends_recovered_draft_once() {
     assert_eq!(retry.agent_turn_id, accepted.agent_turn_id);
     assert_eq!(retry.commit.snapshot.session.revision, 2);
     reopened
-        .discard(session_id)
+        .discard(session_id, restored_draft.command_id)
         .await
         .expect("discard sent draft");
 

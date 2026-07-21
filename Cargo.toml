@@ -29,6 +29,7 @@ rust-version = "1.97"
 async-trait = "0.1"
 async-stream = "0.3"
 futures-core = "0.3"
+fs2 = "0.4"
 getrandom = "0.3"
 hyper-util = { version = "0.1", features = ["tokio"] }
 prost = "0.14"

@@ -1,5 +1,7 @@
 use async_trait::async_trait;
+use dennett_agent_core::RuntimeDescriptor;
 use dennett_contracts::SessionEventId;
+use dennett_memory_core::session::ProjectSessionState;
 use dennett_sync_core::watch::{ResyncReason, WatchCursor, WatchError, WatchFrame};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,7 +21,10 @@ pub struct SessionSummary {
     pub session_id: String,
     pub project_id: String,
     pub title: String,
+    pub state: ProjectSessionState,
     pub revision: u64,
+    pub active_turn_id: Option<String>,
+    pub last_activity_unix_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +45,7 @@ pub struct SystemSnapshot {
     pub active_project_id: Option<String>,
     pub active_session_id: Option<String>,
     pub health: SystemHealth,
+    pub runtime: Option<RuntimeDescriptor>,
 }
 
 impl SystemSnapshot {
@@ -54,6 +60,7 @@ impl SystemSnapshot {
             active_project_id: None,
             active_session_id: None,
             health: SystemHealth::Ready,
+            runtime: None,
         }
     }
 
@@ -63,6 +70,20 @@ impl SystemSnapshot {
         hash.update(self.revision.to_le_bytes());
         hash.update(self.authority_epoch.to_le_bytes());
         hash.update([self.health as u8]);
+        if let Some(runtime) = &self.runtime {
+            update_text(&mut hash, &runtime.adapter_id);
+            hash.update([runtime.runtime_kind as u8]);
+            hash.update([
+                runtime.capabilities.streaming as u8,
+                runtime.capabilities.continuation as u8,
+                runtime.capabilities.scoped_cancellation as u8,
+                runtime.capabilities.deadlines as u8,
+                runtime.capabilities.steering as u8,
+            ]);
+            for schema in &runtime.capabilities.native_extension_schemas {
+                update_text(&mut hash, schema);
+            }
+        }
         update_optional(&mut hash, self.active_project_id.as_deref());
         update_optional(&mut hash, self.active_session_id.as_deref());
         for project in &self.projects {
@@ -74,7 +95,10 @@ impl SystemSnapshot {
             update_text(&mut hash, &session.session_id);
             update_text(&mut hash, &session.project_id);
             update_text(&mut hash, &session.title);
+            hash.update([session.state as u8]);
             hash.update(session.revision.to_le_bytes());
+            update_optional(&mut hash, session.active_turn_id.as_deref());
+            hash.update(session.last_activity_unix_ms.to_le_bytes());
         }
         hash.finalize().to_vec()
     }
@@ -107,6 +131,7 @@ pub enum SystemStateError {
 #[async_trait]
 pub trait SystemWatchSubscription: Send {
     fn take_initial(&mut self) -> Option<SystemWatchFrame>;
+    fn heartbeat(&mut self) -> Option<SystemWatchFrame>;
     async fn recv(&mut self) -> Result<Option<SystemWatchFrame>, SystemStateError>;
 }
 
@@ -207,6 +232,17 @@ struct ProjectionSubscription {
 impl SystemWatchSubscription for ProjectionSubscription {
     fn take_initial(&mut self) -> Option<SystemWatchFrame> {
         self.initial.take()
+    }
+
+    fn heartbeat(&mut self) -> Option<SystemWatchFrame> {
+        if self.blocked {
+            return None;
+        }
+        self.sequence += 1;
+        Some(WatchFrame::Heartbeat {
+            cursor: self.cursor(),
+            current_revision: self.revision,
+        })
     }
 
     async fn recv(&mut self) -> Result<Option<SystemWatchFrame>, SystemStateError> {
@@ -347,6 +383,13 @@ mod tests {
                 ..
             })
         ));
+        assert!(matches!(
+            subscription.heartbeat(),
+            Some(WatchFrame::Heartbeat {
+                current_revision: 1,
+                cursor: WatchCursor { sequence: 2, .. },
+            })
+        ));
 
         projection
             .apply(vec![SystemMutation::Select {
@@ -360,7 +403,7 @@ mod tests {
             Some(WatchFrame::Delta {
                 base_revision: 1,
                 new_revision: 2,
-                cursor: WatchCursor { sequence: 2, .. },
+                cursor: WatchCursor { sequence: 3, .. },
                 ..
             })
         ));

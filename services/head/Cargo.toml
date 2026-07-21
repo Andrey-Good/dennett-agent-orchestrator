@@ -21,4 +21,5 @@ dennett-sync-core = { path = "../../crates/dennett-sync-core" }
 
 [dev-dependencies]
 tempfile.workspace = true
+tracing-subscriber.workspace = true
 dennett-storage-sqlite = { path = "../../adapters/storage/sqlite" }

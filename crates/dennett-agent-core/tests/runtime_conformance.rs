@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use dennett_agent_core::{
     AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest, FakeRuntimeStep,
-    OpaqueContinuation, RuntimeDeadline, RuntimeError, RuntimeErrorCode, RuntimeEvent,
-    RuntimeEventKind, RuntimeEventStream, RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest,
-    RuntimeUsage, ScriptedFakeAgentRuntime,
+    OpaqueContinuation, RuntimeActivityStatus, RuntimeDeadline, RuntimeError, RuntimeErrorCode,
+    RuntimeEvent, RuntimeEventKind, RuntimeEventStream, RuntimeEventValidator,
+    RuntimeTerminalOutcome, RuntimeTurn, RuntimeTurnRequest, RuntimeUsage,
+    ScriptedFakeAgentRuntime,
 };
 use serde::Deserialize;
 use std::{collections::VecDeque, time::Duration};
@@ -49,6 +50,7 @@ fn request(session_id: &str, turn_id: &str) -> RuntimeTurnRequest {
         prompt: "private test prompt".to_owned(),
         workspace_path: "C:/synthetic/project".to_owned(),
         context_handles: Vec::new(),
+        runtime_controls: Vec::new(),
         continuation: None,
         deadline: RuntimeDeadline::after(Duration::from_secs(5))
             .expect("test deadline should be valid"),
@@ -81,6 +83,65 @@ fn event_labels(events: &[RuntimeEvent]) -> Vec<String> {
         })
         .map(str::to_owned)
         .collect()
+}
+
+fn validator_event(sequence: u64, kind: RuntimeEventKind) -> RuntimeEvent {
+    RuntimeEvent {
+        session_id: "session-validator".to_owned(),
+        turn_id: "turn-validator".to_owned(),
+        sequence,
+        kind,
+        native_extensions: Vec::new(),
+    }
+}
+
+#[test]
+fn progress_lifecycle_requires_a_stable_id_for_nonterminal_updates() {
+    let mut validator = RuntimeEventValidator::new("session-validator", "turn-validator");
+    validator
+        .observe(&validator_event(
+            1,
+            RuntimeEventKind::Started { continuation: None },
+        ))
+        .expect("turn start");
+    let missing_id = validator.observe(&validator_event(
+        2,
+        RuntimeEventKind::Progress {
+            activity_id: None,
+            phase: "command".to_owned(),
+            message: None,
+            status: RuntimeActivityStatus::Started,
+        },
+    ));
+    assert_eq!(
+        missing_id,
+        Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation))
+    );
+
+    let mut validator = RuntimeEventValidator::new("session-validator", "turn-validator");
+    validator
+        .observe(&validator_event(
+            1,
+            RuntimeEventKind::Started { continuation: None },
+        ))
+        .expect("turn start");
+    for (sequence, status) in [
+        (2, RuntimeActivityStatus::Started),
+        (3, RuntimeActivityStatus::Updated),
+        (4, RuntimeActivityStatus::Completed),
+    ] {
+        validator
+            .observe(&validator_event(
+                sequence,
+                RuntimeEventKind::Progress {
+                    activity_id: Some("command-1".to_owned()),
+                    phase: "command".to_owned(),
+                    message: None,
+                    status,
+                },
+            ))
+            .expect("valid activity lifecycle");
+    }
 }
 
 #[tokio::test]

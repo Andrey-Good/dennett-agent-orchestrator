@@ -695,11 +695,11 @@
       "version": 1,
       "id": "WP-M01-007",
       "title": "Qualify the complete local desktop conversation",
-      "status": "REFINED",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
-      "outcome": "The approved Project Chat screen drives the real Node and embedded Head through a transport-neutral client, supports fake and Codex runtimes, displays streaming progress, scoped Stop and visible timeout, resyncs a forced gap, and restores the same authoritative session after UI restart with one joined trace.",
+      "outcome": "The approved Project Chat screen drives the real Node and embedded Head through a transport-neutral client, supports fake and Codex runtimes, displays ordered streaming progress, accepts a native in-flight clarification without restarting the Codex turn, creates both project and standalone chats, provides scoped Stop and visible timeout, resyncs a forced gap, and restores the same authoritative session after UI restart with one joined trace.",
       "non_goals": [
         "project file edits, diff approval or Git operations",
         "background managed Runs or multi-agent execution",
@@ -723,6 +723,13 @@
       ],
       "allowed_roots": [
         "apps/desktop",
+        "adapters/storage/sqlite",
+        "adapters/transport/local-ipc",
+        "crates/dennett-agent-core",
+        "crates/dennett-memory-core",
+        "crates/dennett-sync-core",
+        "protocols",
+        "generated",
         "services/node",
         "services/head",
         "services/adapter-host-node",
@@ -734,6 +741,9 @@
         "docs/testing/generated",
         "docs/design",
         "planning",
+        "tools/protocol_codegen.py",
+        "tools/tests/test_protocol_codegen.py",
+        "AGENTS.md",
         "README.md",
         "README.ru.md",
         "VALIDATION.md",
@@ -754,14 +764,16 @@
           "authoritative project-session snapshot, ordered watch frames and normalized runtime events"
         ],
         "writes": [
-          "project chat commands through dennett-node and local presentation preferences"
+          "project and standalone chat commands through dennett-node and local presentation preferences",
+          "durable user clarification delivery state fenced to the exact active provider turn",
+          "Node-owned non-canonical composer drafts through DraftCachePort"
         ]
       },
       "contract_changes": {
-        "public_api": false,
-        "protocol": false,
-        "persistent_schema": false,
-        "migration": false
+        "public_api": true,
+        "protocol": true,
+        "persistent_schema": true,
+        "migration": true
       },
       "security_effects": {
         "permission_change": false,
@@ -778,7 +790,8 @@
         "just check",
         "corepack pnpm --filter @dennett/desktop test",
         "cargo test -p dennett-node -p dennett-head",
-        "corepack pnpm --filter @dennett/adapter-host-node test"
+        "corepack pnpm --filter @dennett/adapter-host-node test",
+        "just test-contracts"
       ],
       "observability": [
         "one trace joins installation, component, project, session, command, runtime turn, provider and memory event identifiers",
@@ -789,15 +802,32 @@
       ],
       "owner_decision": {
         "required_before_start": false,
-        "required_before_merge": true
+        "required_before_merge": false
       },
       "estimate": {
-        "target_agent_hours": 5,
-        "max_diff_lines": 2600
+        "target_agent_hours": 8,
+        "max_diff_lines": 25500
       },
       "notes": [
         "Milestone acceptance requires a live owner demo after automated qualification.",
-        "Codex live failure degrades the provider canary but does not invalidate deterministic core tests."
+        "Codex live failure degrades the provider canary but does not invalidate deterministic core tests.",
+        "The package root set now explicitly includes adapters/transport/local-ipc because the pre-existing SessionService wire contract still required its authenticated client/server implementation for this end-to-end slice.",
+        "Detached architecture review confirmed that durable composer recovery cannot cross UI to Node through any existing RPC. WP-M01-007 therefore adds three backward-compatible SessionService methods for a Node-owned non-canonical text draft and a forward-only local schema migration; no protocol epoch migration is required.",
+        "Adversarial implementation review found that an in-memory admission counter, process-only runtime continuations and unconditional draft upserts could acknowledge state that was lost or resurrect stale text after restart. The package therefore owns one forward-only SQLite migration for command admission, provider-neutral continuation handles and monotonic draft revisions; canonical session history remains unchanged.",
+        "The estimate was raised after the real vertical slice exposed the missing authenticated SessionService implementation, durable draft bridge and deterministic cancellation/timeout/trace qualification. The owner explicitly requested retaining useful reliability work rather than optimizing for an arbitrary code budget.",
+        "The gross implementation delta reached 10692 changed or new lines before final metadata regeneration. The budget was initially raised to 12000 because most of the excess is typed protocol, generated clients, lockfiles and executable recovery tests; deleting those solely to meet the counter would reduce reliability and reviewability.",
+        "Detached R2 implementation review then exposed effect-before-admission races, inherited process secrets, UI switch/resync/draft-close races, optimistic runtime readiness, unbounded adapter-host framing and discarded native extension payloads. The budget is raised to 17000 so those concrete reliability defects can be fixed and regression-tested; this is not authorization for unrelated scope.",
+        "Owner qualification found that the native shell hid project and standalone-chat affordances and exposed no real model, reasoning or speed selection. WP-M01-007 therefore carries a provider-neutral runtime-control descriptor and per-turn selections through Codex adapter, Node, authenticated IPC and Tauri; Codex discovers its current choices from the pinned subscription CLI instead of hardcoding a catalogue. Standalone chats now use a Node-owned scratch workspace and durable sessions; project-folder creation and import remain visibly and honestly deferred.",
+        "Owner qualification also found native select popups, provider events grouped out of order, concatenated agent messages, exposed low-level reasoning and a read-only-only access label. The desktop now uses compact custom runtime menus, preserves provider event chronology, presents only concise agent commentary between effects, treats the final completed agent message as the answer, and maps provider-advertised Auto-approve and Full access choices to enforced Codex sandbox settings.",
+        "Live Windows qualification exposed that the Codex SDK workspace-write flag degrades to read-only unless the native restricted-token sandbox is explicitly enabled. The subscription adapter now pins SDK and CLI 0.144.6, activates the unelevated Windows sandbox, and proves through the ignored live IPC test that Auto-approve writes inside the project while Full access can write to a separate temporary root outside it.",
+        "The owner-visible steering contract is bounded and explicit: an in-flight clarification targets the exact currently active agent turn, is durably recorded as a user turn before the provider call, uses a directly owned native Codex App Server process and turn/steer with a stable message identity, never calls Stop or starts a replacement turn, leaves unsupported providers disabled, and fences uncertain delivery before reporting a visible failure rather than silently duplicating it.",
+        "Renderer chronology is reconstructed from canonical turn and activity timestamps so commentary and effects before a clarification remain above it, later work and the final Markdown answer remain below it, and a cancelled or timed-out activity cannot retain a running animation. Component, domain, IPC, adapter-host and live capability tests cover these transitions.",
+        "The package root set includes dennett-memory-core because durable steer events and first-causal activity timestamps extend the canonical session journal itself; AGENTS.md records the owner's cross-cutting extensibility and DRY/KISS/YAGNI review rules without changing product behavior.",
+        "The final gross delta reached 23974 changed or new lines after metadata regeneration. The budget was raised to 24000 because stable causal timestamps, exact-turn steering races, generated protocol clients and executable end-to-end regressions are required for honest restart behavior; the added allowance did not expand product scope.",
+        "Native first-launch qualification then exposed a real empty-profile defect: the renderer treated the valid absence of sessions as a failed Node connection. The budget is raised to 24500 for the existing typed System watch reducer, independent system/session lifecycle wiring and executable fresh-profile regression; this preserves the planned provider, capability and project expansion seam rather than adding a Codex-only shortcut.",
+        "Native restart qualification also connected to a surviving protocol-v1 Node built before the additive steering field and exposed a dev-shell binary-selection defect. An absent protobuf steering value now degrades only that capability to unsupported while unknown non-empty values still fail schema validation, and repository fallback selects the Node binary matching the desktop debug or release profile. A real debug restart restored the complete system snapshot and provider-discovered controls.",
+        "Windows CI exposed a non-atomic SQLite session read while provider progress was being appended, and owner qualification requested the specified Copy action for both sides of the conversation. The budget is raised to 25500 for one transactional snapshot fix, its concurrent regression and the accessible Copy action: native owner testing proved that the WebView clipboard path did not reach the Windows clipboard, so the official write-only Tauri plugin, capability and dependency locks are included instead of pretending that a browser-only test was sufficient. Rename and presentation/data deletion remain outside M01 until their distinct Node-owned commands and safety semantics are packaged.",
+        "The owner completed the live native qualification and explicitly accepted WP-M01-007 and M01 on 2026-07-21. A detached R2 closure review of exact executable commit 24da00f54918a1b776c7329658ae0a21918edec7 returned PASS with no open P0-P2 findings after independently rerunning the atomic SQLite read regression, all 14 Head conversation integration tests and all 61 adapter-host tests."
       ]
     }
   ],
@@ -810,6 +840,8 @@
     "The chosen visual system remains attractive and minimal in the real first screen",
     "Closing and reopening the desktop window restores the same session while Node remains alive",
     "Timeout, cancellation and stale/resync states are visible and honest",
-    "Codex uses the owner's ChatGPT subscription login and no API-billed key is required"
+    "Codex uses the owner's ChatGPT subscription login and no API-billed key is required",
+    "Model, reasoning and speed choices come from the active provider and change the submitted turn rather than only changing presentation",
+    "A clarification sent while Codex is working appears in causal order and changes the same active provider turn without a hidden Stop-and-restart"
   ]
 }

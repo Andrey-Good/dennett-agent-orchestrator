@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:with-runtime": "corepack pnpm --filter @dennett/adapter-host-node build && cargo build --manifest-path ../../Cargo.toml -p dennett-node && vite",
     "build": "tsc --noEmit && vite build",
+    "build:with-runtime": "corepack pnpm --filter @dennett/adapter-host-node build && cargo build --manifest-path ../../Cargo.toml -p dennett-node --release && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -13,8 +15,11 @@
     "@phosphor-icons/react": "^2.1.10",
     "@tanstack/react-query": "^5.0.0",
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-clipboard-manager": "2.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

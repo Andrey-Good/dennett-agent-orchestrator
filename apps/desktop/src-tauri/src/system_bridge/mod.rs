@@ -1,7 +1,9 @@
+mod conversation;
 mod dto;
 mod installation;
 mod node_process;
 
+pub use conversation::*;
 pub use dto::{
     CloseSystemWatchRequest, DesktopSystemEvent, OpenSystemWatchRequest, OpenSystemWatchResponse,
     UiSafeError,
@@ -25,6 +27,8 @@ use tokio::sync::watch;
 const COMPONENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const INITIAL_WATCH_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(5);
+const NODE_READY_DEADLINE: Duration = Duration::from_secs(5);
+const NODE_READY_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Clone)]
 pub struct DesktopBridge {
@@ -34,6 +38,7 @@ pub struct DesktopBridge {
 struct DesktopBridgeInner {
     data_dir: Option<PathBuf>,
     node_starter: Arc<dyn NodeStarter>,
+    node_start_gate: Arc<tokio::sync::Mutex<()>>,
     subscriptions: Mutex<HashMap<String, ActiveSubscription>>,
 }
 
@@ -53,6 +58,7 @@ impl DesktopBridge {
             inner: Arc::new(DesktopBridgeInner {
                 data_dir,
                 node_starter,
+                node_start_gate: Arc::new(tokio::sync::Mutex::new(())),
                 subscriptions: Mutex::new(HashMap::new()),
             }),
         }
@@ -66,6 +72,17 @@ impl DesktopBridge {
     ) -> Result<OpenSystemWatchResponse, UiSafeError> {
         request.validate()?;
         let correlation_id = request.correlation_id;
+        let subscription_id = uuid::Uuid::now_v7().to_string();
+        let (cancel, cancel_rx) = watch::channel(false);
+        // Claim the window before bootstrap. Otherwise two same-window opens can
+        // complete out of order and let the older request cancel the newer watch.
+        self.replace_subscription(
+            window_label.clone(),
+            ActiveSubscription {
+                subscription_id: subscription_id.clone(),
+                cancel,
+            },
+        );
         let data_dir = self.inner.data_dir.clone().ok_or_else(|| {
             UiSafeError::new(
                 "desktop_data_directory_unavailable",
@@ -78,7 +95,6 @@ impl DesktopBridge {
         let metadata = installation::load_or_create(data_dir.clone())
             .await
             .map_err(|error| installation_error(error, &correlation_id))?;
-        let subscription_id = uuid::Uuid::now_v7().to_string();
         send(
             &channel,
             DesktopSystemEvent::phase(&subscription_id, BridgePhase::DiscoveringNode, 0),
@@ -88,6 +104,7 @@ impl DesktopBridge {
             &metadata,
             &data_dir,
             &self.inner.node_starter,
+            &self.inner.node_start_gate,
             &channel,
             &subscription_id,
             &correlation_id,
@@ -113,19 +130,20 @@ impl DesktopBridge {
             DesktopSystemEvent::phase(&subscription_id, BridgePhase::Watching, 0),
             &correlation_id,
         )?;
-
-        let (cancel, cancel_rx) = watch::channel(false);
-        self.replace_subscription(
-            window_label.clone(),
-            ActiveSubscription {
-                subscription_id: subscription_id.clone(),
-                cancel,
-            },
-        );
+        if !self.subscription_is_current(&window_label, &subscription_id) || *cancel_rx.borrow() {
+            return Err(UiSafeError::new(
+                "desktop_subscription_superseded",
+                "desktop.subscription_superseded",
+                true,
+                false,
+                &correlation_id,
+            ));
+        }
         let bridge = self.clone();
         let task_subscription_id = subscription_id.clone();
         let task_correlation_id = correlation_id.clone();
         let node_starter = self.inner.node_starter.clone();
+        let node_start_gate = self.inner.node_start_gate.clone();
         tauri::async_runtime::spawn(async move {
             supervise_watch(
                 watch,
@@ -133,6 +151,7 @@ impl DesktopBridge {
                     metadata,
                     data_dir,
                     node_starter,
+                    node_start_gate,
                     channel,
                     cancel: cancel_rx,
                     subscription_id: task_subscription_id.clone(),
@@ -213,12 +232,22 @@ impl DesktopBridge {
             subscriptions.remove(window_label);
         }
     }
+
+    fn subscription_is_current(&self, window_label: &str, subscription_id: &str) -> bool {
+        self.inner
+            .subscriptions
+            .lock()
+            .expect("desktop subscription registry poisoned")
+            .get(window_label)
+            .is_some_and(|active| active.subscription_id == subscription_id)
+    }
 }
 
 async fn connect_or_start(
     metadata: &InstallationMetadata,
     data_dir: &Path,
     node_starter: &Arc<dyn NodeStarter>,
+    node_start_gate: &tokio::sync::Mutex<()>,
     channel: &Channel<DesktopSystemEvent>,
     subscription_id: &str,
     correlation_id: &str,
@@ -237,6 +266,10 @@ async fn connect_or_start(
                 DesktopSystemEvent::phase(subscription_id, BridgePhase::StartingNode, attempt),
                 correlation_id,
             )?;
+            let _start_guard = node_start_gate.lock().await;
+            if let Ok(client) = connect(metadata).await {
+                return Ok(client);
+            }
             node_starter
                 .start(metadata.clone(), data_dir.to_path_buf())
                 .await
@@ -246,11 +279,28 @@ async fn connect_or_start(
                 DesktopSystemEvent::phase(subscription_id, BridgePhase::Handshaking, attempt),
                 correlation_id,
             )?;
-            connect(metadata)
+            wait_for_node(metadata)
                 .await
                 .map_err(|error| UiSafeError::from_client(&error, correlation_id))
         }
         Err(error) => Err(UiSafeError::from_client(&error, correlation_id)),
+    }
+}
+
+async fn wait_for_node(
+    metadata: &InstallationMetadata,
+) -> Result<AuthenticatedSystemClient, ClientError> {
+    let deadline = tokio::time::Instant::now() + NODE_READY_DEADLINE;
+    loop {
+        match connect(metadata).await {
+            Ok(client) => return Ok(client),
+            Err(error)
+                if error.node_start_candidate() && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(NODE_READY_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -317,6 +367,7 @@ struct WatchContext {
     metadata: InstallationMetadata,
     data_dir: PathBuf,
     node_starter: Arc<dyn NodeStarter>,
+    node_start_gate: Arc<tokio::sync::Mutex<()>>,
     channel: Channel<DesktopSystemEvent>,
     cancel: watch::Receiver<bool>,
     subscription_id: String,
@@ -328,6 +379,7 @@ async fn supervise_watch(mut stream: AuthenticatedSystemWatch, context: WatchCon
         metadata,
         data_dir,
         node_starter,
+        node_start_gate,
         channel,
         mut cancel,
         subscription_id,
@@ -465,6 +517,7 @@ async fn supervise_watch(mut stream: AuthenticatedSystemWatch, context: WatchCon
                 &metadata,
                 &data_dir,
                 &node_starter,
+                &node_start_gate,
                 &channel,
                 &subscription_id,
                 &correlation_id,
@@ -529,6 +582,7 @@ async fn reconnect_watch(
     metadata: &InstallationMetadata,
     data_dir: &Path,
     node_starter: &Arc<dyn NodeStarter>,
+    node_start_gate: &Arc<tokio::sync::Mutex<()>>,
     channel: &Channel<DesktopSystemEvent>,
     subscription_id: &str,
     correlation_id: &str,
@@ -538,6 +592,7 @@ async fn reconnect_watch(
         metadata,
         data_dir,
         node_starter,
+        node_start_gate,
         channel,
         subscription_id,
         correlation_id,
@@ -613,6 +668,13 @@ fn node_start_error(error: NodeStartError, correlation_id: &str) -> UiSafeError 
             true,
             correlation_id,
         ),
+        NodeStartError::RuntimeHostMissing => UiSafeError::new(
+            "runtime_host_missing",
+            "desktop.runtime_host_missing",
+            false,
+            true,
+            correlation_id,
+        ),
         NodeStartError::StartFailed => UiSafeError::new(
             "node_start_failed",
             "desktop.node_start_failed",
@@ -639,12 +701,50 @@ mod tests {
     #[cfg(windows)]
     use tauri::ipc::InvokeResponseBody;
     #[cfg(windows)]
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::{Notify, mpsc, oneshot};
+
+    #[test]
+    fn newer_subscription_claim_cannot_be_replaced_by_an_older_completion() {
+        let bridge = DesktopBridge::new(None);
+        let key = "conversation:main".to_owned();
+        let (first_cancel, first_rx) = watch::channel(false);
+        bridge.replace_subscription(
+            key.clone(),
+            ActiveSubscription {
+                subscription_id: "first".to_owned(),
+                cancel: first_cancel,
+            },
+        );
+        let (second_cancel, _second_rx) = watch::channel(false);
+        bridge.replace_subscription(
+            key.clone(),
+            ActiveSubscription {
+                subscription_id: "second".to_owned(),
+                cancel: second_cancel,
+            },
+        );
+
+        assert!(*first_rx.borrow(), "the older bootstrap must be superseded");
+        assert!(!bridge.subscription_is_current(&key, "first"));
+        assert!(bridge.subscription_is_current(&key, "second"));
+        assert!(!bridge.close_system_watch(
+            &key,
+            &CloseSystemWatchRequest {
+                subscription_id: "first".to_owned(),
+            },
+        ));
+        assert!(bridge.close_system_watch(
+            &key,
+            &CloseSystemWatchRequest {
+                subscription_id: "second".to_owned(),
+            },
+        ));
+    }
 
     #[cfg(windows)]
     type InProcessNodeHandle = (
         oneshot::Sender<()>,
-        tokio::task::JoinHandle<Result<(), dennett_local_ipc::TransportError>>,
+        tokio::task::JoinHandle<Result<(), dennett_node::NodeRunError>>,
     );
 
     #[cfg(windows)]
@@ -709,6 +809,66 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[derive(Clone)]
+    struct GatedNodeStarter {
+        inner: InProcessNodeStarter,
+        entered: Arc<AtomicBool>,
+        entered_notify: Arc<Notify>,
+        release: watch::Sender<bool>,
+    }
+
+    #[cfg(windows)]
+    impl Default for GatedNodeStarter {
+        fn default() -> Self {
+            let (release, _receiver) = watch::channel(false);
+            Self {
+                inner: InProcessNodeStarter::default(),
+                entered: Arc::new(AtomicBool::new(false)),
+                entered_notify: Arc::new(Notify::new()),
+                release,
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl NodeStarter for GatedNodeStarter {
+        fn start(&self, metadata: InstallationMetadata, data_dir: PathBuf) -> NodeStartFuture {
+            let inner = self.inner.clone();
+            let entered = self.entered.clone();
+            let entered_notify = self.entered_notify.clone();
+            let mut release = self.release.subscribe();
+            Box::pin(async move {
+                entered.store(true, Ordering::Release);
+                entered_notify.notify_waiters();
+                while !*release.borrow() {
+                    release
+                        .changed()
+                        .await
+                        .map_err(|_| NodeStartError::StartFailed)?;
+                }
+                inner.start(metadata, data_dir).await
+            })
+        }
+    }
+
+    #[cfg(windows)]
+    impl GatedNodeStarter {
+        async fn wait_until_entered(&self) {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !self.entered.load(Ordering::Acquire) {
+                    self.entered_notify.notified().await;
+                }
+            })
+            .await
+            .expect("first Node start did not reach the gate");
+        }
+
+        fn release(&self) {
+            self.release.send(true).expect("release Node start");
+        }
+    }
+
     #[test]
     fn reconnect_backoff_is_bounded() {
         assert_eq!(reconnect_delay(1), Duration::from_millis(250));
@@ -744,7 +904,13 @@ mod tests {
             )
             .await
             .expect("open system watch");
-        assert_eq!(opened.snapshot.revision, "1");
+        let initial_revision = opened.snapshot.revision.clone();
+        assert!(
+            initial_revision
+                .parse::<u64>()
+                .is_ok_and(|revision| revision > 0),
+            "the initial snapshot must carry an authoritative revision"
+        );
         assert_eq!(
             opened.snapshot.authority_epoch,
             metadata.authority_epoch.to_string()
@@ -789,7 +955,7 @@ mod tests {
             )
             .await
             .expect("Desktop reconnects while Node stays alive");
-        assert_eq!(reconnected.snapshot.revision, "1");
+        assert_eq!(reconnected.snapshot.revision, initial_revision);
         assert!(bridge.close_system_watch(
             "main",
             &CloseSystemWatchRequest {
@@ -798,6 +964,130 @@ mod tests {
         ));
         assert_eq!(node_starter.starts.load(Ordering::SeqCst), 1);
         node_starter.shutdown().await;
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_windows_share_one_node_start() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let node_starter = Arc::new(InProcessNodeStarter::default());
+        let bridge = DesktopBridge::with_node_starter(
+            Some(directory.path().to_owned()),
+            node_starter.clone(),
+        );
+        let first = bridge.open_system_watch(
+            "window-one".to_owned(),
+            OpenSystemWatchRequest {
+                correlation_id: "parallel-one".to_owned(),
+            },
+            Channel::new(|_| Ok(())),
+        );
+        let second = bridge.open_system_watch(
+            "window-two".to_owned(),
+            OpenSystemWatchRequest {
+                correlation_id: "parallel-two".to_owned(),
+            },
+            Channel::new(|_| Ok(())),
+        );
+        let (first, second) = tokio::join!(first, second);
+        let first = first.expect("first watch");
+        let second = second.expect("second watch");
+        assert_eq!(node_starter.starts.load(Ordering::SeqCst), 1);
+        assert!(bridge.close_system_watch(
+            "window-one",
+            &CloseSystemWatchRequest {
+                subscription_id: first.subscription_id,
+            },
+        ));
+        assert!(bridge.close_system_watch(
+            "window-two",
+            &CloseSystemWatchRequest {
+                subscription_id: second.subscription_id,
+            },
+        ));
+        node_starter.shutdown().await;
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn older_same_window_bootstrap_cannot_replace_the_newer_watch() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let node_starter = Arc::new(GatedNodeStarter::default());
+        let bridge = DesktopBridge::with_node_starter(
+            Some(directory.path().to_owned()),
+            node_starter.clone(),
+        );
+        let first_bridge = bridge.clone();
+        let first = tokio::spawn(async move {
+            first_bridge
+                .open_system_watch(
+                    "same-window".to_owned(),
+                    OpenSystemWatchRequest {
+                        correlation_id: "same-window-first".to_owned(),
+                    },
+                    Channel::new(|_| Ok(())),
+                )
+                .await
+        });
+        node_starter.wait_until_entered().await;
+        let first_subscription = bridge
+            .inner
+            .subscriptions
+            .lock()
+            .expect("subscription registry")
+            .get("same-window")
+            .expect("first subscription claim")
+            .subscription_id
+            .clone();
+
+        let second_bridge = bridge.clone();
+        let second = tokio::spawn(async move {
+            second_bridge
+                .open_system_watch(
+                    "same-window".to_owned(),
+                    OpenSystemWatchRequest {
+                        correlation_id: "same-window-second".to_owned(),
+                    },
+                    Channel::new(|_| Ok(())),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let changed = bridge
+                    .inner
+                    .subscriptions
+                    .lock()
+                    .expect("subscription registry")
+                    .get("same-window")
+                    .is_some_and(|active| active.subscription_id != first_subscription);
+                if changed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("newer subscription did not claim the window");
+        node_starter.release();
+
+        let first_error = first
+            .await
+            .expect("first bootstrap task")
+            .expect_err("older bootstrap must be superseded");
+        assert_eq!(&*first_error.code, "desktop_subscription_superseded");
+        let second = second
+            .await
+            .expect("second bootstrap task")
+            .expect("newer bootstrap must remain current");
+        assert!(bridge.subscription_is_current("same-window", &second.subscription_id));
+        assert!(bridge.close_system_watch(
+            "same-window",
+            &CloseSystemWatchRequest {
+                subscription_id: second.subscription_id,
+            },
+        ));
+        node_starter.inner.shutdown().await;
     }
 
     #[cfg(windows)]

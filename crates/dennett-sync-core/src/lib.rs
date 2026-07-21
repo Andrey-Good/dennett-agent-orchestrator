@@ -1,5 +1,6 @@
 //! Domain-level operation log shapes; transport and storage are adapters.
 
+pub mod admission;
 pub mod draft;
 pub mod watch;
 

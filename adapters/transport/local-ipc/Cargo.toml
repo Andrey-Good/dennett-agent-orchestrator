@@ -8,7 +8,7 @@ rust-version.workspace = true
 [features]
 default = ["client", "server"]
 client = []
-server = ["dep:dennett-head", "dep:dennett-sync-core"]
+server = ["dep:dennett-agent-core", "dep:dennett-contracts", "dep:dennett-head", "dep:dennett-memory-core", "dep:dennett-sync-core"]
 
 [dependencies]
 getrandom.workspace = true
@@ -27,7 +27,10 @@ tonic-prost.workspace = true
 tower.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+dennett-agent-core = { path = "../../../crates/dennett-agent-core", optional = true }
 dennett-head = { path = "../../../services/head", optional = true }
+dennett-contracts = { path = "../../../crates/dennett-contracts", optional = true }
+dennett-memory-core = { path = "../../../crates/dennett-memory-core", optional = true }
 dennett-sync-core = { path = "../../../crates/dennett-sync-core", optional = true }
 
 [target.'cfg(windows)'.dependencies]

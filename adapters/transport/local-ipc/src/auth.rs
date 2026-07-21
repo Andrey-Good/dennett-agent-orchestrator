@@ -1,5 +1,8 @@
 use crate::protocol::dennett::control::v1::{ClientHello, CompatibilityMode, ServerWelcome};
-use crate::{DEFAULT_MAX_MESSAGE_BYTES, M01_PROTOCOL_VERSION, PeerIdentity};
+use crate::{
+    COMPOSER_DRAFT_FEATURE, DEFAULT_MAX_MESSAGE_BYTES, M01_PROTOCOL_VERSION, PeerIdentity,
+    SESSION_CONVERSATION_FEATURE, SYSTEM_WATCH_FEATURE,
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -39,7 +42,11 @@ impl HandshakePolicy {
             node_version: node_version.into(),
             authority_epoch,
             supported_protocol_versions: vec![M01_PROTOCOL_VERSION],
-            enabled_features: vec!["system-watch".to_owned()],
+            enabled_features: vec![
+                SYSTEM_WATCH_FEATURE.to_owned(),
+                SESSION_CONVERSATION_FEATURE.to_owned(),
+                COMPOSER_DRAFT_FEATURE.to_owned(),
+            ],
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             bootstrap_capability_ttl: DEFAULT_BOOTSTRAP_CAPABILITY_TTL,
             ui_session_ttl: DEFAULT_UI_SESSION_TTL,
@@ -106,6 +113,7 @@ impl SessionRegistry {
             session_id.clone(),
             SessionRecord {
                 peer: peer.clone(),
+                device_id: hello.device_id,
                 installation_id: hello.installation_id,
                 authority_epoch: self.policy.authority_epoch,
                 proof,
@@ -212,6 +220,7 @@ impl SessionRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSession {
     pub client_session_id: String,
+    pub device_id: String,
     pub authority_epoch: u64,
 }
 
@@ -231,6 +240,7 @@ impl RegistryState {
 
 struct SessionRecord {
     peer: PeerIdentity,
+    device_id: String,
     installation_id: String,
     authority_epoch: u64,
     proof: [u8; PROOF_BYTES],
@@ -261,6 +271,7 @@ impl SessionRecord {
     fn authenticated(&self, client_session_id: &str) -> AuthenticatedSession {
         AuthenticatedSession {
             client_session_id: client_session_id.to_owned(),
+            device_id: self.device_id.clone(),
             authority_epoch: self.authority_epoch,
         }
     }
@@ -388,7 +399,10 @@ mod tests {
     fn proof_is_single_use_and_connection_bound() {
         let registry = SessionRegistry::new(HandshakePolicy::m01("installation-1", "node", 7));
         let welcome = registry.issue(&peer("a"), hello(1)).expect("handshake");
-        assert_eq!(welcome.enabled_features, vec!["system-watch"]);
+        assert_eq!(
+            welcome.enabled_features,
+            vec![SYSTEM_WATCH_FEATURE.to_owned()]
+        );
         assert!(matches!(
             registry.consume_bootstrap(
                 &peer("b"),
@@ -486,6 +500,27 @@ mod tests {
         assert!(matches!(
             registry.issue(&peer("challenge-over-capacity"), hello(0)),
             Err(AuthError::SessionCapacityExceeded)
+        ));
+    }
+
+    #[tokio::test]
+    async fn active_session_lease_expires_and_requires_reauthentication() {
+        let mut policy = HandshakePolicy::m01("installation-1", "node", 7);
+        policy.ui_session_ttl = Duration::from_millis(20);
+        let registry = SessionRegistry::new(policy);
+        let bound_peer = peer("expiring-session");
+        let welcome = registry.issue(&bound_peer, hello(9)).expect("handshake");
+        registry
+            .consume_bootstrap(
+                &bound_peer,
+                &welcome.client_session_id,
+                &welcome.session_proof,
+            )
+            .expect("bootstrap");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(matches!(
+            registry.authorize_active(&bound_peer, &welcome.client_session_id),
+            Err(AuthError::SessionUnknown)
         ));
     }
 }

@@ -1,19 +1,48 @@
+mod runtime_host;
+
+use dennett_agent_core::{AgentRuntimePort, FakeAgentRuntime, RuntimeError};
+use dennett_contracts::{CommandId, ProjectId};
+use dennett_head::conversation::{ConversationApplication, LocalProject};
+use dennett_head::draft::{ComposerDraftApplication, SessionOperationLocks};
+use dennett_head::session::SessionCoordinator;
 use dennett_head::system::{SystemProjection, SystemSnapshot};
 use dennett_local_ipc::{
-    HandshakePolicy, LocalEndpoint, SessionRegistry, SystemServiceAdapter, TransportError,
-    run_system_server,
+    HandshakePolicy, LocalEndpoint, SessionRegistry, SessionServiceAdapter, SystemServiceAdapter,
+    TransportError, run_local_server,
 };
+use dennett_memory_core::session::{SessionJournal, SessionJournalError};
+use dennett_storage_sqlite::SqliteControlStore;
+use fs2::FileExt;
+use sha2::{Digest, Sha256};
+use std::fs::{File, OpenOptions};
+use std::path::PathBuf;
 use std::sync::Arc;
+
+pub use runtime_host::{RUNTIME_HOST_SCRIPT_ENV, RUNTIME_NODE_EXECUTABLE_ENV};
 
 pub const INSTALLATION_ID_ENV: &str = "DENNETT_INSTALLATION_ID";
 pub const AUTHORITY_EPOCH_ENV: &str = "DENNETT_AUTHORITY_EPOCH";
+pub const DATA_DIR_ENV: &str = "DENNETT_DATA_DIR";
+pub const PROJECT_ROOT_ENV: &str = "DENNETT_PROJECT_ROOT";
+pub const AGENT_RUNTIME_ENV: &str = "DENNETT_AGENT_RUNTIME";
 const SYSTEM_WATCH_CAPACITY: usize = 128;
+const SESSION_WATCH_CAPACITY: usize = 128;
+const NODE_INSTANCE_LOCK_FILE: &str = "dennett-node.lock";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NodeConfig {
     pub installation_id: String,
     pub authority_epoch: u64,
     pub node_version: String,
+    pub data_dir: PathBuf,
+    pub project_root: PathBuf,
+    pub agent_runtime: AgentRuntimeSelection,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentRuntimeSelection {
+    Fake,
+    Codex,
 }
 
 impl NodeConfig {
@@ -26,7 +55,28 @@ impl NodeConfig {
             .transpose()
             .map_err(|_| NodeConfigError::InvalidAuthorityEpoch)?
             .unwrap_or(1);
-        Self::new(installation_id, authority_epoch, env!("CARGO_PKG_VERSION"))
+        let mut config = Self::new(
+            installation_id.clone(),
+            authority_epoch,
+            env!("CARGO_PKG_VERSION"),
+        )?;
+        config.data_dir = std::env::var_os(DATA_DIR_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join("dennett-node")
+                    .join(installation_id)
+            });
+        config.project_root = std::env::var_os(PROJECT_ROOT_ENV)
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| config.data_dir.clone());
+        config.agent_runtime = match std::env::var(AGENT_RUNTIME_ENV).as_deref() {
+            Ok("fake") => AgentRuntimeSelection::Fake,
+            Ok("codex") | Err(_) => AgentRuntimeSelection::Codex,
+            Ok(_) => return Err(NodeConfigError::InvalidAgentRuntime),
+        };
+        Ok(config)
     }
 
     pub fn new(
@@ -44,15 +94,34 @@ impl NodeConfig {
         if node_version.is_empty() {
             return Err(NodeConfigError::InvalidNodeVersion);
         }
+        let data_dir = std::env::temp_dir()
+            .join("dennett-node-tests")
+            .join(&installation_id);
         Ok(Self {
             installation_id,
             authority_epoch,
             node_version,
+            data_dir,
+            project_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            agent_runtime: AgentRuntimeSelection::Fake,
         })
+    }
+
+    #[must_use]
+    pub fn with_paths(mut self, data_dir: PathBuf, project_root: PathBuf) -> Self {
+        self.data_dir = data_dir;
+        self.project_root = project_root;
+        self
+    }
+
+    #[must_use]
+    pub fn with_agent_runtime(mut self, agent_runtime: AgentRuntimeSelection) -> Self {
+        self.agent_runtime = agent_runtime;
+        self
     }
 }
 
-pub async fn run<F>(config: NodeConfig, shutdown: F) -> Result<(), TransportError>
+pub async fn run<F>(config: NodeConfig, shutdown: F) -> Result<(), NodeRunError>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
@@ -61,22 +130,127 @@ where
         authority_epoch = config.authority_epoch,
         "validated Node local IPC configuration"
     );
+    tokio::fs::create_dir_all(&config.data_dir)
+        .await
+        .map_err(TransportError::from)?;
+    let standalone_workspace = config.data_dir.join("standalone-workspace");
+    tokio::fs::create_dir_all(&standalone_workspace)
+        .await
+        .map_err(TransportError::from)?;
+    let _instance_lock = NodeInstanceLock::acquire(&config.data_dir)?;
     let endpoint = LocalEndpoint::for_installation(config.installation_id.clone())?;
+    let store = Arc::new(SqliteControlStore::open(config.data_dir.join("control.sqlite3")).await?);
+    let coordinator = SessionCoordinator::new(
+        SessionJournal::new(store.clone()),
+        config.authority_epoch,
+        SESSION_WATCH_CAPACITY,
+    );
+    let project_id = project_id_for(&config.project_root);
+    let display_name = config
+        .project_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Dennett project")
+        .to_owned();
+    let locks = SessionOperationLocks::default();
+    let drafts = ComposerDraftApplication::new(coordinator.clone(), store.clone(), locks);
+    let runtime: Arc<dyn AgentRuntimePort> = match config.agent_runtime {
+        AgentRuntimeSelection::Fake => Arc::new(FakeAgentRuntime),
+        AgentRuntimeSelection::Codex => Arc::new(runtime_host::HostedAgentRuntime::start().await?),
+    };
+    let runtime_descriptor = runtime.describe().await?;
+    let mut system_snapshot = SystemSnapshot::empty(config.authority_epoch);
+    system_snapshot.runtime = Some(runtime_descriptor);
     let projection = Arc::new(SystemProjection::new(
-        SystemSnapshot::empty(config.authority_epoch),
+        system_snapshot,
         SYSTEM_WATCH_CAPACITY,
     ));
+    let application = Arc::new(
+        ConversationApplication::new(
+            coordinator,
+            projection.clone(),
+            runtime,
+            LocalProject {
+                project_id,
+                display_name,
+                workspace_path: config.project_root.to_string_lossy().into_owned(),
+                standalone_workspace_path: standalone_workspace.to_string_lossy().into_owned(),
+            },
+        )
+        .with_continuations(store.clone())
+        .with_drafts(drafts.clone()),
+    );
+    application
+        .initialize(CommandId::new(), "Untitled chat".to_owned())
+        .await?;
     let sessions = SessionRegistry::new(HandshakePolicy::m01(
         config.installation_id,
         config.node_version,
         config.authority_epoch,
     ));
-    let service = SystemServiceAdapter::new(projection, sessions);
+    let system_service = SystemServiceAdapter::new(projection, sessions.clone());
+    let session_service = SessionServiceAdapter::new(application, drafts, sessions, store);
     tracing::info!(
         phase = "local_ipc_listen",
         "starting authenticated Node IPC"
     );
-    run_system_server(endpoint, service, shutdown).await
+    run_local_server(endpoint, system_service, session_service, shutdown)
+        .await
+        .map_err(Into::into)
+}
+
+struct NodeInstanceLock {
+    _file: File,
+}
+
+impl NodeInstanceLock {
+    fn acquire(data_dir: &std::path::Path) -> Result<Self, NodeRunError> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(data_dir.join(NODE_INSTANCE_LOCK_FILE))
+            .map_err(|_| NodeRunError::InstanceLockUnavailable)?;
+        file.try_lock_exclusive()
+            .map_err(|_| NodeRunError::AlreadyRunning)?;
+        Ok(Self { _file: file })
+    }
+}
+
+fn project_id_for(project_root: &std::path::Path) -> ProjectId {
+    let canonical = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    let mut identity = canonical.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        identity.make_ascii_lowercase();
+    }
+    let digest = Sha256::digest(identity.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    ProjectId(uuid::Uuid::from_bytes(bytes))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum NodeRunError {
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+    #[error(transparent)]
+    Session(#[from] SessionJournalError),
+    #[error(transparent)]
+    Conversation(#[from] dennett_head::conversation::ConversationError),
+    #[error("another Dennett Node already owns this installation")]
+    AlreadyRunning,
+    #[error("the Dennett Node instance lock is unavailable")]
+    InstanceLockUnavailable,
+    #[error(transparent)]
+    RuntimeHost(#[from] runtime_host::RuntimeHostStartError),
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -89,6 +263,8 @@ pub enum NodeConfigError {
     InvalidAuthorityEpoch,
     #[error("Node version is invalid")]
     InvalidNodeVersion,
+    #[error("DENNETT_AGENT_RUNTIME must be fake or codex")]
+    InvalidAgentRuntime,
 }
 
 #[cfg(test)]
@@ -109,5 +285,17 @@ mod tests {
             NodeConfig::new("install", 1, ""),
             Err(NodeConfigError::InvalidNodeVersion)
         ));
+    }
+
+    #[test]
+    fn one_process_owns_a_profile_lock_at_a_time() {
+        let directory = tempfile::tempdir().expect("temporary profile");
+        let first = NodeInstanceLock::acquire(directory.path()).expect("first lock");
+        assert!(matches!(
+            NodeInstanceLock::acquire(directory.path()),
+            Err(NodeRunError::AlreadyRunning)
+        ));
+        drop(first);
+        NodeInstanceLock::acquire(directory.path()).expect("lock released");
     }
 }

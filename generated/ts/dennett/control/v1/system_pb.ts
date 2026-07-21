@@ -21,7 +21,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/control/v1/system.proto.
  */
 export const file_dennett_control_v1_system: GenFile = /*@__PURE__*/
-  fileDesc("Ch9kZW5uZXR0L2NvbnRyb2wvdjEvc3lzdGVtLnByb3RvEhJkZW5uZXR0LmNvbnRyb2wudjEiwAEKC0NsaWVudEhlbGxvEhgKEGNsaWVudF9jb21wb25lbnQYASABKAkSGQoRY29tcG9uZW50X3ZlcnNpb24YAiABKAkSGQoRcHJvdG9jb2xfdmVyc2lvbnMYAyADKA0SFwoPaW5zdGFsbGF0aW9uX2lkGAQgASgJEhEKCWRldmljZV9pZBgFIAEoCRIZChFzZXNzaW9uX2NoYWxsZW5nZRgGIAEoDBIaChJyZXF1ZXN0ZWRfZmVhdHVyZXMYByADKAkioAIKDVNlcnZlcldlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIUCgxub2RlX3ZlcnNpb24YAiABKAkSHAoUYXV0aG9yaXR5X2Vwb2NoX3NlZW4YAyABKAQSGAoQZW5hYmxlZF9mZWF0dXJlcxgEIAMoCRIVCg1zZXNzaW9uX3Byb29mGAUgASgMEhcKD3Jlc3luY19yZXF1aXJlZBgGIAEoCBJBChJjb21wYXRpYmlsaXR5X21vZGUYByABKA4yJS5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcGF0aWJpbGl0eU1vZGUSGQoRbWF4X21lc3NhZ2VfYnl0ZXMYCCABKAQSGQoRY2xpZW50X3Nlc3Npb25faWQYCSABKAkiQgoQSGFuZHNoYWtlUmVxdWVzdBIuCgVoZWxsbxgBIAEoCzIfLmRlbm5ldHQuY29udHJvbC52MS5DbGllbnRIZWxsbyKHAQoRSGFuZHNoYWtlUmVzcG9uc2USNAoHd2VsY29tZRgBIAEoCzIhLmRlbm5ldHQuY29udHJvbC52MS5TZXJ2ZXJXZWxjb21lSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSJ0ChBCb290c3RyYXBSZXF1ZXN0EhUKDXNlc3Npb25fcHJvb2YYASABKAwSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBARIZChFjbGllbnRfc2Vzc2lvbl9pZBgDIAEoCUIRCg9fa25vd25fcmV2aXNpb24izQIKEUJvb3RzdHJhcFNuYXBzaG90EhAKCHJldmlzaW9uGAEgASgEEhcKD2F1dGhvcml0eV9lcG9jaBgCIAEoBBIvCgtvYnNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASNAoIcHJvamVjdHMYBCADKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN1bW1hcnkSOwoPcmVjZW50X3Nlc3Npb25zGAUgAygLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5EhkKEWFjdGl2ZV9wcm9qZWN0X2lkGAYgASgJEhkKEWFjdGl2ZV9zZXNzaW9uX2lkGAcgASgJEjMKCm5vZGVfc3RhdGUYCCABKA4yHy5kZW5uZXR0LmNvbnRyb2wudjEuSGVhbHRoU3RhdGUijAEKEUJvb3RzdHJhcFJlc3BvbnNlEjkKCHNuYXBzaG90GAEgASgLMiUuZGVubmV0dC5jb250cm9sLnYxLkJvb3RzdHJhcFNuYXBzaG90SAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSISChBHZXRIZWFsdGhSZXF1ZXN0Ip0BCg9HZXRIZWFsdGhSZXN1bHQSLgoFc3RhdGUYASABKA4yHy5kZW5uZXR0LmNvbnRyb2wudjEuSGVhbHRoU3RhdGUSFAoMbm9kZV92ZXJzaW9uGAIgASgJEi8KC29ic2VydmVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgtzdGF0dXNfY29kZRgEIAEoCSKIAQoRR2V0SGVhbHRoUmVzcG9uc2USNQoGaGVhbHRoGAEgASgLMiMuZGVubmV0dC5jb250cm9sLnYxLkdldEhlYWx0aFJlc3VsdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUiaAoOU3lzdGVtU25hcHNob3QSOAoJYm9vdHN0cmFwGAEgASgLMiUuZGVubmV0dC5jb250cm9sLnYxLkJvb3RzdHJhcFNuYXBzaG90EhwKFHNuYXBzaG90X2ZpbmdlcnByaW50GAIgASgMIoMBChVTeXN0ZW1TZWxlY3Rpb25VcGRhdGUSHgoRYWN0aXZlX3Byb2plY3RfaWQYASABKAlIAIgBARIeChFhY3RpdmVfc2Vzc2lvbl9pZBgCIAEoCUgBiAEBQhQKEl9hY3RpdmVfcHJvamVjdF9pZEIUChJfYWN0aXZlX3Nlc3Npb25faWQijwEKElN5c3RlbUhlYWx0aFVwZGF0ZRIzCgpub2RlX3N0YXRlGAEgASgOMh8uZGVubmV0dC5jb250cm9sLnYxLkhlYWx0aFN0YXRlEhMKC3N0YXR1c19jb2RlGAIgASgJEi8KC29ic2VydmVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKYAwoOU3lzdGVtTXV0YXRpb24SPAoOdXBzZXJ0X3Byb2plY3QYASABKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN1bW1hcnlIABIbChFyZW1vdmVfcHJvamVjdF9pZBgCIAEoCUgAEjwKDnVwc2VydF9zZXNzaW9uGAMgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5SAASGwoRcmVtb3ZlX3Nlc3Npb25faWQYBCABKAlIABJFChB1cGRhdGVfc2VsZWN0aW9uGAUgASgLMikuZGVubmV0dC5jb250cm9sLnYxLlN5c3RlbVNlbGVjdGlvblVwZGF0ZUgAEj8KDXVwZGF0ZV9oZWFsdGgYBiABKAsyJi5kZW5uZXR0LmNvbnRyb2wudjEuU3lzdGVtSGVhbHRoVXBkYXRlSAASPAoOZmluaXNoX2NvbW1hbmQYByABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kVGVybWluYWxIAEIKCghtdXRhdGlvbiJxCgtTeXN0ZW1EZWx0YRIVCg1iYXNlX3JldmlzaW9uGAEgASgEEhQKDG5ld19yZXZpc2lvbhgCIAEoBBI1CgltdXRhdGlvbnMYAyADKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuU3lzdGVtTXV0YXRpb24i2AIKEFN5c3RlbVdhdGNoRnJhbWUSLAoGY3Vyc29yGAEgASgLMhwuZGVubmV0dC5zeW5jLnYxLldhdGNoQ3Vyc29yEjYKCHNuYXBzaG90GAIgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlN5c3RlbVNuYXBzaG90SAASMAoFZGVsdGEYAyABKAsyHy5kZW5uZXR0LmNvbnRyb2wudjEuU3lzdGVtRGVsdGFIABI0CgloZWFydGJlYXQYBCABKAsyHy5kZW5uZXR0LnN5bmMudjEuV2F0Y2hIZWFydGJlYXRIABI6Cg9yZXN5bmNfcmVxdWlyZWQYBSABKAsyHy5kZW5uZXR0LnN5bmMudjEuUmVzeW5jUmVxdWlyZWRIABIxCgVlcnJvchgGIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIHCgVmcmFtZSJZCgxXYXRjaFJlcXVlc3QSGQoRY2xpZW50X3Nlc3Npb25faWQYASABKAkSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBAUIRCg9fa25vd25fcmV2aXNpb24iRAoNV2F0Y2hSZXNwb25zZRIzCgVmcmFtZRgBIAEoCzIkLmRlbm5ldHQuY29udHJvbC52MS5TeXN0ZW1XYXRjaEZyYW1lKvABChFDb21wYXRpYmlsaXR5TW9kZRIiCh5DT01QQVRJQklMSVRZX01PREVfVU5TUEVDSUZJRUQQABIbChdDT01QQVRJQklMSVRZX01PREVfRlVMTBABEiAKHENPTVBBVElCSUxJVFlfTU9ERV9SRUFEX09OTFkQAhInCiNDT01QQVRJQklMSVRZX01PREVfRkVBVFVSRV9ERUdSQURFRBADEiYKIkNPTVBBVElCSUxJVFlfTU9ERV9VUERBVEVfUkVRVUlSRUQQBBInCiNDT01QQVRJQklMSVRZX01PREVfQkxPQ0tFRF9TRUNVUklUWRAFKp0BCgtIZWFsdGhTdGF0ZRIcChhIRUFMVEhfU1RBVEVfVU5TUEVDSUZJRUQQABIZChVIRUFMVEhfU1RBVEVfU1RBUlRJTkcQARIWChJIRUFMVEhfU1RBVEVfUkVBRFkQAhIZChVIRUFMVEhfU1RBVEVfREVHUkFERUQQAxIiCh5IRUFMVEhfU1RBVEVfUkVDT1ZFUllfUkVRVUlSRUQQBDLtAgoNU3lzdGVtU2VydmljZRJYCglIYW5kc2hha2USJC5kZW5uZXR0LmNvbnRyb2wudjEuSGFuZHNoYWtlUmVxdWVzdBolLmRlbm5ldHQuY29udHJvbC52MS5IYW5kc2hha2VSZXNwb25zZRJYCglCb290c3RyYXASJC5kZW5uZXR0LmNvbnRyb2wudjEuQm9vdHN0cmFwUmVxdWVzdBolLmRlbm5ldHQuY29udHJvbC52MS5Cb290c3RyYXBSZXNwb25zZRJOCgVXYXRjaBIgLmRlbm5ldHQuY29udHJvbC52MS5XYXRjaFJlcXVlc3QaIS5kZW5uZXR0LmNvbnRyb2wudjEuV2F0Y2hSZXNwb25zZTABElgKCUdldEhlYWx0aBIkLmRlbm5ldHQuY29udHJvbC52MS5HZXRIZWFsdGhSZXF1ZXN0GiUuZGVubmV0dC5jb250cm9sLnYxLkdldEhlYWx0aFJlc3BvbnNlYgZwcm90bzM", [file_dennett_common_v1_common, file_dennett_control_v1_project, file_dennett_control_v1_session, file_dennett_sync_v1_watch, file_google_protobuf_timestamp]);
+  fileDesc("Ch9kZW5uZXR0L2NvbnRyb2wvdjEvc3lzdGVtLnByb3RvEhJkZW5uZXR0LmNvbnRyb2wudjEiwAEKC0NsaWVudEhlbGxvEhgKEGNsaWVudF9jb21wb25lbnQYASABKAkSGQoRY29tcG9uZW50X3ZlcnNpb24YAiABKAkSGQoRcHJvdG9jb2xfdmVyc2lvbnMYAyADKA0SFwoPaW5zdGFsbGF0aW9uX2lkGAQgASgJEhEKCWRldmljZV9pZBgFIAEoCRIZChFzZXNzaW9uX2NoYWxsZW5nZRgGIAEoDBIaChJyZXF1ZXN0ZWRfZmVhdHVyZXMYByADKAkioAIKDVNlcnZlcldlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIUCgxub2RlX3ZlcnNpb24YAiABKAkSHAoUYXV0aG9yaXR5X2Vwb2NoX3NlZW4YAyABKAQSGAoQZW5hYmxlZF9mZWF0dXJlcxgEIAMoCRIVCg1zZXNzaW9uX3Byb29mGAUgASgMEhcKD3Jlc3luY19yZXF1aXJlZBgGIAEoCBJBChJjb21wYXRpYmlsaXR5X21vZGUYByABKA4yJS5kZW5uZXR0LmNvbnRyb2wudjEuQ29tcGF0aWJpbGl0eU1vZGUSGQoRbWF4X21lc3NhZ2VfYnl0ZXMYCCABKAQSGQoRY2xpZW50X3Nlc3Npb25faWQYCSABKAkiQgoQSGFuZHNoYWtlUmVxdWVzdBIuCgVoZWxsbxgBIAEoCzIfLmRlbm5ldHQuY29udHJvbC52MS5DbGllbnRIZWxsbyKHAQoRSGFuZHNoYWtlUmVzcG9uc2USNAoHd2VsY29tZRgBIAEoCzIhLmRlbm5ldHQuY29udHJvbC52MS5TZXJ2ZXJXZWxjb21lSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSJ0ChBCb290c3RyYXBSZXF1ZXN0EhUKDXNlc3Npb25fcHJvb2YYASABKAwSGwoOa25vd25fcmV2aXNpb24YAiABKARIAIgBARIZChFjbGllbnRfc2Vzc2lvbl9pZBgDIAEoCUIRCg9fa25vd25fcmV2aXNpb24iggMKEUJvb3RzdHJhcFNuYXBzaG90EhAKCHJldmlzaW9uGAEgASgEEhcKD2F1dGhvcml0eV9lcG9jaBgCIAEoBBIvCgtvYnNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASNAoIcHJvamVjdHMYBCADKAsyIi5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN1bW1hcnkSOwoPcmVjZW50X3Nlc3Npb25zGAUgAygLMiIuZGVubmV0dC5jb250cm9sLnYxLlNlc3Npb25TdW1tYXJ5EhkKEWFjdGl2ZV9wcm9qZWN0X2lkGAYgASgJEhkKEWFjdGl2ZV9zZXNzaW9uX2lkGAcgASgJEjMKCm5vZGVfc3RhdGUYCCABKA4yHy5kZW5uZXR0LmNvbnRyb2wudjEuSGVhbHRoU3RhdGUSMwoHcnVudGltZRgJIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5SdW50aW1lU3VtbWFyeSKHAgoOUnVudGltZVN1bW1hcnkSEgoKYWRhcHRlcl9pZBgBIAEoCRIUCgxydW50aW1lX2tpbmQYAiABKAkSEQoJc3RyZWFtaW5nGAMgASgIEhQKDGNvbnRpbnVhdGlvbhgEIAEoCBIbChNzY29wZWRfY2FuY2VsbGF0aW9uGAUgASgIEhEKCWRlYWRsaW5lcxgGIAEoCBIgChhuYXRpdmVfZXh0ZW5zaW9uX3NjaGVtYXMYByADKAkSPgoIY29udHJvbHMYCCADKAsyLC5kZW5uZXR0LmNvbnRyb2wudjEuUnVudGltZUNvbnRyb2xEZXNjcmlwdG9yEhAKCHN0ZWVyaW5nGAkgASgJIkEKF1J1bnRpbWVDb250cm9sQ29uZGl0aW9uEhIKCmNvbnRyb2xfaWQYASABKAkSEgoKY2hvaWNlX2lkcxgCIAMoCSKgAQoUUnVudGltZUNvbnRyb2xDaG9pY2USCgoCaWQYASABKAkSDQoFbGFiZWwYAiABKAkSGAoLZGVzY3JpcHRpb24YAyABKAlIAIgBARJDCg5hdmFpbGFibGVfd2hlbhgEIAMoCzIrLmRlbm5ldHQuY29udHJvbC52MS5SdW50aW1lQ29udHJvbENvbmRpdGlvbkIOCgxfZGVzY3JpcHRpb24iiwEKGFJ1bnRpbWVDb250cm9sRGVzY3JpcHRvchIKCgJpZBgBIAEoCRINCgVsYWJlbBgCIAEoCRIZChFkZWZhdWx0X2Nob2ljZV9pZBgDIAEoCRI5CgdjaG9pY2VzGAQgAygLMiguZGVubmV0dC5jb250cm9sLnYxLlJ1bnRpbWVDb250cm9sQ2hvaWNlIowBChFCb290c3RyYXBSZXNwb25zZRI5CghzbmFwc2hvdBgBIAEoCzIlLmRlbm5ldHQuY29udHJvbC52MS5Cb290c3RyYXBTbmFwc2hvdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUiEgoQR2V0SGVhbHRoUmVxdWVzdCKdAQoPR2V0SGVhbHRoUmVzdWx0Ei4KBXN0YXRlGAEgASgOMh8uZGVubmV0dC5jb250cm9sLnYxLkhlYWx0aFN0YXRlEhQKDG5vZGVfdmVyc2lvbhgCIAEoCRIvCgtvYnNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoLc3RhdHVzX2NvZGUYBCABKAkiiAEKEUdldEhlYWx0aFJlc3BvbnNlEjUKBmhlYWx0aBgBIAEoCzIjLmRlbm5ldHQuY29udHJvbC52MS5HZXRIZWFsdGhSZXN1bHRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lImgKDlN5c3RlbVNuYXBzaG90EjgKCWJvb3RzdHJhcBgBIAEoCzIlLmRlbm5ldHQuY29udHJvbC52MS5Cb290c3RyYXBTbmFwc2hvdBIcChRzbmFwc2hvdF9maW5nZXJwcmludBgCIAEoDCKDAQoVU3lzdGVtU2VsZWN0aW9uVXBkYXRlEh4KEWFjdGl2ZV9wcm9qZWN0X2lkGAEgASgJSACIAQESHgoRYWN0aXZlX3Nlc3Npb25faWQYAiABKAlIAYgBAUIUChJfYWN0aXZlX3Byb2plY3RfaWRCFAoSX2FjdGl2ZV9zZXNzaW9uX2lkIo8BChJTeXN0ZW1IZWFsdGhVcGRhdGUSMwoKbm9kZV9zdGF0ZRgBIAEoDjIfLmRlbm5ldHQuY29udHJvbC52MS5IZWFsdGhTdGF0ZRITCgtzdGF0dXNfY29kZRgCIAEoCRIvCgtvYnNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAimAMKDlN5c3RlbU11dGF0aW9uEjwKDnVwc2VydF9wcm9qZWN0GAEgASgLMiIuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3RTdW1tYXJ5SAASGwoRcmVtb3ZlX3Byb2plY3RfaWQYAiABKAlIABI8Cg51cHNlcnRfc2Vzc2lvbhgDIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5TZXNzaW9uU3VtbWFyeUgAEhsKEXJlbW92ZV9zZXNzaW9uX2lkGAQgASgJSAASRQoQdXBkYXRlX3NlbGVjdGlvbhgFIAEoCzIpLmRlbm5ldHQuY29udHJvbC52MS5TeXN0ZW1TZWxlY3Rpb25VcGRhdGVIABI/Cg11cGRhdGVfaGVhbHRoGAYgASgLMiYuZGVubmV0dC5jb250cm9sLnYxLlN5c3RlbUhlYWx0aFVwZGF0ZUgAEjwKDmZpbmlzaF9jb21tYW5kGAcgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZFRlcm1pbmFsSABCCgoIbXV0YXRpb24icQoLU3lzdGVtRGVsdGESFQoNYmFzZV9yZXZpc2lvbhgBIAEoBBIUCgxuZXdfcmV2aXNpb24YAiABKAQSNQoJbXV0YXRpb25zGAMgAygLMiIuZGVubmV0dC5jb250cm9sLnYxLlN5c3RlbU11dGF0aW9uItgCChBTeXN0ZW1XYXRjaEZyYW1lEiwKBmN1cnNvchgBIAEoCzIcLmRlbm5ldHQuc3luYy52MS5XYXRjaEN1cnNvchI2CghzbmFwc2hvdBgCIAEoCzIiLmRlbm5ldHQuY29udHJvbC52MS5TeXN0ZW1TbmFwc2hvdEgAEjAKBWRlbHRhGAMgASgLMh8uZGVubmV0dC5jb250cm9sLnYxLlN5c3RlbURlbHRhSAASNAoJaGVhcnRiZWF0GAQgASgLMh8uZGVubmV0dC5zeW5jLnYxLldhdGNoSGVhcnRiZWF0SAASOgoPcmVzeW5jX3JlcXVpcmVkGAUgASgLMh8uZGVubmV0dC5zeW5jLnYxLlJlc3luY1JlcXVpcmVkSAASMQoFZXJyb3IYBiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCBwoFZnJhbWUiWQoMV2F0Y2hSZXF1ZXN0EhkKEWNsaWVudF9zZXNzaW9uX2lkGAEgASgJEhsKDmtub3duX3JldmlzaW9uGAIgASgESACIAQFCEQoPX2tub3duX3JldmlzaW9uIkQKDVdhdGNoUmVzcG9uc2USMwoFZnJhbWUYASABKAsyJC5kZW5uZXR0LmNvbnRyb2wudjEuU3lzdGVtV2F0Y2hGcmFtZSrwAQoRQ29tcGF0aWJpbGl0eU1vZGUSIgoeQ09NUEFUSUJJTElUWV9NT0RFX1VOU1BFQ0lGSUVEEAASGwoXQ09NUEFUSUJJTElUWV9NT0RFX0ZVTEwQARIgChxDT01QQVRJQklMSVRZX01PREVfUkVBRF9PTkxZEAISJwojQ09NUEFUSUJJTElUWV9NT0RFX0ZFQVRVUkVfREVHUkFERUQQAxImCiJDT01QQVRJQklMSVRZX01PREVfVVBEQVRFX1JFUVVJUkVEEAQSJwojQ09NUEFUSUJJTElUWV9NT0RFX0JMT0NLRURfU0VDVVJJVFkQBSqdAQoLSGVhbHRoU3RhdGUSHAoYSEVBTFRIX1NUQVRFX1VOU1BFQ0lGSUVEEAASGQoVSEVBTFRIX1NUQVRFX1NUQVJUSU5HEAESFgoSSEVBTFRIX1NUQVRFX1JFQURZEAISGQoVSEVBTFRIX1NUQVRFX0RFR1JBREVEEAMSIgoeSEVBTFRIX1NUQVRFX1JFQ09WRVJZX1JFUVVJUkVEEAQy7QIKDVN5c3RlbVNlcnZpY2USWAoJSGFuZHNoYWtlEiQuZGVubmV0dC5jb250cm9sLnYxLkhhbmRzaGFrZVJlcXVlc3QaJS5kZW5uZXR0LmNvbnRyb2wudjEuSGFuZHNoYWtlUmVzcG9uc2USWAoJQm9vdHN0cmFwEiQuZGVubmV0dC5jb250cm9sLnYxLkJvb3RzdHJhcFJlcXVlc3QaJS5kZW5uZXR0LmNvbnRyb2wudjEuQm9vdHN0cmFwUmVzcG9uc2USTgoFV2F0Y2gSIC5kZW5uZXR0LmNvbnRyb2wudjEuV2F0Y2hSZXF1ZXN0GiEuZGVubmV0dC5jb250cm9sLnYxLldhdGNoUmVzcG9uc2UwARJYCglHZXRIZWFsdGgSJC5kZW5uZXR0LmNvbnRyb2wudjEuR2V0SGVhbHRoUmVxdWVzdBolLmRlbm5ldHQuY29udHJvbC52MS5HZXRIZWFsdGhSZXNwb25zZWIGcHJvdG8z", [file_dennett_common_v1_common, file_dennett_control_v1_project, file_dennett_control_v1_session, file_dennett_sync_v1_watch, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message dennett.control.v1.ClientHello
@@ -249,6 +249,11 @@ export type BootstrapSnapshot = Message<"dennett.control.v1.BootstrapSnapshot"> 
    * @generated from field: dennett.control.v1.HealthState node_state = 8;
    */
   nodeState: HealthState;
+
+  /**
+   * @generated from field: dennett.control.v1.RuntimeSummary runtime = 9;
+   */
+  runtime?: RuntimeSummary | undefined;
 };
 
 /**
@@ -257,6 +262,151 @@ export type BootstrapSnapshot = Message<"dennett.control.v1.BootstrapSnapshot"> 
  */
 export const BootstrapSnapshotSchema: GenMessage<BootstrapSnapshot> = /*@__PURE__*/
   messageDesc(file_dennett_control_v1_system, 5);
+
+/**
+ * @generated from message dennett.control.v1.RuntimeSummary
+ */
+export type RuntimeSummary = Message<"dennett.control.v1.RuntimeSummary"> & {
+  /**
+   * @generated from field: string adapter_id = 1;
+   */
+  adapterId: string;
+
+  /**
+   * @generated from field: string runtime_kind = 2;
+   */
+  runtimeKind: string;
+
+  /**
+   * @generated from field: bool streaming = 3;
+   */
+  streaming: boolean;
+
+  /**
+   * @generated from field: bool continuation = 4;
+   */
+  continuation: boolean;
+
+  /**
+   * @generated from field: bool scoped_cancellation = 5;
+   */
+  scopedCancellation: boolean;
+
+  /**
+   * @generated from field: bool deadlines = 6;
+   */
+  deadlines: boolean;
+
+  /**
+   * @generated from field: repeated string native_extension_schemas = 7;
+   */
+  nativeExtensionSchemas: string[];
+
+  /**
+   * @generated from field: repeated dennett.control.v1.RuntimeControlDescriptor controls = 8;
+   */
+  controls: RuntimeControlDescriptor[];
+
+  /**
+   * unsupported | native | interrupt_and_resume
+   *
+   * @generated from field: string steering = 9;
+   */
+  steering: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.RuntimeSummary.
+ * Use `create(RuntimeSummarySchema)` to create a new message.
+ */
+export const RuntimeSummarySchema: GenMessage<RuntimeSummary> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 6);
+
+/**
+ * @generated from message dennett.control.v1.RuntimeControlCondition
+ */
+export type RuntimeControlCondition = Message<"dennett.control.v1.RuntimeControlCondition"> & {
+  /**
+   * @generated from field: string control_id = 1;
+   */
+  controlId: string;
+
+  /**
+   * @generated from field: repeated string choice_ids = 2;
+   */
+  choiceIds: string[];
+};
+
+/**
+ * Describes the message dennett.control.v1.RuntimeControlCondition.
+ * Use `create(RuntimeControlConditionSchema)` to create a new message.
+ */
+export const RuntimeControlConditionSchema: GenMessage<RuntimeControlCondition> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 7);
+
+/**
+ * @generated from message dennett.control.v1.RuntimeControlChoice
+ */
+export type RuntimeControlChoice = Message<"dennett.control.v1.RuntimeControlChoice"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * @generated from field: optional string description = 3;
+   */
+  description?: string | undefined;
+
+  /**
+   * @generated from field: repeated dennett.control.v1.RuntimeControlCondition available_when = 4;
+   */
+  availableWhen: RuntimeControlCondition[];
+};
+
+/**
+ * Describes the message dennett.control.v1.RuntimeControlChoice.
+ * Use `create(RuntimeControlChoiceSchema)` to create a new message.
+ */
+export const RuntimeControlChoiceSchema: GenMessage<RuntimeControlChoice> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 8);
+
+/**
+ * @generated from message dennett.control.v1.RuntimeControlDescriptor
+ */
+export type RuntimeControlDescriptor = Message<"dennett.control.v1.RuntimeControlDescriptor"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * @generated from field: string default_choice_id = 3;
+   */
+  defaultChoiceId: string;
+
+  /**
+   * @generated from field: repeated dennett.control.v1.RuntimeControlChoice choices = 4;
+   */
+  choices: RuntimeControlChoice[];
+};
+
+/**
+ * Describes the message dennett.control.v1.RuntimeControlDescriptor.
+ * Use `create(RuntimeControlDescriptorSchema)` to create a new message.
+ */
+export const RuntimeControlDescriptorSchema: GenMessage<RuntimeControlDescriptor> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_system, 9);
 
 /**
  * @generated from message dennett.control.v1.BootstrapResponse
@@ -285,7 +435,7 @@ export type BootstrapResponse = Message<"dennett.control.v1.BootstrapResponse"> 
  * Use `create(BootstrapResponseSchema)` to create a new message.
  */
 export const BootstrapResponseSchema: GenMessage<BootstrapResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 6);
+  messageDesc(file_dennett_control_v1_system, 10);
 
 /**
  * GetHealth is a bounded pre-auth liveness query and exposes no user state.
@@ -300,7 +450,7 @@ export type GetHealthRequest = Message<"dennett.control.v1.GetHealthRequest"> & 
  * Use `create(GetHealthRequestSchema)` to create a new message.
  */
 export const GetHealthRequestSchema: GenMessage<GetHealthRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 7);
+  messageDesc(file_dennett_control_v1_system, 11);
 
 /**
  * @generated from message dennett.control.v1.GetHealthResult
@@ -332,7 +482,7 @@ export type GetHealthResult = Message<"dennett.control.v1.GetHealthResult"> & {
  * Use `create(GetHealthResultSchema)` to create a new message.
  */
 export const GetHealthResultSchema: GenMessage<GetHealthResult> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 8);
+  messageDesc(file_dennett_control_v1_system, 12);
 
 /**
  * @generated from message dennett.control.v1.GetHealthResponse
@@ -361,7 +511,7 @@ export type GetHealthResponse = Message<"dennett.control.v1.GetHealthResponse"> 
  * Use `create(GetHealthResponseSchema)` to create a new message.
  */
 export const GetHealthResponseSchema: GenMessage<GetHealthResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 9);
+  messageDesc(file_dennett_control_v1_system, 13);
 
 /**
  * @generated from message dennett.control.v1.SystemSnapshot
@@ -385,7 +535,7 @@ export type SystemSnapshot = Message<"dennett.control.v1.SystemSnapshot"> & {
  * Use `create(SystemSnapshotSchema)` to create a new message.
  */
 export const SystemSnapshotSchema: GenMessage<SystemSnapshot> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 10);
+  messageDesc(file_dennett_control_v1_system, 14);
 
 /**
  * @generated from message dennett.control.v1.SystemSelectionUpdate
@@ -409,7 +559,7 @@ export type SystemSelectionUpdate = Message<"dennett.control.v1.SystemSelectionU
  * Use `create(SystemSelectionUpdateSchema)` to create a new message.
  */
 export const SystemSelectionUpdateSchema: GenMessage<SystemSelectionUpdate> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 11);
+  messageDesc(file_dennett_control_v1_system, 15);
 
 /**
  * @generated from message dennett.control.v1.SystemHealthUpdate
@@ -436,7 +586,7 @@ export type SystemHealthUpdate = Message<"dennett.control.v1.SystemHealthUpdate"
  * Use `create(SystemHealthUpdateSchema)` to create a new message.
  */
 export const SystemHealthUpdateSchema: GenMessage<SystemHealthUpdate> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 12);
+  messageDesc(file_dennett_control_v1_system, 16);
 
 /**
  * @generated from message dennett.control.v1.SystemMutation
@@ -495,7 +645,7 @@ export type SystemMutation = Message<"dennett.control.v1.SystemMutation"> & {
  * Use `create(SystemMutationSchema)` to create a new message.
  */
 export const SystemMutationSchema: GenMessage<SystemMutation> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 13);
+  messageDesc(file_dennett_control_v1_system, 17);
 
 /**
  * @generated from message dennett.control.v1.SystemDelta
@@ -524,7 +674,7 @@ export type SystemDelta = Message<"dennett.control.v1.SystemDelta"> & {
  * Use `create(SystemDeltaSchema)` to create a new message.
  */
 export const SystemDeltaSchema: GenMessage<SystemDelta> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 14);
+  messageDesc(file_dennett_control_v1_system, 18);
 
 /**
  * @generated from message dennett.control.v1.SystemWatchFrame
@@ -579,7 +729,7 @@ export type SystemWatchFrame = Message<"dennett.control.v1.SystemWatchFrame"> & 
  * Use `create(SystemWatchFrameSchema)` to create a new message.
  */
 export const SystemWatchFrameSchema: GenMessage<SystemWatchFrame> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 15);
+  messageDesc(file_dennett_control_v1_system, 19);
 
 /**
  * @generated from message dennett.control.v1.WatchRequest
@@ -603,7 +753,7 @@ export type WatchRequest = Message<"dennett.control.v1.WatchRequest"> & {
  * Use `create(WatchRequestSchema)` to create a new message.
  */
 export const WatchRequestSchema: GenMessage<WatchRequest> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 16);
+  messageDesc(file_dennett_control_v1_system, 20);
 
 /**
  * @generated from message dennett.control.v1.WatchResponse
@@ -620,7 +770,7 @@ export type WatchResponse = Message<"dennett.control.v1.WatchResponse"> & {
  * Use `create(WatchResponseSchema)` to create a new message.
  */
 export const WatchResponseSchema: GenMessage<WatchResponse> = /*@__PURE__*/
-  messageDesc(file_dennett_control_v1_system, 17);
+  messageDesc(file_dennett_control_v1_system, 21);
 
 /**
  * @generated from enum dennett.control.v1.CompatibilityMode
