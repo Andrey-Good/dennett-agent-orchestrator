@@ -2,7 +2,7 @@
   "version": 1,
   "id": "M01",
   "title": "Local desktop conversation",
-  "status": "ACTIVE",
+  "status": "QUALIFYING",
   "outcome": "A user opens Dennett Desktop, creates or resumes a local project conversation, receives a streaming response from a replaceable agent runtime, can stop the active turn, and sees the authoritative session restored after the UI restarts.",
   "non_goals": [
     "editing project files, reviewing diffs, running project tests or performing Git actions, which belong to M02",
@@ -695,7 +695,7 @@
       "version": 1,
       "id": "WP-M01-007",
       "title": "Qualify the complete local desktop conversation",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
