@@ -60,8 +60,10 @@ import type {
   RuntimeControlChoice,
   RuntimeControlDescriptor,
   RuntimeControlSelection,
+  SystemEvent,
   SystemSnapshot,
 } from "./lib/systemBridge";
+import { applySystemEvent, TauriSystemBridgeClient } from "./lib/systemBridge";
 import "./styles.css";
 
 type Icon = React.ComponentType<IconProps>;
@@ -69,12 +71,35 @@ type ComposerPopover = "context" | "plugins" | "access" | "runtime" | null;
 type ProjectCreationKind = "empty" | "existing";
 type AccessMode = "full" | "auto";
 type ReasoningLevel = "medium" | "high";
-type LiveConnectionPhase = "opening" | "live" | "resyncing" | "error";
+type LiveConnectionPhase = "opening" | "empty" | "live" | "resyncing" | "error";
+type SystemConnectionPhase = "opening" | "live" | "error";
 interface LiveConnectionState {
   phase: LiveConnectionPhase;
   message: string | null;
   targetSessionId: string | null;
   lastEventAtUnixMs: number | null;
+}
+
+interface SystemConnectionState {
+  phase: SystemConnectionPhase;
+  message: string | null;
+}
+
+function bridgeFailure(error: unknown, fallback: string): { message: string; retryable: boolean } {
+  if (error && typeof error === "object" && "messageKey" in error) {
+    const candidate = error as {
+      messageKey?: unknown;
+      retryable?: unknown;
+      userActionRequired?: unknown;
+    };
+    if (typeof candidate.messageKey === "string" && candidate.messageKey.length > 0) {
+      return {
+        message: candidate.messageKey,
+        retryable: candidate.retryable === true && candidate.userActionRequired !== true,
+      };
+    }
+  }
+  return { message: fallback, retryable: false };
 }
 type WorkspaceSurface =
   | { kind: "chat" }
@@ -385,21 +410,25 @@ function Message({ message }: { message: ChatMessage }): React.JSX.Element {
 function EmptyConversation({
   onSuggestion,
   projectScoped,
+  chatAvailable = true,
 }: {
   onSuggestion: (prompt: string) => void;
   projectScoped: boolean;
+  chatAvailable?: boolean;
 }): React.JSX.Element {
   return (
     <div className="empty-state">
       <ChatCircleDots size={30} aria-hidden="true" />
       <h2>{projectScoped ? "Start with the project" : "Start a conversation"}</h2>
-      <p>{projectScoped
+      <p>{!chatAvailable
+        ? "Create a standalone chat from Recent, or select a project chat."
+        : projectScoped
         ? "Ask the direct agent to inspect, explain or change the selected workspace."
         : "Ask the agent to explore an idea, answer a question or begin a task."}</p>
-      <div className="prompt-suggestions" role="group" aria-label="Prompt suggestions">
+      {chatAvailable && <div className="prompt-suggestions" role="group" aria-label="Prompt suggestions">
         <button type="button" onClick={() => onSuggestion("Задай мне вопросы, чтобы лучше понять мою идею проекта")}>Задай мне вопросы о моей идее</button>
         <button type="button" onClick={() => onSuggestion("Изучи этот репозиторий и расскажи, что это")}>Изучи этот репозиторий</button>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -539,13 +568,23 @@ function liveMessages(turns: readonly ProjectTurn[]): ChatMessage[] {
 
 function liveSnapshot(state: ProjectChatState | null, connection: LiveConnectionState): ProjectChatSnapshot | null {
   if (!state) {
+    if (connection.phase === "empty") return {
+      state: "restored",
+      stateLabel: "Ready",
+      stateTone: "good",
+      notice: "The local Node and agent runtime are ready. Create or select a chat to begin.",
+      phase: "No chat selected",
+      freshness: "Live",
+      canStop: false,
+      messages: [],
+    };
     return connection.phase !== "opening" ? {
       state: "stale",
       stateLabel: connection.phase === "resyncing" ? "Refreshing" : "Unavailable",
       stateTone: connection.phase === "resyncing" ? "active" : "warning",
       notice: connection.phase === "resyncing"
         ? "The local conversation is refreshing after an update gap."
-        : "The local conversation is unavailable.",
+        : `The local conversation is unavailable${connection.message ? ` (${connection.message})` : ""}.`,
       phase: connection.message ?? "Opening the local conversation",
       freshness: "Retrying",
       canStop: false,
@@ -661,12 +700,17 @@ export function App(): React.JSX.Element {
     targetSessionId: null,
     lastEventAtUnixMs: nativeShell ? null : Date.now(),
   });
+  const [systemConnection, setSystemConnection] = React.useState<SystemConnectionState>({
+    phase: nativeShell ? "opening" : "live",
+    message: null,
+  });
   const liveConnectionRef = React.useRef(liveConnection);
   liveConnectionRef.current = liveConnection;
   const [retryingTurnId, setRetryingTurnId] = React.useState<string | null>(null);
   const [creatingChat, setCreatingChat] = React.useState(false);
   const [sendingSessions, setSendingSessions] = React.useState<ReadonlySet<string>>(new Set());
   const [reconnectAttempt, setReconnectAttempt] = React.useState(0);
+  const [systemReconnectAttempt, setSystemReconnectAttempt] = React.useState(0);
   const commandRef = React.useRef<HTMLInputElement>(null);
   const commandDialogRef = React.useRef<HTMLDivElement>(null);
   const returnFocusRef = React.useRef<HTMLElement | null>(null);
@@ -690,6 +734,7 @@ export function App(): React.JSX.Element {
   const nextLocalSessionIdRef = React.useRef(1);
   const nextLocalMessageIdRef = React.useRef(1);
   const liveClientRef = React.useRef<TauriProjectChatClient | null>(null);
+  const systemClientRef = React.useRef<TauriSystemBridgeClient | null>(null);
   const draftRevisionsRef = React.useRef<Record<string, number>>({});
   const currentDraftCommandsRef = React.useRef<Record<string, string>>({});
   const persistedDraftCommandsRef = React.useRef<Record<string, string>>({});
@@ -706,6 +751,7 @@ export function App(): React.JSX.Element {
   const draftsBySessionRef = React.useRef(draftsBySession);
   draftsBySessionRef.current = draftsBySession;
   if (nativeShell && !liveClientRef.current) liveClientRef.current = new TauriProjectChatClient();
+  if (nativeShell && !systemClientRef.current) systemClientRef.current = new TauriSystemBridgeClient();
   const authoritativeProjectGroups: ProjectGroup[] = liveSystem?.projects.map((project) => ({
     id: project.projectId,
     title: project.displayName,
@@ -727,7 +773,9 @@ export function App(): React.JSX.Element {
       })) ?? []
     : [...localSessions.filter((session) => !session.projectId), ...recentChats];
   const allSessions = [...visibleProjectGroups.flatMap((project) => project.sessions), ...standaloneSessions];
-  const selectedTitle = allSessions.find((session) => session.id === selectedSession)?.title ?? allSessions[0]?.title ?? "Opening chat";
+  const selectedTitle = allSessions.find((session) => session.id === selectedSession)?.title
+    ?? allSessions[0]?.title
+    ?? (nativeShell && liveSystem ? "No chat selected" : "Opening chat");
   const selectedProject = visibleProjectGroups.find((project) => project.sessions.some((session) => session.id === selectedSession));
   const selectedLocalMessages = localMessages[selectedSession] ?? [];
   const fixture = fixturesBySession[selectedSession] ?? "streaming";
@@ -770,6 +818,8 @@ export function App(): React.JSX.Element {
     liveConnection.phase === "live"
     && liveChat?.session.sessionId === selectedSession
   );
+  const systemConnected = liveSystem !== null;
+  const bootstrapSessionId = liveSystem?.activeSessionId ?? null;
   const runtimeControlsLocked = nativeShell && Boolean(liveChat?.session.activeTurnId);
 
   React.useEffect(() => {
@@ -831,11 +881,113 @@ export function App(): React.JSX.Element {
   React.useEffect(() => {
     if (!nativeShell) return;
     let current = true;
+    let handle: Awaited<ReturnType<TauriSystemBridgeClient["openSystemWatch"]>> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let bootstrapped = false;
+    let currentSystem: SystemSnapshot | null = null;
+    const pendingEvents: SystemEvent[] = [];
+    const clearScheduledReconnect = () => {
+      if (!retryTimer) return;
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+    };
+    const scheduleReconnect = (delay: number) => {
+      if (retryTimer) return;
+      retryTimer = setTimeout(() => setSystemReconnectAttempt((attempt) => attempt + 1), delay);
+    };
+    setSystemConnection({ phase: "opening", message: null });
+    const applyEvent = (event: SystemEvent) => {
+      if (!current) return;
+      if (event.kind === "phase") {
+        if (event.phase === "reconnecting") {
+          setSystemConnection({ phase: "opening", message: "desktop.system_watch_reconnecting" });
+        }
+        return;
+      }
+      if (event.kind === "error") {
+        setSystemConnection({
+          phase: "error",
+          message: event.error.messageKey,
+        });
+        if (event.error.retryable && !event.error.userActionRequired) scheduleReconnect(750);
+        return;
+      }
+      if (event.kind === "resyncRequired") {
+        setSystemConnection({ phase: "opening", message: "desktop.system_watch_resyncing" });
+        return;
+      }
+      if (event.kind === "heartbeat") {
+        if (currentSystem && currentSystem.revision === event.currentRevision) {
+          clearScheduledReconnect();
+          setSystemConnection({ phase: "live", message: null });
+        }
+        return;
+      }
+      try {
+        if (!currentSystem) {
+          if (event.kind !== "snapshot") throw new Error("System delta before snapshot");
+          currentSystem = event.snapshot;
+        } else {
+          currentSystem = applySystemEvent(currentSystem, event);
+        }
+        setLiveSystem(currentSystem);
+        clearScheduledReconnect();
+        setSystemConnection({ phase: "live", message: null });
+      } catch {
+        currentSystem = null;
+        setLiveSystem(null);
+        setSystemConnection({ phase: "opening", message: "desktop.system_watch_resyncing" });
+        scheduleReconnect(80);
+      }
+    };
+    const onEvent = (event: SystemEvent) => bootstrapped ? applyEvent(event) : pendingEvents.push(event);
+    void systemClientRef.current?.openSystemWatch(onEvent).then((opened) => {
+      if (!current) {
+        void opened.close();
+        return;
+      }
+      handle = opened;
+      currentSystem = opened.opened.snapshot;
+      setLiveSystem(currentSystem);
+      setSystemConnection({ phase: "live", message: null });
+      for (const event of pendingEvents.splice(0)) applyEvent(event);
+      bootstrapped = true;
+    }).catch((error: unknown) => {
+      if (!current) return;
+      const failure = bridgeFailure(error, "desktop.system_watch_unavailable");
+      setLiveSystem(null);
+      setSystemConnection({
+        phase: "error",
+        message: failure.message,
+      });
+      if (failure.retryable) scheduleReconnect(750);
+    });
+    return () => {
+      current = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (handle) void handle.close();
+    };
+  }, [nativeShell, systemReconnectAttempt]);
+
+  React.useEffect(() => {
+    if (!nativeShell || !systemConnected) return;
+    let current = true;
     let handle: Awaited<ReturnType<TauriProjectChatClient["open"]>> | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const client = liveClientRef.current;
     if (!client) return;
-    const requestedSession = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(selectedSession) ? selectedSession : null;
+    const requestedSession = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(selectedSession) ? selectedSession : bootstrapSessionId;
+    if (!requestedSession) {
+      setLiveChat(null);
+      setLiveConnection({
+        phase: "empty",
+        message: "Create or select a chat",
+        targetSessionId: null,
+        lastEventAtUnixMs: Date.now(),
+      });
+      setAnnouncement("Local Node ready. Create or select a chat to begin.");
+      return;
+    }
     setLiveChat((snapshot) => requestedSession && snapshot?.session.sessionId !== requestedSession ? null : snapshot);
     setLiveConnection((connection) => ({
       phase: connection.phase === "resyncing" && connection.targetSessionId === requestedSession
@@ -924,7 +1076,9 @@ export function App(): React.JSX.Element {
         return;
       }
       handle = opened;
-      setLiveSystem(opened.opened.system);
+      setLiveSystem((system) => !system || BigInt(opened.opened.system.revision) >= BigInt(system.revision)
+        ? opened.opened.system
+        : system);
       let initialSession = opened.opened.session;
       const deferredEvents: ProjectChatEvent[] = [];
       for (const event of pendingEvents.splice(0)) {
@@ -990,7 +1144,7 @@ export function App(): React.JSX.Element {
       if (retryTimer) clearTimeout(retryTimer);
       if (handle) void handle.close();
     };
-  }, [nativeShell, reconnectAttempt, selectedSession]);
+  }, [bootstrapSessionId, nativeShell, reconnectAttempt, selectedSession, systemConnected]);
 
   React.useEffect(() => {
     if (!nativeShell || !liveChat) return;
@@ -1521,7 +1675,15 @@ export function App(): React.JSX.Element {
     }
   };
 
-  const displaySnapshot = nativeShell ? liveSnapshot(liveChat, liveConnection) : snapshot;
+  const displayConnection: LiveConnectionState = nativeShell && !liveChat && systemConnection.phase !== "live"
+    ? {
+        phase: systemConnection.phase,
+        message: systemConnection.message,
+        targetSessionId: null,
+        lastEventAtUnixMs: null,
+      }
+    : liveConnection;
+  const displaySnapshot = nativeShell ? liveSnapshot(liveChat, displayConnection) : snapshot;
   const messages = [...(displaySnapshot?.messages ?? []), ...(nativeShell ? [] : selectedLocalMessages)];
   const planExpanded = planPinned || planHovered;
   const commandNeedle = commandQuery.trim().toLocaleLowerCase();
@@ -1712,7 +1874,7 @@ export function App(): React.JSX.Element {
                     ) : messages.length ? (
                       messages.map((message) => <Message key={message.id} message={message} />)
                     ) : (
-                      <EmptyConversation onSuggestion={useSuggestion} projectScoped={Boolean(selectedProject)} />
+                      <EmptyConversation onSuggestion={useSuggestion} projectScoped={Boolean(selectedProject)} chatAvailable={!nativeShell || liveChat !== null} />
                     )}
                   </>
                 ) : (
@@ -1734,7 +1896,9 @@ export function App(): React.JSX.Element {
                       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") sendDraft();
                     }}
                     rows={2}
-                    placeholder={nativeShell && !nativeConversationReady ? "Opening the selected chat…" : "Ask the project agent…"}
+                    placeholder={nativeShell && liveConnection.phase === "empty"
+                      ? "Create or select a chat to begin…"
+                      : nativeShell && !nativeConversationReady ? "Opening the selected chat…" : "Ask the project agent…"}
                     aria-label="Message to project agent"
                     disabled={nativeShell && !nativeConversationReady}
                   />

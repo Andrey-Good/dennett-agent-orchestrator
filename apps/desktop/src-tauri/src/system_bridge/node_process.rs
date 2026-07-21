@@ -82,26 +82,50 @@ fn locate_executable() -> Result<PathBuf, NodeStartError> {
         "dennett-node"
     };
     let mut candidates = Vec::new();
-    if let Ok(current_executable) = std::env::current_exe()
-        && let Some(parent) = current_executable.parent()
-    {
+    let current_executable = std::env::current_exe().ok();
+    if let Some(parent) = current_executable.as_deref().and_then(Path::parent) {
         candidates.push(parent.join(executable_name));
     }
-    let executable_root = std::env::current_exe()
-        .ok()
+    let preferred_profile = current_executable
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .filter(|name| matches!(*name, "debug" | "release"));
+    let executable_root = current_executable
+        .as_deref()
         .and_then(|executable| executable.parent().and_then(repository_root_from));
     let working_root = std::env::current_dir()
         .ok()
         .as_deref()
         .and_then(repository_root_from);
     for root in executable_root.into_iter().chain(working_root) {
-        candidates.push(root.join("target/release").join(executable_name));
-        candidates.push(root.join("target/debug").join(executable_name));
+        candidates.extend(repository_binary_candidates(
+            &root,
+            executable_name,
+            preferred_profile,
+        ));
     }
     candidates
         .into_iter()
         .find_map(executable)
         .ok_or(NodeStartError::ExecutableMissing)
+}
+
+fn repository_binary_candidates(
+    root: &Path,
+    executable_name: &str,
+    preferred_profile: Option<&str>,
+) -> Vec<PathBuf> {
+    let profiles: &[&str] = match preferred_profile {
+        Some("debug") => &["debug"],
+        Some("release") => &["release"],
+        _ => &["release", "debug"],
+    };
+    profiles
+        .iter()
+        .map(|profile| root.join("target").join(profile).join(executable_name))
+        .collect()
 }
 
 fn locate_runtime_host_script() -> Result<PathBuf, NodeStartError> {
@@ -157,6 +181,27 @@ mod tests {
         assert_eq!(
             repository_root_from(&desktop_binary_directory),
             Some(directory.path().to_path_buf())
+        );
+    }
+
+    #[test]
+    fn repository_node_fallback_matches_the_desktop_build_profile() {
+        let root = Path::new("C:/work/dennett");
+
+        assert_eq!(
+            repository_binary_candidates(root, "dennett-node.exe", Some("debug")),
+            vec![root.join("target/debug/dennett-node.exe")]
+        );
+        assert_eq!(
+            repository_binary_candidates(root, "dennett-node.exe", Some("release")),
+            vec![root.join("target/release/dennett-node.exe")]
+        );
+        assert_eq!(
+            repository_binary_candidates(root, "dennett-node.exe", None),
+            vec![
+                root.join("target/release/dennett-node.exe"),
+                root.join("target/debug/dennett-node.exe"),
+            ]
         );
     }
 }

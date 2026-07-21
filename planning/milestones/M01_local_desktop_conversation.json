@@ -806,7 +806,7 @@
       },
       "estimate": {
         "target_agent_hours": 8,
-        "max_diff_lines": 24000
+        "max_diff_lines": 24500
       },
       "notes": [
         "Milestone acceptance requires a live owner demo after automated qualification.",
@@ -823,7 +823,9 @@
         "The owner-visible steering contract is bounded and explicit: an in-flight clarification targets the exact currently active agent turn, is durably recorded as a user turn before the provider call, uses a directly owned native Codex App Server process and turn/steer with a stable message identity, never calls Stop or starts a replacement turn, leaves unsupported providers disabled, and fences uncertain delivery before reporting a visible failure rather than silently duplicating it.",
         "Renderer chronology is reconstructed from canonical turn and activity timestamps so commentary and effects before a clarification remain above it, later work and the final Markdown answer remain below it, and a cancelled or timed-out activity cannot retain a running animation. Component, domain, IPC, adapter-host and live capability tests cover these transitions.",
         "The package root set includes dennett-memory-core because durable steer events and first-causal activity timestamps extend the canonical session journal itself; AGENTS.md records the owner's cross-cutting extensibility and DRY/KISS/YAGNI review rules without changing product behavior.",
-        "The final gross delta reached 23974 changed or new lines after metadata regeneration. The budget is raised to 24000 because stable causal timestamps, exact-turn steering races, generated protocol clients and executable end-to-end regressions are required for honest restart behavior; the added allowance does not expand product scope."
+        "The final gross delta reached 23974 changed or new lines after metadata regeneration. The budget was raised to 24000 because stable causal timestamps, exact-turn steering races, generated protocol clients and executable end-to-end regressions are required for honest restart behavior; the added allowance did not expand product scope.",
+        "Native first-launch qualification then exposed a real empty-profile defect: the renderer treated the valid absence of sessions as a failed Node connection. The budget is raised to 24500 for the existing typed System watch reducer, independent system/session lifecycle wiring and executable fresh-profile regression; this preserves the planned provider, capability and project expansion seam rather than adding a Codex-only shortcut.",
+        "Native restart qualification also connected to a surviving protocol-v1 Node built before the additive steering field and exposed a dev-shell binary-selection defect. An absent protobuf steering value now degrades only that capability to unsupported while unknown non-empty values still fail schema validation, and repository fallback selects the Node binary matching the desktop debug or release profile. A real debug restart restored the complete system snapshot and provider-discovered controls."
       ]
     }
   ],

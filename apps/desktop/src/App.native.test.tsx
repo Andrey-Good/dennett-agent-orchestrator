@@ -15,6 +15,9 @@ const tauri = vi.hoisted(() => {
   return {
     channelHandlers,
     closeHandlers,
+    systemSnapshot: null as unknown,
+    systemWatchError: null as unknown,
+    openSystemWatch: vi.fn(),
     invoke: vi.fn(),
     TestChannel,
     closeWindow: vi.fn(async () => undefined),
@@ -32,7 +35,19 @@ const tauri = vi.hoisted(() => {
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: tauri.TestChannel,
-  invoke: tauri.invoke,
+  invoke: (command: string, args?: Record<string, unknown>) => {
+    if (command === "open_system_watch") {
+      tauri.openSystemWatch();
+      if (tauri.systemWatchError) return Promise.reject(tauri.systemWatchError);
+      return Promise.resolve({
+        correlationId: "native-system-correlation",
+        subscriptionId: "native-system-subscription",
+        snapshot: tauri.systemSnapshot,
+      });
+    }
+    if (command === "close_system_watch") return Promise.resolve(true);
+    return tauri.invoke(command, args);
+  },
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -201,11 +216,24 @@ const system = {
     controls: runtimeControls,
   },
 };
+const emptySystem = {
+  ...system,
+  revision: "1",
+  projects: [],
+  recentSessions: [],
+  activeProjectId: null,
+  activeSessionId: null,
+  // Protocol-v1 peers built before steering was added decode it as an empty string.
+  runtime: { ...system.runtime, steering: "" },
+};
 
 describe("native Project Chat recovery", () => {
   beforeEach(() => {
     tauri.channelHandlers.splice(0);
     tauri.closeHandlers.splice(0);
+    tauri.systemSnapshot = system;
+    tauri.systemWatchError = null;
+    tauri.openSystemWatch.mockClear();
     tauri.invoke.mockReset();
     tauri.closeWindow.mockClear();
     tauri.minimizeWindow.mockClear();
@@ -369,8 +397,8 @@ describe("native Project Chat recovery", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const composer = await screen.findByLabelText("Message to project agent");
-    expect(screen.getByRole("button", { name: `Stop generation for session "${sessionSummary.title}"` })).toBeVisible();
+    const composer = await screen.findByPlaceholderText("Ask the project agent…");
+    expect(await screen.findByRole("button", { name: `Stop generation for session "${sessionSummary.title}"` })).toBeVisible();
     expect(screen.getByRole("button", { name: "Auto-approve" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Agent runtime: Codex/i })).toBeDisabled();
     await user.type(composer, "Use the new constraint too");
@@ -448,7 +476,7 @@ describe("native Project Chat recovery", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const composer = await screen.findByLabelText("Message to project agent");
+    const composer = await screen.findByPlaceholderText("Ask the project agent…");
     await user.type(composer, "first clarification");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(resolveFirstSend).toBeTypeOf("function"));
@@ -684,16 +712,126 @@ describe("native Project Chat recovery", () => {
     render(<App />);
 
     await screen.findByText("Timed out");
-    await user.hover(screen.getByRole("heading", { name: "Recent" }));
-    await user.click(screen.getByRole("button", { name: "New recent chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "New recent chat" }));
 
     await waitFor(() => {
       const call = tauri.invoke.mock.calls.find(([command]) => command === "create_chat");
       expect(call?.[1]).toMatchObject({ request: { projectId: null, title: "Untitled chat" } });
     });
-    expect(await screen.findByRole("heading", { name: "Start a conversation" })).toBeVisible();
+    await screen.findByPlaceholderText("Ask the project agent…");
+    expect(screen.getByRole("heading", { name: "Start a conversation" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
     expect(screen.getByRole("button", { name: /Untitled chat/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("treats a fresh profile as an empty ready system and creates its first chat", async () => {
+    const firstSessionId = "00000000-0000-7000-8000-000000000024";
+    const firstSummary = {
+      ...sessionSummary,
+      sessionId: firstSessionId,
+      projectId: null,
+      title: "Untitled chat",
+      revision: "1",
+    };
+    tauri.systemSnapshot = emptySystem;
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "native_mica_available") return true;
+      if (command === "create_chat") return { sessionId: firstSessionId };
+      if (command === "open_project_chat") return {
+        correlationId: "first-chat-correlation",
+        subscriptionId: "first-chat-subscription",
+        system: { ...emptySystem, revision: "2", recentSessions: [firstSummary], activeSessionId: firstSessionId },
+        session: { session: firstSummary, fingerprint: "first-chat", turns: [] },
+        draft: null,
+      };
+      if (command === "close_project_chat") return true;
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByText("The local Node and agent runtime are ready. Create or select a chat to begin.")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Agent runtime: Codex/i })).toBeEnabled();
+    expect(screen.getByPlaceholderText("Create or select a chat to begin…")).toBeDisabled();
+    expect(tauri.invoke.mock.calls.some(([command]) => command === "open_project_chat")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "New recent chat" }));
+    await screen.findByPlaceholderText("Ask the project agent…");
+    expect(screen.getByRole("heading", { name: "Start a conversation" })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: "Current location" })).toHaveTextContent("Chats/Untitled chat");
+  });
+
+  it("returns an empty profile to Ready after the system watch recovers", async () => {
+    tauri.systemSnapshot = emptySystem;
+    render(<App />);
+
+    expect(await screen.findByText("The local Node and agent runtime are ready. Create or select a chat to begin.")).toBeVisible();
+    const handler = tauri.channelHandlers[0];
+    expect(handler).toBeDefined();
+    act(() => handler?.({
+      kind: "error",
+      subscriptionId: "native-system-subscription",
+      error: {
+        code: "ipc_watch_closed",
+        messageKey: "desktop.ipc_watch_closed",
+        correlationId: "native-system-correlation",
+        retryable: true,
+        userActionRequired: false,
+        detailsHandle: null,
+        currentRevision: null,
+      },
+    }));
+    expect(screen.getByText("Unavailable")).toBeVisible();
+
+    act(() => handler?.({
+      kind: "snapshot",
+      subscriptionId: "native-system-subscription",
+      cursor: { streamId: "system-stream", sequence: "2", authorityEpoch: "7" },
+      snapshot: { ...emptySystem, revision: "2" },
+      fingerprint: "recovered-system",
+    }));
+
+    expect(await screen.findByText("The local Node and agent runtime are ready. Create or select a chat to begin.")).toBeVisible();
+    expect(screen.getByLabelText("Message to project agent")).toBeDisabled();
+  });
+
+  it("shows a truthful system-watch failure instead of an endless opening state", async () => {
+    tauri.systemWatchError = {
+      code: "desktop_node_unavailable",
+      messageKey: "desktop.node_unavailable",
+      correlationId: "native-system-correlation",
+      retryable: true,
+      userActionRequired: false,
+      detailsHandle: null,
+      currentRevision: null,
+    };
+    render(<App />);
+
+    expect(await screen.findByText(/desktop\.node_unavailable/)).toBeVisible();
+    expect(screen.getByText("Unavailable")).toBeVisible();
+    expect(tauri.invoke.mock.calls.some(([command]) => command === "open_project_chat")).toBe(false);
+  });
+
+  it("does not retry a system-watch failure that requires user action", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      tauri.systemWatchError = {
+        code: "desktop_authentication_required",
+        messageKey: "desktop.authentication_required",
+        correlationId: "native-system-correlation",
+        retryable: true,
+        userActionRequired: true,
+        detailsHandle: null,
+        currentRevision: null,
+      };
+      render(<App />);
+
+      expect(await screen.findByText(/desktop\.authentication_required/)).toBeVisible();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(tauri.openSystemWatch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("single-flights rapid standalone-chat creation", async () => {
@@ -931,7 +1069,7 @@ describe("native Project Chat recovery", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const composer = await screen.findByLabelText("Message to project agent");
+    const composer = await screen.findByPlaceholderText("Ask the project agent…");
     await user.type(composer, "must remain in this chat");
     await user.click(screen.getByRole("button", { name: /Second chat/ }));
 
@@ -1232,14 +1370,15 @@ describe("native Project Chat recovery", () => {
     });
 
     const first = render(<App />);
-    expect(await screen.findByLabelText("Message to project agent")).toHaveValue("unsent after restart");
+    const firstComposer = await screen.findByLabelText("Message to project agent");
+    await waitFor(() => expect(firstComposer).toHaveValue("unsent after restart"));
     expect(screen.getAllByLabelText(/message$/i).some((message) => message.textContent?.includes("unsent after restart"))).toBe(false);
     first.unmount();
 
     const user = userEvent.setup();
     render(<App />);
     const restored = await screen.findByLabelText("Message to project agent");
-    expect(restored).toHaveValue("unsent after restart");
+    await waitFor(() => expect(restored).toHaveValue("unsent after restart"));
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => {
       const send = tauri.invoke.mock.calls.find(([command]) => command === "send_project_turn");

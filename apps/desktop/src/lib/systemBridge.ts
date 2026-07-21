@@ -92,7 +92,19 @@ export type BridgePhase =
   | "watching"
   | "reconnecting";
 
-export type SystemMutation = Record<string, unknown> & { kind: string };
+export interface SystemSelectionValue {
+  changed: boolean;
+  value: string | null;
+}
+
+export type SystemMutation =
+  | { kind: "upsertProject"; project: ProjectSummary }
+  | { kind: "removeProject"; projectId: string }
+  | { kind: "upsertSession"; session: SessionSummary }
+  | { kind: "removeSession"; sessionId: string }
+  | { kind: "updateSelection"; activeProject: SystemSelectionValue; activeSession: SystemSelectionValue }
+  | { kind: "updateHealth"; nodeState: string; statusCode: string; observedAtUnixMs: number | null }
+  | { kind: "finishCommand"; commandId: string; operationId: string; outcome: Record<string, unknown> };
 
 export type SystemEvent =
   | { kind: "phase"; subscriptionId: string; phase: BridgePhase; attempt: number }
@@ -245,11 +257,7 @@ export function parseSystemEvent(value: unknown): SystemEvent {
         cursor: parseCursor(record.cursor),
         baseRevision: revision(record.baseRevision, "baseRevision"),
         newRevision: revision(record.newRevision, "newRevision"),
-        mutations: array(record.mutations, "mutations").map((mutation) => {
-          const parsed = object(mutation, "mutation");
-          text(parsed.kind, "mutation.kind");
-          return parsed as SystemMutation;
-        }),
+        mutations: array(record.mutations, "mutations").map(parseSystemMutation),
       };
     case "heartbeat":
       return {
@@ -273,6 +281,46 @@ export function parseSystemEvent(value: unknown): SystemEvent {
     default:
       throw new Error("Unknown system event kind");
   }
+}
+
+export function applySystemEvent(snapshot: SystemSnapshot, event: SystemEvent): SystemSnapshot {
+  if (event.kind === "snapshot") return event.snapshot;
+  if (event.kind !== "delta") return snapshot;
+  if (BigInt(event.newRevision) <= BigInt(snapshot.revision)) return snapshot;
+  if (event.baseRevision !== snapshot.revision) throw new Error("System revision gap");
+  const next: SystemSnapshot = {
+    ...snapshot,
+    revision: event.newRevision,
+    projects: [...snapshot.projects],
+    recentSessions: [...snapshot.recentSessions],
+  };
+  for (const mutation of event.mutations) {
+    switch (mutation.kind) {
+      case "upsertProject":
+        next.projects = [...next.projects.filter((item) => item.projectId !== mutation.project.projectId), mutation.project];
+        break;
+      case "removeProject":
+        next.projects = next.projects.filter((item) => item.projectId !== mutation.projectId);
+        break;
+      case "upsertSession":
+        next.recentSessions = [...next.recentSessions.filter((item) => item.sessionId !== mutation.session.sessionId), mutation.session];
+        break;
+      case "removeSession":
+        next.recentSessions = next.recentSessions.filter((item) => item.sessionId !== mutation.sessionId);
+        break;
+      case "updateSelection":
+        if (mutation.activeProject.changed) next.activeProjectId = mutation.activeProject.value;
+        if (mutation.activeSession.changed) next.activeSessionId = mutation.activeSession.value;
+        break;
+      case "updateHealth":
+        next.nodeState = mutation.nodeState;
+        next.observedAtUnixMs = mutation.observedAtUnixMs;
+        break;
+      case "finishCommand":
+        break;
+    }
+  }
+  return next;
 }
 
 export function parseSystemSnapshot(value: unknown): SystemSnapshot {
@@ -309,6 +357,10 @@ function parseRuntime(value: unknown): RuntimeSummary {
 }
 
 function steeringMode(value: unknown): RuntimeSummary["steering"] {
+  // Older protocol-v1 Nodes predate the additive steering field. Protobuf
+  // decodes that absent field as an empty string, which is safely equivalent
+  // to not advertising the capability.
+  if (value === "") return "unsupported";
   if (value === "unsupported" || value === "native" || value === "interrupt_and_resume") {
     return value;
   }
@@ -368,6 +420,43 @@ function parseSession(value: unknown): SessionSummary {
     revision: revision(record.revision, "revision"),
     activeTurnId: optionalText(record.activeTurnId, "activeTurnId"),
     lastActivityAtUnixMs: optionalInteger(record.lastActivityAtUnixMs, "lastActivityAtUnixMs"),
+  };
+}
+
+function parseSystemMutation(value: unknown): SystemMutation {
+  const mutation = object(value, "mutation");
+  const kind = text(mutation.kind, "mutation.kind");
+  switch (kind) {
+    case "upsertProject": return { kind, project: parseProject(mutation.project) };
+    case "removeProject": return { kind, projectId: text(mutation.projectId, "mutation.projectId") };
+    case "upsertSession": return { kind, session: parseSession(mutation.session) };
+    case "removeSession": return { kind, sessionId: text(mutation.sessionId, "mutation.sessionId") };
+    case "updateSelection": return {
+      kind,
+      activeProject: parseSelectionValue(mutation.activeProject, "mutation.activeProject"),
+      activeSession: parseSelectionValue(mutation.activeSession, "mutation.activeSession"),
+    };
+    case "updateHealth": return {
+      kind,
+      nodeState: text(mutation.nodeState, "mutation.nodeState"),
+      statusCode: text(mutation.statusCode, "mutation.statusCode", true),
+      observedAtUnixMs: optionalInteger(mutation.observedAtUnixMs, "mutation.observedAtUnixMs"),
+    };
+    case "finishCommand": return {
+      kind,
+      commandId: text(mutation.commandId, "mutation.commandId"),
+      operationId: text(mutation.operationId, "mutation.operationId"),
+      outcome: object(mutation.outcome, "mutation.outcome"),
+    };
+    default: throw new Error("Unknown system mutation kind");
+  }
+}
+
+function parseSelectionValue(value: unknown, label: string): SystemSelectionValue {
+  const selection = object(value, label);
+  return {
+    changed: flag(selection.changed, `${label}.changed`),
+    value: optionalText(selection.value, `${label}.value`),
   };
 }
 

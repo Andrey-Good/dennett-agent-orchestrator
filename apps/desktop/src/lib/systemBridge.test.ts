@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applySystemEvent,
   TauriSystemBridgeClient,
   parseOpenedSystemWatch,
   parseSystemEvent,
@@ -115,7 +116,57 @@ describe("TauriSystemBridgeClient", () => {
   });
 });
 
+it("treats a protocol-v1 snapshot without the additive steering field as unsupported", () => {
+  const parsed = parseOpenedSystemWatch({
+    correlationId: "correlation-old-node",
+    subscriptionId: "subscription-old-node",
+    snapshot: {
+      ...snapshot,
+      runtime: {
+        adapterId: "openai.codex.sdk",
+        runtimeKind: "native_agent",
+        streaming: true,
+        continuation: true,
+        scopedCancellation: true,
+        deadlines: true,
+        steering: "",
+        nativeExtensionSchemas: [],
+        controls: [],
+      },
+    },
+  });
+
+  expect(parsed.snapshot.runtime?.steering).toBe("unsupported");
+});
+
 describe("system bridge schema validation", () => {
+  it("applies typed project, session, selection and health deltas without losing the runtime", () => {
+    const delta = parseSystemEvent({
+      kind: "delta",
+      subscriptionId: "subscription-1",
+      cursor: { streamId: "stream-1", sequence: "2", authorityEpoch: "7" },
+      baseRevision: "1",
+      newRevision: "2",
+      mutations: [
+        { kind: "removeProject", projectId: "project-1" },
+        { kind: "removeSession", sessionId: "session-1" },
+        { kind: "updateSelection", activeProject: { changed: true, value: null }, activeSession: { changed: true, value: null } },
+        { kind: "updateHealth", nodeState: "health_state_degraded", statusCode: "offline", observedAtUnixMs: 1_750_000_001_000 },
+      ],
+    });
+    const next = applySystemEvent({ ...snapshot, revision: "1" }, delta);
+    expect(next).toMatchObject({
+      revision: "2",
+      projects: [],
+      recentSessions: [],
+      activeProjectId: null,
+      activeSessionId: null,
+      nodeState: "health_state_degraded",
+      runtime: snapshot.runtime,
+    });
+    expect(applySystemEvent(next, delta)).toBe(next);
+  });
+
   it("rejects numeric or malformed revisions before they reach the reducer", () => {
     expect(() => parseOpenedSystemWatch({
       correlationId: "correlation-1",

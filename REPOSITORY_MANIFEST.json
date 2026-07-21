@@ -410,8 +410,8 @@
     },
     {
       "path": "apps/desktop/src-tauri/src/system_bridge/node_process.rs",
-      "bytes": 5737,
-      "sha256": "c70f1a6fbd2efcc452818d7dc37eac79a41cb0617d9fcec6407646f5f794cc33"
+      "bytes": 7179,
+      "sha256": "259c5ea0e8c91e5f64793fb70fbe1e65261b94986139327bd0a3ee2606481d0a"
     },
     {
       "path": "apps/desktop/src-tauri/tauri.conf.json",
@@ -420,8 +420,8 @@
     },
     {
       "path": "apps/desktop/src/App.native.test.tsx",
-      "bytes": 52196,
-      "sha256": "2bdba20f6440ef04edb971361eafbc9484bff9ceaf94de4ad3e4097b9038c4e6"
+      "bytes": 57934,
+      "sha256": "71aa44c5a5e81305cf9b50f236fbcf974c5ec279b7d00118dc5395f3c03af612"
     },
     {
       "path": "apps/desktop/src/App.test.tsx",
@@ -430,8 +430,8 @@
     },
     {
       "path": "apps/desktop/src/App.tsx",
-      "bytes": 99588,
-      "sha256": "fb03d2423b693e513bb0f32b21b2de818ec6e1f888e1cc139020fe6cd54eba81"
+      "bytes": 105974,
+      "sha256": "35388e8e934bae060c9fabb5a19fec67a16fd748a19dcb0c0c21662b9be55694"
     },
     {
       "path": "apps/desktop/src/fixtures/projectChat.ts",
@@ -455,13 +455,13 @@
     },
     {
       "path": "apps/desktop/src/lib/systemBridge.test.ts",
-      "bytes": 4224,
-      "sha256": "61c1b88991f6c6d61373a583a3dd0439d01b57d230420b2514cc6d85a99cb58f"
+      "bytes": 5999,
+      "sha256": "d37a8e8be39a4a67e6b4aa2da409fc2f464e6f3255577cfe5efddfe4d6f7189e"
     },
     {
       "path": "apps/desktop/src/lib/systemBridge.ts",
-      "bytes": 14356,
-      "sha256": "89dc97643d74fc03a30a7c3397989734c2c7d12f1cf849ae92f128b0fa437421"
+      "bytes": 18378,
+      "sha256": "44bef1e99df8d6dae4d2bc3d07da909f40572e386773d0fe383a6f76bce70173"
     },
     {
       "path": "apps/desktop/src/main.tsx",
@@ -1510,8 +1510,8 @@
     },
     {
       "path": "planning/milestones/M01_local_desktop_conversation.json",
-      "bytes": 45580,
-      "sha256": "93d544752d4e34f1a12d5e4c5b1473a818f3121cc5d69a6e2ed03bf3a18ebfc0"
+      "bytes": 46533,
+      "sha256": "ff0315383d701bd7a9e89f498c0cb2f92b4b33fc66a921140c6ad40a88bfb10b"
     },
     {
       "path": "planning/results/WP-M00-001.json",
