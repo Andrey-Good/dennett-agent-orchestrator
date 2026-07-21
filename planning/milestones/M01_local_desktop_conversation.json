@@ -695,7 +695,7 @@
       "version": 1,
       "id": "WP-M01-007",
       "title": "Qualify the complete local desktop conversation",
-      "status": "IN_PROGRESS",
+      "status": "MERGE_READY",
       "milestone": "M01",
       "vertical_slice": "VS-M01-02",
       "risk": "R2",
@@ -802,7 +802,7 @@
       ],
       "owner_decision": {
         "required_before_start": false,
-        "required_before_merge": true
+        "required_before_merge": false
       },
       "estimate": {
         "target_agent_hours": 8,
@@ -826,7 +826,8 @@
         "The final gross delta reached 23974 changed or new lines after metadata regeneration. The budget was raised to 24000 because stable causal timestamps, exact-turn steering races, generated protocol clients and executable end-to-end regressions are required for honest restart behavior; the added allowance did not expand product scope.",
         "Native first-launch qualification then exposed a real empty-profile defect: the renderer treated the valid absence of sessions as a failed Node connection. The budget is raised to 24500 for the existing typed System watch reducer, independent system/session lifecycle wiring and executable fresh-profile regression; this preserves the planned provider, capability and project expansion seam rather than adding a Codex-only shortcut.",
         "Native restart qualification also connected to a surviving protocol-v1 Node built before the additive steering field and exposed a dev-shell binary-selection defect. An absent protobuf steering value now degrades only that capability to unsupported while unknown non-empty values still fail schema validation, and repository fallback selects the Node binary matching the desktop debug or release profile. A real debug restart restored the complete system snapshot and provider-discovered controls.",
-        "Windows CI exposed a non-atomic SQLite session read while provider progress was being appended, and owner qualification requested the specified Copy action for both sides of the conversation. The budget is raised to 25500 for one transactional snapshot fix, its concurrent regression and the accessible Copy action: native owner testing proved that the WebView clipboard path did not reach the Windows clipboard, so the official write-only Tauri plugin, capability and dependency locks are included instead of pretending that a browser-only test was sufficient. Rename and presentation/data deletion remain outside M01 until their distinct Node-owned commands and safety semantics are packaged."
+        "Windows CI exposed a non-atomic SQLite session read while provider progress was being appended, and owner qualification requested the specified Copy action for both sides of the conversation. The budget is raised to 25500 for one transactional snapshot fix, its concurrent regression and the accessible Copy action: native owner testing proved that the WebView clipboard path did not reach the Windows clipboard, so the official write-only Tauri plugin, capability and dependency locks are included instead of pretending that a browser-only test was sufficient. Rename and presentation/data deletion remain outside M01 until their distinct Node-owned commands and safety semantics are packaged.",
+        "The owner completed the live native qualification and explicitly accepted WP-M01-007 and M01 on 2026-07-21. A detached R2 closure review of exact executable commit 24da00f54918a1b776c7329658ae0a21918edec7 returned PASS with no open P0-P2 findings after independently rerunning the atomic SQLite read regression, all 14 Head conversation integration tests and all 61 adapter-host tests."
       ]
     }
   ],
