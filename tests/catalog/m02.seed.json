@@ -88,7 +88,9 @@
       "work_package_refs": ["WP-M02-003", "WP-M02-008"],
       "expected": [
         "Creating an empty project creates only the selected directory, durable project record and direct session",
-        "Adding an existing folder preserves its contents and detects repository and instruction metadata",
+        "Adding an existing folder preserves its contents and detects repository, instruction and optional .dennett metadata",
+        "When .dennett is absent, Dennett offers but does not silently create the minimal portable project identity and shared-memory structure",
+        "Shared .dennett memory is treated as Git-publishable project state while personal memory, chats, secrets and access policy remain local",
         "Canonical path aliases cannot create duplicate project identity and restart restores the same registration"
       ],
       "implementation": {"target_suite": "project registry E2E", "status": "planned", "test_paths": []},
@@ -125,7 +127,7 @@
       "expected": [
         "A disappeared folder changes the project to Missing without deleting sessions or metadata",
         "Read or execution commands fail with an actionable missing-location error",
-        "Locate or rebind validates identity and trust-sensitive changes before returning to Ready"
+        "Locate or rebind validates the stable project identity before returning to Ready without treating ordinary source changes as a trust reset"
       ],
       "implementation": {"target_suite": "missing project recovery", "status": "planned", "test_paths": []},
       "owner": "projects"

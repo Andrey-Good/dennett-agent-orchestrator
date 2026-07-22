@@ -896,7 +896,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "ea1a308e2431b76ce71942a253642865b3548b5d492e40038a0a1cef7bba9f5e"
+      "sha256": "ea37dc3089a6b95969ae82593a31909c0712772eeeb2ef3912afa04b8f3ea504"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1510,8 +1510,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 3516,
-      "sha256": "a63fe08cc6fe5583fba6d6d3d08ae7b2ed6747ee01f4f35930fa2bc7ad4a5713"
+      "bytes": 3525,
+      "sha256": "c25cadb0caa914183b31b068c77356f6cbbf8c6cd17566dec734ad1bc7967c6c"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1675,8 +1675,8 @@
     },
     {
       "path": "planning/decisions/DEC-0006.json",
-      "bytes": 2995,
-      "sha256": "71c8f32b0fbf9e1aca14a9adf8a0449e7acf2069c4c826b4eca3838b0b3a96ce"
+      "bytes": 4416,
+      "sha256": "6c97ba1c243a91485cd63ba6160ae20dd87901d1c177a5a9eb802da12273db6f"
     },
     {
       "path": "planning/milestones/M00_repository_and_contracts.json",
@@ -1690,8 +1690,8 @@
     },
     {
       "path": "planning/milestones/M02_project_workspace_and_review.json",
-      "bytes": 40260,
-      "sha256": "a96dbc473783ccae5818f2b36cb82d2bcb386bfabfbaa0916759a30b8dace78c"
+      "bytes": 40722,
+      "sha256": "4384817ee5992bc6f3449aa082802c2183a1351c4d6134b99ac9f374b0d9799f"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1780,8 +1780,8 @@
     },
     {
       "path": "planning/results/WP-M02-001.json",
-      "bytes": 7984,
-      "sha256": "82faf1684f63be0f0cb7ea2a0bed45dd0fa882f5882f8ffa25bf22004d0341db"
+      "bytes": 8015,
+      "sha256": "23190cef42b2a94e7ac1a4b7d4e1cacc7d23ecde73a50c37af4f1d12b8d081a5"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
@@ -2235,8 +2235,8 @@
     },
     {
       "path": "tests/catalog/m02.seed.json",
-      "bytes": 27549,
-      "sha256": "210b4140d00ad4df23bc0b101798d822f4c83908cbd9a1c08db95aaaf1e0fe85"
+      "bytes": 27910,
+      "sha256": "fb4796c0c1ccdf64b871f65c5d069c48d5ba96fdab694a2d259a01ef9a4885dc"
     },
     {
       "path": "tests/contracts/README.md",

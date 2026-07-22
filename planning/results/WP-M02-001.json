@@ -15,6 +15,7 @@
       "dc29aa14e5fcc48c90fc88c60f63a29d2b3c7b9f"
     ],
     "merge_ready_at": "2026-07-22",
+    "merged_at": "2026-07-22",
     "changed_files": [
       "crates/dennett-observability/**",
       "services/node/**",
