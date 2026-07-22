@@ -6,16 +6,16 @@
 
 Current milestone: `M02` — Project workspace and review (status: `ACTIVE`).
 
-- Package status: `IN_PROGRESS` 1, `MERGED` 1, `REFINED` 7
+- Package status: `MERGED` 1, `REFINED` 7, `REVIEW` 1
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
 | `WP-M02-001` | `MERGED` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `R2` | `automated` | `node` |
 | `WP-M02-001` | `MERGED` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `R2` | `automated` | `observability` |
 | `WP-M02-001` | `MERGED` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `R2` | `automated` | `security` |
-| `WP-M02-002` | `IN_PROGRESS` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `automated` | `protocol` |
-| `WP-M02-002` | `IN_PROGRESS` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
-| `WP-M02-002` | `IN_PROGRESS` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
+| `WP-M02-002` | `REVIEW` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `automated` | `protocol` |
+| `WP-M02-002` | `REVIEW` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
+| `WP-M02-002` | `REVIEW` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
 | `WP-M02-003` | `REFINED` | `TEST-M02-INSTRUCTION-CHANGE-001` | `R3` | `specified` | `projects` |
 | `WP-M02-003` | `REFINED` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `R3` | `specified` | `projects` |
 | `WP-M02-003` | `REFINED` | `TEST-M02-PROJECT-MISSING-001` | `R2` | `specified` | `projects` |

@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M02-002",
+    "status": "partial",
+    "summary": "Defined additive provider-neutral contracts for inspecting, registering and rebinding project folders; stable project identity and relocatable workspace bindings; optional portable .dennett identity and shared memory; local-only trust policy; workspace snapshots, changes, commands, tests, artifacts, checkpoints and review; and immutable cancellation/recovery receipts. Existing folders without .dennett are detected and can only receive the minimal portable structure after an explicit user choice.",
+    "commits": [
+      "65a67f40682099655c93a1e3b3ce0689f9ddffc0",
+      "886afd7dc2e3e11eb77a86e5fb181873a1fd8a9d"
+    ],
+    "changed_files": [
+      "protocols/proto/dennett/control/v1/project.proto",
+      "protocols/proto/dennett/control/v1/workspace.proto",
+      "protocols/buf.gen.yaml",
+      "generated/rust/dennett/control/v1/**",
+      "generated/ts/dennett/control/v1/**",
+      "crates/dennett-contracts/**",
+      "tools/protocol_codegen.py",
+      "tools/tests/test_protocol_codegen.py",
+      "tests/catalog/m02.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/decisions/DEC-0006.json",
+      "planning/milestones/M02_project_workspace_and_review.json",
+      "planning/results/WP-M02-001.json",
+      "planning/results/WP-M02-002.json",
+      "blog/notes/M02_WP002_contract_matrix.md",
+      "Cargo.lock",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "M02:ExitGate",
+      "SPEC-60:ProjectWorkspace",
+      "SPEC-60:ChangesReviewCheckpoints",
+      "ARCH-80:ProjectChatLocalEdit",
+      "ARCH-83:M02ProjectWorkspace",
+      "TEST-M02-PROTOCOL-ADDITIVE-001",
+      "TEST-PROTOCOL-GENERATION-001",
+      "TEST-PROTOCOL-BREAKING-001"
+    ],
+    "tests": {
+      "passed": [
+        "17 protocol generator tests cover the accepted M01 surface, the complete initial M02 descriptor, exact enums and oneofs, trust decision and compare-and-swap fields, deprecations, explicit portable actions, cancellation identity and negative compatibility probes",
+        "7 dennett-contracts tests cover stable wire names, safe Unicode relative paths, nonzero revisions, fail-closed trust, existing-project policy preservation, legal receipt matrices and immutable terminal cancellation",
+        "mise exec -- uv run --project . --frozen python tools/protocol_codegen.py check passed Buf lint, generated-client freshness, the full descriptor contract, origin/main compatibility and negative breaking probes",
+        "the previously contended concurrent lifecycle test passed alone and again inside the full workspace run",
+        "mise exec -- just check passed repository, documentation, planning, CI, formatting, clippy, Rust workspace tests, Python tests, TypeScript type checks and protocol checks"
+      ],
+      "not_run": [
+        "2 live subscription tests remain ignored by the generic full gate because this contract-only package does not change the already accepted Codex runtime path",
+        "actual folder inspection, .dennett creation, durable registration, trust enforcement, Git behavior and desktop interaction belong to WP-M02-003 and later packages",
+        "provider adapters other than Codex and local models remain unavailable by owner constraint"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Two detached adversarial reviewers independently audited architecture and wire semantics. Their findings were repaired and rechecked; the final architecture and protocol reviews reported no remaining P0-P2 findings.",
+      "findings_closed": [
+        "made trust elevation depend on an explicit Trust-issued decision and expected policy revision instead of accepting model or folder claims",
+        "preserved existing local policy when a portable ProjectId is already registered and made copied identity resolution an explicit registration-only fork",
+        "deprecated the legacy existing-folder shortcut so non-empty folders cannot bypass .dennett inspection and registration",
+        "separated cancellation-command identity from its target operation and made every already-terminal receipt, including recovery-required, an immutable idempotent no-op",
+        "defined exhaustive legal receipt state and outcome matrices and removed contradictory test outcome states",
+        "pinned the complete first M02 descriptor so later field, enum, oneof, option or method drift is detected before release"
+      ],
+      "findings_open": []
+    },
+    "migrations": [
+      "none; this package adds a pre-release protocol surface and generated clients without creating durable user data"
+    ],
+    "observability_changes": [
+      "workspace mutations retain command, correlation and one canonical workspace operation identity",
+      "typed terminal failures distinguish stale revision, missing location, denied scope, conflict, cancellation, retryable adapter failure and recovery-required state",
+      "snapshots and receipts expose stable revisions and timestamps without provider-specific or filesystem implementation payloads"
+    ],
+    "known_limitations": [
+      "this package defines and validates contracts only; it does not yet inspect folders or write the minimal .dennett structure",
+      "the desktop offer to create .dennett becomes executable only after WP-M02-003 owns registration and trust behavior",
+      "workspace snapshot history lists need a bounded window or pagination before long-lived production histories",
+      "Codex remains the only permitted real runtime until the owner enables additional providers"
+    ],
+    "follow_up_candidates": [
+      "WP-M02-003 implement durable project registration, existing-folder inspection, explicit minimal .dennett creation and local trust policy",
+      "add bounded snapshot history pagination before long-lived workspace histories",
+      "connect later filesystem, Git, test, artifact and review adapters through the provider-neutral contracts"
+    ],
+    "owner_decision_required": true
+  }
+}

@@ -95,7 +95,7 @@ envelope remains intact and supplies the safe user message and correlation ID.
   deliberately breaking negative probe, contract value types and the complete
   existing repository suite. After detached review, the focused generator
   suite has 17 tests and the contract crate has seven new tests.
-- The post-review branch-wide gross diff is 10,059 lines against a 12,000-line
+- The post-review branch-wide gross diff is 10,696 lines against a 12,000-line
   package cap. About 65% of that diff is generated Rust and TypeScript, useful
   context when this package later becomes part of the M02 development story.
 
