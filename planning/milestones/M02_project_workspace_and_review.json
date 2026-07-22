@@ -193,7 +193,7 @@
       "version": 1,
       "id": "WP-M02-003",
       "title": "Own real project registration and trust",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M02",
       "vertical_slice": "VS-M02-01",
       "risk": "R3",
@@ -293,7 +293,7 @@
       "version": 1,
       "id": "WP-M02-004",
       "title": "Control workspace snapshots and file effects",
-      "status": "REFINED",
+      "status": "IN_PROGRESS",
       "milestone": "M02",
       "vertical_slice": "VS-M02-02",
       "risk": "R3",
@@ -331,6 +331,7 @@
         "tests/integration",
         "tests/simulation",
         "docs/testing/generated",
+        "blog/notes",
         "planning",
         "Cargo.toml",
         "Cargo.lock",
@@ -368,7 +369,12 @@
       "notes": [
         "One interactive writer may use the selected project workspace; leases and worktrees appear only for real concurrency, risky experiments or explicit isolation.",
         "Snapshot identity is content and metadata evidence, not a promise that every large or ignored file is copied.",
-        "Filesystem writes remain local consequential effects even when no remote service is involved."
+        "Filesystem writes remain local consequential effects even when no remote service is involved.",
+        "A mutation is version-bound per touched path: unrelated external edits are preserved and included in the resulting revision, while any touched-path divergence fails before publication with explicit conflict evidence.",
+        "Generic file effects never write Git control state or the portable .dennett/project.json identity; Git operations and portable identity changes remain owned by their dedicated reviewed paths.",
+        "Multi-file operations persist intent and before/after evidence before publication. A restart may prove completion or leave RecoveryRequired, but cannot infer success or overwrite an unrecognized third state.",
+        "Checkpoint restore preflights every touched path against the caller's expected current revision and applies nothing when any of those paths contains a newer unrecognized edit. Already completed external effects remain references only and are never described as undone.",
+        "The baseline passed the four-package focused Rust command plus repository and planning verification on 2026-07-22 before semantic edits began."
       ]
     },
     {

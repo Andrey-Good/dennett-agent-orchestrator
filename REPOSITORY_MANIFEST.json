@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 493,
+  "file_count": 494,
   "files": [
     {
       "path": ".editorconfig",
@@ -624,6 +624,11 @@
       "sha256": "6d7e0097f8b4743582a5ef48e0673bcef1aa12fd050f4b4096b482682f0ac9b6"
     },
     {
+      "path": "blog/notes/M02_WP004_capture.md",
+      "bytes": 3345,
+      "sha256": "2db2cb7addcbe785b0efb02e53bcc98641de4c7902147a96d7aace6cf5c339c0"
+    },
+    {
       "path": "blog/notes/M02_capture.md",
       "bytes": 24194,
       "sha256": "d4179d1be5060bc56134aa656002c22e606761e3f0cfe85bf9521e515cc4061e"
@@ -916,7 +921,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "bf0b412a674b24a01eb554aace8fe4dee9777e1456c812af4119c495b67bddaf"
+      "sha256": "8c45c2cbf6e62407880b98bde9e1e70fc4505a5846e02c3640be1539635bbfb6"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1530,8 +1535,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 3526,
-      "sha256": "1b8372702dc5ca928c36c441995aafa0607b697442af8fcf83d96dbdf23634fe"
+      "bytes": 3522,
+      "sha256": "1a1ac898d2c476b69443751c82dc250e04447afca6b836cc40051495f64fc37c"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1720,8 +1725,8 @@
     },
     {
       "path": "planning/milestones/M02_project_workspace_and_review.json",
-      "bytes": 45050,
-      "sha256": "9432ab750c82a47528cd599ee41ec67a45a275796c1b8e77210b5002559864cb"
+      "bytes": 46155,
+      "sha256": "6dd77e7fc82a78d54e7171f86e8a3b90a878e14b6bf514faaf0e09ffa9eae55d"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1820,8 +1825,8 @@
     },
     {
       "path": "planning/results/WP-M02-003.json",
-      "bytes": 6605,
-      "sha256": "bc81161e44a368758c82b524c5cceb2b00bf4d275df24bc9e1cb2e3a9a8c6105"
+      "bytes": 6636,
+      "sha256": "f5b2d7121557e8e383043d5a0109fd6624a34fda2268965db093f242a0ebbfcb"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
