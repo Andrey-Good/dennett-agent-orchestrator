@@ -2,7 +2,7 @@
   "version": 1,
   "id": "AB-M02-001",
   "title": "Build the diagnosable M02 contract foundation",
-  "status": "DRAFT",
+  "status": "RUNNING",
   "packages": ["WP-M02-001", "WP-M02-002"],
   "execution": {
     "order": "dependency",
