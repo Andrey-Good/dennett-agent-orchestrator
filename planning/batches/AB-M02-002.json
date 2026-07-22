@@ -2,7 +2,7 @@
   "version": 1,
   "id": "AB-M02-002",
   "title": "Build controlled real-project execution",
-  "status": "DRAFT",
+  "status": "RUNNING",
   "packages": ["WP-M02-003", "WP-M02-004", "WP-M02-005", "WP-M02-006"],
   "execution": {
     "order": "dependency",

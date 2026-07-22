@@ -1,5 +1,7 @@
 //! Deterministic trust decisions for the skeleton.
 
+pub mod project_registry;
+
 use dennett_contracts::{HeadEligibility, MemoryDeploymentMode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

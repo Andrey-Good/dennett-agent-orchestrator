@@ -1,5 +1,7 @@
 //! WAL-backed SQLite control-store adapter for local Dennett profiles.
 
+mod project_registry;
+
 use async_trait::async_trait;
 use dennett_agent_core::{OpaqueContinuation, RuntimeContinuationError};
 use dennett_contracts::{CommandId, ProjectId, SessionEventId, SessionId};
@@ -27,7 +29,7 @@ use std::{
 };
 use uuid::Uuid;
 
-pub const CONTROL_SCHEMA_VERSION: u32 = 2;
+pub const CONTROL_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone)]
 pub struct SqliteControlStore {
@@ -119,6 +121,14 @@ impl SqliteControlStore {
         for session_id in self.list_session_ids().await? {
             self.load_session(session_id).await?;
         }
+        self.verify_project_registry_integrity()
+            .await
+            .map_err(|error| match error {
+                dennett_trust_core::project_registry::ProjectRegistryError::StorageUnavailable => {
+                    SessionJournalError::StorageUnavailable
+                }
+                _ => SessionJournalError::IntegrityFailure("project registry integrity failed"),
+            })?;
         Ok(())
     }
 }

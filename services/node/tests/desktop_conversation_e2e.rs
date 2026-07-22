@@ -1,11 +1,12 @@
 #![cfg(windows)]
 
 use dennett_local_ipc::protocol::dennett::control::v1::{
-    ComposerDraft, ComposerDraftWriteState, SessionSnapshot, TurnActivityStatus, TurnDeliveryMode,
-    TurnRole, TurnState, session_mutation, session_watch_frame,
+    ComposerDraft, ComposerDraftWriteState, ProjectTrustState, SessionSnapshot, TurnActivityStatus,
+    TurnDeliveryMode, TurnRole, TurnState, session_mutation, session_watch_frame,
 };
 use dennett_local_ipc::{
     AuthenticatedSystemClient, ClientCommand, ClientConfig, ClientSendTurnRequest,
+    ClientSetProjectTrustRequest,
 };
 use dennett_node::{
     AGENT_RUNTIME_ENV, AUTHORITY_EPOCH_ENV, DATA_DIR_ENV, INSTALLATION_ID_ENV, PROJECT_ROOT_ENV,
@@ -46,6 +47,7 @@ async fn test_m01_desktop_conversation_e2e_001_restores_draft_and_completed_turn
     assert!(!runtime.streaming);
     let project_id = first.bootstrap().active_project_id.clone();
     assert!(!project_id.is_empty());
+    trust_legacy_project(&mut first, &project_id, "trust-desktop-e2e-project").await;
     tokio::time::sleep(Duration::from_millis(2)).await;
     let created = first
         .create_session(
@@ -148,6 +150,15 @@ async fn test_m01_desktop_conversation_e2e_001_restores_draft_and_completed_turn
         agent_turn.text,
         "Dennett skeleton received: recover and send exactly once"
     );
+    restored
+        .set_project_trust(ClientSetProjectTrustRequest {
+            command: ClientCommand::new("revoke-before-idempotent-replay", Some(2)),
+            project_id: project_id.clone(),
+            trust_state: ProjectTrustState::Revoked,
+            expected_policy_revision: 2,
+        })
+        .await
+        .expect("revoke project after the original turn completed");
     let replayed = restored
         .send_turn(ClientSendTurnRequest {
             command: ClientCommand {
@@ -165,7 +176,7 @@ async fn test_m01_desktop_conversation_e2e_001_restores_draft_and_completed_turn
             expected_active_turn_id: None,
         })
         .await
-        .expect("replay admitted command after restart");
+        .expect("replay admitted command without re-running a revoked workspace");
     assert_eq!(replayed.turn_id, accepted.turn_id);
     assert_eq!(
         replayed
@@ -258,6 +269,7 @@ async fn test_m01_native_steer_001_keeps_one_active_turn_under_concurrent_progre
     assert_eq!(runtime.adapter_id, "fixture.native-steer");
     assert_eq!(runtime.steering, "native");
     let project_id = client.bootstrap().active_project_id.clone();
+    trust_legacy_project(&mut client, &project_id, "trust-native-steer-project").await;
     let session_id = client.bootstrap().active_session_id.clone();
     let initial = session_snapshot(&mut client, &session_id).await;
     let revision = initial.session.as_ref().expect("session summary").revision;
@@ -420,6 +432,25 @@ async fn connect(installation_id: &str, device_id: &str) -> AuthenticatedSystemC
     .await
     .expect("Node connection timed out")
     .expect("authenticated Node connection")
+}
+
+async fn trust_legacy_project(
+    client: &mut AuthenticatedSystemClient,
+    project_id: &str,
+    idempotency_key: &str,
+) {
+    client
+        .set_project_trust(ClientSetProjectTrustRequest {
+            command: ClientCommand::new(idempotency_key, Some(1)),
+            project_id: project_id.to_owned(),
+            trust_state: ProjectTrustState::TrustedBounded,
+            // A newly migrated M01 project starts with the first Restricted
+            // policy revision. The E2E must exercise an explicit user grant
+            // instead of bypassing M02 workspace admission.
+            expected_policy_revision: 1,
+        })
+        .await
+        .expect("grant test project bounded trust");
 }
 
 async fn next_snapshot(

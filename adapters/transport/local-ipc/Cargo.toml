@@ -8,7 +8,7 @@ rust-version.workspace = true
 [features]
 default = ["client", "server"]
 client = []
-server = ["dep:dennett-agent-core", "dep:dennett-contracts", "dep:dennett-head", "dep:dennett-memory-core", "dep:dennett-sync-core"]
+server = ["dep:dennett-agent-core", "dep:dennett-contracts", "dep:dennett-head", "dep:dennett-memory-core", "dep:dennett-sync-core", "dep:dennett-trust-core"]
 
 [dependencies]
 getrandom.workspace = true
@@ -32,9 +32,12 @@ dennett-head = { path = "../../../services/head", optional = true }
 dennett-contracts = { path = "../../../crates/dennett-contracts", optional = true }
 dennett-memory-core = { path = "../../../crates/dennett-memory-core", optional = true }
 dennett-sync-core = { path = "../../../crates/dennett-sync-core", optional = true }
+dennett-trust-core = { path = "../../../crates/dennett-trust-core", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
 [dev-dependencies]
 dennett-head = { path = "../../../services/head" }
+dennett-storage-sqlite = { path = "../../storage/sqlite" }
+tempfile.workspace = true

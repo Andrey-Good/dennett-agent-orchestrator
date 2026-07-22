@@ -383,12 +383,14 @@ dependencies = [
  "dennett-observability",
  "dennett-storage-sqlite",
  "dennett-sync-core",
+ "dennett-trust-core",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -409,7 +411,9 @@ dependencies = [
  "dennett-contracts",
  "dennett-head",
  "dennett-memory-core",
+ "dennett-storage-sqlite",
  "dennett-sync-core",
+ "dennett-trust-core",
  "futures-core",
  "getrandom 0.3.4",
  "hyper-util",
@@ -418,6 +422,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "subtle",
+ "tempfile",
  "thiserror",
  "tokio",
  "tonic",
@@ -455,6 +460,8 @@ name = "dennett-node"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "cap-fs-ext",
+ "cap-std",
  "dennett-agent-core",
  "dennett-contracts",
  "dennett-head",
@@ -463,8 +470,10 @@ dependencies = [
  "dennett-memory-core",
  "dennett-observability",
  "dennett-storage-sqlite",
+ "dennett-trust-core",
  "fs2",
  "prost-types",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -510,6 +519,7 @@ dependencies = [
  "dennett-contracts",
  "dennett-memory-core",
  "dennett-sync-core",
+ "dennett-trust-core",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
@@ -534,7 +544,9 @@ dependencies = [
 name = "dennett-trust-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "dennett-contracts",
+ "thiserror",
 ]
 
 [[package]]

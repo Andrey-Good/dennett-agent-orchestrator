@@ -13,7 +13,16 @@ pub type SystemWatchFrame = WatchFrame<SystemSnapshot, SystemDelta>;
 pub struct ProjectSummary {
     pub project_id: String,
     pub display_name: String,
+    pub state: ProjectState,
     pub revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectState {
+    Ready,
+    Missing,
+    Detached,
+    ReadOnly,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +98,7 @@ impl SystemSnapshot {
         for project in &self.projects {
             update_text(&mut hash, &project.project_id);
             update_text(&mut hash, &project.display_name);
+            hash.update([project.state as u8]);
             hash.update(project.revision.to_le_bytes());
         }
         for session in &self.recent_sessions {

@@ -1,17 +1,21 @@
+mod project_fs;
+mod project_location;
 mod runtime_host;
 
 use dennett_agent_core::{AgentRuntimePort, FakeAgentRuntime, RuntimeError};
-use dennett_contracts::{CommandId, ProjectId};
+use dennett_contracts::{CommandId, ProjectId, WorkspaceBindingId};
 use dennett_head::conversation::{ConversationApplication, LocalProject};
 use dennett_head::draft::{ComposerDraftApplication, SessionOperationLocks};
+use dennett_head::project::{ProjectApplication, ProjectApplicationError, ProjectLocationError};
 use dennett_head::session::SessionCoordinator;
 use dennett_head::system::{SystemProjection, SystemSnapshot};
 use dennett_local_ipc::{
-    HandshakePolicy, LocalEndpoint, SessionRegistry, SessionServiceAdapter, SystemServiceAdapter,
-    TransportError, run_local_server,
+    HandshakePolicy, LocalEndpoint, ProjectServiceAdapter, SessionRegistry, SessionServiceAdapter,
+    SystemServiceAdapter, TransportError, run_local_server,
 };
 use dennett_memory_core::session::{SessionJournal, SessionJournalError};
 use dennett_storage_sqlite::SqliteControlStore;
+use dennett_trust_core::project_registry::{ProjectRegistryError, ProjectRegistryPort};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -183,7 +187,12 @@ where
         config.authority_epoch,
         SESSION_WATCH_CAPACITY,
     );
-    let project_id = project_id_for(&config.project_root);
+    // M01 derived its sole project identity from the configured path. Keep
+    // that value only as a migration key; the M02 registry persists it and
+    // every newly registered project receives a path-independent UUID.
+    let project_root = std::path::absolute(&config.project_root)
+        .map_err(|_| NodeRunError::ProjectLocation(ProjectLocationError::InvalidRequest))?;
+    let project_id = legacy_m01_project_id_for(&project_root);
     let display_name = config
         .project_root
         .file_name()
@@ -213,6 +222,45 @@ where
         system_snapshot,
         SYSTEM_WATCH_CAPACITY,
     ));
+    let project_locations = Arc::new(project_location::NodeProjectLocationAdapter::default());
+    if store.get_project(project_id).await?.is_none() {
+        let legacy_import = project_locations
+            .inspect_legacy_import(
+                project_id,
+                legacy_m01_binding_id_for(project_id),
+                display_name.clone(),
+                project_root.clone(),
+                unix_time_ms(),
+            )
+            .await?;
+        store.import_legacy_project(legacy_import).await?;
+    }
+    let project_application = Arc::new(ProjectApplication::new(
+        store.clone(),
+        project_locations,
+        coordinator.clone(),
+        projection.clone(),
+    ));
+    for result in project_application.reconcile_registrations().await {
+        if let Err(error) = result {
+            tracing::warn!(
+                code = project_application_error_code(&error),
+                "project registration remains recoverable after startup reconciliation"
+            );
+        }
+    }
+    for (reconciled_project_id, result) in project_application
+        .reconcile_project_locations("m02.startup_reconcile")
+        .await?
+    {
+        if let Err(error) = result {
+            tracing::info!(
+                dennett.project.id = %reconciled_project_id.0,
+                code = project_application_error_code(&error),
+                "project location is not ready after startup reconciliation"
+            );
+        }
+    }
     let application = Arc::new(
         ConversationApplication::new(
             coordinator,
@@ -221,10 +269,11 @@ where
             LocalProject {
                 project_id,
                 display_name,
-                workspace_path: config.project_root.to_string_lossy().into_owned(),
+                workspace_path: project_root.to_string_lossy().into_owned(),
                 standalone_workspace_path: standalone_workspace.to_string_lossy().into_owned(),
             },
         )
+        .with_projects(project_application.clone())
         .with_continuations(store.clone())
         .with_drafts(drafts.clone()),
     );
@@ -237,7 +286,9 @@ where
         config.authority_epoch,
     ));
     let system_service = SystemServiceAdapter::new(projection, sessions.clone());
-    let session_service = SessionServiceAdapter::new(application, drafts, sessions, store);
+    let session_service =
+        SessionServiceAdapter::new(application, drafts, sessions.clone(), store.clone());
+    let project_service = ProjectServiceAdapter::new(project_application, sessions, store);
     tracing::info!(
         phase = "local_ipc_listen",
         "starting authenticated Node IPC"
@@ -248,9 +299,15 @@ where
         )
         .status("starting"),
     );
-    let result = run_local_server(endpoint, system_service, session_service, shutdown)
-        .await
-        .map_err(Into::into);
+    let result = run_local_server(
+        endpoint,
+        system_service,
+        session_service,
+        project_service,
+        shutdown,
+    )
+    .await
+    .map_err(Into::into);
     if result.is_ok() {
         dennett_observability::record(
             dennett_observability::DiagnosticEvent::new(
@@ -277,7 +334,7 @@ impl NodeInstanceLock {
     }
 }
 
-fn project_id_for(project_root: &std::path::Path) -> ProjectId {
+fn legacy_m01_project_id_for(project_root: &std::path::Path) -> ProjectId {
     let canonical = project_root
         .canonicalize()
         .unwrap_or_else(|_| project_root.to_path_buf());
@@ -291,6 +348,44 @@ fn project_id_for(project_root: &std::path::Path) -> ProjectId {
     bytes[6] = (bytes[6] & 0x0f) | 0x50;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     ProjectId(uuid::Uuid::from_bytes(bytes))
+}
+
+fn legacy_m01_binding_id_for(project_id: ProjectId) -> WorkspaceBindingId {
+    let digest = Sha256::digest(format!("dennett:m01-binding:{}", project_id.0).as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    WorkspaceBindingId(uuid::Uuid::from_bytes(bytes))
+}
+
+fn unix_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn project_application_error_code(error: &ProjectApplicationError) -> &'static str {
+    match error {
+        ProjectApplicationError::InvalidRequest => "project.request.invalid",
+        ProjectApplicationError::ProjectNotFound => "project.not_found",
+        ProjectApplicationError::BindingNotFound => "project.binding.not_found",
+        ProjectApplicationError::TrustDecisionMissing => "project.trust.decision_missing",
+        ProjectApplicationError::RecoveryRequired => "project.registration.recovery_required",
+        ProjectApplicationError::ProjectRestricted => "project.trust.restricted",
+        ProjectApplicationError::ProjectRevoked => "project.trust.revoked",
+        ProjectApplicationError::ProjectMissing => "project.location.missing",
+        ProjectApplicationError::ProjectDetached => "project.location.detached",
+        ProjectApplicationError::ProjectInaccessible => "project.location.inaccessible",
+        ProjectApplicationError::ConcurrentChange => "project.concurrent_change",
+        ProjectApplicationError::Location(error) => error.safe_code(),
+        ProjectApplicationError::Registry(_) => "project.registry.unavailable",
+        ProjectApplicationError::TrustDecision(_) => "project.trust.decision_rejected",
+        ProjectApplicationError::Session(_) => "project.session.unavailable",
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -311,6 +406,12 @@ pub enum NodeRunError {
     RuntimeHost(#[from] runtime_host::RuntimeHostStartError),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
+    #[error(transparent)]
+    ProjectLocation(#[from] ProjectLocationError),
+    #[error(transparent)]
+    ProjectRegistry(#[from] ProjectRegistryError),
+    #[error(transparent)]
+    ProjectApplication(#[from] ProjectApplicationError),
 }
 
 impl NodeRunError {
@@ -325,6 +426,9 @@ impl NodeRunError {
             Self::InstanceLockUnavailable => "node.instance_lock_unavailable",
             Self::RuntimeHost(error) => error.diagnostic_code(),
             Self::Runtime(error) => error.code.as_str(),
+            Self::ProjectLocation(error) => error.safe_code(),
+            Self::ProjectRegistry(_) => "node.project_registry_failure",
+            Self::ProjectApplication(error) => project_application_error_code(error),
         }
     }
 }

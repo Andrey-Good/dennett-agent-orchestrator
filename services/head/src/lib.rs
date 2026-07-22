@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 pub mod conversation;
 pub mod draft;
+pub mod project;
 pub mod session;
 pub mod system;
 
