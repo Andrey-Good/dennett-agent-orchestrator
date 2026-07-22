@@ -610,8 +610,8 @@
     },
     {
       "path": "blog/notes/M02_capture.md",
-      "bytes": 15010,
-      "sha256": "2c1259fd937dc86563c37782f1056441d03efd100fc46ff9e83e473a73e6541c"
+      "bytes": 16361,
+      "sha256": "d61db4144ab13134d574ba6373b0bf8d809c10f783df2b2a5e592d88e44cb8be"
     },
     {
       "path": "blog/notes/README.md",
@@ -790,8 +790,8 @@
     },
     {
       "path": "crates/dennett-observability/src/secure_fs.rs",
-      "bytes": 30800,
-      "sha256": "36a2ebe52f55c8968d25be3e63d7f0a46cdda1216c3ebbd42d9ee70d46183721"
+      "bytes": 31762,
+      "sha256": "4770f9dc14e264a9459044bcfce72837f055b782f37dbd3e19a86ed02036dd0d"
     },
     {
       "path": "crates/dennett-observability/src/writer.rs",

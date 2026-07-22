@@ -194,3 +194,23 @@ privacy_risks:
   serialized by a per-component maintenance lock, so they now reuse one fixed
   private temp name. An interrupted floor write is replaced on the next start;
   repeated crashes can leave one orphan, not an ever-growing collection.
+
+## Owner decision and first public-CI correction
+
+- The owner rejected two parts of the first stable-identity proposal. Shared
+  project memory belongs in `.dennett/memory/` because every collaborator who
+  receives the repository should receive the same decisions and procedures;
+  only personal preferences, chats, secrets, private memory and access policy
+  stay in the Dennett profile. The permission lookup was also simplified to a
+  local `project_id -> policy` mapping. Normal source changes must not trigger
+  trust friction, and project files can request but never grant new authority.
+- When an existing folder has no `.dennett`, the accepted product behavior is
+  to offer creation of the minimal portable structure instead of silently
+  modifying the repository. A folder can still be registered without it and
+  receives a stable local Project ID rather than a path-derived identity.
+- The first public Fast Gate then caught a Linux-only defect that the Windows
+  workstation could not execute. A capability directory may use an `O_PATH`
+  descriptor; applying `std::fs::File::set_permissions` to that descriptor
+  failed with `EBADF` (`Bad file descriptor`). The repair keeps chmod relative
+  to the capability directory through `cap-std` and adds a Unix regression
+  proving both the profile and diagnostics directory use mode `0700`.

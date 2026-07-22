@@ -536,12 +536,13 @@ fn configure_private_file_access(_options: &mut OpenOptions) {}
 
 #[cfg(unix)]
 fn secure_directory(dir: &Dir) -> Result<(), DiagnosticsError> {
-    use std::os::unix::fs::PermissionsExt;
-    let file = dir
-        .try_clone()
-        .map_err(|source| DiagnosticsError::io("clone_secure_directory", source))?
-        .into_std_file();
-    file.set_permissions(std::fs::Permissions::from_mode(0o700))
+    use cap_std::fs::{Permissions, PermissionsExt};
+
+    // A capability directory may be backed by an O_PATH descriptor on Linux.
+    // Calling std::fs::File::set_permissions on such a descriptor fails with
+    // EBADF. Keep the operation capability-relative so cap-std can safely
+    // reopen the directory before applying its private mode.
+    dir.set_permissions(".", Permissions::from_mode(0o700))
         .map_err(|source| DiagnosticsError::io("secure_diagnostic_directory", source))
 }
 
@@ -699,6 +700,27 @@ mod windows_acl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn created_profile_and_diagnostic_directory_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temporary profile parent");
+        let profile = temp.path().join("profile");
+        let root = SecureDir::open_or_create_profile(&profile).expect("secure profile");
+        root.open_or_create_child("diagnostics", "open diagnostics")
+            .expect("secure diagnostics");
+
+        for directory in [&profile, &profile.join("diagnostics")] {
+            let mode = std::fs::metadata(directory)
+                .expect("directory metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "private mode for {}", directory.display());
+        }
+    }
 
     #[test]
     fn profile_child_rejects_a_preplanted_directory_link() {
