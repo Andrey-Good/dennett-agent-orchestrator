@@ -523,6 +523,7 @@ dependencies = [
  "async-trait",
  "dennett-agent-core",
  "dennett-contracts",
+ "dennett-effect-core",
  "dennett-memory-core",
  "dennett-sync-core",
  "dennett-trust-core",
