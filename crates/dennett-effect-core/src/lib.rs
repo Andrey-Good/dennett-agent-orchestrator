@@ -1,5 +1,7 @@
 //! External effect claims prevent blind duplicate sends, payments or publications.
 
+pub mod workspace;
+
 use dennett_contracts::EffectId;
 use serde::{Deserialize, Serialize};
 
