@@ -10,11 +10,18 @@ Each row links one requirement to its catalogue evidence.
 | --- | --- | --- | --- | --- | --- |
 | `ADR-002` | `TEST-MEMORY-ONE-LOGICAL-001` | — | `memory` | `tests/scenarios/offline-client-memory-not-canonical.yaml` | `release` |
 | `ADR-003` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
+| `ARCH-80:LocalExecutionManager` | `TEST-M02-COMMAND-CANCEL-001` | `WP-M02-005` | `execution` | — | `release` |
+| `ARCH-80:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | — | `release` |
+| `ARCH-80:ProjectChatLocalEdit` | `TEST-M02-CODEX-PROJECT-RECOVERY-001` | `WP-M02-006`, `WP-M02-009` | `agents` | — | `release` |
+| `ARCH-80:StructuredCancellation` | `TEST-M02-COMMAND-CANCEL-001` | `WP-M02-005` | `execution` | — | `release` |
 | `ARCH-81:DraftPersistence` | `TEST-DRAFT-CACHE-RECOVERY-001` | `WP-M01-005` | `desktop` | `adapters/storage/sqlite/src/lib.rs`, `crates/dennett-sync-core/src/draft.rs`, `services/head/tests/session_restore.rs` | — |
 | `ARCH-81:EffectClaim` | `TEST-EFFECT-UNKNOWN-001` | — | `effects` | `tests/scenarios/effect-timeout-no-duplicate.yaml` | `release` |
 | `ARCH-81:MemoryAuthority` | `TEST-MEMORY-ONE-LOGICAL-001` | — | `memory` | `tests/scenarios/offline-client-memory-not-canonical.yaml` | `release` |
 | `ARCH-81:ProtocolPackages` | `TEST-M01-PROTOCOL-EPOCH-001` | `WP-M01-002` | `protocol` | `docs/decisions/ADR-006-m01-protocol-epoch.md`, `protocols/buf.yaml`, `protocols/epoch-migrations/m00-to-m01.json`, `protocols/proto/dennett/common/v1/common.proto`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/session.proto`, `protocols/proto/dennett/control/v1/system.proto`, `protocols/proto/dennett/sync/v1/watch.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-81:ProtocolPackages` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
+| `ARCH-82:FilesystemPolicy` | `TEST-M02-FILESYSTEM-SCOPE-001` | `WP-M02-004`, `WP-M02-009` | `security` | — | `release` |
+| `ARCH-82:ProviderSessionRecovery` | `TEST-M02-CODEX-PROJECT-RECOVERY-001` | `WP-M02-006`, `WP-M02-009` | `agents` | — | `release` |
+| `ARCH-82:Worktrees` | `TEST-M02-GIT-WORKTREE-001` | `WP-M02-006` | `workspace` | — | `release` |
 | `ARCH-83:Bootstrap` | `TEST-BOOTSTRAP-CLEAN-001` | `WP-M00-001` | `repository` | `Justfile`, `tools/bootstrap.py`, `tools/doctor.py`, `tools/tests/test_bootstrap.py`, `tools/tests/test_doctor.py` | `release` |
 | `ARCH-83:Correlation` | `TEST-M01-TRACE-CORRELATION-001` | `WP-M01-007` | `observability` | `adapters/transport/local-ipc/src/service.rs`, `apps/desktop/src-tauri/src/system_bridge/conversation.rs`, `services/head/tests/conversation_application.rs` | — |
 | `ARCH-83:DesktopLifecycle` | `TEST-DESKTOP-NODE-LIFECYCLE-001` | `WP-M01-006` | `desktop` | `apps/desktop/src-tauri/src/system_bridge/mod.rs`, `services/node/tests/desktop_lifecycle.rs` | `release` |
@@ -23,7 +30,12 @@ Each row links one requirement to its catalogue evidence.
 | `ARCH-83:FirstVerticalSlice` | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | `WP-M01-007` | `quality` | `adapters/transport/local-ipc/src/service.rs`, `apps/desktop/src/App.native.test.tsx`, `apps/desktop/src/lib/projectChatBridge.test.ts`, `services/adapter-host-node/src/codex-app-server-client.test.ts`, `services/adapter-host-node/src/codex-cli.test.ts`, `services/adapter-host-node/src/codex-model-catalog.test.ts`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `services/head/tests/conversation_application.rs`, `services/node/src/runtime_host.rs`, `services/node/tests/codex_live_e2e.rs`, `services/node/tests/desktop_conversation_e2e.rs`, `services/node/tests/desktop_lifecycle.rs` | `release` |
 | `ARCH-83:GeneratedClients` | `TEST-PROTOCOL-GENERATION-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `protocols/buf.gen.yaml`, `protocols/buf.yaml`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-83:LocalDesktopIPC` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | `adapters/transport/local-ipc/src/auth.rs`, `adapters/transport/local-ipc/src/client.rs`, `adapters/transport/local-ipc/src/service.rs`, `adapters/transport/local-ipc/src/transport/windows.rs` | `release` |
+| `ARCH-83:M02ProjectWorkspace` | `TEST-M02-ARTIFACT-COLLECTION-001` | `WP-M02-005`, `WP-M02-008` | `artifacts` | — | — |
+| `ARCH-83:M02ProjectWorkspace` | `TEST-M02-CHECKPOINT-RECOVERY-001` | `WP-M02-004`, `WP-M02-009` | `recovery` | — | `release` |
+| `ARCH-83:M02ProjectWorkspace` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `WP-M02-002` | `protocol` | — | `release` |
 | `ARCH-83:Milestone0` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
+| `ARCH-83:OperationalModel` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `WP-M02-001` | `node` | — | — |
+| `ARCH-83:PersonalQuietObservability` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `WP-M02-001` | `observability` | — | `release` |
 | `ARCH-83:ProtocolCompatibility` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `ARCH-83:ProviderLiveSmoke` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-login.ts` | `release` |
 | `ARCH-83:RepositoryLayout` | `TEST-REPO-STRUCTURE-001` | `WP-M00-001`, `WP-M01-001` | `repository` | `tools/tests/test_verify_repo.py`, `tools/verify_repo.py` | `release` |
@@ -60,10 +72,32 @@ Each row links one requirement to its catalogue evidence.
 | `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-CANCEL-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
 | `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-STREAM-001` | `WP-M01-004`, `WP-M01-007` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
 | `M01:StreamingCancelTimeout` | `TEST-AGENT-RUNTIME-TIMEOUT-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
+| `M02:ExitGate` | `TEST-M02-E2E-001` | `WP-M02-009` | `quality` | — | `release` |
+| `M02:ExitGate` | `TEST-M02-FAILURE-RECOVERY-001` | `WP-M02-009` | `quality` | — | `release` |
+| `M02:ExitGate` | `TEST-M02-OWNER-ACCEPTANCE-001` | `WP-M02-009` | `owner` | — | `release` |
+| `M02:ExitGate` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `WP-M02-002` | `protocol` | — | `release` |
+| `M02:ExitGate` | `TEST-M02-REVIEW-CORRECTION-001` | `WP-M02-008`, `WP-M02-009` | `review` | — | `release` |
+| `M02:OwnerGate` | `TEST-M02-OWNER-ACCEPTANCE-001` | `WP-M02-009` | `owner` | — | `release` |
+| `M02:OwnerGate` | `TEST-M02-REVIEW-DESIGN-001` | `WP-M02-007` | `desktop` | — | `release` |
+| `M02:OwnerGate` | `TEST-M02-REVIEW-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
+| `M02:ParallelOwnership` | `TEST-M02-EXTERNAL-CHANGE-001` | `WP-M02-004`, `WP-M02-009` | `workspace` | — | `release` |
+| `M02:ParallelOwnership` | `TEST-M02-GIT-CONFLICT-001` | `WP-M02-006`, `WP-M02-009` | `workspace` | — | `release` |
+| `M02:VersionBoundTests` | `TEST-M02-TEST-RECEIPT-001` | `WP-M02-005`, `WP-M02-009` | `execution` | — | `release` |
+| `M02:VersionBoundTests` | `TEST-M02-WORKSPACE-SNAPSHOT-001` | `WP-M02-004`, `WP-M02-005`, `WP-M02-009` | `workspace` | — | `release` |
+| `M02:WorkspaceSnapshot` | `TEST-M02-WORKSPACE-SNAPSHOT-001` | `WP-M02-004`, `WP-M02-005`, `WP-M02-009` | `workspace` | — | `release` |
 | `OWNER:CanonicalNameDennett` | `TEST-PRODUCT-IDENTITY-001` | `WP-M00-006` | `repository` | `tools/generate_repository_metadata.py`, `tools/verify_repo.py` | `release` |
+| `OWNER:CodexOnlyRuntime` | `TEST-M02-CODEX-PROJECT-EDIT-001` | `WP-M02-006`, `WP-M02-009` | `agents` | — | `release` |
+| `OWNER:FigmaBeforeSubstantialUi` | `TEST-M02-REVIEW-DESIGN-001` | `WP-M02-007` | `desktop` | — | `release` |
+| `OWNER:M02Diagnosability` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `WP-M02-001` | `node` | — | — |
+| `OWNER:M02Diagnosability` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `WP-M02-001` | `observability` | — | `release` |
+| `OWNER:M02Diagnosability` | `TEST-M02-FAILURE-RECOVERY-001` | `WP-M02-009` | `quality` | — | `release` |
 | `OWNER:NoLicenseSelected` | `TEST-PRODUCT-IDENTITY-001` | `WP-M00-006` | `repository` | `tools/generate_repository_metadata.py`, `tools/verify_repo.py` | `release` |
 | `OWNER:UseChatGPTSubscriptionBeforeApiBilling` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-login.ts` | `release` |
+| `SPEC-20:Artifact` | `TEST-M02-ARTIFACT-COLLECTION-001` | `WP-M02-005`, `WP-M02-008` | `artifacts` | — | — |
 | `SPEC-20:StopSemantics` | `TEST-AGENT-RUNTIME-CANCEL-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
+| `SPEC-30:ProjectInstructionsTrust` | `TEST-M02-INSTRUCTION-CHANGE-001` | `WP-M02-003`, `WP-M02-006` | `projects` | — | — |
+| `SPEC-30:WorkspaceTrust` | `TEST-M02-COMMAND-TRUST-001` | `WP-M02-005` | `trust` | — | `release` |
+| `SPEC-30:WorkspaceTrust` | `TEST-M02-PROJECT-TRUST-001` | `WP-M02-003`, `WP-M02-005` | `trust` | — | `release` |
 | `SPEC-41:ProviderAdapter` | `TEST-AGENT-RUNTIME-STREAM-001` | `WP-M01-004`, `WP-M01-007` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `tests/contracts/agent_runtime_conformance.json` | `release` |
 | `SPEC-41:ProviderAdapter` | `TEST-CODEX-SDK-CONTRACT-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary-lib.test.ts`, `services/adapter-host-node/src/codex-cli.test.ts`, `services/adapter-host-node/src/codex-workspace.test.ts` | `release` |
 | `SPEC-41:ProviderContinuation` | `TEST-CODEX-SDK-CONTINUATION-001` | `WP-M01-004` | `agents` | `crates/dennett-agent-core/tests/runtime_conformance.rs`, `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-runtime-adapter.test.ts`, `services/adapter-host-node/src/codex-runtime-canary.ts`, `tests/contracts/agent_runtime_conformance.json` | — |
@@ -71,10 +105,35 @@ Each row links one requirement to its catalogue evidence.
 | `SPEC-50:HeadEligibility` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
 | `SPEC-50:OperationLog` | `TEST-PROJECT-SESSION-RESTORE-001` | `WP-M01-005` | `memory` | `adapters/storage/sqlite/src/lib.rs`, `crates/dennett-memory-core/src/session.rs`, `services/head/tests/session_restore.rs` | `release` |
 | `SPEC-60:Accessibility` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
+| `SPEC-60:Accessibility` | `TEST-M02-REVIEW-A11Y-001` | `WP-M02-007`, `WP-M02-008` | `desktop` | — | `release` |
+| `SPEC-60:ChangesReviewCheckpoints` | `TEST-M02-REVIEW-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
+| `SPEC-60:Checkpoints` | `TEST-M02-CHECKPOINT-RECOVERY-001` | `WP-M02-004`, `WP-M02-009` | `recovery` | — | `release` |
+| `SPEC-60:FailureTests` | `TEST-M02-FAILURE-RECOVERY-001` | `WP-M02-009` | `quality` | — | `release` |
+| `SPEC-60:IntegrationActions` | `TEST-M02-GIT-CONFLICT-001` | `WP-M02-006`, `WP-M02-009` | `workspace` | — | `release` |
+| `SPEC-60:MissingProjectState` | `TEST-M02-PROJECT-MISSING-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | — |
 | `SPEC-60:ProjectChat` | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
 | `SPEC-60:ProjectChat` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
 | `SPEC-60:ProjectChatFailure` | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | `WP-M01-007` | `quality` | `apps/desktop/src/App.native.test.tsx`, `apps/desktop/src/lib/projectChatBridge.test.ts`, `services/head/tests/conversation_application.rs` | `release` |
 | `SPEC-60:ProjectWorkspace` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
+| `SPEC-60:ProjectsHub` | `TEST-M02-PROJECT-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
+| `SPEC-60:ReviewComments` | `TEST-M02-REVIEW-CORRECTION-001` | `WP-M02-008`, `WP-M02-009` | `review` | — | `release` |
+| `SPEC-70:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | — | `release` |
+| `SPEC-70:PRJ-01` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | `release` |
+| `SPEC-70:PRJ-01` | `TEST-M02-PROJECT-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
+| `SPEC-70:PRJ-02` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | `release` |
+| `SPEC-70:PRJ-02` | `TEST-M02-PROJECT-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
+| `SPEC-70:PRJ-04` | `TEST-M02-CODEX-PROJECT-EDIT-001` | `WP-M02-006`, `WP-M02-009` | `agents` | — | `release` |
+| `SPEC-70:PRJ-04` | `TEST-M02-E2E-001` | `WP-M02-009` | `quality` | — | `release` |
+| `SPEC-70:PRJ-04` | `TEST-M02-TEST-RECEIPT-001` | `WP-M02-005`, `WP-M02-009` | `execution` | — | `release` |
+| `SPEC-70:PRJ-07` | `TEST-M02-EXTERNAL-CHANGE-001` | `WP-M02-004`, `WP-M02-009` | `workspace` | — | `release` |
+| `SPEC-70:PRJ-07` | `TEST-M02-GIT-WORKTREE-001` | `WP-M02-006` | `workspace` | — | `release` |
+| `SPEC-70:PRJ-08` | `TEST-M02-PROJECT-MISSING-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | — |
+| `SPEC-70:PRJ-13` | `TEST-M02-INSTRUCTION-CHANGE-001` | `WP-M02-003`, `WP-M02-006` | `projects` | — | — |
+| `SPEC-70:TRU-01` | `TEST-M02-COMMAND-TRUST-001` | `WP-M02-005` | `trust` | — | `release` |
+| `SPEC-70:TRU-01` | `TEST-M02-PROJECT-TRUST-001` | `WP-M02-003`, `WP-M02-005` | `trust` | — | `release` |
+| `SPEC-70:TRU-02` | `TEST-M02-FILESYSTEM-SCOPE-001` | `WP-M02-004`, `WP-M02-009` | `security` | — | `release` |
+| `SPEC-70:TRU-02` | `TEST-M02-PROJECT-TRUST-001` | `WP-M02-003`, `WP-M02-005` | `trust` | — | `release` |
+| `SPEC-70:UI-06` | `TEST-M02-REVIEW-A11Y-001` | `WP-M02-007`, `WP-M02-008` | `desktop` | — | `release` |
 | `SPEC-B:UnknownEffect` | `TEST-EFFECT-UNKNOWN-001` | — | `effects` | `tests/scenarios/effect-timeout-no-duplicate.yaml` | `release` |
 | `TEST-STRATEGY:GeneratedViews` | `TEST-CATALOGUE-VIEWS-001` | `WP-M00-005` | `quality` | `tools/generate_test_catalogue.py`, `tools/tests/test_generate_test_catalogue.py` | `release` |
 | `TEST-STRATEGY:PRFastGate` | `TEST-PR-FAST-GATE-001` | `WP-M00-003` | `repository` | `.github/branch-protection.main.json`, `.github/workflows/ci.yml`, `Justfile`, `tools/tests/test_verify_ci.py`, `tools/verify_ci.py`, `tools/verify_worktree_clean.py` | `release` |

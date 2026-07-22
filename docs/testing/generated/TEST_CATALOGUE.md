@@ -4,18 +4,20 @@
 
 > Source: `tests/catalog/*.json`. Regenerate with `uv run python tools/generate_test_catalogue.py`.
 
-35 cases from 2 structured source file(s).
+63 cases from 3 structured source file(s).
 
 ## Summary
 
-- Status: `automated` 30, `manual` 2, `specified` 3
-- Risk: `R1` 8, `R2` 22, `R3` 5
-- Domain: `accessibility` 1, `adapters` 1, `agents` 10, `architecture` 1, `authentication` 1, `ci` 1, `compatibility` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 12, `devices` 2, `documentation` 2, `effects` 1, `head` 3, `ipc` 1, `lifecycle` 1, `memory` 5, `node` 4, `observability` 1, `planning` 4, `project-chat` 2, `protocol` 3, `providers` 6, `recovery` 5, `reliability` 1, `repository` 8, `rust` 1, `security` 1, `sessions` 5, `storage` 1, `streaming` 2, `sync` 3, `tauri` 1, `testing` 4, `tooling` 1, `trust` 1, `ux` 1
+- Status: `automated` 30, `manual` 2, `specified` 31
+- Risk: `R1` 8, `R2` 32, `R3` 23
+- Domain: `accessibility` 2, `adapters` 1, `agents` 14, `architecture` 1, `artifacts` 2, `authentication` 1, `cancellation` 1, `checkpoints` 1, `ci` 1, `compatibility` 3, `conflicts` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 20, `devices` 2, `documentation` 2, `effects` 1, `evidence` 1, `execution` 6, `filesystem` 4, `git` 3, `head` 3, `instructions` 1, `ipc` 2, `lifecycle` 2, `memory` 5, `node` 6, `observability` 5, `planning` 4, `privacy` 1, `project-chat` 2, `projects` 8, `protocol` 4, `providers` 8, `recovery` 15, `reliability` 1, `repository` 8, `review` 9, `rust` 1, `security` 5, `sessions` 5, `storage` 3, `streaming` 2, `sync` 3, `tauri` 1, `testing` 8, `tooling` 1, `trust` 4, `ux` 3, `workspace` 10
 
 ## Cases
 
 | ID | Title | Domains | Risk | Status | Priority | Owner | Implementation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `TEST-M02-CODEX-PROJECT-EDIT-001` | Codex changes and verifies a disposable real project | `agents`, `providers`, `testing`, `workspace` | `R3` | `specified` | `critical` | `agents` | `planned` |
+| `TEST-M02-CODEX-PROJECT-RECOVERY-001` | Codex project work restores without replaying committed effects | `agents`, `providers`, `recovery`, `workspace` | `R3` | `specified` | `critical` | `agents` | `planned` |
 | `TEST-AGENT-RUNTIME-CANCEL-001` | Cancellation is scoped acknowledged and terminal | `agents`, `control`, `streaming` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-AGENT-RUNTIME-STREAM-001` | Agent runtimes emit ordered provider-neutral stream events | `agents`, `providers`, `streaming` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-AGENT-RUNTIME-TIMEOUT-001` | Runtime deadlines produce an honest timeout outcome | `agents`, `providers`, `reliability` | `R2` | `automated` | `critical` | `agents` | `automated` |
@@ -23,6 +25,8 @@
 | `TEST-CODEX-SDK-CONTRACT-001` | Codex SDK adapter preserves the provider boundary | `adapters`, `agents`, `providers` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-FAKE-CHAT-001` | Credential-free fake conversation reaches result and memory | `agents`, `head`, `memory`, `repository` | `R2` | `automated` | `critical` | `agents` | `automated` |
 | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | Codex SDK live canary uses ChatGPT subscription authentication | `agents`, `authentication`, `providers` | `R2` | `manual` | `critical` | `agents` | `manual` |
+| `TEST-M02-ARTIFACT-COLLECTION-001` | Only declared project outputs become truthful artifacts | `artifacts`, `execution`, `filesystem` | `R2` | `specified` | `high` | `artifacts` | `planned` |
+| `TEST-M02-OWNER-ACCEPTANCE-001` | Owner accepts one understandable native project workflow | `desktop`, `projects`, `review`, `ux` | `R3` | `specified` | `critical` | `owner` | `planned` |
 | `TEST-DESKTOP-DRAFT-RECOVERY-001` | Unsent desktop draft survives UI restart without becoming canonical memory | `desktop`, `recovery`, `sessions` | `R2` | `automated` | `high` | `desktop` | `automated` |
 | `TEST-DESKTOP-NODE-LIFECYCLE-001` | Closing the desktop window leaves Node and active state alive | `desktop`, `lifecycle`, `node`, `recovery` | `R2` | `automated` | `critical` | `desktop` | `automated` |
 | `TEST-DESKTOP-PROJECT-CHAT-A11Y-001` | Project Chat remains operable by keyboard and assistive technology | `accessibility`, `desktop`, `project-chat` | `R2` | `automated` | `critical` | `desktop` | `automated` |
@@ -32,22 +36,46 @@
 | `TEST-M01-PROVIDER-TIMEOUT-VISIBLE-001` | Provider timeout is visible recoverable and never shown as success | `agents`, `desktop`, `providers`, `recovery` | `R2` | `automated` | `critical` | `quality` | `automated` |
 | `TEST-TAURI-WATCH-BRIDGE-001` | Tauri forwards typed watch frames without owning domain state | `desktop`, `sync`, `tauri` | `R2` | `automated` | `critical` | `desktop` | `automated` |
 | `TEST-M01-DESKTOP-CONVERSATION-E2E-001` | Local desktop conversation completes and restores end to end | `agents`, `desktop`, `head`, `memory`, `node` | `R2` | `manual` | `critical` | `quality` | `manual` |
+| `TEST-M02-PROJECT-UI-001` | Desktop project creation and import use real Node state | `desktop`, `ipc`, `projects` | `R2` | `specified` | `critical` | `desktop` | `planned` |
+| `TEST-M02-REVIEW-A11Y-001` | Project review is keyboard and assistive-technology operable | `accessibility`, `desktop`, `review` | `R2` | `specified` | `critical` | `desktop` | `planned` |
+| `TEST-M02-REVIEW-DESIGN-001` | Project review design receives explicit owner approval | `desktop`, `review`, `ux` | `R2` | `specified` | `critical` | `desktop` | `planned` |
+| `TEST-M02-REVIEW-UI-001` | Desktop renders real diff test artifact and checkpoint evidence | `artifacts`, `desktop`, `review`, `testing` | `R2` | `specified` | `critical` | `desktop` | `planned` |
 | `TEST-EFFECT-UNKNOWN-001` | Unknown external effect is reconciled instead of blindly retried | `connectors`, `effects` | `R3` | `specified` | `critical` | `effects` | `planned` |
+| `TEST-M02-COMMAND-CANCEL-001` | Project command cancellation is scoped and terminal | `cancellation`, `execution`, `recovery` | `R3` | `specified` | `critical` | `execution` | `planned` |
+| `TEST-M02-COMMAND-TRUST-001` | Project commands enforce trust and resource policy outside the agent | `execution`, `security`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
+| `TEST-M02-TEST-RECEIPT-001` | Test receipts prove the exact verified project version | `evidence`, `execution`, `testing` | `R3` | `specified` | `critical` | `execution` | `planned` |
+| `TEST-M02-GIT-CONFLICT-001` | Git integration reports stale base and conflicts without destructive automation | `conflicts`, `git`, `review` | `R3` | `specified` | `critical` | `workspace` | `planned` |
+| `TEST-M02-GIT-WORKTREE-001` | Local Git worktrees pin base and clean up explicitly | `git`, `recovery`, `workspace` | `R3` | `specified` | `critical` | `workspace` | `planned` |
 | `TEST-HEAD-OPTIN-001` | Unapproved device cannot promote itself to Head | `devices`, `head`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | Client cache cannot become a second canonical memory | `devices`, `memory`, `sync` | `R3` | `specified` | `critical` | `memory` | `planned` |
 | `TEST-M01-TRACE-CORRELATION-001` | One privacy-aware trace joins the complete M01 turn | `agents`, `desktop`, `memory`, `observability` | `R2` | `automated` | `high` | `observability` | `automated` |
+| `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | Abnormal previous exit is distinguishable from clean shutdown | `lifecycle`, `observability`, `recovery` | `R2` | `specified` | `high` | `node` | `planned` |
+| `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | Local diagnostics survive process restart within bounded retention | `node`, `observability`, `recovery` | `R2` | `specified` | `critical` | `observability` | `planned` |
+| `TEST-M02-DIAGNOSTIC-REDACTION-001` | Diagnostic output excludes private content and credentials | `observability`, `privacy`, `security` | `R2` | `specified` | `critical` | `security` | `planned` |
 | `TEST-MILESTONE-ACCEPTED-HANDOFF-001` | Generated milestone plan supports the accepted-milestone handoff | `planning`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
 | `TEST-MILESTONE-CURRENT-LABEL-001` | Generated milestone plan reports the actual current lifecycle state | `planning`, `testing` | `R1` | `automated` | `high` | `quality` | `automated` |
 | `TEST-MILESTONE-QUALIFYING-001` | Current milestone test views support the qualification lifecycle | `planning`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
 | `TEST-PLANNING-VALIDATION-001` | Planning validator rejects invalid graph and unsafe ready work | `planning`, `repository` | `R1` | `automated` | `critical` | `planning` | `automated` |
+| `TEST-M02-E2E-001` | One real project completes the interactive M02 workflow | `agents`, `desktop`, `projects`, `review`, `testing`, `workspace` | `R3` | `specified` | `critical` | `quality` | `planned` |
+| `TEST-M02-INSTRUCTION-CHANGE-001` | Project instruction changes invalidate the effective instruction fingerprint | `instructions`, `projects`, `trust` | `R3` | `specified` | `high` | `projects` | `planned` |
+| `TEST-M02-PROJECT-CREATE-IMPORT-001` | Empty and existing local projects register durably | `desktop`, `node`, `projects`, `storage` | `R3` | `specified` | `critical` | `projects` | `planned` |
+| `TEST-M02-PROJECT-TRUST-001` | Restricted projects cannot execute or self-elevate | `execution`, `projects`, `security`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
+| `TEST-M02-PROJECT-MISSING-001` | Missing project locations preserve metadata and block execution | `desktop`, `projects`, `recovery` | `R2` | `specified` | `high` | `projects` | `planned` |
 | `TEST-M01-PROTOCOL-EPOCH-001` | M01 protocol epoch replaces the scaffold before production consumers | `compatibility`, `desktop`, `node`, `protocol` | `R3` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-BREAKING-001` | Protocol compatibility gate rejects breaking changes | `compatibility`, `protocol` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-GENERATION-001` | Protocol clients regenerate deterministically from canonical schemas | `protocol`, `repository` | `R2` | `automated` | `critical` | `protocol` | `automated` |
+| `TEST-M02-PROTOCOL-ADDITIVE-001` | M02 workspace contracts extend the accepted protocol additively | `compatibility`, `projects`, `protocol`, `review` | `R2` | `specified` | `critical` | `protocol` | `planned` |
 | `TEST-PR-FAST-GATE-001` | Pull request fast gate covers every M00 required check | `ci`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-PRODUCT-IDENTITY-001` | Canonical repository identity uses Dennett and no license file | `contracts`, `documentation`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-BOOTSTRAP-CLEAN-001` | Clean checkout bootstrap installs pinned development dependencies | `repository`, `tooling` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-REPO-STRUCTURE-001` | Required repository boundaries and AGENTS files exist | `architecture`, `repository` | `R1` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-RUST-WORKSPACE-001` | Pinned Rust workspace format lint and tests pass | `repository`, `rust` | `R1` | `automated` | `critical` | `repository` | `automated` |
+| `TEST-M02-REVIEW-CORRECTION-001` | Review correction and rollback preserve exact version context | `agents`, `recovery`, `review`, `workspace` | `R3` | `specified` | `critical` | `review` | `planned` |
 | `TEST-PROJECT-SESSION-RESTORE-001` | Project session restores authoritative turns after restart | `memory`, `recovery`, `sessions` | `R3` | `automated` | `critical` | `memory` | `automated` |
 | `TEST-WATCH-GAP-RESYNC-001` | A watch sequence gap marks state stale and requires resync | `desktop`, `sessions`, `sync` | `R2` | `automated` | `critical` | `sync` | `automated` |
 | `TEST-CATALOGUE-VIEWS-001` | Structured catalogue generates deterministic human views | `documentation`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
+| `TEST-M02-CHECKPOINT-RECOVERY-001` | Checkpoint comparison and restore survive interrupted mutation | `checkpoints`, `recovery`, `storage`, `workspace` | `R3` | `specified` | `critical` | `recovery` | `planned` |
+| `TEST-M02-EXTERNAL-CHANGE-001` | Concurrent human edits are detected without silent overwrite | `conflicts`, `filesystem`, `recovery`, `workspace` | `R3` | `specified` | `critical` | `workspace` | `planned` |
+| `TEST-M02-FAILURE-RECOVERY-001` | M02 failure matrix remains diagnosable and recoverable | `execution`, `git`, `observability`, `recovery`, `workspace` | `R3` | `specified` | `critical` | `quality` | `planned` |
+| `TEST-M02-FILESYSTEM-SCOPE-001` | Filesystem authority blocks escapes and ungranted roots | `filesystem`, `security`, `workspace` | `R3` | `specified` | `critical` | `security` | `planned` |
+| `TEST-M02-WORKSPACE-SNAPSHOT-001` | File changes and tests bind to one exact workspace snapshot | `filesystem`, `review`, `workspace` | `R3` | `specified` | `critical` | `workspace` | `planned` |

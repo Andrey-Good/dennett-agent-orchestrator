@@ -1,0 +1,509 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "TEST-M02-DIAGNOSTIC-PERSISTENCE-001",
+      "title": "Local diagnostics survive process restart within bounded retention",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["observability", "recovery", "node"],
+      "levels": ["unit", "process-integration"],
+      "requirement_refs": ["ARCH-83:PersonalQuietObservability", "OWNER:M02Diagnosability"],
+      "work_package_refs": ["WP-M02-001"],
+      "expected": [
+        "Structured diagnostic records are flushed to a Node-owned local directory and remain readable after restart",
+        "Retention is bounded and cleanup cannot escape the diagnostic root",
+        "Logging failure degrades diagnostics without preventing canonical project recovery"
+      ],
+      "implementation": {"target_suite": "dennett-observability persistence", "status": "planned", "test_paths": []},
+      "owner": "observability"
+    },
+    {
+      "id": "TEST-M02-DIAGNOSTIC-REDACTION-001",
+      "title": "Diagnostic output excludes private content and credentials",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["observability", "privacy", "security"],
+      "levels": ["unit", "contract"],
+      "requirement_refs": ["ARCH-80:Observability", "SPEC-70:Observability"],
+      "work_package_refs": ["WP-M02-001", "WP-M02-009"],
+      "expected": [
+        "Prompts, responses, hidden reasoning, tokens, secret environment values and unrestricted filenames do not enter generic logs",
+        "Allowed correlation and error fields remain sufficient to join one operation",
+        "A redaction regression fails the test with the sensitive field class rather than echoing its value"
+      ],
+      "implementation": {"target_suite": "diagnostic privacy contract", "status": "planned", "test_paths": []},
+      "owner": "security"
+    },
+    {
+      "id": "TEST-M02-DIAGNOSTIC-LIFECYCLE-001",
+      "title": "Abnormal previous exit is distinguishable from clean shutdown",
+      "status": "specified",
+      "priority": "high",
+      "risk": "R2",
+      "domains": ["observability", "lifecycle", "recovery"],
+      "levels": ["process-integration"],
+      "requirement_refs": ["OWNER:M02Diagnosability", "ARCH-83:OperationalModel"],
+      "work_package_refs": ["WP-M02-001"],
+      "expected": [
+        "Startup records whether the previous supervised process reached clean shutdown",
+        "A crash marker identifies component and last durable phase without claiming an unavailable root cause",
+        "The next clean shutdown clears only the matching lifecycle marker"
+      ],
+      "implementation": {"target_suite": "Node lifecycle diagnostics", "status": "planned", "test_paths": []},
+      "owner": "node"
+    },
+    {
+      "id": "TEST-M02-PROTOCOL-ADDITIVE-001",
+      "title": "M02 workspace contracts extend the accepted protocol additively",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["protocol", "compatibility", "projects", "review"],
+      "levels": ["static", "contract"],
+      "requirement_refs": ["M02:ExitGate", "ARCH-83:M02ProjectWorkspace"],
+      "work_package_refs": ["WP-M02-002"],
+      "expected": [
+        "Project, workspace, change, test, artifact and checkpoint messages expose stable identity, revision and terminal error state",
+        "Mutating commands preserve command and correlation identity and do not claim completion on admission",
+        "M01 clients remain wire compatible and generated Rust and TypeScript clients match the sources"
+      ],
+      "implementation": {"target_suite": "M02 protocol descriptor", "status": "planned", "test_paths": []},
+      "owner": "protocol"
+    },
+    {
+      "id": "TEST-M02-PROJECT-CREATE-IMPORT-001",
+      "title": "Empty and existing local projects register durably",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["projects", "node", "storage", "desktop"],
+      "levels": ["application", "persistence", "process-integration"],
+      "requirement_refs": ["SPEC-70:PRJ-01", "SPEC-70:PRJ-02"],
+      "work_package_refs": ["WP-M02-003", "WP-M02-008"],
+      "expected": [
+        "Creating an empty project creates only the selected directory, durable project record and direct session",
+        "Adding an existing folder preserves its contents and detects repository and instruction metadata",
+        "Canonical path aliases cannot create duplicate project identity and restart restores the same registration"
+      ],
+      "implementation": {"target_suite": "project registry E2E", "status": "planned", "test_paths": []},
+      "owner": "projects"
+    },
+    {
+      "id": "TEST-M02-PROJECT-TRUST-001",
+      "title": "Restricted projects cannot execute or self-elevate",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["projects", "trust", "security", "execution"],
+      "levels": ["domain", "application", "scenario"],
+      "requirement_refs": ["SPEC-30:WorkspaceTrust", "SPEC-70:TRU-01", "SPEC-70:TRU-02"],
+      "work_package_refs": ["WP-M02-003", "WP-M02-005"],
+      "expected": [
+        "Unknown imported folders start Restricted and may be statically inspected",
+        "Project instructions, model output and files cannot grant Trusted-Bounded access or expand roots",
+        "An explicit user grant enables only the documented bounded execution scope and remains revocable"
+      ],
+      "implementation": {"target_suite": "workspace trust scenarios", "status": "planned", "test_paths": []},
+      "owner": "trust"
+    },
+    {
+      "id": "TEST-M02-PROJECT-MISSING-001",
+      "title": "Missing project locations preserve metadata and block execution",
+      "status": "specified",
+      "priority": "high",
+      "risk": "R2",
+      "domains": ["projects", "recovery", "desktop"],
+      "levels": ["application", "process-integration", "component"],
+      "requirement_refs": ["SPEC-70:PRJ-08", "SPEC-60:MissingProjectState"],
+      "work_package_refs": ["WP-M02-003", "WP-M02-008"],
+      "expected": [
+        "A disappeared folder changes the project to Missing without deleting sessions or metadata",
+        "Read or execution commands fail with an actionable missing-location error",
+        "Locate or rebind validates identity and trust-sensitive changes before returning to Ready"
+      ],
+      "implementation": {"target_suite": "missing project recovery", "status": "planned", "test_paths": []},
+      "owner": "projects"
+    },
+    {
+      "id": "TEST-M02-INSTRUCTION-CHANGE-001",
+      "title": "Project instruction changes invalidate the effective instruction fingerprint",
+      "status": "specified",
+      "priority": "high",
+      "risk": "R3",
+      "domains": ["projects", "instructions", "trust"],
+      "levels": ["application", "scenario"],
+      "requirement_refs": ["SPEC-70:PRJ-13", "SPEC-30:ProjectInstructionsTrust"],
+      "work_package_refs": ["WP-M02-003", "WP-M02-006"],
+      "expected": [
+        "Relevant AGENTS or provider instruction changes produce a new fingerprint and observable event",
+        "The next provider turn receives the rebuilt effective instruction set",
+        "Instructions remain guidance inside the granted workspace and never permission authority"
+      ],
+      "implementation": {"target_suite": "instruction resolution scenarios", "status": "planned", "test_paths": []},
+      "owner": "projects"
+    },
+    {
+      "id": "TEST-M02-WORKSPACE-SNAPSHOT-001",
+      "title": "File changes and tests bind to one exact workspace snapshot",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["workspace", "filesystem", "review"],
+      "levels": ["domain", "application", "integration"],
+      "requirement_refs": ["M02:WorkspaceSnapshot", "M02:VersionBoundTests"],
+      "work_package_refs": ["WP-M02-004", "WP-M02-005", "WP-M02-009"],
+      "expected": [
+        "A mutation is admitted against a stable base revision and produces a new revision or an explicit conflict",
+        "Diff, command and test receipts name the revision they observed",
+        "Changing any tracked input marks earlier verification stale instead of preserving a false green state"
+      ],
+      "implementation": {"target_suite": "workspace snapshot contract", "status": "planned", "test_paths": []},
+      "owner": "workspace"
+    },
+    {
+      "id": "TEST-M02-FILESYSTEM-SCOPE-001",
+      "title": "Filesystem authority blocks escapes and ungranted roots",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["workspace", "filesystem", "security"],
+      "levels": ["unit", "integration", "adversarial"],
+      "requirement_refs": ["ARCH-82:FilesystemPolicy", "SPEC-70:TRU-02"],
+      "work_package_refs": ["WP-M02-004", "WP-M02-009"],
+      "expected": [
+        "Canonicalization prevents dot segments, symlinks, junctions and case aliases from escaping granted roots",
+        "Read and write permissions are enforced independently outside the model",
+        "Denied attempts produce receipts and do not partially modify either path"
+      ],
+      "implementation": {"target_suite": "filesystem authority adversarial", "status": "planned", "test_paths": []},
+      "owner": "security"
+    },
+    {
+      "id": "TEST-M02-EXTERNAL-CHANGE-001",
+      "title": "Concurrent human edits are detected without silent overwrite",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["workspace", "filesystem", "conflicts", "recovery"],
+      "levels": ["integration", "scenario"],
+      "requirement_refs": ["M02:ParallelOwnership", "SPEC-70:PRJ-07"],
+      "work_package_refs": ["WP-M02-004", "WP-M02-009"],
+      "expected": [
+        "A file changed after the base snapshot rejects a blind replacement",
+        "Unrelated human changes remain intact when an agent change is applied or reverted",
+        "The conflict exposes base, current and proposed identities for retry, merge or cancellation"
+      ],
+      "implementation": {"target_suite": "workspace conflict scenarios", "status": "planned", "test_paths": []},
+      "owner": "workspace"
+    },
+    {
+      "id": "TEST-M02-CHECKPOINT-RECOVERY-001",
+      "title": "Checkpoint comparison and restore survive interrupted mutation",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["workspace", "checkpoints", "recovery", "storage"],
+      "levels": ["persistence", "process-integration", "fault-injection"],
+      "requirement_refs": ["SPEC-60:Checkpoints", "ARCH-83:M02ProjectWorkspace"],
+      "work_package_refs": ["WP-M02-004", "WP-M02-009"],
+      "expected": [
+        "A checkpoint records base, touched paths, artifacts, effects and provider continuation before consequential mutation",
+        "Restart reconstructs committed, unapplied, partially applied or recovery-required state",
+        "Restore stops on external divergence and never claims to undo completed external effects"
+      ],
+      "implementation": {"target_suite": "checkpoint fault injection", "status": "planned", "test_paths": []},
+      "owner": "recovery"
+    },
+    {
+      "id": "TEST-M02-TEST-RECEIPT-001",
+      "title": "Test receipts prove the exact verified project version",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["execution", "testing", "evidence"],
+      "levels": ["application", "process-integration"],
+      "requirement_refs": ["M02:VersionBoundTests", "SPEC-70:PRJ-04"],
+      "work_package_refs": ["WP-M02-005", "WP-M02-009"],
+      "expected": [
+        "Receipt includes command identity, workspace revision, start and finish, exit classification and bounded evidence handles",
+        "Pass, fail, timeout, cancelled and spawn failure remain distinct",
+        "A receipt cannot be attached to a newer workspace revision without an explicit stale marker"
+      ],
+      "implementation": {"target_suite": "local execution receipts", "status": "planned", "test_paths": []},
+      "owner": "execution"
+    },
+    {
+      "id": "TEST-M02-COMMAND-CANCEL-001",
+      "title": "Project command cancellation is scoped and terminal",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["execution", "cancellation", "recovery"],
+      "levels": ["process-integration", "fault-injection"],
+      "requirement_refs": ["ARCH-80:StructuredCancellation", "ARCH-80:LocalExecutionManager"],
+      "work_package_refs": ["WP-M02-005"],
+      "expected": [
+        "Stop targets one supervised process tree and waits for a bounded terminal acknowledgement",
+        "Late output cannot rewrite terminal state",
+        "Failure to prove process termination becomes recovery-required rather than cancelled"
+      ],
+      "implementation": {"target_suite": "local execution cancellation", "status": "planned", "test_paths": []},
+      "owner": "execution"
+    },
+    {
+      "id": "TEST-M02-COMMAND-TRUST-001",
+      "title": "Project commands enforce trust and resource policy outside the agent",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["execution", "trust", "security"],
+      "levels": ["application", "adversarial"],
+      "requirement_refs": ["SPEC-30:WorkspaceTrust", "SPEC-70:TRU-01"],
+      "work_package_refs": ["WP-M02-005"],
+      "expected": [
+        "Restricted project commands are denied before process spawn",
+        "Cwd, executable, network, environment and resource scopes are revalidated by Node",
+        "Project text and provider output cannot bypass a denied scope"
+      ],
+      "implementation": {"target_suite": "local execution trust", "status": "planned", "test_paths": []},
+      "owner": "trust"
+    },
+    {
+      "id": "TEST-M02-ARTIFACT-COLLECTION-001",
+      "title": "Only declared project outputs become truthful artifacts",
+      "status": "specified",
+      "priority": "high",
+      "risk": "R2",
+      "domains": ["artifacts", "execution", "filesystem"],
+      "levels": ["application", "integration"],
+      "requirement_refs": ["SPEC-20:Artifact", "ARCH-83:M02ProjectWorkspace"],
+      "work_package_refs": ["WP-M02-005", "WP-M02-008"],
+      "expected": [
+        "Collected artifacts name a real existing output, source command and workspace revision",
+        "Missing, oversized, escaped and unsupported outputs are reported honestly",
+        "The UI hides empty artifact sections rather than rendering placeholders"
+      ],
+      "implementation": {"target_suite": "artifact basics", "status": "planned", "test_paths": []},
+      "owner": "artifacts"
+    },
+    {
+      "id": "TEST-M02-GIT-WORKTREE-001",
+      "title": "Local Git worktrees pin base and clean up explicitly",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["git", "workspace", "recovery"],
+      "levels": ["adapter-contract", "integration"],
+      "requirement_refs": ["SPEC-70:PRJ-07", "ARCH-82:Worktrees"],
+      "work_package_refs": ["WP-M02-006"],
+      "expected": [
+        "Repository discovery records exact root, head, branch, dirty state and relevant untracked facts",
+        "An isolated workspace uses a unique branch and worktree pinned to the declared base without shared stash",
+        "Cleanup removes only a proven inactive worktree and preserves uncertain or unintegrated work"
+      ],
+      "implementation": {"target_suite": "Git adapter conformance", "status": "planned", "test_paths": []},
+      "owner": "workspace"
+    },
+    {
+      "id": "TEST-M02-GIT-CONFLICT-001",
+      "title": "Git integration reports stale base and conflicts without destructive automation",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["git", "conflicts", "review"],
+      "levels": ["integration", "scenario"],
+      "requirement_refs": ["M02:ParallelOwnership", "SPEC-60:IntegrationActions"],
+      "work_package_refs": ["WP-M02-006", "WP-M02-009"],
+      "expected": [
+        "A moved target branch marks reviewed changes stale before integration",
+        "Conflicts preserve both sides and require an explicit resolution path",
+        "No force push, shared-branch rewrite or remote publication occurs implicitly"
+      ],
+      "implementation": {"target_suite": "Git conflict scenarios", "status": "planned", "test_paths": []},
+      "owner": "workspace"
+    },
+    {
+      "id": "TEST-M02-CODEX-PROJECT-EDIT-001",
+      "title": "Codex changes and verifies a disposable real project",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["agents", "providers", "workspace", "testing"],
+      "levels": ["live-canary", "end-to-end"],
+      "requirement_refs": ["SPEC-70:PRJ-04", "OWNER:CodexOnlyRuntime"],
+      "work_package_refs": ["WP-M02-006", "WP-M02-009"],
+      "expected": [
+        "The ChatGPT-subscription Codex runtime reads the selected disposable project, changes the requested file and runs the requested focused check",
+        "Normalized activity, diff and test evidence retain one project, session, provider turn and workspace revision chain",
+        "The canary contains no private repository content and is excluded from credential-free CI"
+      ],
+      "implementation": {"target_suite": "live Codex project edit", "status": "planned", "test_paths": []},
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-M02-CODEX-PROJECT-RECOVERY-001",
+      "title": "Codex project work restores without replaying committed effects",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["agents", "providers", "workspace", "recovery"],
+      "levels": ["contract", "process-integration", "fault-injection"],
+      "requirement_refs": ["ARCH-80:ProjectChatLocalEdit", "ARCH-82:ProviderSessionRecovery"],
+      "work_package_refs": ["WP-M02-006", "WP-M02-009"],
+      "expected": [
+        "Restart restores provider continuation, workspace revision and durable effect receipts independently",
+        "Already committed file or Git effects are reconciled rather than blindly replayed",
+        "Unavailable continuation preserves recoverable project evidence and reports semantic drift if rehydration is required"
+      ],
+      "implementation": {"target_suite": "Codex workspace recovery", "status": "planned", "test_paths": []},
+      "owner": "agents"
+    },
+    {
+      "id": "TEST-M02-REVIEW-DESIGN-001",
+      "title": "Project review design receives explicit owner approval",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "ux", "review"],
+      "levels": ["design-review", "manual"],
+      "requirement_refs": ["OWNER:FigmaBeforeSubstantialUi", "M02:OwnerGate"],
+      "work_package_refs": ["WP-M02-007"],
+      "expected": [
+        "An editable Figma prototype uses real M02 state fixtures and the accepted monochrome Mica direction",
+        "Files, diffs, tests, artifacts, checkpoints, correction and rollback are understandable without raw logs",
+        "The owner approves or requests changes before renderer implementation begins"
+      ],
+      "implementation": {"target_suite": "owner design checkpoint", "status": "planned", "test_paths": []},
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-M02-PROJECT-UI-001",
+      "title": "Desktop project creation and import use real Node state",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "projects", "ipc"],
+      "levels": ["component", "bridge", "native-e2e"],
+      "requirement_refs": ["SPEC-60:ProjectsHub", "SPEC-70:PRJ-01", "SPEC-70:PRJ-02"],
+      "work_package_refs": ["WP-M02-008", "WP-M02-009"],
+      "expected": [
+        "Projects header creates a project while each project and Recent create chats in the correct scope",
+        "Create empty project and Add existing folder complete through stable commands and authoritative watches",
+        "Missing, Restricted, pending and failed states are visible and no local fixture is presented as live"
+      ],
+      "implementation": {"target_suite": "desktop project management", "status": "planned", "test_paths": []},
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-M02-REVIEW-UI-001",
+      "title": "Desktop renders real diff test artifact and checkpoint evidence",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "review", "testing", "artifacts"],
+      "levels": ["component", "bridge", "native-e2e"],
+      "requirement_refs": ["SPEC-60:ChangesReviewCheckpoints", "M02:OwnerGate"],
+      "work_package_refs": ["WP-M02-008", "WP-M02-009"],
+      "expected": [
+        "Each visible changed file, diff, test, artifact and checkpoint comes from the active Node snapshot",
+        "Stale, failed, cancelled, conflicted and recovery-required evidence is not styled as accepted or green",
+        "Empty resource sections remain absent and all rendered resources open the matching real viewer"
+      ],
+      "implementation": {"target_suite": "desktop project review", "status": "planned", "test_paths": []},
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-M02-REVIEW-A11Y-001",
+      "title": "Project review is keyboard and assistive-technology operable",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R2",
+      "domains": ["desktop", "review", "accessibility"],
+      "levels": ["design-review", "component", "accessibility"],
+      "requirement_refs": ["SPEC-70:UI-06", "SPEC-60:Accessibility"],
+      "work_package_refs": ["WP-M02-007", "WP-M02-008"],
+      "expected": [
+        "Files, changes, review comments, accept, correction and rollback have keyboard and screen-reader paths",
+        "No required operation depends only on hover, color, drag or pointer precision",
+        "Streaming updates preserve focus and announce bounded meaningful state changes"
+      ],
+      "implementation": {"target_suite": "desktop review accessibility", "status": "planned", "test_paths": []},
+      "owner": "desktop"
+    },
+    {
+      "id": "TEST-M02-REVIEW-CORRECTION-001",
+      "title": "Review correction and rollback preserve exact version context",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["review", "workspace", "agents", "recovery"],
+      "levels": ["application", "end-to-end"],
+      "requirement_refs": ["M02:ExitGate", "SPEC-60:ReviewComments"],
+      "work_package_refs": ["WP-M02-008", "WP-M02-009"],
+      "expected": [
+        "A correction references the reviewed file or hunk revision and continues in the same project session",
+        "Outdated review context is marked stale before a new mutation",
+        "Revert hunk, revert file and restore checkpoint affect only proven agent-owned changes or stop on conflict"
+      ],
+      "implementation": {"target_suite": "project review correction E2E", "status": "planned", "test_paths": []},
+      "owner": "review"
+    },
+    {
+      "id": "TEST-M02-E2E-001",
+      "title": "One real project completes the interactive M02 workflow",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["projects", "agents", "workspace", "testing", "review", "desktop"],
+      "levels": ["end-to-end", "native-e2e"],
+      "requirement_refs": ["M02:ExitGate", "SPEC-70:PRJ-04"],
+      "work_package_refs": ["WP-M02-009"],
+      "expected": [
+        "The user imports a disposable repository, grants bounded trust, asks Codex for a small change and sees ordered progress",
+        "The resulting diff and focused test refer to the same workspace revision",
+        "The user requests one correction and then either accepts the exact result or restores the prior checkpoint"
+      ],
+      "implementation": {"target_suite": "M02 native vertical slice", "status": "planned", "test_paths": []},
+      "owner": "quality"
+    },
+    {
+      "id": "TEST-M02-FAILURE-RECOVERY-001",
+      "title": "M02 failure matrix remains diagnosable and recoverable",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["workspace", "execution", "git", "recovery", "observability"],
+      "levels": ["scenario", "fault-injection", "process-integration"],
+      "requirement_refs": ["M02:ExitGate", "SPEC-60:FailureTests", "OWNER:M02Diagnosability"],
+      "work_package_refs": ["WP-M02-009"],
+      "expected": [
+        "Injected missing folder, stale file, denied path, spawn failure, failed test, cancellation, process exit, Git conflict and cleanup failure each reach a distinct terminal or recovery-required state",
+        "Restart preserves canonical evidence and never replays a committed mutation blindly",
+        "A privacy-safe diagnostic summary identifies the failing layer, operation and recommended next step"
+      ],
+      "implementation": {"target_suite": "M02 deterministic failure matrix", "status": "planned", "test_paths": []},
+      "owner": "quality"
+    },
+    {
+      "id": "TEST-M02-OWNER-ACCEPTANCE-001",
+      "title": "Owner accepts one understandable native project workflow",
+      "status": "specified",
+      "priority": "critical",
+      "risk": "R3",
+      "domains": ["desktop", "ux", "projects", "review"],
+      "levels": ["manual", "owner-acceptance"],
+      "requirement_refs": ["M02:OwnerGate", "M02:ExitGate"],
+      "work_package_refs": ["WP-M02-009"],
+      "expected": [
+        "The owner can state what the agent changed and whether tests apply without reading raw technical logs",
+        "Correction, accept and rollback choices are clear and operate on the intended revision",
+        "The native Files and Changes flow matches the approved visual checkpoint and remaining limitations are explicit"
+      ],
+      "implementation": {"target_suite": "M02 owner checkpoint", "status": "planned", "test_paths": []},
+      "owner": "owner"
+    }
+  ]
+}
