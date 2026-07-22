@@ -1268,7 +1268,7 @@ mod tests {
     use super::*;
     use dennett_contracts::{ArtifactId, EffectId, ProjectRelativePath};
     use dennett_effect_core::workspace::{
-        CanonicalObjectRef, DurableWorkspaceFailure, FileMutationKind, MetadataSha256,
+        CanonicalObjectRef, DurableWorkspaceFailure, FileMutationKind, PortableFilePermissions,
         ResolvedFileChangeProposal, WorkspaceCheckpointEntry, WorkspaceFileEffectPlan,
         WorkspaceFileEffectRequest, WorkspaceManifestEntry, WorkspacePathState,
     };
@@ -1276,7 +1276,10 @@ mod tests {
     use tempfile::TempDir;
 
     const SCOPE: ContentSha256 = ContentSha256([7; 32]);
-    const METADATA: MetadataSha256 = MetadataSha256([8; 32]);
+    const PERMISSIONS: PortableFilePermissions = PortableFilePermissions {
+        read_only: false,
+        executable: false,
+    };
 
     fn path(value: &str) -> ProjectRelativePath {
         ProjectRelativePath::try_from(value).expect("valid project-relative path")
@@ -1304,7 +1307,7 @@ mod tests {
     fn file_state(blob: &WorkspaceBlob) -> WorkspacePathState {
         WorkspacePathState::RegularFile {
             content_sha256: blob.reference.content_sha256,
-            metadata_sha256: METADATA,
+            metadata_sha256: PERMISSIONS.metadata_sha256(),
             byte_size: blob.reference.byte_size,
         }
     }
@@ -1412,7 +1415,7 @@ mod tests {
                     previous_path: None,
                     content: Some(blob.reference.clone()),
                     expected_content_sha256: None,
-                    resulting_metadata_sha256: Some(METADATA),
+                    resulting_permissions: Some(PERMISSIONS),
                 }],
             },
         )
