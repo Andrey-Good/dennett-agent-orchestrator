@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M02-001",
+    "status": "completed",
+    "summary": "Added bounded privacy-safe local diagnostics for Dennett Node, Head and the Codex adapter host: structured evidence survives restart without prompts, responses, credentials, paths or hidden reasoning; lifecycle records distinguish clean, handled and unclean exits; the Node data root and SQLite path are guarded against link and replacement races; and dennettctl doctor reports an honest local health summary.",
+    "commits": [
+      "70d3995653fd10fa84d03c796faeff40b223821e",
+      "bb5972bf330cca2813366d7d0bdc2dbebb6ab027",
+      "3cb8582876104c387e3b44b5a0ddff49c202b084",
+      "26d3a1c0df9681be1ba403a9d870105ec3437785",
+      "2574b942813c92e1337a4e1b690637540d350fcc",
+      "4fd2263bd3f704f0fb15f135f2463ff20ac1354f",
+      "27deef23551991bd686736339dbbbb99e74c95d8",
+      "dc29aa14e5fcc48c90fc88c60f63a29d2b3c7b9f"
+    ],
+    "merge_ready_at": "2026-07-22",
+    "changed_files": [
+      "crates/dennett-observability/**",
+      "services/node/**",
+      "services/head/src/conversation.rs",
+      "services/head/src/main.rs",
+      "services/adapter-host-node/src/index.ts",
+      "tools/dennettctl/**",
+      "tests/catalog/m02.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M02_project_workspace_and_review.json",
+      "planning/results/WP-M02-001.json",
+      "blog/notes/M02_capture.md",
+      "Cargo.toml",
+      "Cargo.lock",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "ARCH-80:Observability",
+      "ARCH-83:PersonalQuietObservability",
+      "SPEC-70:Observability",
+      "OWNER:M02Diagnosability",
+      "TEST-M02-DIAGNOSTIC-PERSISTENCE-001",
+      "TEST-M02-DIAGNOSTIC-REDACTION-001",
+      "TEST-M02-DIAGNOSTIC-LIFECYCLE-001"
+    ],
+    "tests": {
+      "passed": [
+        "41 dennett-observability tests cover persistence, rotation, redaction, non-blocking disk and console behavior, exact drop accounting, lifecycle recovery, clock rollback, corrupt records, sequence exhaustion, bounded publication and startup rollback",
+        "15 Node unit and runtime-host tests cover trusted roots, preplanted database and sidecar links, profile locking, bounded framing and queues, control timeouts, unknown responses, stderr classification and host fencing",
+        "5 detached-process diagnostic tests cover clean, handled and unclean restart evidence, unavailable storage fallback and safe adapter-host failure classification",
+        "61 adapter-host tests passed, including subscription authentication, Codex discovery, streaming, cancellation, timeout, continuation, native steering and bounded process behavior",
+        "3 dennettctl doctor tests cover explicit profile selection, typed human-readable output and JSON output that excludes local paths",
+        "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test -p dennett-observability -p dennett-node -p dennett-head passed on the merge-ready implementation",
+        "mise exec -- corepack pnpm --filter @dennett/adapter-host-node test passed all 61 tests",
+        "mise exec -- just check passed repository, documentation, planning, CI, format, clippy, workspace tests, type checks and protocol checks",
+        "the Linux dennett-observability target compiled with warnings denied; a separate Linux SQLite probe confirmed that /proc/self/fd keeps database writes bound to the opened directory after display-path replacement",
+        "2 ignored live subscription tests were run explicitly after the final lifecycle repair and passed: same-turn Codex steering and continuation of the same Codex session after a real Node restart"
+      ],
+      "not_run": [
+        "long-duration soak, fuzzing, disk-full endurance and resource-exhaustion campaigns remain release-wide hardening",
+        "full native Node execution on Linux awaits Ubuntu CI because this Windows workstation has no Linux C cross-compiler for bundled SQLite",
+        "provider adapters other than Codex and local models remain unavailable by owner constraint and are represented by provider-neutral ports plus deterministic fakes"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "Successive detached read-only R2 audits reviewed privacy, filesystem authority, runtime-host recovery and lifecycle ordering against exact commits. Every confirmed P2 finding received a concrete regression and a fresh review. Final review of exact diff 27deef23551991bd686736339dbbbb99e74c95d8..dc29aa14e5fcc48c90fc88c60f63a29d2b3c7b9f returned no P0-P2 findings after the full gate and live Codex canaries passed.",
+      "findings_closed": [
+        "made persistent logging and console fallback bounded and non-blocking, with explicit queue, storage and flush-loss evidence",
+        "made clean, failed, unclean and unknown lifecycle states durable without claiming unavailable operating-system or provider causes",
+        "removed prompt, response, credential, hidden-reasoning, raw provider error and absolute local-path leakage from durable diagnostics and doctor JSON",
+        "fenced runtime-host deadlocks, unknown responses, blocked writes, overflowing queues and late generations with typed safe terminal evidence",
+        "opened every profile path component no-follow, rejected linked SQLite files and sidecars, avoided mutating system-ancestor ACLs and bound Linux SQLite paths to the opened directory capability",
+        "reserved canonically observed corrupt run numbers before cleanup and persisted a monotonic high-water marker across startup rollback and integer exhaustion",
+        "replaced uniquely accumulating lifecycle temp files with one per-component locked temp name so repeated interrupted writes remain bounded"
+      ],
+      "findings_open": []
+    },
+    "migrations": [
+      "introduced disposable private lifecycle schema version 2 and bounded local diagnostic files under the profile diagnostics directory; no canonical user data or project history migration is required"
+    ],
+    "observability_changes": [
+      "privacy-safe run, project, session, command and runtime-turn UUID correlations survive process restart without content",
+      "lifecycle checkpoints retain the last durable phase, drop count completeness, flush status, clock anomaly and clean/failed/unclean outcome",
+      "dennettctl doctor exposes bounded log volume, active or stale runs, unreadable evidence and the latest trustworthy terminal state in text or path-free JSON",
+      "Node startup and adapter-host failures emit fixed diagnostic codes while unavailable file diagnostics degrade to bounded console output"
+    ],
+    "known_limitations": [
+      "M02 currently exposes diagnostics through dennettctl doctor; a clickable desktop Diagnostics workspace and support-bundle export remain later work",
+      "when the operating system or Codex supplies no precise cause, diagnostics intentionally report the last durable phase and a generic safe classification",
+      "Windows and Linux have stable guarded SQLite paths; other native platforms fail closed until their storage adapter gains an equivalent capability-relative open",
+      "the real subscription canaries are an explicit closure gate rather than generic CI because CI does not own the user's ChatGPT authentication and cannot distinguish provider outage or quota from a product regression"
+    ],
+    "follow_up_candidates": [
+      "WP-M02-002 stable project identity and relocatable WorkspaceBinding after owner resolution of DEC-0006",
+      "desktop Diagnostics workspace and privacy-reviewed support-bundle export",
+      "release-wide persistence soak, fuzzing, disk-full and resource-exhaustion qualification",
+      "additional provider and local-model conformance suites when access becomes available"
+    ],
+    "owner_decision_required": false
+  }
+}
