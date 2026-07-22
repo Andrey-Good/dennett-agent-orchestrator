@@ -5,11 +5,13 @@
 //! before/after plan. The Node adapter remains responsible for no-follow
 //! traversal, durable publication and observing the actual result.
 
+use async_trait::async_trait;
 use dennett_contracts::{
-    CommandId, ProjectId, ProjectRelativePath, WorkspaceBindingId, WorkspaceOperationId,
-    WorkspaceRevision,
+    ArtifactId, CheckpointId, CommandId, EffectId, ProjectId, ProjectRelativePath,
+    WorkspaceBindingId, WorkspaceOperationId, WorkspaceRevision,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_FILE_CHANGES_PER_OPERATION: usize = 128;
@@ -197,6 +199,7 @@ pub struct WorkspaceFileEffectPlan {
     pub base_revision: WorkspaceRevision,
     pub scope_sha256: ContentSha256,
     pub intent_sha256: ContentSha256,
+    pub safety_checkpoint_id: CheckpointId,
     pub prepared_at_unix_ms: u64,
     pub changes: Vec<PlannedFileChange>,
     pub transitions: Vec<WorkspacePathTransition>,
@@ -211,6 +214,7 @@ pub struct WorkspaceFileEffectRequest {
     pub binding_id: WorkspaceBindingId,
     pub base_revision: WorkspaceRevision,
     pub intent_sha256: ContentSha256,
+    pub safety_checkpoint_id: CheckpointId,
     pub prepared_at_unix_ms: u64,
     pub changes: Vec<ResolvedFileChangeProposal>,
 }
@@ -343,6 +347,7 @@ impl WorkspaceFileEffectPlan {
             base_revision: request.base_revision,
             scope_sha256: manifest.scope_sha256,
             intent_sha256: request.intent_sha256,
+            safety_checkpoint_id: request.safety_checkpoint_id,
             prepared_at_unix_ms: request.prepared_at_unix_ms,
             changes,
             transitions,
@@ -470,6 +475,346 @@ pub fn classify_transition(
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceSnapshotRecord {
+    pub project_id: ProjectId,
+    pub manifest: WorkspaceManifest,
+    pub observed_at_unix_ms: u64,
+}
+
+/// Bytes staged in the Node-owned journal before a filesystem effect starts.
+/// Debug output deliberately omits the content.
+#[derive(Clone, Eq, PartialEq)]
+pub struct WorkspaceBlob {
+    pub reference: StagedContentRef,
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for WorkspaceBlob {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceBlob")
+            .field("reference", &self.reference)
+            .field("bytes", &"<redacted>")
+            .finish()
+    }
+}
+
+impl WorkspaceBlob {
+    pub fn from_bytes(
+        content_id: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<Self, WorkspacePlanError> {
+        let byte_size =
+            u64::try_from(bytes.len()).map_err(|_| WorkspacePlanError::FileContentTooLarge)?;
+        let reference = StagedContentRef {
+            content_id: content_id.into(),
+            content_sha256: ContentSha256(Sha256::digest(&bytes).into()),
+            byte_size,
+        };
+        reference.validate()?;
+        Ok(Self { reference, bytes })
+    }
+
+    pub fn validate(&self) -> Result<(), WorkspacePlanError> {
+        self.reference.validate()?;
+        if self.reference.byte_size
+            != u64::try_from(self.bytes.len())
+                .map_err(|_| WorkspacePlanError::FileContentTooLarge)?
+            || self.reference.content_sha256 != ContentSha256(Sha256::digest(&self.bytes).into())
+        {
+            return Err(WorkspacePlanError::ContentEvidenceMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CanonicalObjectRef {
+    pub kind: String,
+    pub id: String,
+}
+
+impl CanonicalObjectRef {
+    pub fn validate(&self) -> Result<(), WorkspacePlanError> {
+        if self.kind.is_empty()
+            || self.kind.len() > 128
+            || self.id.is_empty()
+            || self.id.len() > 512
+        {
+            return Err(WorkspacePlanError::InvalidCanonicalReference);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceCheckpointEntry {
+    pub path: ProjectRelativePath,
+    pub state: WorkspacePathState,
+    pub content: Option<StagedContentRef>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DurableCheckpointState {
+    Available,
+    Restored,
+    RecoveryRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceCheckpointRecord {
+    pub checkpoint_id: CheckpointId,
+    pub project_id: ProjectId,
+    pub binding_id: WorkspaceBindingId,
+    pub base_revision: WorkspaceRevision,
+    pub captured_revision: WorkspaceRevision,
+    pub state: DurableCheckpointState,
+    pub label: String,
+    pub request_summary: String,
+    pub entries: Vec<WorkspaceCheckpointEntry>,
+    pub artifacts: Vec<ArtifactId>,
+    pub external_effects: Vec<EffectId>,
+    pub provider_continuation: Option<CanonicalObjectRef>,
+    pub created_at_unix_ms: u64,
+}
+
+impl WorkspaceCheckpointRecord {
+    pub fn validate(&self) -> Result<(), WorkspacePlanError> {
+        if self.base_revision.binding_id() != self.binding_id
+            || self.captured_revision.binding_id() != self.binding_id
+            || self.label.len() > 256
+            || self.request_summary.len() > 8 * 1024
+            || self.entries.len() > MAX_FILE_CHANGES_PER_OPERATION * 2
+        {
+            return Err(WorkspacePlanError::InvalidCheckpoint);
+        }
+        if let Some(reference) = &self.provider_continuation {
+            reference.validate()?;
+        }
+        let mut paths = BTreeSet::new();
+        for entry in &self.entries {
+            validate_mutable_path(&entry.path)?;
+            if !paths.insert(entry.path.as_str()) {
+                return Err(WorkspacePlanError::DuplicateTouchedPath);
+            }
+            match (&entry.state, &entry.content) {
+                (
+                    WorkspacePathState::RegularFile {
+                        content_sha256,
+                        byte_size,
+                        ..
+                    },
+                    Some(content),
+                ) if content.content_sha256 == *content_sha256
+                    && content.byte_size == *byte_size =>
+                {
+                    content.validate()?;
+                }
+                (WorkspacePathState::RegularFile { .. }, _) => {
+                    return Err(WorkspacePlanError::ContentEvidenceMismatch);
+                }
+                (WorkspacePathState::Absent, None) => {}
+                (
+                    WorkspacePathState::Directory { .. }
+                    | WorkspacePathState::Link { .. }
+                    | WorkspacePathState::Other { .. },
+                    None,
+                ) => {}
+                (_, Some(_)) => return Err(WorkspacePlanError::UnexpectedContent),
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DurableWorkspaceOperationState {
+    Prepared,
+    FilesystemApplied,
+    Succeeded,
+    Failed,
+    RecoveryRequired,
+}
+
+impl DurableWorkspaceOperationState {
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::RecoveryRequired
+        )
+    }
+
+    #[must_use]
+    pub fn can_transition_to(self, next: Self) -> bool {
+        self == next
+            || matches!(
+                (self, next),
+                (
+                    Self::Prepared,
+                    Self::FilesystemApplied | Self::Failed | Self::RecoveryRequired
+                ) | (
+                    Self::FilesystemApplied,
+                    Self::Succeeded | Self::RecoveryRequired
+                )
+            )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DurableWorkspaceFailureKind {
+    Conflict,
+    ScopeDenied,
+    AdapterFailure,
+    RecoveryRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DurableWorkspaceFailure {
+    pub kind: DurableWorkspaceFailureKind,
+    pub safe_code: String,
+    pub conflicting_paths: Vec<ProjectRelativePath>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceOperationRecord {
+    pub plan: WorkspaceFileEffectPlan,
+    pub state: DurableWorkspaceOperationState,
+    pub resulting_revision: Option<WorkspaceRevision>,
+    pub failure: Option<DurableWorkspaceFailure>,
+    pub completed_at_unix_ms: Option<u64>,
+}
+
+impl WorkspaceOperationRecord {
+    pub fn validate(&self) -> Result<(), WorkspacePlanError> {
+        let valid_terminal = match self.state {
+            DurableWorkspaceOperationState::Prepared
+            | DurableWorkspaceOperationState::FilesystemApplied => {
+                self.resulting_revision.is_none()
+                    && self.failure.is_none()
+                    && self.completed_at_unix_ms.is_none()
+            }
+            DurableWorkspaceOperationState::Succeeded => {
+                self.resulting_revision.is_some()
+                    && self.failure.is_none()
+                    && self.completed_at_unix_ms.is_some()
+            }
+            DurableWorkspaceOperationState::Failed
+            | DurableWorkspaceOperationState::RecoveryRequired => {
+                self.resulting_revision.is_none()
+                    && self.failure.is_some()
+                    && self.completed_at_unix_ms.is_some()
+            }
+        };
+        if !valid_terminal {
+            return Err(WorkspacePlanError::InvalidOperationRecord);
+        }
+        if let Some(revision) = self.resulting_revision
+            && revision.binding_id() != self.plan.binding_id
+        {
+            return Err(WorkspacePlanError::WrongBinding);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotCommitOutcome {
+    Inserted,
+    AlreadyCurrent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum WorkspaceJournalError {
+    #[error("workspace journal is unavailable")]
+    Unavailable,
+    #[error("workspace journal integrity check failed")]
+    Integrity,
+    #[error("workspace journal revision changed")]
+    RevisionConflict,
+    #[error("workspace journal command identity was reused for another intent")]
+    IdempotencyConflict,
+    #[error("workspace journal object is missing")]
+    NotFound,
+    #[error("workspace journal transition is invalid")]
+    InvalidTransition,
+}
+
+/// Durable Node-owned state used by the workspace application. Implementations
+/// must make each method atomic and preserve an existing terminal record on
+/// retry.
+#[async_trait]
+pub trait WorkspaceJournalPort: Send + Sync {
+    async fn load_head(
+        &self,
+        binding_id: WorkspaceBindingId,
+    ) -> Result<Option<WorkspaceSnapshotRecord>, WorkspaceJournalError>;
+
+    async fn load_snapshot(
+        &self,
+        revision: WorkspaceRevision,
+    ) -> Result<Option<WorkspaceSnapshotRecord>, WorkspaceJournalError>;
+
+    async fn commit_snapshot(
+        &self,
+        expected_head: Option<WorkspaceRevision>,
+        snapshot: WorkspaceSnapshotRecord,
+    ) -> Result<SnapshotCommitOutcome, WorkspaceJournalError>;
+
+    async fn prepare_file_effect(
+        &self,
+        operation: WorkspaceOperationRecord,
+        safety_checkpoint: WorkspaceCheckpointRecord,
+        blobs: Vec<WorkspaceBlob>,
+    ) -> Result<WorkspaceOperationRecord, WorkspaceJournalError>;
+
+    async fn load_operation(
+        &self,
+        operation_id: WorkspaceOperationId,
+    ) -> Result<Option<WorkspaceOperationRecord>, WorkspaceJournalError>;
+
+    async fn load_operation_by_command(
+        &self,
+        command_id: CommandId,
+    ) -> Result<Option<WorkspaceOperationRecord>, WorkspaceJournalError>;
+
+    async fn load_unfinished_operations(
+        &self,
+    ) -> Result<Vec<WorkspaceOperationRecord>, WorkspaceJournalError>;
+
+    async fn load_operation_blobs(
+        &self,
+        operation_id: WorkspaceOperationId,
+    ) -> Result<Vec<WorkspaceBlob>, WorkspaceJournalError>;
+
+    async fn transition_operation(
+        &self,
+        expected_state: DurableWorkspaceOperationState,
+        operation: WorkspaceOperationRecord,
+        resulting_snapshot: Option<WorkspaceSnapshotRecord>,
+    ) -> Result<WorkspaceOperationRecord, WorkspaceJournalError>;
+
+    async fn save_checkpoint(
+        &self,
+        checkpoint: WorkspaceCheckpointRecord,
+        blobs: Vec<WorkspaceBlob>,
+    ) -> Result<WorkspaceCheckpointRecord, WorkspaceJournalError>;
+
+    async fn load_checkpoint(
+        &self,
+        checkpoint_id: CheckpointId,
+    ) -> Result<Option<WorkspaceCheckpointRecord>, WorkspaceJournalError>;
+
+    async fn load_checkpoint_blobs(
+        &self,
+        checkpoint_id: CheckpointId,
+    ) -> Result<Vec<WorkspaceBlob>, WorkspaceJournalError>;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum WorkspacePlanError {
     #[error("workspace correlation is invalid")]
@@ -512,10 +857,18 @@ pub enum WorkspacePlanError {
     InvalidContentReference,
     #[error("workspace content reference is reused with different evidence")]
     ContentReferenceCollision,
+    #[error("workspace content bytes do not match their evidence")]
+    ContentEvidenceMismatch,
     #[error("workspace staged file exceeds the bounded size")]
     FileContentTooLarge,
     #[error("workspace staged operation exceeds the bounded size")]
     OperationContentTooLarge,
+    #[error("workspace canonical object reference is invalid")]
+    InvalidCanonicalReference,
+    #[error("workspace checkpoint is invalid")]
+    InvalidCheckpoint,
+    #[error("workspace durable operation record is invalid")]
+    InvalidOperationRecord,
 }
 
 #[cfg(test)]
@@ -566,6 +919,7 @@ mod tests {
             binding_id,
             base_revision,
             intent_sha256: ContentSha256([9; 32]),
+            safety_checkpoint_id: CheckpointId::new(),
             prepared_at_unix_ms: 1,
             changes,
         }
@@ -745,6 +1099,91 @@ mod tests {
                 }]
             ),
             Err(WorkspaceManifestError::AbsentEntry)
+        );
+    }
+
+    #[test]
+    fn staged_blob_and_checkpoint_require_matching_content_evidence() {
+        let blob = WorkspaceBlob::from_bytes("blob-1", b"data".to_vec()).unwrap();
+        assert!(blob.validate().is_ok());
+
+        let mut corrupt = blob.clone();
+        corrupt.bytes.push(b'!');
+        assert_eq!(
+            corrupt.validate(),
+            Err(WorkspacePlanError::ContentEvidenceMismatch)
+        );
+
+        let binding_id = WorkspaceBindingId::new();
+        let revision = revision(binding_id, 1);
+        let checkpoint = WorkspaceCheckpointRecord {
+            checkpoint_id: CheckpointId::new(),
+            project_id: ProjectId::new(),
+            binding_id,
+            base_revision: revision,
+            captured_revision: revision,
+            state: DurableCheckpointState::Available,
+            label: "Before change".to_owned(),
+            request_summary: "Safety checkpoint".to_owned(),
+            entries: vec![WorkspaceCheckpointEntry {
+                path: path("file.txt"),
+                state: WorkspacePathState::RegularFile {
+                    content_sha256: blob.reference.content_sha256,
+                    metadata_sha256: METADATA,
+                    byte_size: blob.reference.byte_size,
+                },
+                content: Some(blob.reference),
+            }],
+            artifacts: vec![],
+            external_effects: vec![],
+            provider_continuation: None,
+            created_at_unix_ms: 1,
+        };
+        assert!(checkpoint.validate().is_ok());
+    }
+
+    #[test]
+    fn durable_operation_lifecycle_is_forward_only_and_self_consistent() {
+        assert!(
+            DurableWorkspaceOperationState::Prepared
+                .can_transition_to(DurableWorkspaceOperationState::FilesystemApplied)
+        );
+        assert!(
+            DurableWorkspaceOperationState::FilesystemApplied
+                .can_transition_to(DurableWorkspaceOperationState::Succeeded)
+        );
+        assert!(
+            !DurableWorkspaceOperationState::Succeeded
+                .can_transition_to(DurableWorkspaceOperationState::Prepared)
+        );
+        assert!(DurableWorkspaceOperationState::RecoveryRequired.is_terminal());
+
+        let binding_id = WorkspaceBindingId::new();
+        let base_revision = revision(binding_id, 1);
+        let manifest = WorkspaceManifest::new(base_revision, SCOPE, true, vec![]).unwrap();
+        let proposal = ResolvedFileChangeProposal {
+            kind: FileMutationKind::Add,
+            path: path("new.txt"),
+            previous_path: None,
+            content: Some(content()),
+            expected_content_sha256: None,
+            resulting_metadata_sha256: Some(METADATA),
+        };
+        let plan = WorkspaceFileEffectPlan::build(
+            &manifest,
+            request(binding_id, base_revision, vec![proposal]),
+        )
+        .unwrap();
+        let malformed = WorkspaceOperationRecord {
+            plan,
+            state: DurableWorkspaceOperationState::Succeeded,
+            resulting_revision: None,
+            failure: None,
+            completed_at_unix_ms: Some(2),
+        };
+        assert_eq!(
+            malformed.validate(),
+            Err(WorkspacePlanError::InvalidOperationRecord)
         );
     }
 }

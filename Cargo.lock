@@ -367,8 +367,10 @@ dependencies = [
 name = "dennett-effect-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "dennett-contracts",
  "serde",
+ "sha2 0.10.9",
  "thiserror",
 ]
 
