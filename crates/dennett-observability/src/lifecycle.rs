@@ -125,14 +125,15 @@ impl LifecycleSession {
         let directory =
             diagnostics_dir.open_or_create_child("lifecycle", "create_lifecycle_directory")?;
         let _maintenance = acquire_maintenance_lock(&directory, component)?;
+        let mut next_run_sequence = allocate_run_sequence(&directory, component)?;
         cleanup_auxiliary_files(&directory, component)?;
-        reconcile_stale_markers(&directory, component)?;
+        reconcile_stale_markers(&directory, component, &mut next_run_sequence)?;
         trim_terminal_records(&directory, component, max_records)?;
         let previous_status = latest_terminal_record(&directory, component)?
             .map_or(ExitStatus::Unknown, |record| record.exit_status());
         let process_id = std::process::id();
         let started_unix_ms = now_unix_ms()?;
-        let run_sequence = allocate_run_sequence(&directory, component)?;
+        let run_sequence = reserve_run_sequence(&mut next_run_sequence)?;
         let run_id = Uuid::now_v7().to_string();
         let record = LifecycleRecord {
             schema_version: SCHEMA_VERSION,
@@ -700,7 +701,11 @@ impl LifecycleRecord {
     }
 }
 
-fn reconcile_stale_markers(directory: &SecureDir, component: &str) -> Result<(), DiagnosticsError> {
+fn reconcile_stale_markers(
+    directory: &SecureDir,
+    component: &str,
+    next_run_sequence: &mut u64,
+) -> Result<(), DiagnosticsError> {
     for path in matching_paths(directory, component, ".active.json")? {
         let lock_path = lock_path_for(&path);
         let Some(file) = acquire_stale_marker_lock(directory, &path, &lock_path)? else {
@@ -719,7 +724,7 @@ fn reconcile_stale_markers(directory: &SecureDir, component: &str) -> Result<(),
                 let terminal = invalid_marker_record(
                     component,
                     run_id_from_active_path(component, &path),
-                    allocate_run_sequence(directory, component)?,
+                    reserve_run_sequence(next_run_sequence)?,
                 )?;
                 write_terminal_record(directory, &terminal)?;
                 remove_checkpoints_for_run(directory, component, &terminal.run_id)?;
@@ -1376,6 +1381,14 @@ fn allocate_run_sequence(directory: &SecureDir, component: &str) -> Result<u64, 
         .ok_or(DiagnosticsError::InvalidLifecycleData)
 }
 
+fn reserve_run_sequence(next: &mut u64) -> Result<u64, DiagnosticsError> {
+    let reserved = *next;
+    *next = next
+        .checked_add(1)
+        .ok_or(DiagnosticsError::InvalidLifecycleData)?;
+    Ok(reserved)
+}
+
 fn observed_run_sequence(component: &str, path: &Path) -> Option<u64> {
     let name = path.file_name()?.to_str()?;
     let parts = name.split('.').collect::<Vec<_>>();
@@ -1727,6 +1740,36 @@ mod tests {
 
         let summary = inspect_local(temp.path(), "dennett-node").expect("diagnostic summary");
         assert_eq!(summary.previous_exit, ExitStatus::Clean);
+    }
+
+    #[test]
+    fn removed_corrupt_checkpoint_still_reserves_its_run_sequence() {
+        let temp = tempfile::tempdir().expect("temporary diagnostics");
+        let (diagnostics, display) = diagnostics(&temp);
+        let lifecycle = lifecycle_dir(&diagnostics);
+        let run_id = Uuid::now_v7();
+        std::fs::write(
+            display.join("lifecycle").join(format!(
+                "dennett-node.{run_id}.00000000000000000050.00000000000000000001.checkpoint.json"
+            )),
+            b"not-json",
+        )
+        .expect("corrupt orphan checkpoint");
+
+        let current =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("current lifecycle");
+        let current_record = matching_paths(&lifecycle, "dennett-node", ".active.json")
+            .expect("active records")
+            .into_iter()
+            .find_map(|path| read_record(&lifecycle, &path).ok())
+            .expect("current active record");
+        assert_eq!(current_record.run_sequence, 51);
+        assert!(
+            matching_paths(&lifecycle, "dennett-node", ".checkpoint.json")
+                .expect("checkpoint records")
+                .is_empty()
+        );
+        complete_clean(current, 0);
     }
 
     #[test]

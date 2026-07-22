@@ -51,11 +51,13 @@ reports a generic safe code and continues with console-only tracing. An
 invalid, relative or preplanted linked data root fails closed before SQLite or
 other canonical state is opened. Node also rejects linked database entries and
 checks that the path still names its opened root immediately before and after
-the legacy path-based SQLite open. The retained capability prevents root
-replacement on Windows and detects it on Unix; a process already running with
-the same user's full filesystem authority remains outside this boundary because
-it can edit the user's database directly. Canonical project state never depends
-on the diagnostic files themselves.
+the SQLite open. The retained capability prevents root replacement on Windows;
+on Linux, SQLite receives a `/proc/self/fd` path bound to that opened directory
+instead of the replaceable display path. Platforms that cannot yet provide a
+stable capability-relative SQLite path fail closed. A process already running
+with the same user's full filesystem authority remains outside this boundary
+because it can edit the user's database directly. Canonical project state never
+depends on the diagnostic files themselves.
 
 ## Inspection
 

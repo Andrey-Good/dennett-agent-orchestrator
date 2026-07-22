@@ -104,13 +104,13 @@
         "remove only diagnostic files through their typed retention policy; never delete audit or user data"
       ],
       "owner_decision": {"required_before_start": false, "required_before_merge": false},
-      "estimate": {"target_agent_hours": 5, "max_diff_lines": 7500},
+      "estimate": {"target_agent_hours": 5, "max_diff_lines": 7800},
       "notes": [
         "This is a reliability prerequisite for later filesystem, command and Git mutations, not a production observability platform.",
         "The owner explicitly prioritized reconstructing failures from logs before M02 began.",
         "A mature bounded logging capability is preferred over a custom logging framework; retention and redaction remain Dennett-owned policy.",
         "The lifecycle files are a new pre-release diagnostic schema, so no user-data migration exists yet; changing their private ACL or mode is an explicit permission change.",
-        "The diff budget was raised after detached closure review required capability-based filesystem access, non-blocking lifecycle checkpoints, bounded shutdown and adversarial runtime-host race tests; the added code closes observed reliability and privacy failures rather than adding product scope."
+        "The diff budget was raised after detached closure review required capability-based filesystem access, non-blocking lifecycle checkpoints, bounded shutdown and adversarial runtime-host race tests; the final increase covers component-wise no-follow root traversal, capability-bound Linux SQLite paths and corrupt-sequence regressions, closing observed reliability and privacy failures rather than adding product scope."
       ]
     },
     {

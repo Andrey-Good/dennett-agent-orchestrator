@@ -62,17 +62,13 @@ struct DirectoryIdentity {
 
 impl SecureDir {
     pub(crate) fn open_existing_profile(path: &Path) -> Result<Self, DiagnosticsError> {
-        if !path.is_absolute() {
-            return Err(DiagnosticsError::InvalidProfileRoot);
+        let (anchor, components) = absolute_path_components(path)?;
+        let mut dir = Dir::open_ambient_dir(&anchor, ambient_authority())
+            .map_err(|source| DiagnosticsError::io("open_profile_anchor", source))?;
+        for name in components {
+            dir = open_child_dir_nofollow(&dir, &name)
+                .map_err(|source| DiagnosticsError::io("open_profile_component", source))?;
         }
-        let parent = path.parent().ok_or(DiagnosticsError::InvalidProfileRoot)?;
-        let name = path
-            .file_name()
-            .ok_or(DiagnosticsError::InvalidProfileRoot)?;
-        let parent = Dir::open_ambient_dir(parent, ambient_authority())
-            .map_err(|source| DiagnosticsError::io("open_profile_parent", source))?;
-        let dir = open_child_dir_nofollow(&parent, name)
-            .map_err(|source| DiagnosticsError::io("open_profile_root", source))?;
         Ok(Self {
             inner: Arc::new(dir),
             display_path: Arc::new(path.to_path_buf()),
@@ -80,33 +76,31 @@ impl SecureDir {
     }
 
     pub(crate) fn open_or_create_profile(path: &Path) -> Result<Self, DiagnosticsError> {
-        if !path.is_absolute() {
-            return Err(DiagnosticsError::InvalidProfileRoot);
-        }
-        let mut ancestor = path;
-        loop {
-            match std::fs::symlink_metadata(ancestor) {
-                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => break,
-                Ok(_) | Err(_) => {
-                    ancestor = ancestor
-                        .parent()
-                        .ok_or(DiagnosticsError::InvalidProfileRoot)?;
-                }
-            }
-        }
-        let mut current = Dir::open_ambient_dir(ancestor, ambient_authority())
-            .map_err(|source| DiagnosticsError::io("open_profile_ancestor", source))?;
-        let mut display = ancestor.to_path_buf();
-        for component in path
-            .strip_prefix(ancestor)
-            .map_err(|_| DiagnosticsError::InvalidProfileRoot)?
-            .components()
-        {
-            let Component::Normal(name) = component else {
-                return Err(DiagnosticsError::InvalidProfileRoot);
-            };
+        let (anchor, components) = absolute_path_components(path)?;
+        let mut current = Dir::open_ambient_dir(&anchor, ambient_authority())
+            .map_err(|source| DiagnosticsError::io("open_profile_anchor", source))?;
+        let mut display = anchor;
+        let mut secured_subtree = false;
+        for (index, name) in components.iter().enumerate() {
             let next_display = display.join(name);
-            current = open_or_create_child_dir(&current, name, &next_display)?;
+            let is_profile_root = index + 1 == components.len();
+            current = if secured_subtree || is_profile_root {
+                open_or_create_child_dir(&current, name, &next_display)?
+            } else {
+                match open_child_dir_nofollow(&current, name) {
+                    Ok(directory) => directory,
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                        secured_subtree = true;
+                        open_or_create_child_dir(&current, name, &next_display)?
+                    }
+                    Err(source) => {
+                        return Err(DiagnosticsError::io(
+                            "reject_linked_profile_ancestor",
+                            source,
+                        ));
+                    }
+                }
+            };
             display = next_display;
         }
         Ok(Self {
@@ -126,6 +120,11 @@ impl SecureDir {
         } else {
             Err(DiagnosticsError::InvalidProfileRoot)
         }
+    }
+
+    pub(crate) fn stable_child_path(&self, name: &str) -> Result<PathBuf, DiagnosticsError> {
+        validate_name(name)?;
+        stable_child_path(self, name)
     }
 
     pub(crate) fn open_or_create_child(
@@ -322,9 +321,54 @@ impl SecureDir {
     }
 }
 
+fn absolute_path_components(path: &Path) -> Result<(PathBuf, Vec<OsString>), DiagnosticsError> {
+    if !path.is_absolute() {
+        return Err(DiagnosticsError::InvalidProfileRoot);
+    }
+    let anchor = path
+        .ancestors()
+        .last()
+        .filter(|candidate| candidate.has_root())
+        .ok_or(DiagnosticsError::InvalidProfileRoot)?
+        .to_path_buf();
+    let components = path
+        .strip_prefix(&anchor)
+        .map_err(|_| DiagnosticsError::InvalidProfileRoot)?
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => Ok(name.to_os_string()),
+            _ => Err(DiagnosticsError::InvalidProfileRoot),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if components.is_empty() {
+        return Err(DiagnosticsError::InvalidProfileRoot);
+    }
+    Ok((anchor, components))
+}
+
 fn directory_identity(directory: &Dir) -> std::io::Result<DirectoryIdentity> {
     let file = directory.try_clone()?.into_std_file();
     file_identity(&file)
+}
+
+#[cfg(windows)]
+fn stable_child_path(directory: &SecureDir, name: &str) -> Result<PathBuf, DiagnosticsError> {
+    Ok(directory.display_path.join(name))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn stable_child_path(directory: &SecureDir, name: &str) -> Result<PathBuf, DiagnosticsError> {
+    use std::os::fd::AsRawFd;
+
+    Ok(PathBuf::from(format!(
+        "/proc/self/fd/{}/{name}",
+        directory.inner.as_raw_fd()
+    )))
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
+fn stable_child_path(_directory: &SecureDir, _name: &str) -> Result<PathBuf, DiagnosticsError> {
+    Err(DiagnosticsError::StableDataPathUnavailable)
 }
 
 #[cfg(unix)]
@@ -365,7 +409,7 @@ fn open_or_create_child_dir(
     name: &OsStr,
     display: &Path,
 ) -> Result<Dir, DiagnosticsError> {
-    match open_child_dir_nofollow(parent, name) {
+    match open_secure_child_dir_nofollow(parent, name) {
         Ok(dir) => {
             secure_directory(&dir)?;
             Ok(dir)
@@ -378,7 +422,7 @@ fn open_or_create_child_dir(
                     return Err(DiagnosticsError::io("create_secure_directory", source));
                 }
             }
-            let dir = open_child_dir_nofollow(parent, name)
+            let dir = open_secure_child_dir_nofollow(parent, name)
                 .map_err(|source| DiagnosticsError::io("open_secure_directory", source))?;
             secure_directory(&dir)?;
             Ok(dir)
@@ -395,12 +439,26 @@ fn open_or_create_child_dir(
 }
 
 fn open_child_dir_nofollow(parent: &Dir, name: &OsStr) -> std::io::Result<Dir> {
+    open_child_dir_nofollow_with_privacy(parent, name, false)
+}
+
+fn open_secure_child_dir_nofollow(parent: &Dir, name: &OsStr) -> std::io::Result<Dir> {
+    open_child_dir_nofollow_with_privacy(parent, name, true)
+}
+
+fn open_child_dir_nofollow_with_privacy(
+    parent: &Dir,
+    name: &OsStr,
+    make_private: bool,
+) -> std::io::Result<Dir> {
     let mut options = OpenOptions::new();
     options
         .read(true)
         .follow(FollowSymlinks::No)
         .maybe_dir(true);
-    configure_directory_access(&mut options);
+    if make_private {
+        configure_directory_access(&mut options);
+    }
     let file = parent.open_with(name, &options)?;
     let metadata = file.metadata()?;
     if !metadata.is_dir() {
@@ -412,7 +470,9 @@ fn open_child_dir_nofollow(parent: &Dir, name: &OsStr) -> std::io::Result<Dir> {
     #[cfg(windows)]
     {
         let file = file.into_std();
-        windows_acl::secure_current_user_only(&file)?;
+        if make_private {
+            windows_acl::secure_current_user_only(&file)?;
+        }
         Dir::reopen_dir(&file)
     }
     #[cfg(not(windows))]
@@ -471,7 +531,7 @@ fn configure_private_file_access(options: &mut OpenOptions) {
     options.access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC);
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(unix, windows)))]
 fn configure_private_file_access(_options: &mut OpenOptions) {}
 
 #[cfg(unix)]
@@ -678,6 +738,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary profile parent");
         let outside = temp.path().join("outside");
         std::fs::create_dir(&outside).expect("outside");
+        std::fs::create_dir(outside.join("data")).expect("existing redirected leaf");
         let profile = temp.path().join("profile");
         std::fs::create_dir(&profile).expect("profile");
         let link = profile.join("linked-parent");
@@ -686,7 +747,8 @@ mod tests {
         }
 
         assert!(SecureDir::open_or_create_profile(&link.join("data")).is_err());
-        assert!(!outside.join("data").exists());
+        assert!(outside.join("data").is_dir());
+        assert!(SecureDir::open_existing_profile(&link.join("data")).is_err());
     }
 
     #[test]
@@ -713,6 +775,30 @@ mod tests {
         }
 
         assert!(root.ensure_display_path_identity().is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stable_child_path_stays_with_the_opened_profile_after_a_swap() {
+        let temp = tempfile::tempdir().expect("temporary profile parent");
+        let profile = temp.path().join("profile");
+        std::fs::create_dir(&profile).expect("profile");
+        let root = SecureDir::open_or_create_profile(&profile).expect("secure profile");
+        let stable = root
+            .stable_child_path("control.sqlite3")
+            .expect("stable child path");
+        let moved = temp.path().join("moved-profile");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).expect("outside");
+        std::fs::rename(&profile, &moved).expect("rename open profile");
+        std::os::unix::fs::symlink(&outside, &profile).expect("replacement link");
+
+        std::fs::write(stable, b"bound to handle").expect("write stable child");
+        assert_eq!(
+            std::fs::read(moved.join("control.sqlite3")).expect("moved child"),
+            b"bound to handle"
+        );
+        assert!(!outside.join("control.sqlite3").exists());
     }
 
     #[test]

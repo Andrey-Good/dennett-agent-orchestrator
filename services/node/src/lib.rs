@@ -174,7 +174,8 @@ where
         data_root_guard.validate_optional_regular_file(name)?;
     }
     data_root_guard.ensure_unchanged()?;
-    let store = SqliteControlStore::open(config.data_dir.join(CONTROL_DATABASE_FILE)).await?;
+    let control_database_path = data_root_guard.stable_child_path(CONTROL_DATABASE_FILE)?;
+    let store = SqliteControlStore::open(control_database_path).await?;
     data_root_guard.ensure_unchanged()?;
     let store = Arc::new(store);
     let coordinator = SessionCoordinator::new(

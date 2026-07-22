@@ -529,6 +529,14 @@ impl LocalDataRootGuard {
             Err(error) => Err(error),
         }
     }
+
+    /// Returns a child path bound to the opened directory object when the
+    /// platform can provide one. Windows pins the directory by handle; Linux
+    /// addresses it through `/proc/self/fd`. Other platforms fail closed until
+    /// their storage adapter can open SQLite relative to a capability.
+    pub fn stable_child_path(&self, name: &str) -> Result<PathBuf, DiagnosticsError> {
+        self._root.stable_child_path(name)
+    }
 }
 
 pub fn guard_local_data_root(path: &Path) -> Result<LocalDataRootGuard, DiagnosticsError> {
@@ -1102,6 +1110,8 @@ pub enum DiagnosticsError {
     DiagnosticRootEscape,
     #[error("diagnostic profile root must be an absolute ordinary directory")]
     InvalidProfileRoot,
+    #[error("the platform cannot expose a stable path beneath the guarded data root")]
+    StableDataPathUnavailable,
     #[error("diagnostic entry must be one ordinary relative name")]
     InvalidDiagnosticEntry,
     #[error("diagnostic entry exceeds its byte limit")]
@@ -1137,6 +1147,7 @@ impl DiagnosticsError {
             Self::InvalidLifecycleData => "diagnostics.lifecycle_invalid",
             Self::DiagnosticRootEscape => "diagnostics.root_escape",
             Self::InvalidProfileRoot => "diagnostics.profile_root_invalid",
+            Self::StableDataPathUnavailable => "diagnostics.stable_data_path_unavailable",
             Self::InvalidDiagnosticEntry => "diagnostics.entry_invalid",
             Self::DiagnosticEntryTooLarge => "diagnostics.entry_too_large",
             Self::DiagnosticEntryLimit => "diagnostics.entry_limit",

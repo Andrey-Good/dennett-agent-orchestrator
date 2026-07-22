@@ -152,3 +152,26 @@ privacy_risks:
   subscription canaries were rerun rather than inherited from the prior commit.
   Both passed again: same-turn native steering and continuation of the same
   Codex session across a real Node restart.
+
+## Fifth closure-review addendum
+
+- The first component-by-component root test was not adversarial enough: the
+  redirected leaf did not exist. A reviewer supplied the missing counterexample.
+  When the whole remainder already existed behind an intermediate link,
+  `symlink_metadata` could accept it as the starting ancestor. Root opening and
+  inspection now begin at the filesystem anchor and traverse every component
+  with no-follow handles. Existing system ancestors are opened read-only and
+  never have their ACLs rewritten; only the created/private subtree and final
+  profile root are secured.
+- SQLx still requires a filename. A post-open identity comparison could detect
+  a Unix rename but only after SQLite had written through the replaced path.
+  Windows already pins the directory against rename; Linux now gives SQLx a
+  `/proc/self/fd/<directory-handle>/control.sqlite3` path, proven separately to
+  keep writes in the opened directory after its display path is replaced.
+  Unsupported platforms fail closed until their SQLite adapter has an
+  equivalent capability-relative open.
+- Run sequence allocation now snapshots the highest readable or canonically
+  named observation before startup cleanup. Reconciliation consumes numbers
+  from that one monotonic allocator, so deleting an unreadable orphan checkpoint
+  cannot make its run number available again. The focused suite now passes 40
+  observability tests and 15 Node unit/runtime-host tests.

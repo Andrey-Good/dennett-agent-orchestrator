@@ -610,8 +610,8 @@
     },
     {
       "path": "blog/notes/M02_capture.md",
-      "bytes": 12460,
-      "sha256": "17bb3392d67c5e20bfc21087e03a62863406c665f59755d926a1a94a6edbc468"
+      "bytes": 13930,
+      "sha256": "35cbf8cc351c5eda2336e218d4d540c7c0b2d14e89a80e59fe83d31b8245b344"
     },
     {
       "path": "blog/notes/README.md",
@@ -775,23 +775,23 @@
     },
     {
       "path": "crates/dennett-observability/README.md",
-      "bytes": 4512,
-      "sha256": "05901fd9a70cbacd8e296193732f2108997196ba80b9f84b4b8d496af6605293"
+      "bytes": 4680,
+      "sha256": "37f7126668ef1201f33c78ef9256bf15fa7a83bde31919ca7221ff25af3a47af"
     },
     {
       "path": "crates/dennett-observability/src/lib.rs",
-      "bytes": 44920,
-      "sha256": "0e4c43ceba2f9e9ed4ccea22b8afe19c92594762f5b13859ca53d06333c45bab"
+      "bytes": 45571,
+      "sha256": "aef3e9a4c587f0445fc7682bb1425580c0cc61f8c0f59e8d1011807c1098eb40"
     },
     {
       "path": "crates/dennett-observability/src/lifecycle.rs",
-      "bytes": 73221,
-      "sha256": "2f3cfba4f6cfbfda1d2d041720386f949086cee0953948f8764908b7d89f03ee"
+      "bytes": 74816,
+      "sha256": "6c936ec58f909696a8fdb55ab7f3ab4acd64fbab5e7b7299896a19473ee60e67"
     },
     {
       "path": "crates/dennett-observability/src/secure_fs.rs",
-      "bytes": 27465,
-      "sha256": "5d7f2653e9d8819cc48a3ebc3c17785fc853db850bf4782688516275604e01a6"
+      "bytes": 30800,
+      "sha256": "36a2ebe52f55c8968d25be3e63d7f0a46cdda1216c3ebbd42d9ee70d46183721"
     },
     {
       "path": "crates/dennett-observability/src/writer.rs",
@@ -1690,8 +1690,8 @@
     },
     {
       "path": "planning/milestones/M02_project_workspace_and_review.json",
-      "bytes": 40075,
-      "sha256": "de9557b94d18f6c17f4feb400c6f6cf57667b5c376e0b8cf4fc36027ce1ca12c"
+      "bytes": 40198,
+      "sha256": "909280684461b6db64bd8af4fbb306258d82e66744d306b63e1d851f35910ddd"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -2155,8 +2155,8 @@
     },
     {
       "path": "services/node/src/lib.rs",
-      "bytes": 16978,
-      "sha256": "8ab62f333c115607bbf53c89cd89cb493d5c258e356e6211e452157b13599cb9"
+      "bytes": 17047,
+      "sha256": "b2090b43600b96dc8e491589172c808ff1a920b94a69af8ab6a4443ad5c62d7d"
     },
     {
       "path": "services/node/src/main.rs",
