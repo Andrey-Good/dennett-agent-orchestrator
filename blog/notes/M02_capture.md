@@ -127,3 +127,28 @@ privacy_risks:
   subscription. Both scenarios passed in 84 seconds: one continued the same
   Codex session after a real Node restart, and one steered the same active turn
   without replacing it or issuing a hidden Stop.
+
+## Fourth closure-review addendum
+
+- A final privacy pass found that `doctor --json` still serialized the absolute
+  diagnostics path even though the human-readable form hid it. That path adds
+  no diagnostic value—the caller just supplied it—and could disclose a Windows
+  account name when support output is copied. The field remains available to
+  trusted in-process callers but is now excluded from JSON, with a CLI
+  regression that rejects both the key and the temporary profile path.
+- A corrupt terminal filename also reserved no run sequence because allocation
+  trusted only readable JSON. The next run could reuse the number and make
+  ordering depend on UUID text. Canonically shaped filenames now reserve their
+  sequence even when their contents are unreadable; a regression writes a
+  corrupt sequence 2 and proves that the next clean run receives sequence 3.
+- Node's data-root capability now participates in startup instead of serving as
+  a one-time check: it creates direct child directories and lock/database files
+  without following links, rejects preplanted SQLite sidecar links, and verifies
+  root identity around the path-based SQLx open. An intermediate-link fixture,
+  a directory-swap fixture and a preplanted-database-link Node test cover the
+  boundary. The focused checkpoint now passes 39 observability tests and all 15
+  Node unit/runtime-host tests before the full gate is rerun.
+- Because the repair changed Node startup before SQLite opened, the two real
+  subscription canaries were rerun rather than inherited from the prior commit.
+  Both passed again: same-turn native steering and continuation of the same
+  Codex session across a real Node restart.

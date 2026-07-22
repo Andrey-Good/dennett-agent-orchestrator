@@ -383,6 +383,7 @@ pub enum DiagnosticFlushStatus {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DiagnosticSummary {
     pub component: String,
+    #[serde(skip_serializing)]
     pub diagnostics_dir: PathBuf,
     pub storage_status: DiagnosticStorageStatus,
     pub log_file_count: usize,
@@ -1358,16 +1359,49 @@ fn valid_run_id(run_id: &str) -> bool {
 fn allocate_run_sequence(directory: &SecureDir, component: &str) -> Result<u64, DiagnosticsError> {
     let mut highest = 0_u64;
     for path in matching_paths(directory, component, ".json")? {
-        let Ok(record) = read_record(directory, &path) else {
-            continue;
-        };
-        if record.component == component {
-            highest = highest.max(record.run_sequence);
+        match read_record(directory, &path) {
+            Ok(record) if record.component == component => {
+                highest = highest.max(record.run_sequence);
+            }
+            Ok(_) => {}
+            Err(_) => {
+                if let Some(sequence) = observed_run_sequence(component, &path) {
+                    highest = highest.max(sequence);
+                }
+            }
         }
     }
     highest
         .checked_add(1)
         .ok_or(DiagnosticsError::InvalidLifecycleData)
+}
+
+fn observed_run_sequence(component: &str, path: &Path) -> Option<u64> {
+    let name = path.file_name()?.to_str()?;
+    let parts = name.split('.').collect::<Vec<_>>();
+    if parts.len() < 5
+        || parts[0] != component
+        || !valid_component(parts[0])
+        || !valid_run_id(parts[1])
+        || parts[2].len() != 20
+    {
+        return None;
+    }
+    let known_shape = match parts.as_slice() {
+        [_, _, _, "active", "json"] => true,
+        [_, _, _, status, "json"] => matches!(*status, "clean" | "failed" | "unclean"),
+        [_, _, _, checkpoint, "checkpoint", "json"] => {
+            checkpoint.len() == 20 && checkpoint.parse::<u64>().is_ok_and(|value| value > 0)
+        }
+        _ => false,
+    };
+    if !known_shape {
+        return None;
+    }
+    parts[2]
+        .parse::<u64>()
+        .ok()
+        .filter(|sequence| *sequence > 0)
 }
 
 fn terminal_is_newer(candidate: &LifecycleRecord, current: &LifecycleRecord) -> bool {
@@ -1443,6 +1477,9 @@ mod tests {
         assert_eq!(summary.previous_exit, ExitStatus::Clean);
         assert_eq!(summary.dropped_log_records, 3);
         assert_eq!(summary.diagnostics_dir, display);
+        let json = serde_json::to_string(&summary).expect("serialized summary");
+        assert!(!json.contains("diagnostics_dir"));
+        assert!(!json.contains(&temp.path().to_string_lossy().to_string()));
         assert_eq!(
             summary.previous_flush_status,
             DiagnosticFlushStatus::Confirmed
@@ -1658,6 +1695,38 @@ mod tests {
         assert_eq!(summary.unreadable_lifecycle_records, 1);
         assert!(!summary.previous_drop_count_complete);
         assert!(!summary.previous_clock_anomaly);
+    }
+
+    #[test]
+    fn corrupt_terminal_sequence_is_reserved_for_the_next_run() {
+        let temp = tempfile::tempdir().expect("temporary diagnostics");
+        let (diagnostics, display) = diagnostics(&temp);
+        LifecycleSession::start(&diagnostics, "dennett-node", 8)
+            .expect("first lifecycle")
+            .complete(DiagnosticExit::Clean, 0, true, true)
+            .expect("clean lifecycle");
+        std::fs::write(
+            display.join("lifecycle").join(format!(
+                "dennett-node.{}.00000000000000000002.failed.json",
+                Uuid::now_v7()
+            )),
+            b"not-json",
+        )
+        .expect("corrupt terminal");
+
+        let current =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("current lifecycle");
+        let current_record =
+            matching_paths(&lifecycle_dir(&diagnostics), "dennett-node", ".active.json")
+                .expect("active records")
+                .into_iter()
+                .find_map(|path| read_record(&lifecycle_dir(&diagnostics), &path).ok())
+                .expect("current active record");
+        assert_eq!(current_record.run_sequence, 3);
+        complete_clean(current, 0);
+
+        let summary = inspect_local(temp.path(), "dennett-node").expect("diagnostic summary");
+        assert_eq!(summary.previous_exit, ExitStatus::Clean);
     }
 
     #[test]

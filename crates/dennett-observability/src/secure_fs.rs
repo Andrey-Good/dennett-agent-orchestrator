@@ -54,6 +54,12 @@ pub(crate) struct SecureEntry {
     pub(crate) metadata: Metadata,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectoryIdentity {
+    volume: u64,
+    file: u64,
+}
+
 impl SecureDir {
     pub(crate) fn open_existing_profile(path: &Path) -> Result<Self, DiagnosticsError> {
         if !path.is_absolute() {
@@ -107,6 +113,19 @@ impl SecureDir {
             inner: Arc::new(current),
             display_path: Arc::new(path.to_path_buf()),
         })
+    }
+
+    pub(crate) fn ensure_display_path_identity(&self) -> Result<(), DiagnosticsError> {
+        let reopened = Self::open_existing_profile(&self.display_path)?;
+        let opened_identity = directory_identity(&self.inner)
+            .map_err(|source| DiagnosticsError::io("inspect_open_profile_identity", source))?;
+        let current_identity = directory_identity(&reopened.inner)
+            .map_err(|source| DiagnosticsError::io("inspect_current_profile_identity", source))?;
+        if opened_identity == current_identity {
+            Ok(())
+        } else {
+            Err(DiagnosticsError::InvalidProfileRoot)
+        }
     }
 
     pub(crate) fn open_or_create_child(
@@ -301,6 +320,44 @@ impl SecureDir {
             .try_exists(name)
             .map_err(|source| DiagnosticsError::io("inspect_diagnostic_entry", source))
     }
+}
+
+fn directory_identity(directory: &Dir) -> std::io::Result<DirectoryIdentity> {
+    let file = directory.try_clone()?.into_std_file();
+    file_identity(&file)
+}
+
+#[cfg(unix)]
+fn file_identity(file: &File) -> std::io::Result<DirectoryIdentity> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file.metadata()?;
+    Ok(DirectoryIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn file_identity(file: &File) -> std::io::Result<DirectoryIdentity> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    // SAFETY: the file owns a valid handle and `information` is writable output storage.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), information.as_mut_ptr()) }
+        == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: a successful call initialized the whole output structure.
+    let information = unsafe { information.assume_init() };
+    Ok(DirectoryIdentity {
+        volume: u64::from(information.dwVolumeSerialNumber),
+        file: (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
+    })
 }
 
 fn open_or_create_child_dir(
@@ -614,6 +671,48 @@ mod tests {
 
         assert!(SecureDir::open_or_create_profile(&link).is_err());
         assert!(!outside.join("control.sqlite3").exists());
+    }
+
+    #[test]
+    fn profile_root_rejects_an_intermediate_directory_link() {
+        let temp = tempfile::tempdir().expect("temporary profile parent");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).expect("outside");
+        let profile = temp.path().join("profile");
+        std::fs::create_dir(&profile).expect("profile");
+        let link = profile.join("linked-parent");
+        if !create_directory_link(&outside, &link) {
+            return;
+        }
+
+        assert!(SecureDir::open_or_create_profile(&link.join("data")).is_err());
+        assert!(!outside.join("data").exists());
+    }
+
+    #[test]
+    fn open_profile_detects_a_display_path_swap() {
+        let temp = tempfile::tempdir().expect("temporary profile parent");
+        let profile = temp.path().join("profile");
+        std::fs::create_dir(&profile).expect("profile");
+        let root = SecureDir::open_or_create_profile(&profile).expect("secure profile");
+        let moved = temp.path().join("moved-profile");
+        if let Err(error) = std::fs::rename(&profile, &moved) {
+            assert!(
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Other
+                ) || matches!(error.raw_os_error(), Some(32 | 33)),
+                "unexpected profile swap error: {error}"
+            );
+            return;
+        }
+        let replacement = temp.path().join("replacement");
+        std::fs::create_dir(&replacement).expect("replacement");
+        if !create_directory_link(&replacement, &profile) {
+            return;
+        }
+
+        assert!(root.ensure_display_path_identity().is_err());
     }
 
     #[test]

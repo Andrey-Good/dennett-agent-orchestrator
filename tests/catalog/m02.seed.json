@@ -15,7 +15,7 @@
         "Structured diagnostic records are flushed to a Node-owned local directory and remain readable after restart",
         "Retention, reads, enumeration and maintenance waits are bounded and handle-relative cleanup cannot escape the private diagnostic root",
         "Event publication never waits for diagnostic storage or a stalled console pipe, while a safe-root logging failure degrades without preventing canonical project recovery",
-        "An invalid, relative or linked canonical data root fails closed before Node opens SQLite or workspace state",
+        "An invalid, relative or linked canonical data root or database entry fails closed before Node opens SQLite or workspace state, and root identity is checked around the path-based database open",
         "Shutdown evidence states whether flush and the final drop count were complete instead of silently claiming durable logs"
       ],
       "implementation": {"target_suite": "dennett-observability persistence", "status": "automated", "test_paths": ["crates/dennett-observability/tests/console.rs", "crates/dennett-observability/tests/persistence.rs", "crates/dennett-observability/tests/drop_accounting.rs", "crates/dennett-observability/tests/nonblocking.rs", "crates/dennett-observability/tests/startup_transaction.rs", "crates/dennett-observability/src/lifecycle.rs", "crates/dennett-observability/src/secure_fs.rs", "crates/dennett-observability/src/writer.rs", "services/node/src/lib.rs"]},
@@ -32,11 +32,11 @@
       "requirement_refs": ["ARCH-80:Observability", "SPEC-70:Observability"],
       "work_package_refs": ["WP-M02-001", "WP-M02-009"],
       "expected": [
-        "Prompts, responses, hidden reasoning, tokens, secret environment values and unrestricted filenames do not enter generic logs",
+        "Prompts, responses, hidden reasoning, tokens, secret environment values, unrestricted filenames and absolute local profile paths do not enter copied diagnostic output",
         "Allowed correlation and error fields remain sufficient to join one operation",
         "A redaction regression fails the test with the sensitive field class rather than echoing its value"
       ],
-      "implementation": {"target_suite": "diagnostic privacy contract", "status": "automated", "test_paths": ["crates/dennett-observability/tests/redaction.rs", "services/node/tests/diagnostic_lifecycle.rs"]},
+      "implementation": {"target_suite": "diagnostic privacy contract", "status": "automated", "test_paths": ["crates/dennett-observability/tests/redaction.rs", "services/node/tests/diagnostic_lifecycle.rs", "tools/dennettctl/src/main.rs"]},
       "owner": "security"
     },
     {

@@ -12,6 +12,7 @@ mod writer;
 use lifecycle::{LifecycleProgress, LifecycleSession};
 use secure_fs::SecureDir;
 use std::{
+    fs::File,
     io,
     path::{Path, PathBuf},
     sync::{
@@ -489,6 +490,45 @@ where
 #[must_use]
 pub struct LocalDataRootGuard {
     _root: SecureDir,
+}
+
+impl LocalDataRootGuard {
+    /// Reopens the configured display path without following its final entry
+    /// and verifies that it still names the directory held by this guard.
+    pub fn ensure_unchanged(&self) -> Result<(), DiagnosticsError> {
+        self._root.ensure_display_path_identity()
+    }
+
+    /// Creates or validates one direct child directory without following links.
+    pub fn ensure_child_directory(&self, name: &str) -> Result<(), DiagnosticsError> {
+        self._root
+            .open_or_create_child(name, "prepare_local_data_directory")?;
+        Ok(())
+    }
+
+    /// Opens or creates one ordinary direct child file without following links.
+    /// Keeping the returned handle alive also pins the initial file object for
+    /// callers that must subsequently pass a path to a legacy library.
+    pub fn open_or_create_regular_file(&self, name: &str) -> Result<File, DiagnosticsError> {
+        self._root
+            .open_lock_file(name, true, "prepare_local_data_file")
+    }
+
+    /// Rejects an existing linked or non-file entry while allowing absence.
+    pub fn validate_optional_regular_file(&self, name: &str) -> Result<(), DiagnosticsError> {
+        match self
+            ._root
+            .open_existing_file(name, false, "validate_local_data_file")
+        {
+            Ok(_) => Ok(()),
+            Err(DiagnosticsError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 pub fn guard_local_data_root(path: &Path) -> Result<LocalDataRootGuard, DiagnosticsError> {

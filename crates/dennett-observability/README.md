@@ -26,7 +26,8 @@ evidence, not canonical user memory, security audit or product analytics.
 - restart reconciliation that distinguishes clean, handled failure and
   unclean previous exit and preserves the last durable safe phase;
 - monotonic per-component run sequencing, so a wall-clock rollback cannot make
-  an older exit look newer;
+  an older exit look newer and a corrupt but canonically named record cannot
+  cause its sequence to be reused;
 - bounded reads, directory enumeration and lock acquisition while inspecting
   or maintaining diagnostics;
 - a five-second caller-side shutdown deadline. A stalled diagnostic disk can
@@ -48,8 +49,13 @@ arbitrary field from becoming durable diagnostic data.
 If only the diagnostic child directory cannot be initialized, the Device Node
 reports a generic safe code and continues with console-only tracing. An
 invalid, relative or preplanted linked data root fails closed before SQLite or
-other canonical state is opened. Canonical project state never depends on the
-diagnostic files themselves.
+other canonical state is opened. Node also rejects linked database entries and
+checks that the path still names its opened root immediately before and after
+the legacy path-based SQLite open. The retained capability prevents root
+replacement on Windows and detects it on Unix; a process already running with
+the same user's full filesystem authority remains outside this boundary because
+it can edit the user's database directly. Canonical project state never depends
+on the diagnostic files themselves.
 
 ## Inspection
 
@@ -64,9 +70,10 @@ durable phase. It also says whether the previous shutdown flush and final drop
 count were confirmed. A newer corrupt terminal record produces `unknown`
 rather than allowing an older clean exit to masquerade as current. Wrong-type
 directories are reported as an invalid layout instead of an empty healthy
-profile. The text form deliberately hides the absolute profile path; explicit
-JSON output retains the path for local tooling. Neither form inspects private
-project files or internal database tables.
+profile. Both text and JSON forms deliberately hide the absolute profile path;
+the caller already supplied it and repeating it could expose a local account
+name in copied support output. Neither form inspects private project files or
+internal database tables.
 
 The profile cannot invent a root cause that the operating system or provider
 did not expose. In that case it preserves the last durable phase and an honest

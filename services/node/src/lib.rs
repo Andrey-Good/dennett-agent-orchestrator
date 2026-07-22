@@ -14,7 +14,7 @@ use dennett_memory_core::session::{SessionJournal, SessionJournalError};
 use dennett_storage_sqlite::SqliteControlStore;
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,6 +28,12 @@ pub const AGENT_RUNTIME_ENV: &str = "DENNETT_AGENT_RUNTIME";
 const SYSTEM_WATCH_CAPACITY: usize = 128;
 const SESSION_WATCH_CAPACITY: usize = 128;
 const NODE_INSTANCE_LOCK_FILE: &str = "dennett-node.lock";
+const CONTROL_DATABASE_FILE: &str = "control.sqlite3";
+const CONTROL_DATABASE_TRANSIENT_FILES: [&str; 3] = [
+    "control.sqlite3-journal",
+    "control.sqlite3-shm",
+    "control.sqlite3-wal",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NodeConfig {
@@ -140,7 +146,8 @@ pub async fn run<F>(config: NodeConfig, shutdown: F) -> Result<(), NodeRunError>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    let _data_root_guard = dennett_observability::guard_local_data_root(&config.data_dir)?;
+    let data_root_guard = dennett_observability::guard_local_data_root(&config.data_dir)?;
+    data_root_guard.ensure_unchanged()?;
     dennett_observability::record(
         dennett_observability::DiagnosticEvent::new(
             dennett_observability::DiagnosticEventKind::NodeConfigurationValidated,
@@ -152,14 +159,9 @@ where
         authority_epoch = config.authority_epoch,
         "validated Node local IPC configuration"
     );
-    tokio::fs::create_dir_all(&config.data_dir)
-        .await
-        .map_err(TransportError::from)?;
     let standalone_workspace = config.data_dir.join("standalone-workspace");
-    tokio::fs::create_dir_all(&standalone_workspace)
-        .await
-        .map_err(TransportError::from)?;
-    let _instance_lock = NodeInstanceLock::acquire(&config.data_dir)?;
+    data_root_guard.ensure_child_directory("standalone-workspace")?;
+    let _instance_lock = NodeInstanceLock::acquire(&data_root_guard)?;
     dennett_observability::record(
         dennett_observability::DiagnosticEvent::new(
             dennett_observability::DiagnosticEventKind::NodeInstanceLockAcquired,
@@ -167,7 +169,14 @@ where
         .status("ready"),
     );
     let endpoint = LocalEndpoint::for_installation(config.installation_id.clone())?;
-    let store = Arc::new(SqliteControlStore::open(config.data_dir.join("control.sqlite3")).await?);
+    let _control_file_guard = data_root_guard.open_or_create_regular_file(CONTROL_DATABASE_FILE)?;
+    for name in CONTROL_DATABASE_TRANSIENT_FILES {
+        data_root_guard.validate_optional_regular_file(name)?;
+    }
+    data_root_guard.ensure_unchanged()?;
+    let store = SqliteControlStore::open(config.data_dir.join(CONTROL_DATABASE_FILE)).await?;
+    data_root_guard.ensure_unchanged()?;
+    let store = Arc::new(store);
     let coordinator = SessionCoordinator::new(
         SessionJournal::new(store.clone()),
         config.authority_epoch,
@@ -257,14 +266,10 @@ struct NodeInstanceLock {
 }
 
 impl NodeInstanceLock {
-    fn acquire(data_dir: &std::path::Path) -> Result<Self, NodeRunError> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(data_dir.join(NODE_INSTANCE_LOCK_FILE))
-            .map_err(|_| NodeRunError::InstanceLockUnavailable)?;
+    fn acquire(
+        data_root: &dennett_observability::LocalDataRootGuard,
+    ) -> Result<Self, NodeRunError> {
+        let file = data_root.open_or_create_regular_file(NODE_INSTANCE_LOCK_FILE)?;
         file.try_lock_exclusive()
             .map_err(|_| NodeRunError::AlreadyRunning)?;
         Ok(Self { _file: file })
@@ -389,15 +394,60 @@ mod tests {
         assert!(!relative.exists());
     }
 
+    #[tokio::test]
+    async fn run_rejects_preplanted_database_and_sidecar_links() {
+        for name in std::iter::once(CONTROL_DATABASE_FILE).chain(CONTROL_DATABASE_TRANSIENT_FILES) {
+            let directory = tempfile::tempdir().expect("temporary profile parent");
+            let profile = directory.path().join("profile");
+            std::fs::create_dir(&profile).expect("profile");
+            let outside = directory.path().join("outside.sqlite3");
+            std::fs::write(&outside, b"outside").expect("outside file");
+            let link = profile.join(name);
+            if !create_file_link(&outside, &link) {
+                return;
+            }
+            let config = NodeConfig::new("unsafe-database-link", 1, "0.1.0")
+                .expect("Node config")
+                .with_paths(profile, std::env::temp_dir());
+
+            let error = run(config, async {})
+                .await
+                .expect_err("linked database entry must fail closed");
+            assert!(matches!(error, NodeRunError::DataRoot(_)), "entry: {name}");
+            assert_eq!(
+                std::fs::read(&outside).expect("outside file"),
+                b"outside",
+                "entry: {name}"
+            );
+        }
+    }
+
     #[test]
     fn one_process_owns_a_profile_lock_at_a_time() {
         let directory = tempfile::tempdir().expect("temporary profile");
-        let first = NodeInstanceLock::acquire(directory.path()).expect("first lock");
+        let root = dennett_observability::guard_local_data_root(directory.path())
+            .expect("guarded profile");
+        let first = NodeInstanceLock::acquire(&root).expect("first lock");
         assert!(matches!(
-            NodeInstanceLock::acquire(directory.path()),
+            NodeInstanceLock::acquire(&root),
             Err(NodeRunError::AlreadyRunning)
         ));
         drop(first);
-        NodeInstanceLock::acquire(directory.path()).expect("lock released");
+        NodeInstanceLock::acquire(&root).expect("lock released");
+    }
+
+    #[cfg(unix)]
+    fn create_file_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(target, link).expect("file symlink");
+        true
+    }
+
+    #[cfg(windows)]
+    fn create_file_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+        if let Err(error) = std::os::windows::fs::symlink_file(target, link) {
+            eprintln!("skipping symlink assertion: {error}");
+            return false;
+        }
+        true
     }
 }

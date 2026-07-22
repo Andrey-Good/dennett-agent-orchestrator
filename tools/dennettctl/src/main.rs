@@ -122,5 +122,7 @@ mod tests {
                 .expect("JSON diagnostic summary");
         let value: serde_json::Value = serde_json::from_str(&json).expect("summary JSON");
         assert_eq!(value["previous_exit"], "clean");
+        assert!(value.get("diagnostics_dir").is_none());
+        assert!(!json.contains(temp.path().to_string_lossy().as_ref()));
     }
 }

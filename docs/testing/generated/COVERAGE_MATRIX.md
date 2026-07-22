@@ -11,7 +11,7 @@ Each row links one requirement to its catalogue evidence.
 | `ADR-002` | `TEST-MEMORY-ONE-LOGICAL-001` | — | `memory` | `tests/scenarios/offline-client-memory-not-canonical.yaml` | `release` |
 | `ADR-003` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
 | `ARCH-80:LocalExecutionManager` | `TEST-M02-COMMAND-CANCEL-001` | `WP-M02-005` | `execution` | — | `release` |
-| `ARCH-80:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | `crates/dennett-observability/tests/redaction.rs`, `services/node/tests/diagnostic_lifecycle.rs` | `release` |
+| `ARCH-80:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | `crates/dennett-observability/tests/redaction.rs`, `services/node/tests/diagnostic_lifecycle.rs`, `tools/dennettctl/src/main.rs` | `release` |
 | `ARCH-80:ProjectChatLocalEdit` | `TEST-M02-CODEX-PROJECT-RECOVERY-001` | `WP-M02-006`, `WP-M02-009` | `agents` | — | `release` |
 | `ARCH-80:StructuredCancellation` | `TEST-M02-COMMAND-CANCEL-001` | `WP-M02-005` | `execution` | — | `release` |
 | `ARCH-81:DraftPersistence` | `TEST-DRAFT-CACHE-RECOVERY-001` | `WP-M01-005` | `desktop` | `adapters/storage/sqlite/src/lib.rs`, `crates/dennett-sync-core/src/draft.rs`, `services/head/tests/session_restore.rs` | — |
@@ -117,7 +117,7 @@ Each row links one requirement to its catalogue evidence.
 | `SPEC-60:ProjectWorkspace` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
 | `SPEC-60:ProjectsHub` | `TEST-M02-PROJECT-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
 | `SPEC-60:ReviewComments` | `TEST-M02-REVIEW-CORRECTION-001` | `WP-M02-008`, `WP-M02-009` | `review` | — | `release` |
-| `SPEC-70:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | `crates/dennett-observability/tests/redaction.rs`, `services/node/tests/diagnostic_lifecycle.rs` | `release` |
+| `SPEC-70:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | `crates/dennett-observability/tests/redaction.rs`, `services/node/tests/diagnostic_lifecycle.rs`, `tools/dennettctl/src/main.rs` | `release` |
 | `SPEC-70:PRJ-01` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | `release` |
 | `SPEC-70:PRJ-01` | `TEST-M02-PROJECT-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
 | `SPEC-70:PRJ-02` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | `release` |
