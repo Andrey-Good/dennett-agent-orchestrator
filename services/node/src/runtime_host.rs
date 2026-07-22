@@ -15,7 +15,10 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Arc, Mutex as StdMutex, Weak},
+    sync::{
+        Arc, Mutex as StdMutex, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -31,6 +34,7 @@ const HOST_CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
 const HOST_STARTUP_TIMEOUT: Duration = Duration::from_secs(65);
 const HOST_EVENT_CAPACITY: usize = 128;
 const MAX_HOST_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_HOST_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 const SAFE_HOST_ENVIRONMENT: &[&str] = &[
     "ALLUSERSPROFILE",
     "APPDATA",
@@ -81,6 +85,7 @@ struct RuntimeHostInner {
     pending: Mutex<HashMap<String, PendingResponse>>,
     turns: Mutex<HashMap<TurnKey, TurnSender>>,
     child: StdMutex<Child>,
+    fenced: AtomicBool,
 }
 
 impl Drop for RuntimeHostInner {
@@ -106,12 +111,24 @@ impl HostedAgentRuntime {
             .arg(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         command.env_clear().envs(sanitized_host_environment());
-        let mut child = command
-            .spawn()
-            .map_err(|_| RuntimeHostStartError::SpawnFailed)?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                dennett_observability::record(
+                    dennett_observability::DiagnosticEvent::error(
+                        "runtime.host_spawn_failed",
+                        "runtime_startup",
+                        "Node adapter host process could not be started",
+                    )
+                    .error_code("runtime_host.spawn_failed")
+                    .retryable(true),
+                );
+                return Err(RuntimeHostStartError::SpawnFailed);
+            }
+        };
         let writer = child
             .stdin
             .take()
@@ -120,23 +137,59 @@ impl HostedAgentRuntime {
             .stdout
             .take()
             .ok_or(RuntimeHostStartError::SpawnFailed)?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(RuntimeHostStartError::SpawnFailed)?;
         let inner = Arc::new(RuntimeHostInner {
             writer: Mutex::new(writer),
             pending: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
             child: StdMutex::new(child),
+            fenced: AtomicBool::new(false),
         });
         tokio::spawn(read_host(BufReader::new(stdout), Arc::downgrade(&inner)));
+        tokio::spawn(read_host_diagnostics(BufReader::new(stderr)));
         let runtime = Self { inner };
-        let health = runtime
+        let health = match runtime
             .call_with_timeout("health", json!({}), HOST_STARTUP_TIMEOUT)
             .await
-            .map_err(|_| RuntimeHostStartError::HandshakeFailed)?;
+        {
+            Ok(health) => health,
+            Err(error) => {
+                dennett_observability::record(
+                    dennett_observability::DiagnosticEvent::error(
+                        "runtime.host_handshake_failed",
+                        "runtime_startup",
+                        "Node adapter host did not complete its protocol handshake",
+                    )
+                    .error_code(error.code.as_str())
+                    .retryable(error.retryable),
+                );
+                return Err(RuntimeHostStartError::HandshakeFailed);
+            }
+        };
         if health.get("status").and_then(Value::as_str) != Some("healthy")
             || health.get("protocolVersion").and_then(Value::as_u64) != Some(HOST_PROTOCOL_VERSION)
         {
+            dennett_observability::record(
+                dennett_observability::DiagnosticEvent::error(
+                    "runtime.host_protocol_mismatch",
+                    "runtime_startup",
+                    "Node adapter host reported an incompatible health contract",
+                )
+                .error_code("runtime_host.protocol_mismatch"),
+            );
             return Err(RuntimeHostStartError::HandshakeFailed);
         }
+        dennett_observability::record(
+            dennett_observability::DiagnosticEvent::info(
+                "runtime.host_ready",
+                "runtime_startup",
+                "Node adapter host protocol handshake completed",
+            )
+            .status("ready"),
+        );
         Ok(runtime)
     }
 
@@ -151,6 +204,11 @@ impl HostedAgentRuntime {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, RuntimeError> {
+        if self.inner.fenced.load(Ordering::Acquire) {
+            return Err(RuntimeError::retryable(
+                RuntimeErrorCode::ProviderUnavailable,
+            ));
+        }
         let request_id = uuid::Uuid::now_v7().to_string();
         let request = json!({
             "v": HOST_PROTOCOL_VERSION,
@@ -169,23 +227,69 @@ impl HostedAgentRuntime {
             .lock()
             .await
             .insert(request_id.clone(), sender);
-        let write_result = async {
-            let mut writer = self.inner.writer.lock().await;
-            writer.write_all(&encoded).await?;
-            writer.write_all(b"\n").await?;
-            writer.flush().await
+        enum ControlIoFailure {
+            Write,
+            ResponseClosed,
         }
-        .await;
-        if write_result.is_err() {
-            self.inner.pending.lock().await.remove(&request_id);
-            fail_host(&self.inner).await;
-            return Err(RuntimeError::retryable(
-                RuntimeErrorCode::ProviderUnavailable,
-            ));
-        }
-        match tokio::time::timeout(timeout, receiver).await {
+        let operation = async {
+            {
+                let mut writer = self.inner.writer.lock().await;
+                writer
+                    .write_all(&encoded)
+                    .await
+                    .map_err(|_| ControlIoFailure::Write)?;
+                writer
+                    .write_all(b"\n")
+                    .await
+                    .map_err(|_| ControlIoFailure::Write)?;
+                writer.flush().await.map_err(|_| ControlIoFailure::Write)?;
+            }
+            receiver.await.map_err(|_| ControlIoFailure::ResponseClosed)
+        };
+        match tokio::time::timeout(timeout, operation).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) | Err(_) => {
+            Ok(Err(ControlIoFailure::Write)) => {
+                dennett_observability::record(
+                    dennett_observability::DiagnosticEvent::error(
+                        "runtime.host_write_failed",
+                        "runtime_control",
+                        "runtime host control request could not be written",
+                    )
+                    .error_code("provider_unavailable")
+                    .retryable(true),
+                );
+                self.inner.pending.lock().await.remove(&request_id);
+                fail_host(&self.inner).await;
+                Err(RuntimeError::retryable(
+                    RuntimeErrorCode::ProviderUnavailable,
+                ))
+            }
+            Ok(Err(ControlIoFailure::ResponseClosed)) => {
+                dennett_observability::record(
+                    dennett_observability::DiagnosticEvent::error(
+                        "runtime.host_response_channel_closed",
+                        "runtime_control",
+                        "runtime host closed before returning a control result",
+                    )
+                    .error_code("provider_unavailable")
+                    .retryable(true),
+                );
+                self.inner.pending.lock().await.remove(&request_id);
+                fail_host(&self.inner).await;
+                Err(RuntimeError::retryable(
+                    RuntimeErrorCode::ProviderUnavailable,
+                ))
+            }
+            Err(_) => {
+                dennett_observability::record(
+                    dennett_observability::DiagnosticEvent::error(
+                        "runtime.host_control_timeout",
+                        "runtime_control",
+                        "runtime host control request exceeded its deadline",
+                    )
+                    .error_code("provider_unavailable")
+                    .retryable(true),
+                );
                 self.inner.pending.lock().await.remove(&request_id);
                 // A timed-out control request has an unknown external result.
                 // Fence the dedicated host before callers may persist failure
@@ -418,8 +522,21 @@ where
         let line = match read_bounded_frame(&mut reader).await {
             Ok(Some(line)) => line,
             Ok(None) => break,
-            Err(_) => {
+            Err(error) => {
                 if let Some(inner) = inner.upgrade() {
+                    if error.kind() == std::io::ErrorKind::InvalidData {
+                        record_host_failure(
+                            "runtime.host_frame_too_large",
+                            "runtime_host.frame_too_large",
+                            "runtime host exceeded the stdout protocol frame limit",
+                        );
+                    } else {
+                        record_host_failure(
+                            "runtime.host_read_failed",
+                            "runtime_host.read_failed",
+                            "runtime host stdout could not be read",
+                        );
+                    }
                     fail_host(&inner).await;
                 }
                 return;
@@ -427,6 +544,11 @@ where
         };
         let Ok(line) = String::from_utf8(line) else {
             if let Some(inner) = inner.upgrade() {
+                record_host_failure(
+                    "runtime.host_invalid_utf8",
+                    "runtime_host.invalid_utf8",
+                    "runtime host emitted non-UTF-8 protocol data",
+                );
                 fail_host(&inner).await;
             }
             return;
@@ -437,11 +559,99 @@ where
         dispatch_host_message(&inner, &line).await;
     }
     if let Some(inner) = inner.upgrade() {
+        record_host_failure(
+            "runtime.host_stdout_eof",
+            "runtime_host.stdout_eof",
+            "runtime host stdout closed unexpectedly",
+        );
         fail_host(&inner).await;
     }
 }
 
+async fn read_host_diagnostics<R>(mut reader: BufReader<R>)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut unclassified_reported = false;
+    loop {
+        let line = match read_bounded_frame_with_limit(&mut reader, MAX_HOST_DIAGNOSTIC_BYTES).await
+        {
+            Ok(Some(line)) => line,
+            Ok(None) => return,
+            Err(error) => {
+                let (event_code, error_code, message) =
+                    if error.kind() == std::io::ErrorKind::InvalidData {
+                        (
+                            "runtime.host_stderr_frame_too_large",
+                            "runtime_host.stderr_frame_too_large",
+                            "runtime host diagnostic frame exceeded its safe limit",
+                        )
+                    } else {
+                        (
+                            "runtime.host_stderr_read_failed",
+                            "runtime_host.stderr_read_failed",
+                            "runtime host diagnostic channel could not be read",
+                        )
+                    };
+                record_host_failure(event_code, error_code, message);
+                return;
+            }
+        };
+        let diagnostic = String::from_utf8(line)
+            .ok()
+            .as_deref()
+            .map_or(HostDiagnostic::Unclassified, classify_host_diagnostic);
+        match diagnostic {
+            HostDiagnostic::UnhandledFailure => record_host_failure(
+                "runtime.host_unhandled_failure",
+                "runtime_host.unhandled_failure",
+                "runtime host reported an unhandled internal failure",
+            ),
+            HostDiagnostic::Unclassified if !unclassified_reported => {
+                unclassified_reported = true;
+                record_host_failure(
+                    "runtime.host_stderr_unclassified",
+                    "runtime_host.stderr_unclassified",
+                    "runtime host wrote unclassified private data to stderr",
+                );
+            }
+            HostDiagnostic::Unclassified => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostDiagnostic {
+    UnhandledFailure,
+    Unclassified,
+}
+
+fn classify_host_diagnostic(line: &str) -> HostDiagnostic {
+    let Ok(Value::Object(message)) = serde_json::from_str::<Value>(line) else {
+        return HostDiagnostic::Unclassified;
+    };
+    if message.len() == 2
+        && message.get("v").and_then(Value::as_u64) == Some(HOST_PROTOCOL_VERSION)
+        && message.get("diagnosticCode").and_then(Value::as_str)
+            == Some("runtime_host.unhandled_failure")
+    {
+        HostDiagnostic::UnhandledFailure
+    } else {
+        HostDiagnostic::Unclassified
+    }
+}
+
 async fn read_bounded_frame<R>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    read_bounded_frame_with_limit(reader, MAX_HOST_MESSAGE_BYTES).await
+}
+
+async fn read_bounded_frame_with_limit<R>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<Vec<u8>>>
 where
     R: tokio::io::AsyncBufRead + Unpin,
 {
@@ -458,7 +668,7 @@ where
             }
             let newline = available.iter().position(|byte| *byte == b'\n');
             let payload_len = newline.unwrap_or(available.len());
-            if line.len().saturating_add(payload_len) > MAX_HOST_MESSAGE_BYTES {
+            if line.len().saturating_add(payload_len) > max_bytes {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "runtime host frame exceeds the protocol limit",
@@ -482,24 +692,54 @@ where
 
 async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
     let Ok(message) = serde_json::from_str::<Value>(line) else {
+        record_host_failure(
+            "runtime.host_invalid_json",
+            "runtime_host.invalid_json",
+            "runtime host emitted invalid JSON",
+        );
         fail_host(inner).await;
         return;
     };
     if message.get("v").and_then(Value::as_u64) != Some(HOST_PROTOCOL_VERSION) {
+        record_host_failure(
+            "runtime.host_protocol_version_invalid",
+            "runtime_host.protocol_version_invalid",
+            "runtime host emitted an incompatible protocol version",
+        );
         fail_host(inner).await;
         return;
     }
     if let Some(id) = message.get("id").and_then(Value::as_str) {
-        if let Some(sender) = inner.pending.lock().await.remove(id) {
-            let result = if let Some(error) = message.get("error") {
-                Err(parse_error(error))
-            } else {
-                message
-                    .get("result")
-                    .cloned()
-                    .ok_or_else(|| RuntimeError::new(RuntimeErrorCode::ProtocolViolation))
-            };
-            let _ = sender.send(result);
+        let Some(sender) = inner.pending.lock().await.remove(id) else {
+            if !inner.fenced.load(Ordering::Acquire) {
+                record_host_failure(
+                    "runtime.host_unknown_response",
+                    "runtime_host.unknown_response",
+                    "runtime host returned an unknown control response",
+                );
+                fail_host(inner).await;
+            }
+            return;
+        };
+        let result = match (message.get("error"), message.get("result")) {
+            (Some(error), None) => parse_error(error).map_or_else(
+                || Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation)),
+                Err,
+            ),
+            (None, Some(result)) => Ok(result.clone()),
+            _ => Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation)),
+        };
+        let protocol_violation = result
+            .as_ref()
+            .is_err_and(|error| error.code == RuntimeErrorCode::ProtocolViolation);
+        let _ = sender.send(result);
+        if protocol_violation {
+            record_host_failure(
+                "runtime.host_invalid_response",
+                "runtime_host.invalid_response",
+                "runtime host returned an invalid control response",
+            );
+            fail_host(inner).await;
         }
         return;
     }
@@ -512,6 +752,11 @@ async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
             {
                 Ok(event) => event,
                 Err(()) => {
+                    record_host_failure(
+                        "runtime.host_invalid_event",
+                        "runtime_host.invalid_event",
+                        "runtime host emitted an invalid runtime event",
+                    );
                     fail_host(inner).await;
                     return;
                 }
@@ -522,25 +767,59 @@ async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
         }
         Some("runtime_error") => {
             let Some(session_id) = message.get("sessionId").and_then(Value::as_str) else {
+                record_host_failure(
+                    "runtime.host_invalid_scope",
+                    "runtime_host.invalid_scope",
+                    "runtime host error omitted its session scope",
+                );
                 fail_host(inner).await;
                 return;
             };
             let Some(turn_id) = message.get("turnId").and_then(Value::as_str) else {
+                record_host_failure(
+                    "runtime.host_invalid_scope",
+                    "runtime_host.invalid_scope",
+                    "runtime host error omitted its turn scope",
+                );
                 fail_host(inner).await;
                 return;
             };
-            let error = message.get("error").map_or_else(
-                || RuntimeError::new(RuntimeErrorCode::ProtocolViolation),
-                parse_error,
-            );
+            let Some(error) = message.get("error").and_then(parse_error) else {
+                record_host_failure(
+                    "runtime.host_invalid_error",
+                    "runtime_host.invalid_error",
+                    "runtime host emitted an invalid scoped error",
+                );
+                fail_host(inner).await;
+                return;
+            };
             let key = (session_id.to_owned(), turn_id.to_owned());
             try_deliver_turn_message(inner, &key, Err(error), true).await;
         }
-        _ => fail_host(inner).await,
+        _ => {
+            record_host_failure(
+                "runtime.host_unknown_event",
+                "runtime_host.unknown_event",
+                "runtime host emitted an unknown notification",
+            );
+            fail_host(inner).await;
+        }
     }
 }
 
 async fn fail_host(inner: &RuntimeHostInner) {
+    if inner.fenced.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::warning(
+            "runtime.host_fenced",
+            "runtime_recovery",
+            "runtime host was fenced after communication became uncertain",
+        )
+        .error_code("provider_unavailable")
+        .retryable(true),
+    );
     if let Ok(mut child) = inner.child.lock() {
         let _ = child.start_kill();
     }
@@ -558,6 +837,14 @@ async fn fail_host(inner: &RuntimeHostInner) {
     for sender in senders {
         let _ = sender.try_send(Err(error.clone()));
     }
+}
+
+fn record_host_failure(event_code: &'static str, error_code: &'static str, message: &'static str) {
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::error(event_code, "runtime_host", message)
+            .error_code(error_code)
+            .retryable(true),
+    );
 }
 
 async fn try_deliver_turn_message(
@@ -904,7 +1191,7 @@ fn parse_steering(
     Ok(acknowledgement)
 }
 
-fn parse_error(value: &Value) -> RuntimeError {
+fn parse_error(value: &Value) -> Option<RuntimeError> {
     let code = match value.get("code").and_then(Value::as_str) {
         Some("invalid_request") => RuntimeErrorCode::InvalidRequest,
         Some("unsupported") => RuntimeErrorCode::Unsupported,
@@ -912,19 +1199,14 @@ fn parse_error(value: &Value) -> RuntimeError {
         Some("scope_mismatch") => RuntimeErrorCode::ScopeMismatch,
         Some("continuation_unavailable") => RuntimeErrorCode::ContinuationUnavailable,
         Some("provider_unavailable") => RuntimeErrorCode::ProviderUnavailable,
-        _ => RuntimeErrorCode::ProviderFailure,
+        Some("provider_failure") => RuntimeErrorCode::ProviderFailure,
+        _ => return None,
     };
-    RuntimeError {
+    Some(RuntimeError {
         code,
-        retryable: value
-            .get("retryable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        recoverable: value
-            .get("recoverable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    }
+        retryable: value.get("retryable").and_then(Value::as_bool)?,
+        recoverable: value.get("recoverable").and_then(Value::as_bool)?,
+    })
 }
 
 fn required_string(value: &Value, field: &str) -> Result<String, RuntimeError> {
@@ -1002,6 +1284,17 @@ pub enum RuntimeHostStartError {
     HandshakeFailed,
 }
 
+impl RuntimeHostStartError {
+    #[must_use]
+    pub const fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::HostMissing => "runtime_host.missing",
+            Self::SpawnFailed => "runtime_host.spawn_failed",
+            Self::HandshakeFailed => "runtime_host.handshake_failed",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,6 +1330,46 @@ mod tests {
                 .expect("frame"),
             b"{\"v\":1}".to_vec()
         );
+    }
+
+    #[tokio::test]
+    async fn control_timeout_covers_a_blocked_stdin_write_and_fences_the_host() {
+        let temp = tempfile::tempdir().expect("temporary runtime host");
+        let script = temp.path().join("blocked-stdin-runtime-host.mjs");
+        std::fs::write(
+            &script,
+            r#"
+import readline from "node:readline";
+const write = value => process.stdout.write(JSON.stringify(value) + "\n");
+const input = readline.createInterface({ input: process.stdin });
+input.on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method === "health") {
+    write({ v: 1, id: request.id, result: { status: "healthy", protocolVersion: 1 } });
+    input.pause();
+    process.stdin.pause();
+  }
+});
+"#,
+        )
+        .expect("write blocked-stdin fixture");
+        let script = configured_host_script(Some(script.into_os_string()))
+            .expect("canonical blocked-stdin fixture");
+        let runtime = HostedAgentRuntime::start_process(Path::new("node"), &script)
+            .await
+            .expect("start blocked-stdin fixture");
+
+        let error = runtime
+            .call_with_timeout(
+                "blocked",
+                json!({ "payload": "x".repeat(512 * 1024) }),
+                Duration::from_millis(100),
+            )
+            .await
+            .expect_err("blocked write must time out");
+        assert_eq!(error.code, RuntimeErrorCode::ProviderUnavailable);
+        assert!(runtime.inner.fenced.load(Ordering::Acquire));
+        assert!(runtime.inner.pending.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -1187,6 +1520,26 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
         assert_eq!(
             names,
             vec![OsString::from("PATH"), OsString::from("LOCALAPPDATA")]
+        );
+    }
+
+    #[test]
+    fn stderr_diagnostics_accept_only_the_fixed_safe_schema() {
+        assert_eq!(
+            classify_host_diagnostic(
+                r#"{"v":1,"diagnosticCode":"runtime_host.unhandled_failure"}"#
+            ),
+            HostDiagnostic::UnhandledFailure
+        );
+        assert_eq!(
+            classify_host_diagnostic("sk-proj-private-provider-secret"),
+            HostDiagnostic::Unclassified
+        );
+        assert_eq!(
+            classify_host_diagnostic(
+                r#"{"v":1,"diagnosticCode":"runtime_host.unhandled_failure","detail":"private"}"#
+            ),
+            HostDiagnostic::Unclassified
         );
     }
 

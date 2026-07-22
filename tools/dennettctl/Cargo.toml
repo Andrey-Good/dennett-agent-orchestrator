@@ -8,3 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+dennett-observability = { path = "../../crates/dennett-observability" }
+
+[dev-dependencies]
+tempfile.workspace = true

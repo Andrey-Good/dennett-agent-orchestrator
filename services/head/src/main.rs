@@ -3,11 +3,58 @@ use dennett_contracts::{CommandId, ProjectChatCommand, ProjectId, SessionId};
 use dennett_head::HeadApplication;
 use dennett_kernel::ProjectChatUseCase;
 use dennett_memory_core::{InMemoryMemory, MemoryPort};
+use dennett_observability::{
+    DiagnosticEvent, DiagnosticExit, LocalDiagnosticsConfig, init, init_local, record,
+};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dennett_observability::init("dennett-head");
+    let data_dir = std::env::var_os("DENNETT_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("dennett-head"));
+    let diagnostics = match init_local(LocalDiagnosticsConfig::personal_quiet(
+        "dennett-head",
+        data_dir,
+    )) {
+        Ok(diagnostics) => Some(diagnostics),
+        Err(error) => {
+            init("dennett-head");
+            eprintln!(
+                "Dennett local diagnostics unavailable ({})",
+                error.diagnostic_code()
+            );
+            None
+        }
+    };
+    let result = run_demo().await;
+    let exit = if result.is_ok() {
+        DiagnosticExit::Clean
+    } else {
+        DiagnosticExit::Failed {
+            error_code: "head.demo_failure",
+        }
+    };
+    if let Some(diagnostics) = diagnostics
+        && let Err(error) = diagnostics.shutdown(exit)
+    {
+        eprintln!(
+            "Dennett diagnostic shutdown incomplete ({})",
+            error.diagnostic_code()
+        );
+    }
+    result
+}
+
+async fn run_demo() -> Result<(), Box<dyn std::error::Error>> {
+    record(
+        DiagnosticEvent::info(
+            "head.demo_started",
+            "startup",
+            "credential-free Head demo started",
+        )
+        .status("running"),
+    );
     let memory = Arc::new(InMemoryMemory::default());
     let app = HeadApplication::new(Arc::new(FakeAgentRuntime), Arc::clone(&memory));
     let command_id = CommandId::new();
@@ -36,6 +83,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(std::io::Error::other("fake conversation correlation check failed").into());
     }
 
+    record(
+        DiagnosticEvent::info(
+            "head.demo_completed",
+            "runtime",
+            "credential-free Head demo completed",
+        )
+        .project_id(project_id.0)
+        .session_id(session_id.0)
+        .command_id(command_id.0)
+        .status("completed"),
+    );
     println!(
         "fake_chat command_id={} result_command_id={} memory_event_id={} project_id={} session_id={}",
         command_id.0, result.command_id.0, event.event_id.0, project_id.0, session_id.0

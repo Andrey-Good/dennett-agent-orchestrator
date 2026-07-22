@@ -420,6 +420,18 @@ impl ConversationApplication {
             let application = self.clone();
             let workspace_path = self.workspace_for(project_id).to_owned();
             let project_span_id = project_id.map(|id| id.0.to_string()).unwrap_or_default();
+            let diagnostic = dennett_observability::DiagnosticEvent::info(
+                "head.turn_accepted",
+                "conversation",
+                "project conversation turn was durably accepted",
+            )
+            .session_id(session_id.0)
+            .command_id(command_id.0)
+            .runtime_turn_id(turn_id.0)
+            .status("accepted");
+            dennett_observability::record(
+                project_id.map_or(diagnostic, |id| diagnostic.project_id(id.0)),
+            );
             let span = tracing::info_span!(
                 "project_chat_turn",
                 dennett.installation.id = %trace.installation_id,
@@ -1325,6 +1337,7 @@ impl ConversationApplication {
         }
         let event_id = SessionEventId::new();
         let committed_at = unix_time_ms();
+        let diagnostic_error_code = terminal_diagnostic_error_code(state, outcome.as_ref());
         loop {
             match self
                 .sessions
@@ -1351,6 +1364,17 @@ impl ConversationApplication {
                         memory_event_id.as_str(),
                     );
                     tracing::info!(dennett.memory.event.id = %event_id.0, "runtime turn committed");
+                    dennett_observability::record(
+                        dennett_observability::DiagnosticEvent::info(
+                            "head.turn_terminal_committed",
+                            "conversation",
+                            "project conversation terminal state was durably committed",
+                        )
+                        .session_id(session_id.0)
+                        .runtime_turn_id(turn_id.0)
+                        .status(terminal_state_label(state))
+                        .error_code(diagnostic_error_code),
+                    );
                     self.system
                         .apply(vec![SystemMutation::UpsertSession(session_summary(
                             &commit.snapshot,
@@ -1479,6 +1503,28 @@ fn terminal_state_label(state: SessionTurnState) -> &'static str {
     }
 }
 
+fn terminal_diagnostic_error_code(
+    state: SessionTurnState,
+    outcome: Option<&SessionTurnOutcome>,
+) -> &'static str {
+    if state != SessionTurnState::Failed {
+        return "";
+    }
+    let Some(SessionTurnOutcome::Error(error)) = outcome else {
+        return "runtime_failure";
+    };
+    match error.code.as_str() {
+        "continuation_unavailable" => "continuation_unavailable",
+        "invalid_request" => "invalid_request",
+        "protocol_violation" => "protocol_violation",
+        "provider_failure" => "provider_failure",
+        "provider_unavailable" => "provider_unavailable",
+        "scope_mismatch" => "scope_mismatch",
+        "unsupported" => "unsupported",
+        _ => "runtime_failure",
+    }
+}
+
 fn session_activity_status(status: RuntimeActivityStatus) -> SessionActivityStatus {
     match status {
         RuntimeActivityStatus::Started => SessionActivityStatus::Started,
@@ -1583,4 +1629,36 @@ pub enum ConversationError {
     Session(#[from] SessionJournalError),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
+}
+
+#[cfg(test)]
+mod diagnostic_code_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_diagnostics_keep_only_known_safe_failure_codes() {
+        let known = SessionTurnOutcome::Error(SafeSessionError {
+            code: "provider_unavailable".to_owned(),
+            message_key: "runtime.provider_unavailable".to_owned(),
+            details_handle: None,
+        });
+        assert_eq!(
+            terminal_diagnostic_error_code(SessionTurnState::Failed, Some(&known)),
+            "provider_unavailable"
+        );
+
+        let unknown = SessionTurnOutcome::Error(SafeSessionError {
+            code: "provider-secret-shaped-value".to_owned(),
+            message_key: "runtime.failure".to_owned(),
+            details_handle: None,
+        });
+        assert_eq!(
+            terminal_diagnostic_error_code(SessionTurnState::Failed, Some(&unknown)),
+            "runtime_failure"
+        );
+        assert_eq!(
+            terminal_diagnostic_error_code(SessionTurnState::Completed, Some(&known)),
+            ""
+        );
+    }
 }

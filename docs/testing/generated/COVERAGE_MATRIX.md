@@ -11,7 +11,7 @@ Each row links one requirement to its catalogue evidence.
 | `ADR-002` | `TEST-MEMORY-ONE-LOGICAL-001` | — | `memory` | `tests/scenarios/offline-client-memory-not-canonical.yaml` | `release` |
 | `ADR-003` | `TEST-HEAD-OPTIN-001` | — | `trust` | `tests/scenarios/head-promotion-opt-in.yaml` | `release` |
 | `ARCH-80:LocalExecutionManager` | `TEST-M02-COMMAND-CANCEL-001` | `WP-M02-005` | `execution` | — | `release` |
-| `ARCH-80:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | — | `release` |
+| `ARCH-80:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | `crates/dennett-observability/tests/redaction.rs`, `services/node/tests/diagnostic_lifecycle.rs` | `release` |
 | `ARCH-80:ProjectChatLocalEdit` | `TEST-M02-CODEX-PROJECT-RECOVERY-001` | `WP-M02-006`, `WP-M02-009` | `agents` | — | `release` |
 | `ARCH-80:StructuredCancellation` | `TEST-M02-COMMAND-CANCEL-001` | `WP-M02-005` | `execution` | — | `release` |
 | `ARCH-81:DraftPersistence` | `TEST-DRAFT-CACHE-RECOVERY-001` | `WP-M01-005` | `desktop` | `adapters/storage/sqlite/src/lib.rs`, `crates/dennett-sync-core/src/draft.rs`, `services/head/tests/session_restore.rs` | — |
@@ -34,8 +34,8 @@ Each row links one requirement to its catalogue evidence.
 | `ARCH-83:M02ProjectWorkspace` | `TEST-M02-CHECKPOINT-RECOVERY-001` | `WP-M02-004`, `WP-M02-009` | `recovery` | — | `release` |
 | `ARCH-83:M02ProjectWorkspace` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `WP-M02-002` | `protocol` | — | `release` |
 | `ARCH-83:Milestone0` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
-| `ARCH-83:OperationalModel` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `WP-M02-001` | `node` | — | — |
-| `ARCH-83:PersonalQuietObservability` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `WP-M02-001` | `observability` | — | `release` |
+| `ARCH-83:OperationalModel` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `WP-M02-001` | `node` | `services/node/tests/diagnostic_lifecycle.rs`, `tools/dennettctl/src/main.rs` | — |
+| `ARCH-83:PersonalQuietObservability` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `WP-M02-001` | `observability` | `crates/dennett-observability/src/lifecycle.rs`, `crates/dennett-observability/src/writer.rs`, `crates/dennett-observability/tests/persistence.rs`, `crates/dennett-observability/tests/startup_transaction.rs` | `release` |
 | `ARCH-83:ProtocolCompatibility` | `TEST-PROTOCOL-BREAKING-001` | `WP-M00-002`, `WP-M01-002` | `protocol` | `.github/workflows/protocol-compatibility.yml`, `tools/protocol_codegen.py` | `release` |
 | `ARCH-83:ProviderLiveSmoke` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-login.ts` | `release` |
 | `ARCH-83:RepositoryLayout` | `TEST-REPO-STRUCTURE-001` | `WP-M00-001`, `WP-M01-001` | `repository` | `tools/tests/test_verify_repo.py`, `tools/verify_repo.py` | `release` |
@@ -88,8 +88,8 @@ Each row links one requirement to its catalogue evidence.
 | `OWNER:CanonicalNameDennett` | `TEST-PRODUCT-IDENTITY-001` | `WP-M00-006` | `repository` | `tools/generate_repository_metadata.py`, `tools/verify_repo.py` | `release` |
 | `OWNER:CodexOnlyRuntime` | `TEST-M02-CODEX-PROJECT-EDIT-001` | `WP-M02-006`, `WP-M02-009` | `agents` | — | `release` |
 | `OWNER:FigmaBeforeSubstantialUi` | `TEST-M02-REVIEW-DESIGN-001` | `WP-M02-007` | `desktop` | — | `release` |
-| `OWNER:M02Diagnosability` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `WP-M02-001` | `node` | — | — |
-| `OWNER:M02Diagnosability` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `WP-M02-001` | `observability` | — | `release` |
+| `OWNER:M02Diagnosability` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `WP-M02-001` | `node` | `services/node/tests/diagnostic_lifecycle.rs`, `tools/dennettctl/src/main.rs` | — |
+| `OWNER:M02Diagnosability` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `WP-M02-001` | `observability` | `crates/dennett-observability/src/lifecycle.rs`, `crates/dennett-observability/src/writer.rs`, `crates/dennett-observability/tests/persistence.rs`, `crates/dennett-observability/tests/startup_transaction.rs` | `release` |
 | `OWNER:M02Diagnosability` | `TEST-M02-FAILURE-RECOVERY-001` | `WP-M02-009` | `quality` | — | `release` |
 | `OWNER:NoLicenseSelected` | `TEST-PRODUCT-IDENTITY-001` | `WP-M00-006` | `repository` | `tools/generate_repository_metadata.py`, `tools/verify_repo.py` | `release` |
 | `OWNER:UseChatGPTSubscriptionBeforeApiBilling` | `TEST-CODEX-SDK-CHATGPT-AUTH-001` | `WP-M01-001` | `agents` | `services/adapter-host-node/src/codex-canary.ts`, `services/adapter-host-node/src/codex-login.ts` | `release` |
@@ -117,7 +117,7 @@ Each row links one requirement to its catalogue evidence.
 | `SPEC-60:ProjectWorkspace` | `TEST-DESKTOP-PROJECT-CHAT-UI-001` | `WP-M01-003` | `desktop` | `apps/desktop/src/App.test.tsx` | `release` |
 | `SPEC-60:ProjectsHub` | `TEST-M02-PROJECT-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
 | `SPEC-60:ReviewComments` | `TEST-M02-REVIEW-CORRECTION-001` | `WP-M02-008`, `WP-M02-009` | `review` | — | `release` |
-| `SPEC-70:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | — | `release` |
+| `SPEC-70:Observability` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `WP-M02-001`, `WP-M02-009` | `security` | `crates/dennett-observability/tests/redaction.rs`, `services/node/tests/diagnostic_lifecycle.rs` | `release` |
 | `SPEC-70:PRJ-01` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | `release` |
 | `SPEC-70:PRJ-01` | `TEST-M02-PROJECT-UI-001` | `WP-M02-008`, `WP-M02-009` | `desktop` | — | `release` |
 | `SPEC-70:PRJ-02` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `WP-M02-003`, `WP-M02-008` | `projects` | — | `release` |

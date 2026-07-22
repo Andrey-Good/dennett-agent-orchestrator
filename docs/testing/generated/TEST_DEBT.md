@@ -30,9 +30,6 @@ Quarantined, waived, retired-without-replacement and not-yet-automated cases.
 | `TEST-M02-WORKSPACE-SNAPSHOT-001` | `R3` | `workspace` | missing automation | — |
 | `TEST-MEMORY-ONE-LOGICAL-001` | `R3` | `memory` | missing automation | `tests/scenarios/offline-client-memory-not-canonical.yaml` |
 | `TEST-M02-ARTIFACT-COLLECTION-001` | `R2` | `artifacts` | missing automation | — |
-| `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `R2` | `node` | missing automation | — |
-| `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `R2` | `observability` | missing automation | — |
-| `TEST-M02-DIAGNOSTIC-REDACTION-001` | `R2` | `security` | missing automation | — |
 | `TEST-M02-PROJECT-MISSING-001` | `R2` | `projects` | missing automation | — |
 | `TEST-M02-PROJECT-UI-001` | `R2` | `desktop` | missing automation | — |
 | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `protocol` | missing automation | — |

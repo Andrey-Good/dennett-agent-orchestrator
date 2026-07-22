@@ -6,13 +6,13 @@
 
 Current milestone: `M02` — Project workspace and review (status: `ACTIVE`).
 
-- Package status: `READY` 1, `REFINED` 8
+- Package status: `IN_PROGRESS` 1, `REFINED` 8
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
-| `WP-M02-001` | `READY` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `R2` | `specified` | `node` |
-| `WP-M02-001` | `READY` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `R2` | `specified` | `observability` |
-| `WP-M02-001` | `READY` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `R2` | `specified` | `security` |
+| `WP-M02-001` | `IN_PROGRESS` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `R2` | `automated` | `node` |
+| `WP-M02-001` | `IN_PROGRESS` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `R2` | `automated` | `observability` |
+| `WP-M02-001` | `IN_PROGRESS` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `R2` | `automated` | `security` |
 | `WP-M02-002` | `REFINED` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `specified` | `protocol` |
 | `WP-M02-002` | `REFINED` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
 | `WP-M02-002` | `REFINED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |

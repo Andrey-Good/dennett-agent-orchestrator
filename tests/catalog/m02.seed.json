@@ -4,7 +4,7 @@
     {
       "id": "TEST-M02-DIAGNOSTIC-PERSISTENCE-001",
       "title": "Local diagnostics survive process restart within bounded retention",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["observability", "recovery", "node"],
@@ -16,13 +16,13 @@
         "Retention is bounded and cleanup cannot escape the diagnostic root",
         "Logging failure degrades diagnostics without preventing canonical project recovery"
       ],
-      "implementation": {"target_suite": "dennett-observability persistence", "status": "planned", "test_paths": []},
+      "implementation": {"target_suite": "dennett-observability persistence", "status": "automated", "test_paths": ["crates/dennett-observability/tests/persistence.rs", "crates/dennett-observability/tests/startup_transaction.rs", "crates/dennett-observability/src/lifecycle.rs", "crates/dennett-observability/src/writer.rs"]},
       "owner": "observability"
     },
     {
       "id": "TEST-M02-DIAGNOSTIC-REDACTION-001",
       "title": "Diagnostic output excludes private content and credentials",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["observability", "privacy", "security"],
@@ -34,13 +34,13 @@
         "Allowed correlation and error fields remain sufficient to join one operation",
         "A redaction regression fails the test with the sensitive field class rather than echoing its value"
       ],
-      "implementation": {"target_suite": "diagnostic privacy contract", "status": "planned", "test_paths": []},
+      "implementation": {"target_suite": "diagnostic privacy contract", "status": "automated", "test_paths": ["crates/dennett-observability/tests/redaction.rs", "services/node/tests/diagnostic_lifecycle.rs"]},
       "owner": "security"
     },
     {
       "id": "TEST-M02-DIAGNOSTIC-LIFECYCLE-001",
       "title": "Abnormal previous exit is distinguishable from clean shutdown",
-      "status": "specified",
+      "status": "automated",
       "priority": "high",
       "risk": "R2",
       "domains": ["observability", "lifecycle", "recovery"],
@@ -52,7 +52,7 @@
         "A crash marker identifies component and last durable phase without claiming an unavailable root cause",
         "The next clean shutdown clears only the matching lifecycle marker"
       ],
-      "implementation": {"target_suite": "Node lifecycle diagnostics", "status": "planned", "test_paths": []},
+      "implementation": {"target_suite": "Node lifecycle diagnostics", "status": "automated", "test_paths": ["services/node/tests/diagnostic_lifecycle.rs", "tools/dennettctl/src/main.rs"]},
       "owner": "node"
     },
     {

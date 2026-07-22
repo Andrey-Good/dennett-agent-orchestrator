@@ -60,13 +60,7 @@ impl NodeConfig {
             authority_epoch,
             env!("CARGO_PKG_VERSION"),
         )?;
-        config.data_dir = std::env::var_os(DATA_DIR_ENV)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::temp_dir()
-                    .join("dennett-node")
-                    .join(installation_id)
-            });
+        config.data_dir = diagnostic_data_dir_from_environment();
         config.project_root = std::env::var_os(PROJECT_ROOT_ENV)
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
@@ -121,10 +115,37 @@ impl NodeConfig {
     }
 }
 
+#[must_use]
+pub fn diagnostic_data_dir_from_environment() -> PathBuf {
+    std::env::var_os(DATA_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let installation = std::env::var(INSTALLATION_ID_ENV)
+                .ok()
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 128
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                })
+                .unwrap_or_else(|| "unconfigured".to_owned());
+            std::env::temp_dir().join("dennett-node").join(installation)
+        })
+}
+
 pub async fn run<F>(config: NodeConfig, shutdown: F) -> Result<(), NodeRunError>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::info(
+            "node.configuration_validated",
+            "startup",
+            "Node configuration passed validation",
+        )
+        .status("ready"),
+    );
     tracing::info!(
         phase = "local_ipc_configuration",
         authority_epoch = config.authority_epoch,
@@ -138,6 +159,14 @@ where
         .await
         .map_err(TransportError::from)?;
     let _instance_lock = NodeInstanceLock::acquire(&config.data_dir)?;
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::info(
+            "node.instance_lock_acquired",
+            "startup",
+            "Node owns the local installation lock",
+        )
+        .status("ready"),
+    );
     let endpoint = LocalEndpoint::for_installation(config.installation_id.clone())?;
     let store = Arc::new(SqliteControlStore::open(config.data_dir.join("control.sqlite3")).await?);
     let coordinator = SessionCoordinator::new(
@@ -160,6 +189,17 @@ where
         AgentRuntimeSelection::Codex => Arc::new(runtime_host::HostedAgentRuntime::start().await?),
     };
     let runtime_descriptor = runtime.describe().await?;
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::info(
+            "node.runtime_ready",
+            "runtime_startup",
+            "agent runtime descriptor is available",
+        )
+        .provider(dennett_observability::DiagnosticProvider::from_adapter_id(
+            &runtime_descriptor.adapter_id,
+        ))
+        .status("ready"),
+    );
     let mut system_snapshot = SystemSnapshot::empty(config.authority_epoch);
     system_snapshot.runtime = Some(runtime_descriptor);
     let projection = Arc::new(SystemProjection::new(
@@ -195,9 +235,28 @@ where
         phase = "local_ipc_listen",
         "starting authenticated Node IPC"
     );
-    run_local_server(endpoint, system_service, session_service, shutdown)
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::info(
+            "node.ipc_start_requested",
+            "local_ipc",
+            "authenticated local IPC startup was requested",
+        )
+        .status("starting"),
+    );
+    let result = run_local_server(endpoint, system_service, session_service, shutdown)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    if result.is_ok() {
+        dennett_observability::record(
+            dennett_observability::DiagnosticEvent::info(
+                "node.ipc_stopped",
+                "local_ipc",
+                "local IPC stopped after an explicit shutdown",
+            )
+            .status("stopped"),
+        );
+    }
+    result
 }
 
 struct NodeInstanceLock {
@@ -253,6 +312,21 @@ pub enum NodeRunError {
     Runtime(#[from] RuntimeError),
 }
 
+impl NodeRunError {
+    #[must_use]
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Transport(_) => "node.transport_failure",
+            Self::Session(_) => "node.session_failure",
+            Self::Conversation(_) => "node.conversation_failure",
+            Self::AlreadyRunning => "node.already_running",
+            Self::InstanceLockUnavailable => "node.instance_lock_unavailable",
+            Self::RuntimeHost(error) => error.diagnostic_code(),
+            Self::Runtime(error) => error.code.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NodeConfigError {
     #[error("DENNETT_INSTALLATION_ID is required")]
@@ -265,6 +339,19 @@ pub enum NodeConfigError {
     InvalidNodeVersion,
     #[error("DENNETT_AGENT_RUNTIME must be fake or codex")]
     InvalidAgentRuntime,
+}
+
+impl NodeConfigError {
+    #[must_use]
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::MissingInstallationIdentity => "node.config.installation_missing",
+            Self::InvalidInstallationIdentity => "node.config.installation_invalid",
+            Self::InvalidAuthorityEpoch => "node.config.authority_epoch_invalid",
+            Self::InvalidNodeVersion => "node.config.version_invalid",
+            Self::InvalidAgentRuntime => "node.config.runtime_invalid",
+        }
+    }
 }
 
 #[cfg(test)]

@@ -17,6 +17,10 @@ privacy_risks:
 - 2026-07-22 — A clean worktree was created from `origin/main` at `924bbcc` on branch `codex/m02-project-workspace`.
 - 2026-07-22 — The first `just check` attempt passed Rust, Python and protocol checks but could not start TypeScript because the fresh worktree had no `node_modules`. After a frozen `pnpm install`, the complete gate passed in 237.7 seconds.
 - 2026-07-22 — An independent architecture review agreed with the diagnostics-first sequence but found a dangerous inherited shortcut: M01 derived project identity from the current folder path. M02 planning was corrected before implementation and an explicit owner decision was opened.
+- 2026-07-22 — The first diagnostic lifecycle test failed on Windows because locking the JSON marker also prevented another process from reading it. The design changed to a readable marker plus a separate locked file; restart tests then distinguished a live process from a stale crash marker.
+- 2026-07-22 — A detached real Node was killed and restarted in tests. The next process retained the earlier logs, labelled the previous exit `unclean`, and did not persist the project path. A blocked diagnostics directory also proved that logging failure does not prevent Node startup.
+- 2026-07-22 — Two detached closure reviews blocked the first implementation. They found that a lossless logging queue could freeze Node on a bad disk, concurrent startup could lose lifecycle evidence on Windows, a truncated marker could disable diagnostics permanently, and adapter-host failures collapsed into one generic fence.
+- 2026-07-22 — The repair changed the writer to a bounded non-blocking queue with visible drop counts, gave every process run a UUID, made lifecycle publication atomic, recovered corrupt markers, bounded logs by age and bytes, and introduced a strict adapter-host stderr code channel. A 48-thread lifecycle race and two real child-process stderr tests now pass.
 
 ## Decision turns
 
@@ -31,6 +35,7 @@ privacy_risks:
 - Pre-change full gate: `mise exec -- just check` passed after installing the lockfile-pinned Node dependencies.
 - Full gate wall time after dependency installation: 237.7 seconds.
 - Live-provider tests remained intentionally ignored in the credential-free gate; deterministic fake/runtime, restart, cancellation, SQLite and IPC tests passed.
+- WP-M02-001 targeted tests: privacy-safe log persistence, token-shaped secret rejection, lifecycle retention, 48-way concurrent startup, corrupt-marker recovery, subscriber-init rollback, handled startup failure, abrupt detached-Node termination/restart, adapter-host stderr classification and diagnostics-degraded startup all pass.
 
 ## Visual candidates
 
@@ -47,5 +52,23 @@ privacy_risks:
 - The M02 Work Packages and 28-case acceptance catalogue are specified but not yet implemented.
 - `DEC-0006` is intentionally open: implementation of project identity and lifecycle cannot begin until the owner accepts or rejects the stable-ID recommendation.
 - The exact Files/Changes/Diff layout requires an owner-approved Figma checkpoint before implementation.
-- Persistent rotating logs, crash markers, a diagnostic summary and support bundle are planned, not yet implemented.
+- Persistent rotating logs, crash markers and a local diagnostic summary are implemented in WP-M02-001; support-bundle export and a desktop Diagnostics workspace remain later work.
 - The default Git integration policy must distinguish local reversible work from remote consequential effects.
+
+## Closure-review addendum
+
+- Two fresh closure reviewers still rejected the green implementation. The
+  32 MiB bound was accidentally a lifetime quota, the crash marker did not
+  actually contain the promised last durable phase, a terminal chat failure
+  lost its safe cause code, and the adapter-host deadline started only after
+  stdin had been written. These were semantic failures that ordinary
+  happy-path tests had not exposed.
+- The second repair replaced the lifetime counter with locked daily-and-size
+  rotation, persisted immutable lifecycle checkpoints, flushed the
+  asynchronous queue before final drop accounting, retained normalized chat
+  failure codes, cleaned orphan lock/temp/checkpoint files and moved the
+  adapter-host deadline around both request writing and response waiting.
+- New tests force quota rollover, a physical log-write failure, a genuinely
+  blocked child stdin, last-phase recovery after a crash, corrupt-latest-record
+  honesty, orphan cleanup, safe run-ID recovery and a spoofed private tracing
+  target.

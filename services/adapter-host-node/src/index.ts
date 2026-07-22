@@ -29,8 +29,6 @@ import {
 } from "./runtime-contract.js";
 import { RuntimeHost } from "./runtime-host.js";
 
-assertNoApiKeyEnvironment(process.env);
-
 const MAX_HOST_MESSAGE_BYTES = 1024 * 1024;
 const MAX_IN_FLIGHT_HOST_REQUESTS = 64;
 
@@ -161,6 +159,17 @@ const write = (message: Record<string, unknown>): Promise<void> => {
 };
 
 const host = new RuntimeHost(new LazyCodexRuntimeAdapter(), write);
+let hostDiagnosticWritten = false;
+const writeHostDiagnostic = (): void => {
+  if (hostDiagnosticWritten) return;
+  hostDiagnosticWritten = true;
+  process.stderr.write(
+    `${JSON.stringify({
+      v: 1,
+      diagnosticCode: "runtime_host.unhandled_failure",
+    })}\n`,
+  );
+};
 
 async function consumeInput(): Promise<void> {
   let pending = Buffer.alloc(0);
@@ -175,6 +184,7 @@ async function consumeInput(): Promise<void> {
       () => inFlight.delete(handling),
       () => {
         inFlight.delete(handling);
+        writeHostDiagnostic();
         process.exitCode = 1;
       },
     );
@@ -203,10 +213,16 @@ async function consumeInput(): Promise<void> {
   await Promise.allSettled(inFlight);
 }
 
-void consumeInput()
-  .then(() => host.close())
-  .then(() => outputTail)
+async function main(): Promise<void> {
+  assertNoApiKeyEnvironment(process.env);
+  await consumeInput();
+  await host.close();
+  await outputTail;
+}
+
+void main()
   .catch(() => {
+    writeHostDiagnostic();
     process.exitCode = 1;
   });
 

@@ -8,7 +8,7 @@
 
 ## Summary
 
-- Status: `automated` 30, `manual` 2, `specified` 31
+- Status: `automated` 33, `manual` 2, `specified` 28
 - Risk: `R1` 8, `R2` 32, `R3` 23
 - Domain: `accessibility` 2, `adapters` 1, `agents` 14, `architecture` 1, `artifacts` 2, `authentication` 1, `cancellation` 1, `checkpoints` 1, `ci` 1, `compatibility` 3, `conflicts` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 20, `devices` 2, `documentation` 2, `effects` 1, `evidence` 1, `execution` 6, `filesystem` 4, `git` 3, `head` 3, `instructions` 1, `ipc` 2, `lifecycle` 2, `memory` 5, `node` 6, `observability` 5, `planning` 4, `privacy` 1, `project-chat` 2, `projects` 8, `protocol` 4, `providers` 8, `recovery` 15, `reliability` 1, `repository` 8, `review` 9, `rust` 1, `security` 5, `sessions` 5, `storage` 3, `streaming` 2, `sync` 3, `tauri` 1, `testing` 8, `tooling` 1, `trust` 4, `ux` 3, `workspace` 10
 
@@ -49,9 +49,9 @@
 | `TEST-HEAD-OPTIN-001` | Unapproved device cannot promote itself to Head | `devices`, `head`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
 | `TEST-MEMORY-ONE-LOGICAL-001` | Client cache cannot become a second canonical memory | `devices`, `memory`, `sync` | `R3` | `specified` | `critical` | `memory` | `planned` |
 | `TEST-M01-TRACE-CORRELATION-001` | One privacy-aware trace joins the complete M01 turn | `agents`, `desktop`, `memory`, `observability` | `R2` | `automated` | `high` | `observability` | `automated` |
-| `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | Abnormal previous exit is distinguishable from clean shutdown | `lifecycle`, `observability`, `recovery` | `R2` | `specified` | `high` | `node` | `planned` |
-| `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | Local diagnostics survive process restart within bounded retention | `node`, `observability`, `recovery` | `R2` | `specified` | `critical` | `observability` | `planned` |
-| `TEST-M02-DIAGNOSTIC-REDACTION-001` | Diagnostic output excludes private content and credentials | `observability`, `privacy`, `security` | `R2` | `specified` | `critical` | `security` | `planned` |
+| `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | Abnormal previous exit is distinguishable from clean shutdown | `lifecycle`, `observability`, `recovery` | `R2` | `automated` | `high` | `node` | `automated` |
+| `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | Local diagnostics survive process restart within bounded retention | `node`, `observability`, `recovery` | `R2` | `automated` | `critical` | `observability` | `automated` |
+| `TEST-M02-DIAGNOSTIC-REDACTION-001` | Diagnostic output excludes private content and credentials | `observability`, `privacy`, `security` | `R2` | `automated` | `critical` | `security` | `automated` |
 | `TEST-MILESTONE-ACCEPTED-HANDOFF-001` | Generated milestone plan supports the accepted-milestone handoff | `planning`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
 | `TEST-MILESTONE-CURRENT-LABEL-001` | Generated milestone plan reports the actual current lifecycle state | `planning`, `testing` | `R1` | `automated` | `high` | `quality` | `automated` |
 | `TEST-MILESTONE-QUALIFYING-001` | Current milestone test views support the qualification lifecycle | `planning`, `testing` | `R1` | `automated` | `critical` | `quality` | `automated` |
