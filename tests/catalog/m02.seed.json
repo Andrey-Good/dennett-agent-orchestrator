@@ -61,7 +61,7 @@
     {
       "id": "TEST-M02-PROTOCOL-ADDITIVE-001",
       "title": "M02 workspace contracts extend the accepted protocol additively",
-      "status": "specified",
+      "status": "automated",
       "priority": "critical",
       "risk": "R2",
       "domains": ["protocol", "compatibility", "projects", "review"],
@@ -71,9 +71,13 @@
       "expected": [
         "Project, workspace, change, test, artifact and checkpoint messages expose stable identity, revision and terminal error state",
         "Mutating commands preserve command and correlation identity and do not claim completion on admission",
+        "Trust changes require a Trust-issued decision and exact policy revision, unspecified trust is fail-closed and attaching an existing portable Project ID preserves its local policy",
+        "Copied portable identity has an explicit registration-only fork resolution, legacy existing-folder admission cannot bypass .dennett inspection and cancellation names exactly one target operation",
+        "Cancellation that loses a race with an already terminal operation preserves the original receipt and completes as an idempotent no-op",
+        "Operation, command and test receipt state matrices reject contradictory success and failure combinations",
         "M01 clients remain wire compatible and generated Rust and TypeScript clients match the sources"
       ],
-      "implementation": {"target_suite": "M02 protocol descriptor", "status": "planned", "test_paths": []},
+      "implementation": {"target_suite": "M02 protocol descriptor", "status": "automated", "test_paths": ["protocols/proto/dennett/control/v1/project.proto", "protocols/proto/dennett/control/v1/workspace.proto", "crates/dennett-contracts/src/lib.rs", "tools/protocol_codegen.py", "tools/tests/test_protocol_codegen.py"]},
       "owner": "protocol"
     },
     {
@@ -88,7 +92,9 @@
       "work_package_refs": ["WP-M02-003", "WP-M02-008"],
       "expected": [
         "Creating an empty project creates only the selected directory, durable project record and direct session",
-        "Adding an existing folder preserves its contents and detects repository and instruction metadata",
+        "Adding an existing folder preserves its contents and detects repository, instruction and optional .dennett metadata",
+        "When .dennett is absent, Dennett offers but does not silently create the minimal portable project identity and shared-memory structure",
+        "Shared .dennett memory is treated as Git-publishable project state while personal memory, chats, secrets and access policy remain local",
         "Canonical path aliases cannot create duplicate project identity and restart restores the same registration"
       ],
       "implementation": {"target_suite": "project registry E2E", "status": "planned", "test_paths": []},
@@ -125,7 +131,7 @@
       "expected": [
         "A disappeared folder changes the project to Missing without deleting sessions or metadata",
         "Read or execution commands fail with an actionable missing-location error",
-        "Locate or rebind validates identity and trust-sensitive changes before returning to Ready"
+        "Locate or rebind validates the stable project identity before returning to Ready without treating ordinary source changes as a trust reset"
       ],
       "implementation": {"target_suite": "missing project recovery", "status": "planned", "test_paths": []},
       "owner": "projects"

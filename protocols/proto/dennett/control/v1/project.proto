@@ -3,6 +3,7 @@ syntax = "proto3";
 package dennett.control.v1;
 
 import "dennett/common/v1/common.proto";
+import "dennett/control/v1/workspace.proto";
 import "google/protobuf/timestamp.proto";
 
 enum ProjectState {
@@ -11,6 +12,20 @@ enum ProjectState {
   PROJECT_STATE_MISSING = 2;
   PROJECT_STATE_DETACHED = 3;
   PROJECT_STATE_READ_ONLY = 4;
+}
+
+enum ProjectRegistrationKind {
+  PROJECT_REGISTRATION_KIND_UNSPECIFIED = 0;
+  PROJECT_REGISTRATION_KIND_CREATE_EMPTY = 1;
+  PROJECT_REGISTRATION_KIND_ATTACH_EXISTING = 2;
+}
+
+enum ProjectSourceFeature {
+  PROJECT_SOURCE_FEATURE_UNSPECIFIED = 0;
+  PROJECT_SOURCE_FEATURE_VERSIONED_REPOSITORY = 1;
+  PROJECT_SOURCE_FEATURE_INSTRUCTION_FILES = 2;
+  PROJECT_SOURCE_FEATURE_PORTABLE_PROJECT_METADATA = 3;
+  PROJECT_SOURCE_FEATURE_SHARED_PROJECT_MEMORY = 4;
 }
 
 message ProjectSummary {
@@ -24,18 +39,24 @@ message ProjectSummary {
 message Project {
   string project_id = 1;
   string display_name = 2;
-  // root_uri is local-sensitive and must not be copied into telemetry labels.
-  string root_uri = 3;
+  // Legacy M01 projection of the primary binding location. It is
+  // local-sensitive, never identity or permission authority, and must not be
+  // copied into telemetry labels.
+  string root_uri = 3 [deprecated = true];
   ProjectState state = 4;
   uint64 revision = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
+  string primary_workspace_binding_id = 8;
 }
 
+// Legacy M01 empty-project compatibility request. Servers must reject an
+// existing non-empty location and direct callers to InspectProjectLocation ->
+// RegisterProject, so this route cannot bypass .dennett inspection.
 message CreateProjectRequest {
   dennett.common.v1.CommandMetadata command = 1;
   string display_name = 2;
-  string root_uri = 3;
+  string root_uri = 3 [deprecated = true];
 }
 
 // CreateProjectAccepted allocates identity but does not claim project completion.
@@ -84,8 +105,113 @@ message GetProjectResponse {
   }
 }
 
+// ProjectLocationInspection is a read-only, expiring observation. root_uri is
+// a location, never project identity or permission authority.
+message ProjectLocationInspection {
+  string inspection_id = 1;
+  ProjectRegistrationKind registration_kind = 2;
+  string root_uri = 3;
+  string suggested_display_name = 4;
+  bool location_exists = 5;
+  bool location_empty = 6;
+  PortableProjectMetadata portable_metadata = 7;
+  repeated ProjectSourceFeature detected_features = 8;
+  dennett.common.v1.StableRef location_identity = 9;
+  google.protobuf.Timestamp observed_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+}
+
+message InspectProjectLocationRequest {
+  ProjectRegistrationKind registration_kind = 1;
+  string root_uri = 2;
+  string client_session_id = 3;
+}
+
+message InspectProjectLocationResponse {
+  oneof outcome {
+    ProjectLocationInspection inspection = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message RegisterProjectRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  // The Node revalidates this inspection before committing any folder change.
+  string inspection_id = 2;
+  string display_name = 3;
+  PortableMetadataAction portable_metadata_action = 4;
+  // UNSPECIFIED and RESTRICTED both register fail-closed. TRUSTED_BOUNDED is
+  // accepted only with a Trust-issued decision that the Node validates as an
+  // explicit current-user grant. Portable metadata cannot supply that record.
+  // When USE_EXISTING resolves to an already registered local Project ID,
+  // initial_trust_state must be UNSPECIFIED and trust_decision absent: the
+  // existing local policy is preserved and changes use SetProjectTrust.
+  ProjectTrustState initial_trust_state = 5;
+  dennett.common.v1.StableRef trust_decision = 6;
+}
+
+// RegisterProjectAccepted allocates stable identities but does not claim that
+// registration, metadata creation or projection publication completed.
+message RegisterProjectAccepted {
+  dennett.common.v1.CommandAccepted command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+}
+
+message RegisterProjectResponse {
+  oneof outcome {
+    RegisterProjectAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message RebindProjectWorkspaceRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  string current_workspace_binding_id = 3;
+  string inspection_id = 4;
+  RebindPortableMetadataAction portable_metadata_action = 5;
+}
+
+message RebindProjectWorkspaceAccepted {
+  dennett.common.v1.CommandAccepted command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+}
+
+message RebindProjectWorkspaceResponse {
+  oneof outcome {
+    RebindProjectWorkspaceAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message SetProjectTrustRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  // UNSPECIFIED is invalid. Every change requires a Trust-issued current-user
+  // decision and a non-zero exact policy revision; project files,
+  // instructions and model output cannot mint either authority.
+  ProjectTrustState trust_state = 3;
+  uint64 expected_policy_revision = 4;
+  dennett.common.v1.StableRef trust_decision = 5;
+}
+
+message SetProjectTrustResponse {
+  oneof outcome {
+    dennett.common.v1.CommandAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
 service ProjectService {
-  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {
+    option deprecated = true;
+  }
   rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
   rpc GetProject(GetProjectRequest) returns (GetProjectResponse);
+  rpc InspectProjectLocation(InspectProjectLocationRequest) returns (InspectProjectLocationResponse);
+  rpc RegisterProject(RegisterProjectRequest) returns (RegisterProjectResponse);
+  rpc RebindProjectWorkspace(RebindProjectWorkspaceRequest) returns (RebindProjectWorkspaceResponse);
+  rpc SetProjectTrust(SetProjectTrustRequest) returns (SetProjectTrustResponse);
 }

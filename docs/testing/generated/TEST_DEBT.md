@@ -32,7 +32,6 @@ Quarantined, waived, retired-without-replacement and not-yet-automated cases.
 | `TEST-M02-ARTIFACT-COLLECTION-001` | `R2` | `artifacts` | missing automation | — |
 | `TEST-M02-PROJECT-MISSING-001` | `R2` | `projects` | missing automation | — |
 | `TEST-M02-PROJECT-UI-001` | `R2` | `desktop` | missing automation | — |
-| `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `protocol` | missing automation | — |
 | `TEST-M02-REVIEW-A11Y-001` | `R2` | `desktop` | missing automation | — |
 | `TEST-M02-REVIEW-DESIGN-001` | `R2` | `desktop` | missing automation | — |
 | `TEST-M02-REVIEW-UI-001` | `R2` | `desktop` | missing automation | — |

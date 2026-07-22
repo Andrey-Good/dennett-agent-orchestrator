@@ -37,7 +37,7 @@
       "version": 1,
       "id": "WP-M02-001",
       "title": "Persist privacy-safe local diagnostics",
-      "status": "MERGE_READY",
+      "status": "MERGED",
       "milestone": "M02",
       "vertical_slice": "VS-M02-01",
       "risk": "R2",
@@ -117,7 +117,7 @@
       "version": 1,
       "id": "WP-M02-002",
       "title": "Define additive project workspace contracts",
-      "status": "REFINED",
+      "status": "MERGE_READY",
       "milestone": "M02",
       "vertical_slice": "VS-M02-01",
       "risk": "R4",
@@ -146,10 +146,12 @@
         "protocols",
         "generated",
         "crates/dennett-contracts",
+        "Cargo.lock",
         "tools/protocol_codegen.py",
         "tools/tests/test_protocol_codegen.py",
         "tests/catalog",
         "docs/testing/generated",
+        "blog/notes",
         "planning",
         "REPOSITORY_MANIFEST.json",
         "REPOSITORY_CHECKSUMS.sha256",
@@ -177,12 +179,13 @@
         "error envelopes distinguish stale snapshot, scope denial, conflict, cancellation, missing location and retryable adapter failure"
       ],
       "rollback": ["revert the additive fields and services before a production M02 client ships; preserve the accepted M01 surface unchanged"],
-      "owner_decision": {"required_before_start": true, "required_before_merge": true},
+      "owner_decision": {"required_before_start": false, "required_before_merge": false, "resolved_by": ["DEC-0006"]},
       "estimate": {"target_agent_hours": 5, "max_diff_lines": 12000},
       "notes": [
         "Generated Rust and TypeScript clients dominate the gross diff budget and must not be hand-edited.",
         "The contract exposes snapshot identity and receipts rather than raw Git CLI or Codex SDK payloads.",
-        "DEC-0006 must resolve stable project identity, relocatable device-local bindings and the bounded M02 lifecycle before this contract is implemented."
+        "DEC-0006 resolved stable project identity, optional portable .dennett identity and shared memory, simple local project policy, relocatable local bindings and the bounded M02 lifecycle.",
+        "Cargo.lock is in scope only for the serde_json dev-dependency used by contract serialization tests."
       ]
     },
     {
@@ -266,6 +269,8 @@
       "notes": [
         "Project location and trust are durable Node-owned state; the React client never writes paths or grants directly to SQLite.",
         "An empty project creates only the selected directory and one direct session; it does not invent agents or workflows.",
+        "Adding an existing folder detects .dennett first and, when it is absent, explicitly offers creation of the minimal portable identity and shared-memory structure without silently modifying the folder.",
+        "Ordinary source changes do not reset project trust; project files and instructions can request capabilities but cannot grant or expand local authority.",
         "R3 review covers path canonicalization, symlink and junction handling, trust-sensitive changes and migration recovery."
       ]
     },

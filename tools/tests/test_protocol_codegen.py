@@ -25,6 +25,15 @@ class ProtocolCodegenTests(unittest.TestCase):
         self.assertIn("buf.build/bufbuild/es:v2.12.1", config)
         self.assertEqual(config.count("revision: 1"), 3)
         self.assertNotIn("buf.build/protocolbuffers/rust", config)
+        self.assertIn(
+            "boxed=.dennett.control.v1.WorkspaceWatchFrame.frame.snapshot", config
+        )
+        self.assertIn(
+            "boxed=.dennett.control.v1.GetWorkspaceResponse.outcome.snapshot", config
+        )
+        self.assertIn(
+            "boxed=.dennett.control.v1.GetWorkspaceResponse.outcome.error", config
+        )
 
     def test_buf_configuration_matches_explicit_approval_hash(self) -> None:
         digest = hashlib.sha256(
@@ -210,7 +219,7 @@ class ProtocolCodegenTests(unittest.TestCase):
                 path.relative_to(ROOT).as_posix(),
             )
 
-    def test_m01_protocol_epoch_matches_exact_descriptor_contract(self) -> None:
+    def test_accepted_protocol_epoch_matches_exact_descriptor_contract(self) -> None:
         descriptor = protocol_codegen.build_descriptor_set()
 
         self.assertEqual(protocol_codegen.descriptor_contract_differences(descriptor), [])
@@ -240,6 +249,130 @@ class ProtocolCodegenTests(unittest.TestCase):
             )
         )
 
+    def test_m02_workspace_mutations_admit_before_receipts_complete(self) -> None:
+        descriptor = protocol_codegen.build_descriptor_set()
+        messages = {
+            f".{file['package']}.{message['name']}": message
+            for file in descriptor["file"]
+            if file.get("package") == "dennett.control.v1"
+            for message in file.get("messageType", [])
+        }
+        mutating_requests = (
+            "RegisterProjectRequest",
+            "RebindProjectWorkspaceRequest",
+            "SetProjectTrustRequest",
+            "ApplyFileChangesRequest",
+            "RunWorkspaceCommandRequest",
+            "CancelWorkspaceOperationRequest",
+            "CreateCheckpointRequest",
+            "RestoreCheckpointRequest",
+            "SubmitReviewActionRequest",
+        )
+        for short_name in mutating_requests:
+            message = messages[f".dennett.control.v1.{short_name}"]
+            command = next(field for field in message["field"] if field["number"] == 1)
+            self.assertEqual(command["name"], "command", short_name)
+            self.assertEqual(
+                command["typeName"],
+                ".dennett.common.v1.CommandMetadata",
+                short_name,
+            )
+
+        accepted = messages[".dennett.control.v1.WorkspaceOperationAccepted"]
+        command = next(field for field in accepted["field"] if field["name"] == "command")
+        self.assertEqual(command["typeName"], ".dennett.common.v1.CommandAccepted")
+
+        receipt = messages[".dennett.control.v1.WorkspaceOperationReceipt"]
+        terminal_fields = {
+            field["name"]: field["typeName"]
+            for field in receipt["field"]
+            if field.get("oneofIndex") == 0
+        }
+        self.assertEqual(
+            terminal_fields,
+            {
+                "success": ".dennett.control.v1.WorkspaceOperationSuccess",
+                "failure": ".dennett.control.v1.WorkspaceFailure",
+            },
+        )
+
+        workspace_accepted = messages[
+            ".dennett.control.v1.WorkspaceOperationAccepted"
+        ]
+        self.assertEqual(
+            {field["name"] for field in workspace_accepted["field"]},
+            {"command", "allocated_refs"},
+        )
+        cancel_accepted = messages[
+            ".dennett.control.v1.CancelWorkspaceOperationAccepted"
+        ]
+        self.assertEqual(
+            {field["name"] for field in cancel_accepted["field"]},
+            {"command", "target_workspace_operation_id"},
+        )
+
+    def test_m02_portable_metadata_is_an_explicit_non_authority_choice(self) -> None:
+        descriptor = protocol_codegen.build_descriptor_set()
+        files = [
+            file
+            for file in descriptor["file"]
+            if file.get("package") == "dennett.control.v1"
+        ]
+        enums = {
+            f".dennett.control.v1.{enum['name']}": enum
+            for file in files
+            for enum in file.get("enumType", [])
+        }
+        messages = {
+            f".dennett.control.v1.{message['name']}": message
+            for file in files
+            for message in file.get("messageType", [])
+        }
+
+        metadata_actions = tuple(
+            (value["name"], value["number"])
+            for value in enums[".dennett.control.v1.PortableMetadataAction"]["value"]
+        )
+        self.assertEqual(
+            metadata_actions,
+            (
+                ("PORTABLE_METADATA_ACTION_UNSPECIFIED", 0),
+                ("PORTABLE_METADATA_ACTION_LEAVE_ABSENT", 1),
+                ("PORTABLE_METADATA_ACTION_USE_EXISTING", 2),
+                ("PORTABLE_METADATA_ACTION_CREATE_MINIMAL", 3),
+                ("PORTABLE_METADATA_ACTION_FORK_WITH_NEW_IDENTITY", 4),
+            ),
+        )
+        rebind_actions = tuple(
+            (value["name"], value["number"])
+            for value in enums[
+                ".dennett.control.v1.RebindPortableMetadataAction"
+            ]["value"]
+        )
+        self.assertEqual(
+            rebind_actions,
+            (
+                ("REBIND_PORTABLE_METADATA_ACTION_UNSPECIFIED", 0),
+                ("REBIND_PORTABLE_METADATA_ACTION_LEAVE_ABSENT", 1),
+                ("REBIND_PORTABLE_METADATA_ACTION_USE_EXISTING", 2),
+                ("REBIND_PORTABLE_METADATA_ACTION_CREATE_MINIMAL", 3),
+            ),
+        )
+        portable = messages[".dennett.control.v1.PortableProjectMetadata"]
+        self.assertIn(
+            "minimal_structure_creation_available",
+            {field["name"] for field in portable["field"]},
+        )
+        policy = messages[".dennett.control.v1.ProjectAccessPolicy"]
+        self.assertEqual(
+            {field["name"] for field in policy["field"]},
+            {"project_id", "trust_state", "revision", "policy_ref", "updated_at"},
+        )
+
+        encoded = str(descriptor).lower()
+        for forbidden in ("codex", "sqlite", "pathbuf", "git_status", "git_diff"):
+            self.assertNotIn(forbidden, encoded)
+
         non_streaming = deepcopy(descriptor)
         system_file = next(
             file
@@ -264,6 +397,103 @@ class ProtocolCodegenTests(unittest.TestCase):
                 for difference in protocol_codegen.descriptor_contract_differences(
                     non_streaming
                 )
+            )
+        )
+
+    def test_m02_trust_and_legacy_registration_are_fail_closed(self) -> None:
+        descriptor = protocol_codegen.build_descriptor_set()
+        project_file = next(
+            file
+            for file in descriptor["file"]
+            if file.get("name") == "dennett/control/v1/project.proto"
+        )
+        messages = {
+            message["name"]: message for message in project_file["messageType"]
+        }
+
+        register_fields = {
+            field["name"]: field for field in messages["RegisterProjectRequest"]["field"]
+        }
+        self.assertEqual(
+            register_fields["trust_decision"]["typeName"],
+            ".dennett.common.v1.StableRef",
+        )
+        trust_fields = {
+            field["name"]: field for field in messages["SetProjectTrustRequest"]["field"]
+        }
+        self.assertEqual(
+            trust_fields["trust_decision"]["typeName"],
+            ".dennett.common.v1.StableRef",
+        )
+        self.assertFalse(
+            trust_fields["expected_policy_revision"].get("proto3Optional", False)
+        )
+        rebind_fields = {
+            field["name"]: field
+            for field in messages["RebindProjectWorkspaceRequest"]["field"]
+        }
+        self.assertEqual(
+            rebind_fields["portable_metadata_action"]["typeName"],
+            ".dennett.control.v1.RebindPortableMetadataAction",
+        )
+
+        project_root = next(
+            field
+            for field in messages["Project"]["field"]
+            if field["name"] == "root_uri"
+        )
+        create_root = next(
+            field
+            for field in messages["CreateProjectRequest"]["field"]
+            if field["name"] == "root_uri"
+        )
+        self.assertTrue(project_root["options"]["deprecated"])
+        self.assertTrue(create_root["options"]["deprecated"])
+        project_service = next(
+            service
+            for service in project_file["service"]
+            if service["name"] == "ProjectService"
+        )
+        legacy_method = next(
+            method
+            for method in project_service["method"]
+            if method["name"] == "CreateProject"
+        )
+        self.assertTrue(legacy_method["options"]["deprecated"])
+
+    def test_m02_initial_descriptor_approval_detects_any_initial_field_change(
+        self,
+    ) -> None:
+        descriptor = protocol_codegen.build_descriptor_set()
+        files = {
+            file["name"]: file
+            for file in descriptor["file"]
+            if file.get("name") in protocol_codegen.M02_INITIAL_DESCRIPTOR_FILES
+        }
+        self.assertEqual(
+            protocol_codegen.m02_initial_descriptor_sha256(files),
+            protocol_codegen.APPROVED_M02_INITIAL_DESCRIPTOR_SHA256,
+        )
+
+        broken = deepcopy(descriptor)
+        workspace_file = next(
+            file
+            for file in broken["file"]
+            if file.get("name") == "dennett/control/v1/workspace.proto"
+        )
+        snapshot = next(
+            message
+            for message in workspace_file["messageType"]
+            if message["name"] == "WorkspaceSnapshot"
+        )
+        observed_at = next(
+            field for field in snapshot["field"] if field["name"] == "observed_at"
+        )
+        observed_at["number"] = 99
+        self.assertTrue(
+            any(
+                difference.startswith("M02 initial descriptor approval hash")
+                for difference in protocol_codegen.descriptor_contract_differences(broken)
             )
         )
 

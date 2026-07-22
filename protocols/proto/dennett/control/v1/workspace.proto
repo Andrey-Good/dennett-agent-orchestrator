@@ -1,0 +1,693 @@
+syntax = "proto3";
+
+package dennett.control.v1;
+
+import "dennett/common/v1/common.proto";
+import "dennett/sync/v1/watch.proto";
+import "google/protobuf/timestamp.proto";
+
+// WorkspaceKind classifies a binding without exposing a Git or provider DTO.
+enum WorkspaceKind {
+  WORKSPACE_KIND_UNSPECIFIED = 0;
+  WORKSPACE_KIND_FOLDER = 1;
+  WORKSPACE_KIND_VERSIONED_CHECKOUT = 2;
+  WORKSPACE_KIND_ISOLATED_CHECKOUT = 3;
+  WORKSPACE_KIND_REMOTE = 4;
+}
+
+enum WorkspaceAvailability {
+  WORKSPACE_AVAILABILITY_UNSPECIFIED = 0;
+  WORKSPACE_AVAILABILITY_AVAILABLE = 1;
+  WORKSPACE_AVAILABILITY_MISSING = 2;
+  WORKSPACE_AVAILABILITY_INACCESSIBLE = 3;
+  WORKSPACE_AVAILABILITY_DETACHED = 4;
+}
+
+enum WorkspaceAccessMode {
+  WORKSPACE_ACCESS_MODE_UNSPECIFIED = 0;
+  WORKSPACE_ACCESS_MODE_READ_ONLY = 1;
+  WORKSPACE_ACCESS_MODE_READ_WRITE = 2;
+}
+
+// ProjectTrustState is local policy. Project files and portable metadata can
+// never grant or expand it. UNSPECIFIED is fail-closed: registration normalizes
+// it to RESTRICTED, while an explicit trust update rejects it.
+enum ProjectTrustState {
+  PROJECT_TRUST_STATE_UNSPECIFIED = 0;
+  PROJECT_TRUST_STATE_RESTRICTED = 1;
+  PROJECT_TRUST_STATE_TRUSTED_BOUNDED = 2;
+  PROJECT_TRUST_STATE_REVOKED = 3;
+}
+
+enum PortableProjectMetadataState {
+  PORTABLE_PROJECT_METADATA_STATE_UNSPECIFIED = 0;
+  PORTABLE_PROJECT_METADATA_STATE_ABSENT = 1;
+  PORTABLE_PROJECT_METADATA_STATE_PRESENT_VALID = 2;
+  PORTABLE_PROJECT_METADATA_STATE_INVALID = 3;
+  PORTABLE_PROJECT_METADATA_STATE_IDENTITY_CONFLICT = 4;
+  PORTABLE_PROJECT_METADATA_STATE_UNSUPPORTED_VERSION = 5;
+}
+
+enum SharedProjectMemoryState {
+  SHARED_PROJECT_MEMORY_STATE_UNSPECIFIED = 0;
+  SHARED_PROJECT_MEMORY_STATE_ABSENT = 1;
+  SHARED_PROJECT_MEMORY_STATE_PRESENT = 2;
+  SHARED_PROJECT_MEMORY_STATE_INVALID = 3;
+}
+
+// PortableMetadataAction must be explicit when registration commits. The zero
+// value is rejected so an absent .dennett directory is never created silently.
+enum PortableMetadataAction {
+  PORTABLE_METADATA_ACTION_UNSPECIFIED = 0;
+  PORTABLE_METADATA_ACTION_LEAVE_ABSENT = 1;
+  // USE_EXISTING preserves the portable Project ID. If that ID is already
+  // registered locally, the inspected location becomes another explicit
+  // binding of that same logical project and imports no local policy.
+  PORTABLE_METADATA_ACTION_USE_EXISTING = 2;
+  PORTABLE_METADATA_ACTION_CREATE_MINIMAL = 3;
+  // FORK_WITH_NEW_IDENTITY is the explicit copied-project resolution. It
+  // allocates a new Project ID and rewrites portable identity only after the
+  // user accepts that folder mutation.
+  PORTABLE_METADATA_ACTION_FORK_WITH_NEW_IDENTITY = 4;
+}
+
+// Rebinding preserves the existing logical Project ID and therefore cannot
+// fork. A conflicting portable identity must return to registration, where the
+// user can explicitly create a separate project.
+enum RebindPortableMetadataAction {
+  REBIND_PORTABLE_METADATA_ACTION_UNSPECIFIED = 0;
+  REBIND_PORTABLE_METADATA_ACTION_LEAVE_ABSENT = 1;
+  REBIND_PORTABLE_METADATA_ACTION_USE_EXISTING = 2;
+  REBIND_PORTABLE_METADATA_ACTION_CREATE_MINIMAL = 3;
+}
+
+enum WorkspaceProjectionState {
+  WORKSPACE_PROJECTION_STATE_UNSPECIFIED = 0;
+  WORKSPACE_PROJECTION_STATE_READY = 1;
+  WORKSPACE_PROJECTION_STATE_STALE = 2;
+  WORKSPACE_PROJECTION_STATE_CONFLICT = 3;
+  WORKSPACE_PROJECTION_STATE_RECOVERY_REQUIRED = 4;
+}
+
+enum FileChangeKind {
+  FILE_CHANGE_KIND_UNSPECIFIED = 0;
+  FILE_CHANGE_KIND_ADDED = 1;
+  FILE_CHANGE_KIND_MODIFIED = 2;
+  FILE_CHANGE_KIND_DELETED = 3;
+  FILE_CHANGE_KIND_RENAMED = 4;
+}
+
+enum FileReviewState {
+  FILE_REVIEW_STATE_UNSPECIFIED = 0;
+  FILE_REVIEW_STATE_UNREVIEWED = 1;
+  FILE_REVIEW_STATE_REVIEWED = 2;
+  FILE_REVIEW_STATE_CHANGES_REQUESTED = 3;
+  FILE_REVIEW_STATE_ACCEPTED = 4;
+}
+
+enum WorkspaceOperationKind {
+  WORKSPACE_OPERATION_KIND_UNSPECIFIED = 0;
+  WORKSPACE_OPERATION_KIND_APPLY_FILE_CHANGES = 1;
+  WORKSPACE_OPERATION_KIND_RUN_COMMAND = 2;
+  WORKSPACE_OPERATION_KIND_RUN_TEST = 3;
+  WORKSPACE_OPERATION_KIND_CREATE_CHECKPOINT = 4;
+  WORKSPACE_OPERATION_KIND_RESTORE_CHECKPOINT = 5;
+  WORKSPACE_OPERATION_KIND_REVIEW_ACTION = 6;
+}
+
+enum WorkspaceOperationState {
+  WORKSPACE_OPERATION_STATE_UNSPECIFIED = 0;
+  WORKSPACE_OPERATION_STATE_ACCEPTED = 1;
+  WORKSPACE_OPERATION_STATE_RUNNING = 2;
+  WORKSPACE_OPERATION_STATE_SUCCEEDED = 3;
+  WORKSPACE_OPERATION_STATE_FAILED = 4;
+  WORKSPACE_OPERATION_STATE_CANCELLED = 5;
+  WORKSPACE_OPERATION_STATE_TIMED_OUT = 6;
+  WORKSPACE_OPERATION_STATE_RECOVERY_REQUIRED = 7;
+}
+
+// WorkspaceFailureKind is stable UI/application semantics. Adapter-specific
+// causes remain behind the safe details handle in ErrorEnvelope.
+enum WorkspaceFailureKind {
+  WORKSPACE_FAILURE_KIND_UNSPECIFIED = 0;
+  WORKSPACE_FAILURE_KIND_STALE_SNAPSHOT = 1;
+  WORKSPACE_FAILURE_KIND_SCOPE_DENIED = 2;
+  WORKSPACE_FAILURE_KIND_CONFLICT = 3;
+  WORKSPACE_FAILURE_KIND_CANCELLED = 4;
+  WORKSPACE_FAILURE_KIND_LOCATION_MISSING = 5;
+  WORKSPACE_FAILURE_KIND_ADAPTER_RETRYABLE = 6;
+  WORKSPACE_FAILURE_KIND_ADAPTER_TERMINAL = 7;
+  WORKSPACE_FAILURE_KIND_VALIDATION = 8;
+  WORKSPACE_FAILURE_KIND_RECOVERY_REQUIRED = 9;
+}
+
+enum ExecutionKind {
+  EXECUTION_KIND_UNSPECIFIED = 0;
+  EXECUTION_KIND_COMMAND = 1;
+  EXECUTION_KIND_TEST = 2;
+}
+
+enum ExecutionTerminalKind {
+  EXECUTION_TERMINAL_KIND_UNSPECIFIED = 0;
+  EXECUTION_TERMINAL_KIND_SUCCEEDED = 1;
+  EXECUTION_TERMINAL_KIND_FAILED = 2;
+  EXECUTION_TERMINAL_KIND_TIMED_OUT = 3;
+  EXECUTION_TERMINAL_KIND_CANCELLED = 4;
+  EXECUTION_TERMINAL_KIND_SPAWN_FAILED = 5;
+  EXECUTION_TERMINAL_KIND_RECOVERY_REQUIRED = 6;
+}
+
+enum TestOutcome {
+  TEST_OUTCOME_UNSPECIFIED = 0;
+  TEST_OUTCOME_PASSED = 1;
+  TEST_OUTCOME_FAILED = 2;
+  TEST_OUTCOME_TIMED_OUT = 3;
+  TEST_OUTCOME_CANCELLED = 4;
+  TEST_OUTCOME_SPAWN_FAILED = 5;
+  TEST_OUTCOME_RECOVERY_REQUIRED = 6;
+}
+
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_FILE = 1;
+  ARTIFACT_KIND_DIRECTORY = 2;
+  ARTIFACT_KIND_REPORT = 3;
+  ARTIFACT_KIND_BINARY = 4;
+  ARTIFACT_KIND_PATCH = 5;
+  ARTIFACT_KIND_OTHER = 6;
+}
+
+enum ArtifactState {
+  ARTIFACT_STATE_UNSPECIFIED = 0;
+  ARTIFACT_STATE_AVAILABLE = 1;
+  ARTIFACT_STATE_MISSING = 2;
+  ARTIFACT_STATE_OVERSIZED = 3;
+  ARTIFACT_STATE_OUT_OF_SCOPE = 4;
+  ARTIFACT_STATE_UNSUPPORTED = 5;
+}
+
+enum CheckpointState {
+  CHECKPOINT_STATE_UNSPECIFIED = 0;
+  CHECKPOINT_STATE_AVAILABLE = 1;
+  CHECKPOINT_STATE_RESTORING = 2;
+  CHECKPOINT_STATE_RESTORED = 3;
+  CHECKPOINT_STATE_PARTIALLY_APPLIED = 4;
+  CHECKPOINT_STATE_RECOVERY_REQUIRED = 5;
+}
+
+enum ReviewState {
+  REVIEW_STATE_UNSPECIFIED = 0;
+  REVIEW_STATE_PENDING = 1;
+  REVIEW_STATE_IN_REVIEW = 2;
+  REVIEW_STATE_CHANGES_REQUESTED = 3;
+  REVIEW_STATE_APPROVED = 4;
+  REVIEW_STATE_STALE = 5;
+}
+
+enum ReviewActionKind {
+  REVIEW_ACTION_KIND_UNSPECIFIED = 0;
+  REVIEW_ACTION_KIND_REQUEST_CHANGES = 1;
+  REVIEW_ACTION_KIND_APPROVE = 2;
+  REVIEW_ACTION_KIND_CONTINUE_REVIEWING = 3;
+}
+
+enum ReviewCommentState {
+  REVIEW_COMMENT_STATE_UNSPECIFIED = 0;
+  REVIEW_COMMENT_STATE_OPEN = 1;
+  REVIEW_COMMENT_STATE_RESOLVED = 2;
+  REVIEW_COMMENT_STATE_OUTDATED = 3;
+}
+
+// WorkspacePath is slash-separated and relative to one binding. It is never an
+// absolute OS path. Empty is permitted only where a request explicitly means
+// the workspace root.
+message WorkspacePath {
+  string value = 1;
+}
+
+// WorkspaceRevision names one exact observed file state. sequence is monotonic
+// within the binding and zero is never a committed revision.
+message WorkspaceRevision {
+  string workspace_binding_id = 1;
+  uint64 sequence = 2;
+  string snapshot_id = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message PortableProjectMetadata {
+  PortableProjectMetadataState state = 1;
+  // Empty unless valid metadata exposed a portable stable Project ID.
+  string project_id = 2;
+  string schema_version = 3;
+  SharedProjectMemoryState shared_memory_state = 4;
+  // True only when the inspected folder can receive the minimal structure.
+  bool minimal_structure_creation_available = 5;
+}
+
+message ProjectAccessPolicy {
+  string project_id = 1;
+  ProjectTrustState trust_state = 2;
+  uint64 revision = 3;
+  dennett.common.v1.StableRef policy_ref = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message WorkspaceBinding {
+  string workspace_binding_id = 1;
+  string project_id = 2;
+  string device_id = 3;
+  // location_uri is local-sensitive and must not enter telemetry labels.
+  string location_uri = 4;
+  WorkspaceKind kind = 5;
+  WorkspaceAvailability availability = 6;
+  WorkspaceAccessMode access_mode = 7;
+  dennett.common.v1.StableRef source_identity = 8;
+  PortableProjectMetadata portable_metadata = 9;
+  bool primary = 10;
+  uint64 record_revision = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp last_verified_at = 13;
+}
+
+message WorkspaceFailure {
+  WorkspaceFailureKind kind = 1;
+  dennett.common.v1.ErrorEnvelope error = 2;
+  // Present when retry or reconciliation needs an authoritative file state.
+  WorkspaceRevision current_revision = 3;
+  repeated WorkspacePath conflicting_paths = 4;
+}
+
+message FileChange {
+  string file_change_id = 1;
+  FileChangeKind kind = 2;
+  WorkspacePath path = 3;
+  WorkspacePath previous_path = 4;
+  WorkspaceRevision base_revision = 5;
+  WorkspaceRevision resulting_revision = 6;
+  optional uint64 lines_added = 7;
+  optional uint64 lines_removed = 8;
+  bool conflict = 9;
+  dennett.common.v1.StableRef source = 10;
+  FileReviewState review_state = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// FileChangeProposal describes intent; content is supplied through a bounded
+// object/evidence handle rather than an unbounded wire payload.
+message FileChangeProposal {
+  string proposal_id = 1;
+  FileChangeKind kind = 2;
+  WorkspacePath path = 3;
+  WorkspacePath previous_path = 4;
+  dennett.common.v1.StableRef content = 5;
+  // Absence means that only the request base revision guards this proposal.
+  optional bytes expected_content_sha256 = 6;
+}
+
+message WorkspaceDiff {
+  string diff_id = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  WorkspaceRevision from_revision = 4;
+  WorkspaceRevision to_revision = 5;
+  repeated FileChange changes = 6;
+  dennett.common.v1.StableRef content = 7;
+  bool binary_content_present = 8;
+  google.protobuf.Timestamp observed_at = 9;
+}
+
+message ArtifactCollectionRule {
+  // project_relative_pattern is interpreted by the bounded workspace adapter.
+  string project_relative_pattern = 1;
+  uint64 max_bytes = 2;
+  repeated string accepted_media_types = 3;
+}
+
+message WorkspaceCommandSpec {
+  string display_name = 1;
+  string executable = 2;
+  repeated string arguments = 3;
+  WorkspacePath working_directory = 4;
+  ExecutionKind kind = 5;
+  uint64 timeout_ms = 6;
+  dennett.common.v1.StableRef execution_grant = 7;
+  repeated ArtifactCollectionRule artifact_rules = 8;
+}
+
+message WorkspaceOperationSuccess {
+  string message_key = 1;
+  repeated dennett.common.v1.StableRef evidence = 2;
+  repeated dennett.common.v1.StableRef artifacts = 3;
+  bool partial = 4;
+}
+
+message WorkspaceOperationReceipt {
+  string workspace_operation_id = 1;
+  string command_id = 2;
+  string correlation_id = 3;
+  string project_id = 4;
+  string workspace_binding_id = 5;
+  WorkspaceOperationKind kind = 6;
+  // The authoritative validator requires: ACCEPTED/RUNNING have no terminal
+  // arm; SUCCEEDED has success; every other terminal state has failure.
+  WorkspaceOperationState state = 7;
+  WorkspaceRevision base_revision = 8;
+  WorkspaceRevision resulting_revision = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp completed_at = 11;
+  oneof terminal {
+    WorkspaceOperationSuccess success = 12;
+    WorkspaceFailure failure = 13;
+  }
+}
+
+message CommandReceipt {
+  string command_receipt_id = 1;
+  string workspace_operation_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+  string project_id = 5;
+  string workspace_binding_id = 6;
+  WorkspaceRevision observed_revision = 7;
+  ExecutionKind kind = 8;
+  string display_name = 9;
+  // SUCCEEDED requires failure to be absent. Every other terminal kind
+  // requires failure to be present; UNSPECIFIED is invalid.
+  ExecutionTerminalKind terminal_kind = 10;
+  google.protobuf.Timestamp started_at = 11;
+  google.protobuf.Timestamp completed_at = 12;
+  optional sint32 exit_code = 13;
+  repeated dennett.common.v1.StableRef output_evidence = 14;
+  bool output_truncated = 15;
+  WorkspaceFailure failure = 16;
+}
+
+message TestReceipt {
+  string test_receipt_id = 1;
+  string command_receipt_id = 2;
+  string project_id = 3;
+  string workspace_binding_id = 4;
+  WorkspaceRevision verified_revision = 5;
+  string suite_name = 6;
+  // PASSED/FAILED are valid test results and require failure to be absent.
+  // Timeout, cancellation, spawn failure and recovery-required require it.
+  TestOutcome outcome = 7;
+  optional uint64 passed_count = 8;
+  optional uint64 failed_count = 9;
+  optional uint64 skipped_count = 10;
+  repeated dennett.common.v1.StableRef evidence = 11;
+  // Staleness is orthogonal to pass/fail and compares verified_revision with
+  // the current workspace revision.
+  bool stale = 12;
+  google.protobuf.Timestamp completed_at = 13;
+  WorkspaceFailure failure = 14;
+}
+
+message ArtifactDescriptor {
+  string artifact_id = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  WorkspaceRevision produced_revision = 4;
+  string source_command_id = 5;
+  ArtifactKind kind = 6;
+  ArtifactState state = 7;
+  WorkspacePath path = 8;
+  dennett.common.v1.StableRef content = 9;
+  string media_type = 10;
+  optional uint64 byte_size = 11;
+  google.protobuf.Timestamp created_at = 12;
+}
+
+message CheckpointDescriptor {
+  string checkpoint_id = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  WorkspaceRevision base_revision = 4;
+  WorkspaceRevision captured_revision = 5;
+  CheckpointState state = 6;
+  string label = 7;
+  string request_summary = 8;
+  repeated WorkspacePath touched_paths = 9;
+  repeated dennett.common.v1.StableRef artifacts = 10;
+  repeated dennett.common.v1.StableRef external_effects = 11;
+  dennett.common.v1.StableRef provider_continuation = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+message ReviewComment {
+  string review_comment_id = 1;
+  WorkspacePath path = 2;
+  WorkspaceRevision revision = 3;
+  dennett.common.v1.StableRef hunk = 4;
+  string body = 5;
+  ReviewCommentState state = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ReviewCommentProposal {
+  WorkspacePath path = 1;
+  WorkspaceRevision revision = 2;
+  dennett.common.v1.StableRef hunk = 3;
+  string body = 4;
+}
+
+message ReviewRecord {
+  string review_id = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  WorkspaceRevision revision = 4;
+  ReviewState state = 5;
+  repeated ReviewComment comments = 6;
+  repeated string test_receipt_ids = 7;
+  uint32 reviewed_files = 8;
+  uint32 remaining_files = 9;
+  uint32 unresolved_comments = 10;
+  string summary = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message WorkspaceSnapshot {
+  string project_id = 1;
+  WorkspaceBinding binding = 2;
+  ProjectAccessPolicy access_policy = 3;
+  WorkspaceRevision workspace_revision = 4;
+  uint64 projection_revision = 5;
+  WorkspaceProjectionState state = 6;
+  repeated FileChange changes = 7;
+  repeated WorkspaceOperationReceipt operations = 8;
+  repeated CommandReceipt command_receipts = 9;
+  repeated TestReceipt test_receipts = 10;
+  repeated ArtifactDescriptor artifacts = 11;
+  repeated CheckpointDescriptor checkpoints = 12;
+  ReviewRecord review = 13;
+  google.protobuf.Timestamp observed_at = 14;
+}
+
+message WorkspaceProjectionStateUpdate {
+  WorkspaceProjectionState state = 1;
+  WorkspaceRevision workspace_revision = 2;
+}
+
+message WorkspaceMutation {
+  oneof mutation {
+    WorkspaceBinding upsert_binding = 1;
+    ProjectAccessPolicy update_access_policy = 2;
+    WorkspaceProjectionStateUpdate update_projection_state = 3;
+    FileChange upsert_file_change = 4;
+    string remove_file_change_id = 5;
+    WorkspaceOperationReceipt upsert_operation = 6;
+    CommandReceipt upsert_command_receipt = 7;
+    TestReceipt upsert_test_receipt = 8;
+    ArtifactDescriptor upsert_artifact = 9;
+    string remove_artifact_id = 10;
+    CheckpointDescriptor upsert_checkpoint = 11;
+    ReviewRecord upsert_review = 12;
+  }
+}
+
+message WorkspaceDelta {
+  uint64 base_projection_revision = 1;
+  uint64 new_projection_revision = 2;
+  repeated WorkspaceMutation mutations = 3;
+  google.protobuf.Timestamp committed_at = 4;
+}
+
+message WorkspaceWatchFrame {
+  dennett.sync.v1.WatchCursor cursor = 1;
+  oneof frame {
+    WorkspaceSnapshot snapshot = 2;
+    WorkspaceDelta delta = 3;
+    dennett.sync.v1.WatchHeartbeat heartbeat = 4;
+    dennett.sync.v1.ResyncRequired resync_required = 5;
+    WorkspaceFailure error = 6;
+  }
+}
+
+message GetWorkspaceRequest {
+  string project_id = 1;
+  // Empty selects the project's primary binding.
+  string workspace_binding_id = 2;
+  string client_session_id = 3;
+}
+
+message GetWorkspaceResponse {
+  oneof outcome {
+    WorkspaceSnapshot snapshot = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message WatchWorkspaceRequest {
+  string project_id = 1;
+  // Empty selects the project's primary binding.
+  string workspace_binding_id = 2;
+  optional uint64 known_projection_revision = 3;
+  string client_session_id = 4;
+}
+
+message WatchWorkspaceResponse {
+  WorkspaceWatchFrame frame = 1;
+}
+
+message GetWorkspaceDiffRequest {
+  string project_id = 1;
+  string workspace_binding_id = 2;
+  WorkspaceRevision from_revision = 3;
+  WorkspaceRevision to_revision = 4;
+  string client_session_id = 5;
+}
+
+message GetWorkspaceDiffResponse {
+  oneof outcome {
+    WorkspaceDiff diff = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message WorkspaceOperationAccepted {
+  // command.operation_id is the workspace_operation_id. Keeping one identity
+  // prevents retry and terminal-receipt ambiguity.
+  dennett.common.v1.CommandAccepted command = 1;
+  repeated dennett.common.v1.StableRef allocated_refs = 2;
+}
+
+message ApplyFileChangesRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  WorkspaceRevision base_revision = 4;
+  repeated FileChangeProposal changes = 5;
+  dennett.common.v1.StableRef permission_decision = 6;
+}
+
+message ApplyFileChangesResponse {
+  oneof outcome {
+    WorkspaceOperationAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message RunWorkspaceCommandRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  WorkspaceRevision base_revision = 4;
+  WorkspaceCommandSpec specification = 5;
+}
+
+message RunWorkspaceCommandResponse {
+  oneof outcome {
+    WorkspaceOperationAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message CancelWorkspaceOperationRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  string workspace_operation_id = 4;
+}
+
+message CancelWorkspaceOperationAccepted {
+  // command.operation_id identifies the cancellation command itself. The
+  // target operation remains separately identifiable and transitions to
+  // CANCELLED or RECOVERY_REQUIRED through its own receipt. If the target has
+  // already reached any terminal state, that receipt is immutable: the cancel
+  // command completes as an idempotent already-terminal no-op and references
+  // the unchanged target operation in its common CommandTerminal result.
+  dennett.common.v1.CommandAccepted command = 1;
+  string target_workspace_operation_id = 2;
+}
+
+message CancelWorkspaceOperationResponse {
+  oneof outcome {
+    CancelWorkspaceOperationAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message CreateCheckpointRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  WorkspaceRevision base_revision = 4;
+  string label = 5;
+  string request_summary = 6;
+  repeated WorkspacePath touched_paths = 7;
+  repeated dennett.common.v1.StableRef artifacts = 8;
+  repeated dennett.common.v1.StableRef external_effects = 9;
+  dennett.common.v1.StableRef provider_continuation = 10;
+}
+
+message CreateCheckpointResponse {
+  oneof outcome {
+    WorkspaceOperationAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message RestoreCheckpointRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  string checkpoint_id = 4;
+  WorkspaceRevision expected_current_revision = 5;
+}
+
+message RestoreCheckpointResponse {
+  oneof outcome {
+    WorkspaceOperationAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+message SubmitReviewActionRequest {
+  dennett.common.v1.CommandMetadata command = 1;
+  string project_id = 2;
+  string workspace_binding_id = 3;
+  string review_id = 4;
+  WorkspaceRevision expected_revision = 5;
+  ReviewActionKind action = 6;
+  string summary = 7;
+  repeated ReviewCommentProposal comments = 8;
+}
+
+message SubmitReviewActionResponse {
+  oneof outcome {
+    WorkspaceOperationAccepted accepted = 1;
+    WorkspaceFailure error = 2;
+  }
+}
+
+service WorkspaceService {
+  rpc GetWorkspace(GetWorkspaceRequest) returns (GetWorkspaceResponse);
+  rpc WatchWorkspace(WatchWorkspaceRequest) returns (stream WatchWorkspaceResponse);
+  rpc GetWorkspaceDiff(GetWorkspaceDiffRequest) returns (GetWorkspaceDiffResponse);
+  rpc ApplyFileChanges(ApplyFileChangesRequest) returns (ApplyFileChangesResponse);
+  rpc RunWorkspaceCommand(RunWorkspaceCommandRequest) returns (RunWorkspaceCommandResponse);
+  rpc CancelWorkspaceOperation(CancelWorkspaceOperationRequest) returns (CancelWorkspaceOperationResponse);
+  rpc CreateCheckpoint(CreateCheckpointRequest) returns (CreateCheckpointResponse);
+  rpc RestoreCheckpoint(RestoreCheckpointRequest) returns (RestoreCheckpointResponse);
+  rpc SubmitReviewAction(SubmitReviewActionRequest) returns (SubmitReviewActionResponse);
+}

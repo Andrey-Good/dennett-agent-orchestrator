@@ -32,7 +32,7 @@ Each row links one requirement to its catalogue evidence.
 | `ARCH-83:LocalDesktopIPC` | `TEST-LOCAL-IPC-HANDSHAKE-001` | `WP-M01-006` | `transport` | `adapters/transport/local-ipc/src/auth.rs`, `adapters/transport/local-ipc/src/client.rs`, `adapters/transport/local-ipc/src/service.rs`, `adapters/transport/local-ipc/src/transport/windows.rs` | `release` |
 | `ARCH-83:M02ProjectWorkspace` | `TEST-M02-ARTIFACT-COLLECTION-001` | `WP-M02-005`, `WP-M02-008` | `artifacts` | — | — |
 | `ARCH-83:M02ProjectWorkspace` | `TEST-M02-CHECKPOINT-RECOVERY-001` | `WP-M02-004`, `WP-M02-009` | `recovery` | — | `release` |
-| `ARCH-83:M02ProjectWorkspace` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `WP-M02-002` | `protocol` | — | `release` |
+| `ARCH-83:M02ProjectWorkspace` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `WP-M02-002` | `protocol` | `crates/dennett-contracts/src/lib.rs`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/workspace.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `ARCH-83:Milestone0` | `TEST-RUST-WORKSPACE-001` | `WP-M00-001` | `repository` | `.github/workflows/ci.yml`, `Justfile`, `rust-toolchain.toml` | `release` |
 | `ARCH-83:OperationalModel` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `WP-M02-001` | `node` | `crates/dennett-observability/src/lifecycle.rs`, `services/node/src/runtime_host.rs`, `services/node/tests/diagnostic_lifecycle.rs`, `tools/dennettctl/src/main.rs` | — |
 | `ARCH-83:PersonalQuietObservability` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `WP-M02-001` | `observability` | `crates/dennett-observability/src/lifecycle.rs`, `crates/dennett-observability/src/secure_fs.rs`, `crates/dennett-observability/src/writer.rs`, `crates/dennett-observability/tests/console.rs`, `crates/dennett-observability/tests/drop_accounting.rs`, `crates/dennett-observability/tests/nonblocking.rs`, `crates/dennett-observability/tests/persistence.rs`, `crates/dennett-observability/tests/startup_transaction.rs`, `services/node/src/lib.rs` | `release` |
@@ -75,7 +75,7 @@ Each row links one requirement to its catalogue evidence.
 | `M02:ExitGate` | `TEST-M02-E2E-001` | `WP-M02-009` | `quality` | — | `release` |
 | `M02:ExitGate` | `TEST-M02-FAILURE-RECOVERY-001` | `WP-M02-009` | `quality` | — | `release` |
 | `M02:ExitGate` | `TEST-M02-OWNER-ACCEPTANCE-001` | `WP-M02-009` | `owner` | — | `release` |
-| `M02:ExitGate` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `WP-M02-002` | `protocol` | — | `release` |
+| `M02:ExitGate` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `WP-M02-002` | `protocol` | `crates/dennett-contracts/src/lib.rs`, `protocols/proto/dennett/control/v1/project.proto`, `protocols/proto/dennett/control/v1/workspace.proto`, `tools/protocol_codegen.py`, `tools/tests/test_protocol_codegen.py` | `release` |
 | `M02:ExitGate` | `TEST-M02-REVIEW-CORRECTION-001` | `WP-M02-008`, `WP-M02-009` | `review` | — | `release` |
 | `M02:OwnerGate` | `TEST-M02-OWNER-ACCEPTANCE-001` | `WP-M02-009` | `owner` | — | `release` |
 | `M02:OwnerGate` | `TEST-M02-REVIEW-DESIGN-001` | `WP-M02-007` | `desktop` | — | `release` |
