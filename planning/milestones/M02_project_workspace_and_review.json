@@ -117,7 +117,7 @@
       "version": 1,
       "id": "WP-M02-002",
       "title": "Define additive project workspace contracts",
-      "status": "REVIEW",
+      "status": "MERGE_READY",
       "milestone": "M02",
       "vertical_slice": "VS-M02-01",
       "risk": "R4",
@@ -179,7 +179,7 @@
         "error envelopes distinguish stale snapshot, scope denial, conflict, cancellation, missing location and retryable adapter failure"
       ],
       "rollback": ["revert the additive fields and services before a production M02 client ships; preserve the accepted M01 surface unchanged"],
-      "owner_decision": {"required_before_start": false, "required_before_merge": true, "resolved_by": ["DEC-0006"]},
+      "owner_decision": {"required_before_start": false, "required_before_merge": false, "resolved_by": ["DEC-0006"]},
       "estimate": {"target_agent_hours": 5, "max_diff_lines": 12000},
       "notes": [
         "Generated Rust and TypeScript clients dominate the gross diff budget and must not be hand-edited.",

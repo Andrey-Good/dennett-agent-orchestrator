@@ -2,12 +2,14 @@
   "version": 1,
   "work_package_result": {
     "id": "WP-M02-002",
-    "status": "partial",
+    "status": "completed",
     "summary": "Defined additive provider-neutral contracts for inspecting, registering and rebinding project folders; stable project identity and relocatable workspace bindings; optional portable .dennett identity and shared memory; local-only trust policy; workspace snapshots, changes, commands, tests, artifacts, checkpoints and review; and immutable cancellation/recovery receipts. Existing folders without .dennett are detected and can only receive the minimal portable structure after an explicit user choice.",
     "commits": [
       "65a67f40682099655c93a1e3b3ce0689f9ddffc0",
-      "886afd7dc2e3e11eb77a86e5fb181873a1fd8a9d"
+      "886afd7dc2e3e11eb77a86e5fb181873a1fd8a9d",
+      "68890aedabe70fc644289c9bc38fef4a1763b7e5"
     ],
+    "merge_ready_at": "2026-07-22",
     "changed_files": [
       "protocols/proto/dennett/control/v1/project.proto",
       "protocols/proto/dennett/control/v1/workspace.proto",
@@ -35,6 +37,7 @@
       "SPEC-60:ChangesReviewCheckpoints",
       "ARCH-80:ProjectChatLocalEdit",
       "ARCH-83:M02ProjectWorkspace",
+      "OWNER:WP-M02-002",
       "TEST-M02-PROTOCOL-ADDITIVE-001",
       "TEST-PROTOCOL-GENERATION-001",
       "TEST-PROTOCOL-BREAKING-001"
@@ -55,7 +58,7 @@
       "failed": []
     },
     "review": {
-      "method": "Two detached adversarial reviewers independently audited architecture and wire semantics. Their findings were repaired and rechecked; the final architecture and protocol reviews reported no remaining P0-P2 findings.",
+      "method": "The owner accepted the project identity, portable .dennett, local-policy and minimal-structure semantics and directed M02 to continue. Two detached adversarial reviewers independently audited architecture and wire semantics. Their findings were repaired and rechecked; the final architecture and protocol reviews reported no remaining P0-P2 findings.",
       "findings_closed": [
         "made trust elevation depend on an explicit Trust-issued decision and expected policy revision instead of accepting model or folder claims",
         "preserved existing local policy when a portable ProjectId is already registered and made copied identity resolution an explicit registration-only fork",
@@ -85,6 +88,6 @@
       "add bounded snapshot history pagination before long-lived workspace histories",
       "connect later filesystem, Git, test, artifact and review adapters through the provider-neutral contracts"
     ],
-    "owner_decision_required": true
+    "owner_decision_required": false
   }
 }
