@@ -10,6 +10,7 @@
       "68890aedabe70fc644289c9bc38fef4a1763b7e5"
     ],
     "merge_ready_at": "2026-07-22",
+    "merged_at": "2026-07-22",
     "changed_files": [
       "protocols/proto/dennett/control/v1/project.proto",
       "protocols/proto/dennett/control/v1/workspace.proto",

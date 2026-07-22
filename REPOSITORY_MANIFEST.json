@@ -901,7 +901,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "5180795b179b7cb51c759872ef81f19b1dac9d569c8f9ae2e7a4cf000bc6e3c1"
+      "sha256": "5641e87b3a13429af1b4088c175221248af9e1926eca10bc55b5783741e65e02"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1515,8 +1515,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 3525,
-      "sha256": "f5925d8e705dce8ee2777fcd61b21e17402aa3e8375188a26850223e0271fed0"
+      "bytes": 3526,
+      "sha256": "e16fd65796817f2a5439139087ce739986ea5d9e05a2b439947cb508dc2cad23"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1645,13 +1645,13 @@
     },
     {
       "path": "planning/batches/AB-M02-001.json",
-      "bytes": 1294,
-      "sha256": "a25f27c7ac378893e641985ac0ae9f14158d3d56c38886939750b06d7fa0fa28"
+      "bytes": 1296,
+      "sha256": "d1780fef5f7d1eb2c419a6e7fc0ab2d28fda5d6edf53d55d19c2999725c3a580"
     },
     {
       "path": "planning/batches/AB-M02-002.json",
-      "bytes": 1490,
-      "sha256": "3235fed7b9b2e4b376d8c3f05685962d9e4199fdaf39171ca7065089c27959b8"
+      "bytes": 1492,
+      "sha256": "f9eb9c318ebd0ecd618cebf9a6bec02d77d3a00332e5d1baed4e3a6e7fbfb7d3"
     },
     {
       "path": "planning/batches/AB-M02-003.json",
@@ -1700,8 +1700,8 @@
     },
     {
       "path": "planning/milestones/M02_project_workspace_and_review.json",
-      "bytes": 40856,
-      "sha256": "0f89e0309a8dea56ee1d147df275aea15fdd4f557d5ad5dcc1765d3c17098e2a"
+      "bytes": 40855,
+      "sha256": "56952109914305547bbb62908f954203fd1f46d8c313d2be35f91f8c42d52eef"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1795,8 +1795,8 @@
     },
     {
       "path": "planning/results/WP-M02-002.json",
-      "bytes": 6401,
-      "sha256": "4083236403462e0e54dfb22153b74f4373d0254b7a624188dc0f89ae52c37a79"
+      "bytes": 6432,
+      "sha256": "f9821c3804b807cba2ad82ba3f5ac6aa6999a4129a70655ad2cf95ec229ab35a"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
