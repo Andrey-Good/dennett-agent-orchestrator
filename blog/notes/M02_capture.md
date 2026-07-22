@@ -175,3 +175,13 @@ privacy_risks:
   from that one monotonic allocator, so deleting an unreadable orphan checkpoint
   cannot make its run number available again. The focused suite now passes 40
   observability tests and 15 Node unit/runtime-host tests.
+
+## Sixth closure-review addendum
+
+- The next reviewer found that the sequence floor above still lived only in
+  memory. If cleanup deleted a corrupt high-number checkpoint and startup then
+  rolled back, the following process could forget that number. Each reservation
+  now advances one privacy-safe durable high-water marker before destructive
+  cleanup or active-marker publication. A double-failure regression removes the
+  corrupt source, rolls startup back, and proves the next run still advances;
+  exhaustion at the integer boundary now remains permanently fail-closed too.

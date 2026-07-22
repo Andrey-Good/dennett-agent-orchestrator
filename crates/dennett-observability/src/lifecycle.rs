@@ -75,6 +75,13 @@ struct LifecycleRecord {
     drop_count_complete: bool,
 }
 
+#[derive(Serialize)]
+struct SequenceFloorRecord<'a> {
+    schema_version: u32,
+    component: &'a str,
+    run_sequence: u64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum LifecycleStatus {
@@ -126,6 +133,9 @@ impl LifecycleSession {
             diagnostics_dir.open_or_create_child("lifecycle", "create_lifecycle_directory")?;
         let _maintenance = acquire_maintenance_lock(&directory, component)?;
         let mut next_run_sequence = allocate_run_sequence(&directory, component)?;
+        if let Some(observed_floor) = next_run_sequence.checked_sub(1).filter(|value| *value > 0) {
+            persist_run_sequence_floor(&directory, component, observed_floor)?;
+        }
         cleanup_auxiliary_files(&directory, component)?;
         reconcile_stale_markers(&directory, component, &mut next_run_sequence)?;
         trim_terminal_records(&directory, component, max_records)?;
@@ -133,7 +143,7 @@ impl LifecycleSession {
             .map_or(ExitStatus::Unknown, |record| record.exit_status());
         let process_id = std::process::id();
         let started_unix_ms = now_unix_ms()?;
-        let run_sequence = reserve_run_sequence(&mut next_run_sequence)?;
+        let run_sequence = reserve_run_sequence(&directory, component, &mut next_run_sequence)?;
         let run_id = Uuid::now_v7().to_string();
         let record = LifecycleRecord {
             schema_version: SCHEMA_VERSION,
@@ -724,7 +734,7 @@ fn reconcile_stale_markers(
                 let terminal = invalid_marker_record(
                     component,
                     run_id_from_active_path(component, &path),
-                    reserve_run_sequence(next_run_sequence)?,
+                    reserve_run_sequence(directory, component, next_run_sequence)?,
                 )?;
                 write_terminal_record(directory, &terminal)?;
                 remove_checkpoints_for_run(directory, component, &terminal.run_id)?;
@@ -1376,17 +1386,71 @@ fn allocate_run_sequence(directory: &SecureDir, component: &str) -> Result<u64, 
             }
         }
     }
+    for path in matching_paths(directory, component, ".sequence")? {
+        if let Some(sequence) = observed_sequence_floor(component, &path) {
+            highest = highest.max(sequence);
+        }
+    }
     highest
         .checked_add(1)
         .ok_or(DiagnosticsError::InvalidLifecycleData)
 }
 
-fn reserve_run_sequence(next: &mut u64) -> Result<u64, DiagnosticsError> {
+fn reserve_run_sequence(
+    directory: &SecureDir,
+    component: &str,
+    next: &mut u64,
+) -> Result<u64, DiagnosticsError> {
     let reserved = *next;
+    persist_run_sequence_floor(directory, component, reserved)?;
     *next = next
         .checked_add(1)
         .ok_or(DiagnosticsError::InvalidLifecycleData)?;
     Ok(reserved)
+}
+
+fn persist_run_sequence_floor(
+    directory: &SecureDir,
+    component: &str,
+    sequence: u64,
+) -> Result<(), DiagnosticsError> {
+    if sequence == 0 {
+        return Err(DiagnosticsError::InvalidLifecycleData);
+    }
+    let path = PathBuf::from(format!("{component}.{sequence:020}.sequence"));
+    let record = SequenceFloorRecord {
+        schema_version: SCHEMA_VERSION,
+        component,
+        run_sequence: sequence,
+    };
+    atomic_write_new(
+        directory,
+        &path,
+        &record,
+        "write_lifecycle_sequence_floor",
+        true,
+    )?;
+    for previous in matching_paths(directory, component, ".sequence")? {
+        if previous != path
+            && observed_sequence_floor(component, &previous).is_some_and(|value| value < sequence)
+        {
+            remove_if_present(directory, &previous, "trim_lifecycle_sequence_floor")?;
+        }
+    }
+    Ok(())
+}
+
+fn observed_sequence_floor(component: &str, path: &Path) -> Option<u64> {
+    let name = path.file_name()?.to_str()?;
+    let parts = name.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [candidate, sequence, "sequence"]
+            if *candidate == component && valid_component(candidate) && sequence.len() == 20 =>
+        {
+            sequence.parse::<u64>().ok().filter(|value| *value > 0)
+        }
+        _ => None,
+    }
 }
 
 fn observed_run_sequence(component: &str, path: &Path) -> Option<u64> {
@@ -1743,7 +1807,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_corrupt_checkpoint_still_reserves_its_run_sequence() {
+    fn removed_corrupt_checkpoint_keeps_its_sequence_after_startup_rollback() {
         let temp = tempfile::tempdir().expect("temporary diagnostics");
         let (diagnostics, display) = diagnostics(&temp);
         let lifecycle = lifecycle_dir(&diagnostics);
@@ -1769,7 +1833,46 @@ mod tests {
                 .expect("checkpoint records")
                 .is_empty()
         );
-        complete_clean(current, 0);
+        current.cancel_startup().expect("rollback current startup");
+
+        let restarted =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("restarted lifecycle");
+        let restarted_record = matching_paths(&lifecycle, "dennett-node", ".active.json")
+            .expect("active records")
+            .into_iter()
+            .find_map(|path| read_record(&lifecycle, &path).ok())
+            .expect("restarted active record");
+        assert_eq!(restarted_record.run_sequence, 52);
+        assert_eq!(
+            matching_paths(&lifecycle, "dennett-node", ".sequence")
+                .expect("sequence floors")
+                .len(),
+            1
+        );
+        complete_clean(restarted, 0);
+    }
+
+    #[test]
+    fn exhausted_run_sequence_stays_exhausted_after_observation_is_removed() {
+        let temp = tempfile::tempdir().expect("temporary diagnostics");
+        let (diagnostics, display) = diagnostics(&temp);
+        lifecycle_dir(&diagnostics);
+        let terminal = display.join("lifecycle").join(format!(
+            "dennett-node.{}.{:020}.failed.json",
+            Uuid::now_v7(),
+            u64::MAX - 1
+        ));
+        std::fs::write(&terminal, b"not-json").expect("high corrupt terminal");
+
+        assert!(matches!(
+            LifecycleSession::start(&diagnostics, "dennett-node", 8),
+            Err(DiagnosticsError::InvalidLifecycleData)
+        ));
+        std::fs::remove_file(terminal).expect("remove original observation");
+        assert!(matches!(
+            LifecycleSession::start(&diagnostics, "dennett-node", 8),
+            Err(DiagnosticsError::InvalidLifecycleData)
+        ));
     }
 
     #[test]

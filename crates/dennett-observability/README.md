@@ -27,7 +27,8 @@ evidence, not canonical user memory, security audit or product analytics.
   unclean previous exit and preserves the last durable safe phase;
 - monotonic per-component run sequencing, so a wall-clock rollback cannot make
   an older exit look newer and a corrupt but canonically named record cannot
-  cause its sequence to be reused;
+  cause its sequence to be reused; a durable high-water marker survives
+  startup rollback even after the corrupt source record has been cleaned up;
 - bounded reads, directory enumeration and lock acquisition while inspecting
   or maintaining diagnostics;
 - a five-second caller-side shutdown deadline. A stalled diagnostic disk can
