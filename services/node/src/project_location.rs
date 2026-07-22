@@ -875,9 +875,7 @@ mod tests {
             .expect("prepare trusted workspace");
         assert_eq!(
             canonical_location(&workspace.absolute_path).unwrap().key,
-            canonical_location(&project_root.to_string_lossy())
-                .unwrap()
-                .key
+            registered.project.bindings[0].location.key
         );
 
         fs::rename(&project_root, &renamed_root).expect("move project folder");

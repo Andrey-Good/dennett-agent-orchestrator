@@ -625,8 +625,8 @@
     },
     {
       "path": "blog/notes/M02_capture.md",
-      "bytes": 23167,
-      "sha256": "83987571703e1a9b444f4e0f0045ea7ff02f5f05ccb8dd72fa8e69eeff0bfda7"
+      "bytes": 23802,
+      "sha256": "f7a3e28aa77d6b61430e035cbae01e8d982dc59b3ccf35a5e601043662b66a39"
     },
     {
       "path": "blog/notes/README.md",
@@ -1715,8 +1715,8 @@
     },
     {
       "path": "planning/milestones/M02_project_workspace_and_review.json",
-      "bytes": 44471,
-      "sha256": "f090d93270e2826f1735616979a527e962c91474b015c852961c54a992708102"
+      "bytes": 44917,
+      "sha256": "5e0ebb4419110e6f36c676b09f582873220d25235e8e37875f809388d70a9e8f"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -2210,13 +2210,13 @@
     },
     {
       "path": "services/node/src/project_fs.rs",
-      "bytes": 62537,
-      "sha256": "c98c0a7abfba97e8a79615d649e9049af0ddd758831eee98b050ec46ba3db09c"
+      "bytes": 63028,
+      "sha256": "e9a9ef3a7fe45400aa19df79be718169f460020ddfb1a3400282c8388ade7fd7"
     },
     {
       "path": "services/node/src/project_location.rs",
-      "bytes": 49071,
-      "sha256": "498af489cd5adea999c4b2d5e07e80d7b1c386195b967e67398619b4d3710692"
+      "bytes": 49016,
+      "sha256": "b0110436d045a88ac77e2c297afa375d13f6f516835704e43abf990f55e57a93"
     },
     {
       "path": "services/node/src/runtime_host.rs",

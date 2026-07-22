@@ -1312,8 +1312,15 @@ fn sync_published_regular_file(_dir: &Dir, _target: &OsStr) -> Result<(), Projec
 
 #[cfg(unix)]
 fn sync_directory(dir: &Dir, operation: &'static str) -> Result<(), ProjectFolderError> {
-    dir.try_clone()
-        .and_then(|clone| clone.into_std_file().sync_all())
+    // `cap_std::fs::Dir` may intentionally hold an `O_PATH` descriptor on
+    // Linux. That handle is safe for capability-relative traversal but cannot
+    // itself be fsynced (`EBADF`). Reopen `.` relative to the already verified
+    // capability as an ordinary read-only directory handle; this preserves the
+    // no-path-re-resolution boundary while making namespace durability real.
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    dir.open_with(Path::new("."), &options)
+        .and_then(|file| file.sync_all())
         .map_err(|source| ProjectFolderError::io(operation, source))
 }
 

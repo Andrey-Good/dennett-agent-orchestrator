@@ -255,3 +255,12 @@ privacy_risks:
   the authenticated public IPC first. Both subscription-backed flows then
   passed: native in-flight steering, and session continuation across a real
   Node restart with project and full-access file effects.
+- Public CI then found two assumptions hidden by the developer machine. On
+  Linux, a capability directory may be represented by an `O_PATH` handle: safe
+  for traversal, invalid for `fsync`. Dennett now reopens `.` relative to that
+  already verified handle before syncing the directory, so durability does not
+  reintroduce ambient path lookup. On the hosted Windows runner, the temporary
+  directory's lexical alias differed from its canonical location. The product
+  had stored the canonical binding correctly; the test was repaired to compare
+  against that authoritative binding instead of the caller's original path
+  spelling.
