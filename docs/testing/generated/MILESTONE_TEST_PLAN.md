@@ -6,7 +6,7 @@
 
 Current milestone: `M02` — Project workspace and review (status: `ACTIVE`).
 
-- Package status: `MERGED` 2, `REFINED` 6, `REVIEW` 1
+- Package status: `MERGED` 2, `MERGE_READY` 1, `REFINED` 6
 
 | Work Package | Package status | Acceptance case | Risk | Case status | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -16,10 +16,10 @@ Current milestone: `M02` — Project workspace and review (status: `ACTIVE`).
 | `WP-M02-002` | `MERGED` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `automated` | `protocol` |
 | `WP-M02-002` | `MERGED` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
 | `WP-M02-002` | `MERGED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
-| `WP-M02-003` | `REVIEW` | `TEST-M02-INSTRUCTION-CHANGE-001` | `R3` | `specified` | `projects` |
-| `WP-M02-003` | `REVIEW` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `R3` | `specified` | `projects` |
-| `WP-M02-003` | `REVIEW` | `TEST-M02-PROJECT-MISSING-001` | `R2` | `specified` | `projects` |
-| `WP-M02-003` | `REVIEW` | `TEST-M02-PROJECT-TRUST-001` | `R3` | `specified` | `trust` |
+| `WP-M02-003` | `MERGE_READY` | `TEST-M02-INSTRUCTION-CHANGE-001` | `R3` | `specified` | `projects` |
+| `WP-M02-003` | `MERGE_READY` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `R3` | `specified` | `projects` |
+| `WP-M02-003` | `MERGE_READY` | `TEST-M02-PROJECT-MISSING-001` | `R2` | `specified` | `projects` |
+| `WP-M02-003` | `MERGE_READY` | `TEST-M02-PROJECT-TRUST-001` | `R3` | `specified` | `trust` |
 | `WP-M02-004` | `REFINED` | `TEST-M02-CHECKPOINT-RECOVERY-001` | `R3` | `specified` | `recovery` |
 | `WP-M02-004` | `REFINED` | `TEST-M02-EXTERNAL-CHANGE-001` | `R3` | `specified` | `workspace` |
 | `WP-M02-004` | `REFINED` | `TEST-M02-FILESYSTEM-SCOPE-001` | `R3` | `specified` | `security` |

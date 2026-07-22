@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "work_package_result": {
+    "id": "WP-M02-003",
+    "status": "completed",
+    "summary": "Implemented Node-owned durable project registration and trust: Dennett can create an empty project or attach an existing folder, preserve a stable Project ID across moves, optionally publish the minimal portable .dennett identity and shared-memory structure, keep personal policy local, restore restricted, trusted, revoked and missing states after restart, and prevent untrusted or stale projects from reaching the agent runtime.",
+    "commits": [
+      "9e7c993f0fa4790abaeeaa5d5fe21b3df26f62dd",
+      "018fbf974198fcbb2bb66068e16a4609cc1dbe15",
+      "2569686cbe664aeac1c38fb1e3f8551cd73b3e2f"
+    ],
+    "merge_ready_at": "2026-07-22",
+    "changed_files": [
+      "crates/dennett-trust-core/**",
+      "services/node/**",
+      "services/head/**",
+      "adapters/storage/sqlite/**",
+      "adapters/transport/local-ipc/**",
+      "tests/catalog/m02.seed.json",
+      "docs/testing/generated/*.md",
+      "planning/milestones/M02_project_workspace_and_review.json",
+      "planning/results/WP-M02-003.json",
+      "blog/notes/M02_capture.md",
+      "Cargo.toml",
+      "Cargo.lock",
+      "REPOSITORY_MANIFEST.json",
+      "REPOSITORY_CHECKSUMS.sha256",
+      "docs/CHECKSUMS.sha256"
+    ],
+    "requirements_satisfied": [
+      "SPEC-70:PRJ-01",
+      "SPEC-70:PRJ-02",
+      "SPEC-70:PRJ-08",
+      "SPEC-70:PRJ-13",
+      "SPEC-30:WorkspaceTrust",
+      "ARCH-80:WorkspaceManager",
+      "OWNER:WP-M02-003",
+      "TEST-M02-PROJECT-CREATE-IMPORT-001",
+      "TEST-M02-PROJECT-TRUST-001",
+      "TEST-M02-PROJECT-MISSING-001",
+      "TEST-M02-INSTRUCTION-CHANGE-001"
+    ],
+    "tests": {
+      "passed": [
+        "106 focused Rust tests passed across trust, SQLite, Node and authenticated local IPC after the bounded instruction-enumeration repair",
+        "15 targeted Head conversation tests passed, including fail-closed project admission and trust-revocation ordering",
+        "59 sequential desktop regression tests passed without changing the accepted M01 presentation surface",
+        "two real subscription-backed Codex canaries passed after granting Trusted-Bounded through authenticated IPC: native same-turn steering and continuation of the same session after a real Node restart",
+        "mise exec -- just check passed the complete local repository gate, including format, Clippy with warnings denied, workspace tests, Python suites, TypeScript checks, protocol compatibility, documentation, planning and repository metadata",
+        "the public Linux Fast Gate passed after capability-relative directory synchronization was made compatible with O_PATH",
+        "the public hosted-Windows desktop IPC, detached Node lifecycle, Tauri watch bridge and renderer-boundary job passed after canonical binding comparison was made authoritative"
+      ],
+      "not_run": [
+        "desktop project creation and existing-folder interaction remain WP-M02-008 and were intentionally not simulated as completed UI",
+        "exact filesystem, command and Codex effect scopes remain WP-M02-004 through WP-M02-006",
+        "long-duration soak, fuzzing, disk-full endurance and resource-exhaustion campaigns remain release-wide hardening"
+      ],
+      "failed": []
+    },
+    "review": {
+      "method": "An independent R3 closure review audited project identity, canonical path handling, trust admission, rebinding, crash durability and recovery. Confirmed findings were repaired, retested and re-reviewed. The owner then explicitly accepted the internal package and its diff-budget overage; public Linux and Windows CI passed on the accepted repair commit.",
+      "findings_closed": [
+        "made project trust revocation and workspace rebinding linearly ordered with provider admission by holding a short per-project authority permit",
+        "made the normal conversation constructor fail closed for project scope when no real project registry is installed",
+        "made portable project metadata publication atomic and crash-durable with platform-appropriate write-through and directory synchronization",
+        "bounded instruction discovery during enumeration and records incomplete evidence instead of collecting an unbounded tree first",
+        "reopened Linux capability directories relative to their already verified handles before fsync so O_PATH does not cause EBADF or ambient path re-resolution",
+        "made the hosted-Windows regression compare the admitted workspace with the Node-owned canonical binding rather than a lexical temporary-path alias",
+        "updated live Codex canaries to grant trust through authenticated public IPC instead of weakening the M02 Restricted default"
+      ],
+      "findings_open": []
+    },
+    "migrations": [
+      "introduced project-registry schema version 3 for stable project identity, relocatable bindings, local trust decisions, instruction fingerprints and durable registration operations",
+      "preserves the configured M01 project as a legacy stable identity and restores it as Missing instead of silently rebinding mismatched history"
+    ],
+    "observability_changes": [
+      "registration, canonicalization, trust transitions, missing-location changes and instruction-fingerprint changes emit privacy-safe correlated evidence",
+      "prepared, filesystem-applied and committed registration phases survive restart and retry without duplicate projects, bindings or direct sessions",
+      "trust and workspace admission failures use actionable stable codes without logging source contents or raw local paths"
+    ],
+    "known_limitations": [
+      "this package deliberately exposes no new visible desktop flow; WP-M02-008 owns the user-facing folder picker, .dennett choice and trust presentation",
+      "the portable .dennett/memory container is only a shared-memory location until a later milestone writes a canonical Memory Fabric manifest",
+      "a copied folder without portable identity is a new project unless the local filesystem identity proves it is the same binding",
+      "project trust authorizes admission only; later M02 packages still enforce exact filesystem, command, provider and Git effect scopes"
+    ],
+    "follow_up_candidates": [
+      "WP-M02-004 workspace snapshots, scoped file effects and checkpoint recovery",
+      "WP-M02-005 bounded command and test execution",
+      "WP-M02-006 project instruction delivery to the provider runtime",
+      "WP-M02-008 owner-approved desktop project import and review UX"
+    ],
+    "owner_decision_required": false
+  }
+}

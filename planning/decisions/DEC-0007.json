@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "DEC-0007",
+  "work_package": "WP-M02-003",
+  "severity": "red",
+  "question": "Should Dennett merge the internal project-registry and trust boundary after reviewing its behavior, closure evidence and diff-budget overage?",
+  "context": "WP-M02-003 introduces the first durable Node-owned project registry, local project trust policy and capability-safe optional .dennett publication. It is intentionally not a visible desktop package: opening the current M01 interface cannot demonstrate restart recovery, canonical rebinding, trust ordering or crash durability. The implementation exceeds its original 7,500-line review trigger because it includes the SQLite state machine, authenticated transport, platform-specific guarded filesystem effects and adversarial tests rather than an unreviewed scope expansion.",
+  "options": [
+    {
+      "id": "A",
+      "description": "Reject or rework the internal boundary before merging",
+      "benefits": [
+        "keeps main unchanged while any remaining concern is investigated"
+      ],
+      "costs": [
+        "blocks workspace effects and the later visible project-import flow",
+        "discards a green, independently reviewed implementation without identifying a concrete defect"
+      ],
+      "risks": [
+        "a smaller rewrite could remove recovery or cross-platform safety merely to satisfy a line estimate"
+      ]
+    },
+    {
+      "id": "B",
+      "description": "Accept the internal boundary and documented overage, then continue M02",
+      "benefits": [
+        "establishes one authoritative and tested project identity, binding and trust owner",
+        "unblocks scoped file effects, commands, provider instructions and the owner-visible desktop flow"
+      ],
+      "costs": [
+        "the user-facing behavior remains unavailable until the later desktop package",
+        "the larger boundary requires continued conformance maintenance on Windows and Linux"
+      ],
+      "risks": [
+        "later packages could accidentally confuse registration trust with unrestricted filesystem, command or provider authority unless their own gates remain explicit"
+      ]
+    }
+  ],
+  "recommendation": "B",
+  "reason": "The package implements the owner-approved identity and memory semantics, fails closed at the runtime boundary, passed focused, full-repository, live-Codex and public Windows/Linux checks, and closed every detached P0-P2 review finding. The overage buys concrete state ownership, recovery and platform safety; it is not a reason to simplify away required behavior.",
+  "default_if_deferred": "stop",
+  "needed_by": "WP-M02-003",
+  "status": "resolved",
+  "resolution": {
+    "selected_option": "B",
+    "decided_by": "owner",
+    "decided_at": "2026-07-22",
+    "note": "After being told that WP-M02-003 is an internal package with no honest visual checkpoint in the current interface, the owner accepted it because visual evaluation was impossible and authorized M02 to continue. This acceptance includes the documented diff-budget overage; the later desktop project-import flow remains a separate visual checkpoint."
+  }
+}

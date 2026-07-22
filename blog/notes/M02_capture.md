@@ -264,3 +264,9 @@ privacy_risks:
   had stored the canonical binding correctly; the test was repaired to compare
   against that authoritative binding instead of the caller's original path
   spelling.
+- Both public gates passed on the repair commit. The owner accepted
+  WP-M02-003 as an intentionally internal package, including its documented
+  diff-budget overage, after being told that opening the M01 interface would
+  provide no honest visual evidence for this boundary. The next visible owner
+  checkpoint belongs to the later desktop project-import flow, not to the
+  registry itself.
