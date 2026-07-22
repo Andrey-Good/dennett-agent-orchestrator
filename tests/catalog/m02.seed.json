@@ -13,10 +13,11 @@
       "work_package_refs": ["WP-M02-001"],
       "expected": [
         "Structured diagnostic records are flushed to a Node-owned local directory and remain readable after restart",
-        "Retention is bounded and cleanup cannot escape the diagnostic root",
-        "Logging failure degrades diagnostics without preventing canonical project recovery"
+        "Retention, reads, enumeration and maintenance waits are bounded and handle-relative cleanup cannot escape the private diagnostic root",
+        "Event publication never waits for diagnostic storage and logging failure degrades diagnostics without preventing canonical project recovery",
+        "Shutdown evidence states whether flush and the final drop count were complete instead of silently claiming durable logs"
       ],
-      "implementation": {"target_suite": "dennett-observability persistence", "status": "automated", "test_paths": ["crates/dennett-observability/tests/persistence.rs", "crates/dennett-observability/tests/startup_transaction.rs", "crates/dennett-observability/src/lifecycle.rs", "crates/dennett-observability/src/writer.rs"]},
+      "implementation": {"target_suite": "dennett-observability persistence", "status": "automated", "test_paths": ["crates/dennett-observability/tests/persistence.rs", "crates/dennett-observability/tests/drop_accounting.rs", "crates/dennett-observability/tests/nonblocking.rs", "crates/dennett-observability/tests/startup_transaction.rs", "crates/dennett-observability/src/lifecycle.rs", "crates/dennett-observability/src/secure_fs.rs", "crates/dennett-observability/src/writer.rs"]},
       "owner": "observability"
     },
     {
@@ -50,9 +51,10 @@
       "expected": [
         "Startup records whether the previous supervised process reached clean shutdown",
         "A crash marker identifies component and last durable phase without claiming an unavailable root cause",
-        "The next clean shutdown clears only the matching lifecycle marker"
+        "The next clean shutdown clears only the matching lifecycle marker",
+        "Concurrent startup, clock rollback, corrupt records and wrong-type storage produce deterministic honest summaries"
       ],
-      "implementation": {"target_suite": "Node lifecycle diagnostics", "status": "automated", "test_paths": ["services/node/tests/diagnostic_lifecycle.rs", "tools/dennettctl/src/main.rs"]},
+      "implementation": {"target_suite": "Node lifecycle diagnostics", "status": "automated", "test_paths": ["crates/dennett-observability/src/lifecycle.rs", "services/node/src/runtime_host.rs", "services/node/tests/diagnostic_lifecycle.rs", "tools/dennettctl/src/main.rs"]},
       "owner": "node"
     },
     {

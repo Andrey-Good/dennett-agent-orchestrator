@@ -1,5 +1,6 @@
 use dennett_observability::{
-    DiagnosticEvent, DiagnosticExit, ExitStatus, LocalDiagnosticsConfig, MarkerState, init_local,
+    DiagnosticEvent, DiagnosticEventKind, DiagnosticExit, DiagnosticFlushStatus,
+    DiagnosticStorageStatus, ExitStatus, LocalDiagnosticsConfig, MarkerState, init_local,
     inspect_local, record,
 };
 use std::{path::PathBuf, process::Command};
@@ -15,6 +16,12 @@ fn diagnostics_survive_restart_and_reconcile_an_unfinished_process() {
     run_child(temp.path().to_path_buf(), "clean");
     let clean = inspect_local(temp.path(), COMPONENT).expect("clean summary");
     assert_eq!(clean.previous_exit, ExitStatus::Clean);
+    assert_eq!(clean.storage_status, DiagnosticStorageStatus::Available);
+    assert_eq!(
+        clean.previous_flush_status,
+        DiagnosticFlushStatus::Confirmed
+    );
+    assert!(clean.previous_drop_count_complete);
     assert_eq!(clean.active_runs.len(), 0);
 
     run_child(temp.path().to_path_buf(), "abandon");
@@ -25,6 +32,11 @@ fn diagnostics_survive_restart_and_reconcile_an_unfinished_process() {
     run_child(temp.path().to_path_buf(), "clean");
     let recovered = inspect_local(temp.path(), COMPONENT).expect("recovered summary");
     assert_eq!(recovered.previous_exit, ExitStatus::Clean);
+    assert_eq!(
+        recovered.previous_flush_status,
+        DiagnosticFlushStatus::Confirmed
+    );
+    assert!(recovered.previous_drop_count_complete);
     assert_eq!(recovered.active_runs.len(), 0);
     assert!(recovered.log_file_count >= 1);
 
@@ -47,14 +59,16 @@ fn diagnostic_child_process() {
     let diagnostics = init_local(LocalDiagnosticsConfig::personal_quiet(COMPONENT, data_dir))
         .expect("initialize child diagnostics");
     record(
-        DiagnosticEvent::info(
-            "diagnostics.test_checkpoint",
-            "test",
-            "diagnostic persistence checkpoint",
-        )
-        .project_id(Uuid::parse_str("019f0000-0000-7000-8000-000000000001").expect("project UUID"))
-        .session_id(Uuid::parse_str("019f0000-0000-7000-8000-000000000002").expect("session UUID"))
-        .command_id(Uuid::parse_str("019f0000-0000-7000-8000-000000000003").expect("command UUID")),
+        DiagnosticEvent::new(DiagnosticEventKind::DiagnosticsTestCheckpoint)
+            .project_id(
+                Uuid::parse_str("019f0000-0000-7000-8000-000000000001").expect("project UUID"),
+            )
+            .session_id(
+                Uuid::parse_str("019f0000-0000-7000-8000-000000000002").expect("session UUID"),
+            )
+            .command_id(
+                Uuid::parse_str("019f0000-0000-7000-8000-000000000003").expect("command UUID"),
+            ),
     );
     if mode == "abandon" {
         drop(diagnostics);

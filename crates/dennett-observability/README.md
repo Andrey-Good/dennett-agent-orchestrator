@@ -5,6 +5,12 @@ evidence, not canonical user memory, security audit or product analytics.
 
 ## Current profile
 
+- a per-user default root (`%LOCALAPPDATA%\Dennett\data` on Windows,
+  `~/Library/Application Support/Dennett/data` on macOS and the XDG data root
+  on Linux) rather than a shared temporary directory;
+- handle-relative, no-follow filesystem access for every managed child, with
+  current-user-only ACLs on Windows and `0700` directories / `0600` files on
+  Unix;
 - structured JSONL logs under `<DENNETT_DATA_DIR>/diagnostics/logs`;
 - daily and size-based rotation with at most 14 log files, 14 days and 32 MiB
   per component; a long-lived Node reclaims old files instead of treating the
@@ -17,6 +23,13 @@ evidence, not canonical user memory, security audit or product analytics.
   process is alive;
 - restart reconciliation that distinguishes clean, handled failure and
   unclean previous exit and preserves the last durable safe phase;
+- monotonic per-component run sequencing, so a wall-clock rollback cannot make
+  an older exit look newer;
+- bounded reads, directory enumeration and lock acquisition while inspecting
+  or maintaining diagnostics;
+- a five-second caller-side shutdown deadline. A stalled diagnostic disk can
+  leave a recoverable active marker, but it cannot hold the application open
+  indefinitely;
 - one UUID run identifier on every record plus UUID-only
   project/session/command/runtime-turn references;
 - a provider allowlist that maps unknown adapter text to `other`;
@@ -41,13 +54,15 @@ dennettctl doctor --data-dir <profile-path>
 dennettctl doctor --data-dir <profile-path> --json
 ```
 
-The text summary reports bounded log volume, dropped records, live/stale/
-unreadable marker counts, the latest terminal exit code and its last durable
-phase. A newer corrupt terminal record produces `unknown` rather than allowing
-an older clean exit to masquerade as current. The text form deliberately hides
-the absolute profile path; explicit JSON output retains the path for local
-tooling. Neither form inspects private project files or internal database
-tables.
+The text summary reports storage health, bounded log volume, dropped records,
+live/stale/unreadable marker counts, the latest terminal exit code and its last
+durable phase. It also says whether the previous shutdown flush and final drop
+count were confirmed. A newer corrupt terminal record produces `unknown`
+rather than allowing an older clean exit to masquerade as current. Wrong-type
+directories are reported as an invalid layout instead of an empty healthy
+profile. The text form deliberately hides the absolute profile path; explicit
+JSON output retains the path for local tooling. Neither form inspects private
+project files or internal database tables.
 
 The profile cannot invent a root cause that the operating system or provider
 did not expose. In that case it preserves the last durable phase and an honest

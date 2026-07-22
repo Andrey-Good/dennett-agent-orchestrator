@@ -4,7 +4,8 @@ use dennett_head::HeadApplication;
 use dennett_kernel::ProjectChatUseCase;
 use dennett_memory_core::{InMemoryMemory, MemoryPort};
 use dennett_observability::{
-    DiagnosticEvent, DiagnosticExit, LocalDiagnosticsConfig, init, init_local, record,
+    DiagnosticEvent, DiagnosticEventKind, DiagnosticExit, LocalDiagnosticsConfig, init, init_local,
+    record,
 };
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use std::sync::Arc;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = std::env::var_os("DENNETT_DATA_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("dennett-head"));
+        .unwrap_or_else(|| dennett_observability::default_user_data_root().join("head"));
     let diagnostics = match init_local(LocalDiagnosticsConfig::personal_quiet(
         "dennett-head",
         data_dir,
@@ -47,14 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_demo() -> Result<(), Box<dyn std::error::Error>> {
-    record(
-        DiagnosticEvent::info(
-            "head.demo_started",
-            "startup",
-            "credential-free Head demo started",
-        )
-        .status("running"),
-    );
+    record(DiagnosticEvent::new(DiagnosticEventKind::HeadDemoStarted).status("running"));
     let memory = Arc::new(InMemoryMemory::default());
     let app = HeadApplication::new(Arc::new(FakeAgentRuntime), Arc::clone(&memory));
     let command_id = CommandId::new();
@@ -84,15 +78,11 @@ async fn run_demo() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     record(
-        DiagnosticEvent::info(
-            "head.demo_completed",
-            "runtime",
-            "credential-free Head demo completed",
-        )
-        .project_id(project_id.0)
-        .session_id(session_id.0)
-        .command_id(command_id.0)
-        .status("completed"),
+        DiagnosticEvent::new(DiagnosticEventKind::HeadDemoCompleted)
+            .project_id(project_id.0)
+            .session_id(session_id.0)
+            .command_id(command_id.0)
+            .status("completed"),
     );
     println!(
         "fake_chat command_id={} result_command_id={} memory_event_id={} project_id={} session_id={}",

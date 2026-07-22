@@ -420,10 +420,8 @@ impl ConversationApplication {
             let application = self.clone();
             let workspace_path = self.workspace_for(project_id).to_owned();
             let project_span_id = project_id.map(|id| id.0.to_string()).unwrap_or_default();
-            let diagnostic = dennett_observability::DiagnosticEvent::info(
-                "head.turn_accepted",
-                "conversation",
-                "project conversation turn was durably accepted",
+            let diagnostic = dennett_observability::DiagnosticEvent::new(
+                dennett_observability::DiagnosticEventKind::HeadTurnAccepted,
             )
             .session_id(session_id.0)
             .command_id(command_id.0)
@@ -1365,10 +1363,8 @@ impl ConversationApplication {
                     );
                     tracing::info!(dennett.memory.event.id = %event_id.0, "runtime turn committed");
                     dennett_observability::record(
-                        dennett_observability::DiagnosticEvent::info(
-                            "head.turn_terminal_committed",
-                            "conversation",
-                            "project conversation terminal state was durably committed",
+                        dennett_observability::DiagnosticEvent::new(
+                            dennett_observability::DiagnosticEventKind::HeadTurnTerminalCommitted,
                         )
                         .session_id(session_id.0)
                         .runtime_turn_id(turn_id.0)

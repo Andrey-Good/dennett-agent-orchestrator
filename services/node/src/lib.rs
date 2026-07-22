@@ -130,7 +130,9 @@ pub fn diagnostic_data_dir_from_environment() -> PathBuf {
                             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
                 })
                 .unwrap_or_else(|| "unconfigured".to_owned());
-            std::env::temp_dir().join("dennett-node").join(installation)
+            dennett_observability::default_user_data_root()
+                .join("installations")
+                .join(installation)
         })
 }
 
@@ -139,10 +141,8 @@ where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     dennett_observability::record(
-        dennett_observability::DiagnosticEvent::info(
-            "node.configuration_validated",
-            "startup",
-            "Node configuration passed validation",
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeConfigurationValidated,
         )
         .status("ready"),
     );
@@ -160,10 +160,8 @@ where
         .map_err(TransportError::from)?;
     let _instance_lock = NodeInstanceLock::acquire(&config.data_dir)?;
     dennett_observability::record(
-        dennett_observability::DiagnosticEvent::info(
-            "node.instance_lock_acquired",
-            "startup",
-            "Node owns the local installation lock",
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeInstanceLockAcquired,
         )
         .status("ready"),
     );
@@ -190,10 +188,8 @@ where
     };
     let runtime_descriptor = runtime.describe().await?;
     dennett_observability::record(
-        dennett_observability::DiagnosticEvent::info(
-            "node.runtime_ready",
-            "runtime_startup",
-            "agent runtime descriptor is available",
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeRuntimeReady,
         )
         .provider(dennett_observability::DiagnosticProvider::from_adapter_id(
             &runtime_descriptor.adapter_id,
@@ -236,10 +232,8 @@ where
         "starting authenticated Node IPC"
     );
     dennett_observability::record(
-        dennett_observability::DiagnosticEvent::info(
-            "node.ipc_start_requested",
-            "local_ipc",
-            "authenticated local IPC startup was requested",
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeIpcStartRequested,
         )
         .status("starting"),
     );
@@ -248,10 +242,8 @@ where
         .map_err(Into::into);
     if result.is_ok() {
         dennett_observability::record(
-            dennett_observability::DiagnosticEvent::info(
-                "node.ipc_stopped",
-                "local_ipc",
-                "local IPC stopped after an explicit shutdown",
+            dennett_observability::DiagnosticEvent::new(
+                dennett_observability::DiagnosticEventKind::NodeIpcStopped,
             )
             .status("stopped"),
         );

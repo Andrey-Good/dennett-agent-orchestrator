@@ -1,5 +1,6 @@
 use dennett_observability::{
-    DiagnosticEvent, DiagnosticExit, DiagnosticProvider, LocalDiagnosticsConfig, init_local, record,
+    DiagnosticEvent, DiagnosticEventKind, DiagnosticExit, DiagnosticProvider,
+    LocalDiagnosticsConfig, init_local, record,
 };
 use uuid::Uuid;
 
@@ -27,15 +28,12 @@ fn persistent_logs_exclude_untyped_events_and_reject_unsafe_references() {
         "spoofed diagnostic target"
     );
     record(
-        DiagnosticEvent::error(
-            "runtime.provider_failure",
-            "runtime",
-            "provider operation failed",
-        )
-        .command_id(Uuid::now_v7())
-        .provider(DiagnosticProvider::from_adapter_id(SECRET))
-        .error_code("provider\nsecret")
-        .retryable(true),
+        DiagnosticEvent::new(DiagnosticEventKind::RuntimeProviderFailure)
+            .command_id(Uuid::now_v7())
+            .provider(DiagnosticProvider::from_adapter_id(SECRET))
+            .status(SECRET)
+            .error_code(SECRET)
+            .retryable(true),
     );
     diagnostics
         .shutdown(DiagnosticExit::Failed {

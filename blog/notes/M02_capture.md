@@ -72,3 +72,29 @@ privacy_risks:
   blocked child stdin, last-phase recovery after a crash, corrupt-latest-record
   honesty, orphan cleanup, safe run-ID recovery and a spoofed private tracing
   target.
+
+## Second closure-review addendum
+
+- A later privacy and reliability pass found that bounded retention was not
+  enough. Path checks still happened before filesystem mutation, so a
+  directory link or rename could redirect later I/O; lifecycle inspection was
+  bounded by file size but not by entry count; and publishing a checkpoint
+  from the application thread could still wait on disk or a lock.
+- The repair moved managed diagnostic I/O behind open directory capabilities
+  with no-follow child opens, private per-user permissions and bounded reads,
+  enumeration and maintenance locks. The public `record` path now only updates
+  atomics and a one-slot wake channel; one integration test holds the lifecycle
+  lock while publishing events and verifies that the caller returns promptly.
+- Shutdown now has a five-second caller deadline and writes whether queue flush
+  and the final drop count were actually complete. Runs use a monotonic
+  sequence rather than wall-clock order, and `doctor` reports corrupt,
+  wrong-type or noncanonical entries as degraded/unknown instead of letting an
+  older clean result masquerade as current.
+- The same review exposed a separate adapter-host race: a response admitted
+  just before a fence could become visible after the host was declared failed.
+  Admission, generation and fencing now share one coordination boundary, with
+  barrier tests for both request admission and buffered-response publication.
+- At this checkpoint, 30 observability unit/integration tests and 10 focused
+  runtime-host tests pass. The package remains open until the full repository
+  gate and another detached review pass; a green local suite is evidence, not
+  permission to declare the reliability problem solved.

@@ -1,7 +1,10 @@
-use crate::{DiagnosticsError, lifecycle::LifecycleProgress};
+use crate::{
+    CheckpointPublisher, DiagnosticsError,
+    secure_fs::{SecureDir, lock_exclusive_bounded},
+};
 use fs2::FileExt;
 use std::{
-    fs::{File, FileType, OpenOptions},
+    fs::File,
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{
@@ -13,6 +16,8 @@ use std::{
 use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use uuid::Uuid;
 
+const MAX_LOG_DIRECTORY_ENTRIES: usize = 512;
+
 pub(crate) struct PreparedWriter {
     pub(crate) writer: NonBlocking,
     pub(crate) guard: WorkerGuard,
@@ -23,39 +28,36 @@ pub(crate) struct PreparedWriter {
 pub(crate) struct WriterHealth {
     queue_drops: ErrorCounter,
     storage_drops: Arc<AtomicUsize>,
+    durability_failures: Arc<AtomicUsize>,
 }
 
 impl WriterHealth {
     pub(crate) fn dropped_records(&self) -> usize {
         self.queue_drops
             .dropped_lines()
-            .saturating_add(self.storage_drops.load(Ordering::Relaxed))
+            .saturating_add(self.storage_drops.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn flush_confirmed(&self) -> bool {
+        self.durability_failures.load(Ordering::Acquire) == 0
     }
 }
 
 pub(crate) fn prepare_writer(
-    data_dir: &Path,
-    diagnostics_dir: &Path,
+    diagnostics_dir: &SecureDir,
     component: &str,
     max_log_files: usize,
     max_log_age: Duration,
     max_log_bytes: u64,
-    progress: LifecycleProgress,
+    checkpoint_publisher: CheckpointPublisher,
 ) -> Result<PreparedWriter, DiagnosticsError> {
-    let logs_dir = diagnostics_dir.join("logs");
-    std::fs::create_dir_all(&logs_dir)
-        .map_err(|source| DiagnosticsError::io("create_diagnostics_directory", source))?;
-    ensure_within_root(data_dir, diagnostics_dir)?;
-    ensure_within_root(data_dir, &logs_dir)?;
-    let maintenance_lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(log_maintenance_path(&logs_dir, component))
-        .map_err(|source| DiagnosticsError::io("open_log_maintenance_lock", source))?;
-    FileExt::lock_exclusive(&maintenance_lock)
-        .map_err(|source| DiagnosticsError::io("lock_log_maintenance", source))?;
+    let logs_dir = diagnostics_dir.open_or_create_child("logs", "create_log_directory")?;
+    let maintenance_lock = logs_dir.open_lock_file(
+        &log_maintenance_name(component),
+        true,
+        "open_log_maintenance_lock",
+    )?;
+    lock_exclusive_bounded(&maintenance_lock, "lock_log_maintenance")?;
     let prune_result = prune_logs(
         &logs_dir,
         component,
@@ -71,6 +73,7 @@ pub(crate) fn prepare_writer(
     unlock_result?;
 
     let storage_drops = Arc::new(AtomicUsize::new(0));
+    let durability_failures = Arc::new(AtomicUsize::new(0));
     let bounded = BoundedRollingWriter {
         directory: logs_dir,
         component: component.to_owned(),
@@ -81,7 +84,8 @@ pub(crate) fn prepare_writer(
         current: None,
         maintenance_lock,
         storage_drops: Arc::clone(&storage_drops),
-        progress,
+        durability_failures: Arc::clone(&durability_failures),
+        checkpoint_publisher,
     };
     let (writer, guard) = NonBlockingBuilder::default()
         .buffered_lines_limit(1024)
@@ -90,6 +94,7 @@ pub(crate) fn prepare_writer(
     let health = WriterHealth {
         queue_drops: writer.error_counter(),
         storage_drops,
+        durability_failures,
     };
     Ok(PreparedWriter {
         writer,
@@ -98,22 +103,8 @@ pub(crate) fn prepare_writer(
     })
 }
 
-pub(crate) fn ensure_within_root(root: &Path, candidate: &Path) -> Result<(), DiagnosticsError> {
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|source| DiagnosticsError::io("canonicalize_diagnostic_root", source))?;
-    let canonical_candidate = candidate
-        .canonicalize()
-        .map_err(|source| DiagnosticsError::io("canonicalize_diagnostic_directory", source))?;
-    if canonical_candidate.starts_with(&canonical_root) {
-        Ok(())
-    } else {
-        Err(DiagnosticsError::DiagnosticRootEscape)
-    }
-}
-
 struct BoundedRollingWriter {
-    directory: PathBuf,
+    directory: SecureDir,
     component: String,
     max_files: usize,
     max_age: Duration,
@@ -122,14 +113,15 @@ struct BoundedRollingWriter {
     current: Option<OpenLog>,
     maintenance_lock: File,
     storage_drops: Arc<AtomicUsize>,
-    progress: LifecycleProgress,
+    durability_failures: Arc<AtomicUsize>,
+    checkpoint_publisher: CheckpointPublisher,
 }
 
 impl BoundedRollingWriter {
     fn write_locked(&mut self, buffer: &[u8]) -> io::Result<()> {
         let bytes = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if bytes > self.max_bytes {
-            self.note_drop();
+            self.note_drop(false);
             return Ok(());
         }
         let day = unix_day(SystemTime::now());
@@ -153,20 +145,20 @@ impl BoundedRollingWriter {
             ) {
                 Ok(inventory) => inventory,
                 Err(_) => {
-                    self.note_drop();
+                    self.note_drop(true);
                     return Ok(());
                 }
             };
             if inventory.files >= self.max_files
                 || inventory.bytes.saturating_add(bytes) > self.max_bytes
             {
-                self.note_drop();
+                self.note_drop(false);
                 return Ok(());
             }
             match OpenLog::create(&self.directory, &self.component, day) {
                 Ok(log) => self.current = Some(log),
                 Err(_) => {
-                    self.note_drop();
+                    self.note_drop(true);
                     return Ok(());
                 }
             }
@@ -183,24 +175,24 @@ impl BoundedRollingWriter {
             ) {
                 Ok(inventory) => inventory,
                 Err(_) => {
-                    self.note_drop();
+                    self.note_drop(true);
                     return Ok(());
                 }
             };
             if inventory.bytes.saturating_add(bytes) > self.max_bytes {
                 self.close_current();
-                self.note_drop();
+                self.note_drop(false);
                 return Ok(());
             }
         }
 
         let Some(current) = self.current.as_mut() else {
-            self.note_drop();
+            self.note_drop(true);
             return Ok(());
         };
         if current.file.write_all(buffer).is_err() {
             drop(self.current.take());
-            self.note_drop();
+            self.note_drop(true);
             return Ok(());
         }
         current.bytes = current.bytes.saturating_add(bytes);
@@ -211,44 +203,47 @@ impl BoundedRollingWriter {
         if let Some(mut current) = self.current.take()
             && (current.file.flush().is_err() || current.file.sync_data().is_err())
         {
-            self.note_drop();
+            self.note_drop(true);
         }
     }
 
-    fn note_drop(&self) {
+    fn note_drop(&self, durability_failure: bool) {
         let dropped = self
             .storage_drops
-            .fetch_add(1, Ordering::Relaxed)
+            .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
-        let _ = self.progress.note_dropped_records(dropped);
+        if durability_failure {
+            self.durability_failures.fetch_add(1, Ordering::AcqRel);
+        }
+        self.checkpoint_publisher.publish_dropped(dropped);
     }
 }
 
 impl Write for BoundedRollingWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if FileExt::lock_exclusive(&self.maintenance_lock).is_err() {
-            self.note_drop();
+        if FileExt::try_lock_exclusive(&self.maintenance_lock).is_err() {
+            self.note_drop(true);
             return Ok(buffer.len());
         }
         let result = self.write_locked(buffer);
         if FileExt::unlock(&self.maintenance_lock).is_err() {
-            self.note_drop();
+            self.note_drop(true);
         }
         result.map(|()| buffer.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if FileExt::lock_exclusive(&self.maintenance_lock).is_err() {
-            self.note_drop();
+        if FileExt::try_lock_exclusive(&self.maintenance_lock).is_err() {
+            self.note_drop(true);
             return Ok(());
         }
         if let Some(current) = self.current.as_mut()
             && (current.file.flush().is_err() || current.file.sync_data().is_err())
         {
-            self.note_drop();
+            self.note_drop(true);
         }
         if FileExt::unlock(&self.maintenance_lock).is_err() {
-            self.note_drop();
+            self.note_drop(true);
         }
         Ok(())
     }
@@ -261,6 +256,7 @@ impl Drop for BoundedRollingWriter {
 }
 
 struct OpenLog {
+    directory: SecureDir,
     file: File,
     lock_file: File,
     path: PathBuf,
@@ -270,29 +266,28 @@ struct OpenLog {
 }
 
 impl OpenLog {
-    fn create(directory: &Path, component: &str, day: u64) -> io::Result<Self> {
+    fn create(directory: &SecureDir, component: &str, day: u64) -> Result<Self, DiagnosticsError> {
         let nonce = Uuid::now_v7();
-        let path = directory.join(format!(
+        let path = PathBuf::from(format!(
             "{component}-diagnostic.{day:010}.{}.{nonce}.jsonl",
             std::process::id()
         ));
         let lock_path = log_lock_path(&path);
-        let lock_file = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&lock_path)?;
-        FileExt::try_lock_exclusive(&lock_file)?;
-        let file = match OpenOptions::new().create_new(true).write(true).open(&path) {
+        let lock_file =
+            directory.create_new_file(path_name(&lock_path)?, true, "create_log_lock")?;
+        FileExt::try_lock_exclusive(&lock_file)
+            .map_err(|source| DiagnosticsError::io("lock_log_file", source))?;
+        let file = match directory.create_new_file(path_name(&path)?, false, "create_log_file") {
             Ok(file) => file,
             Err(error) => {
                 let _ = FileExt::unlock(&lock_file);
                 drop(lock_file);
-                let _ = std::fs::remove_file(&lock_path);
+                let _ = directory.remove_file(path_name(&lock_path)?, "remove_log_lock");
                 return Err(error);
             }
         };
         Ok(Self {
+            directory: directory.clone(),
             file,
             lock_file,
             path,
@@ -306,7 +301,10 @@ impl OpenLog {
 impl Drop for OpenLog {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.lock_file);
-        let _ = std::fs::remove_file(&self.lock_path);
+        let _ = self.directory.remove_file(
+            path_name(&self.lock_path).unwrap_or_default(),
+            "remove_log_lock",
+        );
     }
 }
 
@@ -317,7 +315,7 @@ struct LogInventory {
 }
 
 fn prune_logs(
-    directory: &Path,
+    directory: &SecureDir,
     component: &str,
     max_age: Duration,
     max_files: usize,
@@ -334,7 +332,7 @@ fn prune_logs(
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age > max_age);
         if expired && protected != Some(file.path.as_path()) {
-            remove_bounded_file(&file.path)?;
+            remove_bounded_file(directory, &file.path)?;
         }
     }
     files = log_files(directory, component)?;
@@ -347,7 +345,7 @@ fn prune_logs(
         if protected == Some(file.path.as_path()) {
             continue;
         }
-        if remove_bounded_file(&file.path)? {
+        if remove_bounded_file(directory, &file.path)? {
             inventory.files = inventory.files.saturating_sub(1);
             inventory.bytes = inventory.bytes.saturating_sub(file.bytes);
         }
@@ -361,32 +359,22 @@ struct LogFile {
     bytes: u64,
 }
 
-fn log_files(directory: &Path, component: &str) -> Result<Vec<LogFile>, DiagnosticsError> {
+fn log_files(directory: &SecureDir, component: &str) -> Result<Vec<LogFile>, DiagnosticsError> {
     let prefix = format!("{component}-diagnostic.");
     let mut files = Vec::new();
-    for entry in std::fs::read_dir(directory)
-        .map_err(|source| DiagnosticsError::io("read_log_directory", source))?
-    {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(DiagnosticsError::io("read_log_entry", source)),
-        };
-        let file_type: FileType = entry
-            .file_type()
-            .map_err(|source| DiagnosticsError::io("read_log_file_type", source))?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !file_type.is_file() || !name.starts_with(&prefix) || !name.ends_with(".jsonl") {
+    for entry in directory.entries_bounded(MAX_LOG_DIRECTORY_ENTRIES, "read_log_directory")? {
+        let name = entry.name.to_string_lossy();
+        if !entry.metadata.is_file()
+            || entry.metadata.file_type().is_symlink()
+            || !name.starts_with(&prefix)
+            || !name.ends_with(".jsonl")
+        {
             continue;
         }
-        let metadata = entry
-            .metadata()
-            .map_err(|source| DiagnosticsError::io("read_log_metadata", source))?;
         files.push(LogFile {
-            path: entry.path(),
-            modified: metadata.modified().ok(),
-            bytes: metadata.len(),
+            path: PathBuf::from(name.as_ref()),
+            modified: entry.metadata.modified().ok().map(|value| value.into_std()),
+            bytes: entry.metadata.len(),
         });
     }
     Ok(files)
@@ -401,78 +389,89 @@ fn inventory(files: &[LogFile]) -> LogInventory {
     }
 }
 
-fn remove_bounded_file(path: &Path) -> Result<bool, DiagnosticsError> {
+fn remove_bounded_file(directory: &SecureDir, path: &Path) -> Result<bool, DiagnosticsError> {
     let lock_path = log_lock_path(path);
-    let lock_file = match OpenOptions::new().read(true).write(true).open(&lock_path) {
-        Ok(file) => match FileExt::try_lock_exclusive(&file) {
-            Ok(()) => Some(file),
-            Err(_) => return Ok(false),
-        },
-        Err(source) if source.kind() == io::ErrorKind::NotFound => None,
-        Err(source) => return Err(DiagnosticsError::io("open_log_lock", source)),
-    };
-    let removed = match std::fs::remove_file(path) {
-        Ok(()) => true,
-        Err(source)
-            if matches!(
-                source.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
-            ) =>
-        {
-            false
-        }
-        Err(source) => return Err(DiagnosticsError::io("prune_log_file", source)),
-    };
+    let lock_file =
+        match directory.open_existing_file(path_name(&lock_path)?, true, "open_log_lock") {
+            Ok(file) => match FileExt::try_lock_exclusive(&file) {
+                Ok(()) => Some(file),
+                Err(_) => return Ok(false),
+            },
+            Err(error) if is_not_found(&error) => None,
+            Err(error) => return Err(error),
+        };
+    let existed = directory.try_exists(path_name(path)?)?;
+    directory.remove_file(path_name(path)?, "prune_log_file")?;
+    let removed = existed && !directory.try_exists(path_name(path)?)?;
     if let Some(file) = lock_file {
         let _ = FileExt::unlock(&file);
         drop(file);
         if removed {
-            let _ = std::fs::remove_file(lock_path);
+            let _ = directory.remove_file(path_name(&lock_path)?, "remove_log_lock");
         }
     }
     Ok(removed)
 }
 
-fn cleanup_orphan_log_locks(directory: &Path, component: &str) -> Result<(), DiagnosticsError> {
+fn cleanup_orphan_log_locks(
+    directory: &SecureDir,
+    component: &str,
+) -> Result<(), DiagnosticsError> {
     let prefix = format!("{component}-diagnostic.");
-    for entry in std::fs::read_dir(directory)
-        .map_err(|source| DiagnosticsError::io("read_log_directory", source))?
-    {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(DiagnosticsError::io("read_log_entry", source)),
-        };
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
+    for entry in directory.entries_bounded(MAX_LOG_DIRECTORY_ENTRIES, "read_log_directory")? {
+        let name = entry.name.to_string_lossy();
         if !name.starts_with(&prefix) || !name.ends_with(".jsonl.lock") {
             continue;
         }
-        let lock_path = entry.path();
+        let lock_path = PathBuf::from(name.as_ref());
         let log_path = lock_path.with_extension("");
-        if log_path.exists() {
+        if directory.try_exists(path_name(&log_path)?)? {
             continue;
         }
-        let file = match OpenOptions::new().read(true).write(true).open(&lock_path) {
+        let file = match directory.open_existing_file(
+            path_name(&lock_path)?,
+            true,
+            "open_orphan_log_lock",
+        ) {
             Ok(file) => file,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(DiagnosticsError::io("open_orphan_log_lock", source)),
+            Err(error) if is_not_found(&error) => continue,
+            Err(error) => return Err(error),
         };
         if FileExt::try_lock_exclusive(&file).is_ok() {
             let _ = FileExt::unlock(&file);
             drop(file);
-            let _ = std::fs::remove_file(lock_path);
+            directory.remove_file(path_name(&lock_path)?, "remove_orphan_log_lock")?;
         }
     }
     Ok(())
+}
+
+fn path_name(path: &Path) -> Result<&str, DiagnosticsError> {
+    if path
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+    {
+        return Err(DiagnosticsError::InvalidDiagnosticEntry);
+    }
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(DiagnosticsError::InvalidDiagnosticEntry)
+}
+
+fn is_not_found(error: &DiagnosticsError) -> bool {
+    matches!(
+        error,
+        DiagnosticsError::Io { source, .. }
+            if source.kind() == io::ErrorKind::NotFound
+    )
 }
 
 fn log_lock_path(path: &Path) -> PathBuf {
     path.with_extension("jsonl.lock")
 }
 
-fn log_maintenance_path(directory: &Path, component: &str) -> PathBuf {
-    directory.join(format!("{component}-diagnostic.maintenance.lock"))
+fn log_maintenance_name(component: &str) -> String {
+    format!("{component}-diagnostic.maintenance.lock")
 }
 
 fn unix_day(now: SystemTime) -> u64 {
@@ -483,29 +482,23 @@ fn unix_day(now: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lifecycle::LifecycleSession;
 
-    #[test]
-    fn containment_rejects_a_resolved_directory_outside_the_profile() {
-        let temp = tempfile::tempdir().expect("temporary root");
-        let root = temp.path().join("root");
-        let outside = temp.path().join("outside");
-        std::fs::create_dir_all(&root).expect("root");
-        std::fs::create_dir_all(&outside).expect("outside");
-        assert!(matches!(
-            ensure_within_root(&root, &outside),
-            Err(DiagnosticsError::DiagnosticRootEscape)
-        ));
+    fn logs_dir(temp: &tempfile::TempDir) -> SecureDir {
+        SecureDir::open_or_create_profile(temp.path())
+            .expect("profile")
+            .open_or_create_child("logs", "logs")
+            .expect("logs")
     }
 
     #[test]
     fn age_pruning_removes_expired_logs() {
         let temp = tempfile::tempdir().expect("temporary logs");
-        let old = temp.path().join("dennett-node-diagnostic.old.jsonl");
+        let directory = logs_dir(&temp);
+        let old = temp.path().join("logs/dennett-node-diagnostic.old.jsonl");
         std::fs::write(&old, vec![b'a'; 16]).expect("old log");
         std::thread::sleep(Duration::from_millis(10));
         let result = prune_logs(
-            temp.path(),
+            &directory,
             "dennett-node",
             Duration::from_millis(1),
             8,
@@ -521,13 +514,14 @@ mod tests {
     #[test]
     fn size_pruning_removes_the_oldest_log_first() {
         let temp = tempfile::tempdir().expect("temporary logs");
-        let old = temp.path().join("dennett-node-diagnostic.old.jsonl");
-        let new = temp.path().join("dennett-node-diagnostic.new.jsonl");
+        let directory = logs_dir(&temp);
+        let old = temp.path().join("logs/dennett-node-diagnostic.old.jsonl");
+        let new = temp.path().join("logs/dennett-node-diagnostic.new.jsonl");
         std::fs::write(&old, vec![b'a'; 16]).expect("old log");
         std::thread::sleep(Duration::from_millis(10));
         std::fs::write(&new, vec![b'b'; 16]).expect("new log");
         let result = prune_logs(
-            temp.path(),
+            &directory,
             "dennett-node",
             Duration::from_secs(60),
             8,
@@ -542,24 +536,20 @@ mod tests {
     }
 
     #[test]
-    fn writer_rotates_under_a_lifetime_quota_instead_of_becoming_permanently_blind() {
+    fn writer_rotates_under_a_lifetime_quota() {
         let temp = tempfile::tempdir().expect("temporary diagnostics");
-        let diagnostics = temp.path().join("diagnostics");
-        let lifecycle =
-            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("lifecycle");
-        let progress = lifecycle.progress();
-        let logs = diagnostics.join("logs");
-        std::fs::create_dir_all(&logs).expect("logs");
-        let maintenance_lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(log_maintenance_path(&logs, "dennett-node"))
+        let directory = logs_dir(&temp);
+        let maintenance_lock = directory
+            .open_lock_file(
+                &log_maintenance_name("dennett-node"),
+                true,
+                "maintenance lock",
+            )
             .expect("maintenance lock");
         let drops = Arc::new(AtomicUsize::new(0));
+        let failures = Arc::new(AtomicUsize::new(0));
         let mut writer = BoundedRollingWriter {
-            directory: logs.clone(),
+            directory: directory.clone(),
             component: "dennett-node".to_owned(),
             max_files: 2,
             max_age: Duration::from_secs(60),
@@ -568,62 +558,58 @@ mod tests {
             current: None,
             maintenance_lock,
             storage_drops: Arc::clone(&drops),
-            progress,
+            durability_failures: Arc::clone(&failures),
+            checkpoint_publisher: CheckpointPublisher::disabled_for_test(),
         };
         for value in [b"12345678".as_slice(), b"abcdefgh", b"ABCDEFGH"] {
             writer.write_all(value).expect("bounded write");
         }
         writer.flush().expect("flush");
         assert_eq!(drops.load(Ordering::Relaxed), 0);
-        assert_eq!(log_files(&logs, "dennett-node").expect("logs").len(), 2);
-        drop(writer);
-        lifecycle
-            .complete(crate::DiagnosticExit::Clean, 0)
-            .expect("complete lifecycle");
+        assert_eq!(failures.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            log_files(&directory, "dennett-node").expect("logs").len(),
+            2
+        );
     }
 
     #[test]
-    fn physical_write_failure_is_counted_and_persisted_for_doctor() {
+    fn physical_write_failure_is_counted() {
         let temp = tempfile::tempdir().expect("temporary diagnostics");
-        let diagnostics = temp.path().join("diagnostics");
-        let lifecycle =
-            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("lifecycle");
-        let logs = diagnostics.join("logs");
-        std::fs::create_dir_all(&logs).expect("logs");
+        let directory = logs_dir(&temp);
         let day = unix_day(SystemTime::now());
-        let path = logs.join(format!(
+        let path = PathBuf::from(format!(
             "dennett-node-diagnostic.{day:010}.{}.jsonl",
             Uuid::now_v7()
         ));
-        std::fs::write(&path, b"").expect("read-only test log");
+        let display_path = temp.path().join("logs").join(&path);
+        std::fs::write(&display_path, b"").expect("read-only test log");
         let lock_path = log_lock_path(&path);
-        let lock_file = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&lock_path)
+        let lock_file = directory
+            .create_new_file(path_name(&lock_path).expect("lock name"), true, "log lock")
             .expect("log lock");
         FileExt::try_lock_exclusive(&lock_file).expect("lock test log");
-        let read_only = OpenOptions::new()
-            .read(true)
-            .open(&path)
+        let read_only = directory
+            .open_existing_file(path_name(&path).expect("log name"), false, "read-only log")
             .expect("read-only log handle");
-        let maintenance_lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(log_maintenance_path(&logs, "dennett-node"))
+        let maintenance_lock = directory
+            .open_lock_file(
+                &log_maintenance_name("dennett-node"),
+                true,
+                "maintenance lock",
+            )
             .expect("maintenance lock");
         let drops = Arc::new(AtomicUsize::new(0));
+        let failures = Arc::new(AtomicUsize::new(0));
         let mut writer = BoundedRollingWriter {
-            directory: logs,
+            directory: directory.clone(),
             component: "dennett-node".to_owned(),
             max_files: 2,
             max_age: Duration::from_secs(60),
             max_bytes: 16,
             max_file_bytes: 8,
             current: Some(OpenLog {
+                directory,
                 file: read_only,
                 lock_file,
                 path,
@@ -633,42 +619,14 @@ mod tests {
             }),
             maintenance_lock,
             storage_drops: Arc::clone(&drops),
-            progress: lifecycle.progress(),
+            durability_failures: Arc::clone(&failures),
+            checkpoint_publisher: CheckpointPublisher::disabled_for_test(),
         };
 
         writer
             .write_all(b"x")
             .expect("lossy writer stays available");
         assert_eq!(drops.load(Ordering::Relaxed), 1);
-        let summary = crate::inspect_local(temp.path(), "dennett-node").expect("doctor summary");
-        assert_eq!(summary.dropped_log_records, 1);
-        drop(writer);
-        lifecycle
-            .complete(crate::DiagnosticExit::Clean, 1)
-            .expect("complete lifecycle");
-    }
-
-    #[test]
-    fn resolved_directory_links_cannot_escape_the_profile() {
-        let temp = tempfile::tempdir().expect("temporary root");
-        let root = temp.path().join("root");
-        let outside = temp.path().join("outside");
-        let link = root.join("diagnostics");
-        std::fs::create_dir_all(&root).expect("root");
-        std::fs::create_dir_all(&outside).expect("outside");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, &link).expect("directory symlink");
-        #[cfg(windows)]
-        if let Err(error) = std::os::windows::fs::symlink_dir(&outside, &link) {
-            if error.kind() == io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(1314)
-            {
-                return;
-            }
-            panic!("directory link failed: {error}");
-        }
-        assert!(matches!(
-            ensure_within_root(&root, &link),
-            Err(DiagnosticsError::DiagnosticRootEscape)
-        ));
+        assert_eq!(failures.load(Ordering::Relaxed), 1);
     }
 }

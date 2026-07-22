@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 477,
+  "file_count": 479,
   "files": [
     {
       "path": ".editorconfig",
@@ -70,13 +70,13 @@
     },
     {
       "path": "Cargo.lock",
-      "bytes": 57026,
-      "sha256": "91602583e6b59d2ab4b3c1f8eac2319a91a7275d73081d11af1abf4920187132"
+      "bytes": 64811,
+      "sha256": "05c3b8188e05c44db0dd2933959767970d79d12053e6b1e0a124bcbea74f785f"
     },
     {
       "path": "Cargo.toml",
-      "bytes": 1676,
-      "sha256": "3c85f8821d7312c2c76208cc585609839b8eff09b13fbb5cffe45a7a3f3d1d28"
+      "bytes": 1707,
+      "sha256": "bdad58ae571fe96320aecfbf38d8bed287fe2722dfb63abd8dae202d4d5ca314"
     },
     {
       "path": "GOVERNANCE.md",
@@ -610,8 +610,8 @@
     },
     {
       "path": "blog/notes/M02_capture.md",
-      "bytes": 7057,
-      "sha256": "46cf3cbfcde2c0ecfa93c4127eda974fd54b041da1244d2152349b590ed7be4b"
+      "bytes": 8796,
+      "sha256": "34346e9902db682c1cd571e82f9cbadf49eb75de44876c51613506858f521600"
     },
     {
       "path": "blog/notes/README.md",
@@ -770,43 +770,53 @@
     },
     {
       "path": "crates/dennett-observability/Cargo.toml",
-      "bytes": 424,
-      "sha256": "90c2fcee8c637f208c56cd15def11066881fdc4c41dcdbc55869fd8e10036612"
+      "bytes": 544,
+      "sha256": "860b74c6355dabf38a102a05e1434fd69035e05a47a8c58bb0c7e8821dd4a7d7"
     },
     {
       "path": "crates/dennett-observability/README.md",
-      "bytes": 2774,
-      "sha256": "bafb18915d5c396e3e84d7ab03ce006d7dcd5f2f0ce60d47f650f4b12f78251a"
+      "bytes": 3716,
+      "sha256": "8c1157583ec9ad4ba227c8e5c25851e68c8243427dcf16e67047df4ab3d9309f"
     },
     {
       "path": "crates/dennett-observability/src/lib.rs",
-      "bytes": 16874,
-      "sha256": "fa2b49998caa6b3d59741598751728221ce079824a7352e9f56135f55676a325"
+      "bytes": 40100,
+      "sha256": "3bbfaec8e1b571c05b0197ef738bc7553d94cc530155bf18b246b3dc73c22d4a"
     },
     {
       "path": "crates/dennett-observability/src/lifecycle.rs",
-      "bytes": 51431,
-      "sha256": "4081144b053f078aee116cca4a91099bec68a50fa3b443da762b7b38fecb04bb"
+      "bytes": 64438,
+      "sha256": "f4417ebb4b4f34ca6d766b830043035de3fd1ded0506f78f168bca3d65788690"
+    },
+    {
+      "path": "crates/dennett-observability/src/secure_fs.rs",
+      "bytes": 23107,
+      "sha256": "d6db0310f9913bcfe04375ac59e9fd868459b8eb7f30737750e3786e6f2ad907"
     },
     {
       "path": "crates/dennett-observability/src/writer.rs",
-      "bytes": 22385,
-      "sha256": "ab01f326f2358cedf0d92f261cc024611e77f81415845366682760296588dce3"
+      "bytes": 20472,
+      "sha256": "cacbcbf92498ae080e311ac8484c64d22ac03e37e741b8dd86944e8deb846c13"
     },
     {
       "path": "crates/dennett-observability/tests/drop_accounting.rs",
-      "bytes": 972,
-      "sha256": "eed4b86da7107ca15dec86e8b3cfc6ba9d7f3b57114e64594501b0514e4f5c5f"
+      "bytes": 1234,
+      "sha256": "e37ade7723f9584a90470cdabb8bb53525bd4ad35e82a0cfc5f3627602bf6720"
+    },
+    {
+      "path": "crates/dennett-observability/tests/nonblocking.rs",
+      "bytes": 1345,
+      "sha256": "76ed4c48b95a564f50cf57686c93f79d745226da270b1d6128d5a65fa1c48a39"
     },
     {
       "path": "crates/dennett-observability/tests/persistence.rs",
-      "bytes": 3893,
-      "sha256": "9f093c1dca57d52d33a5259b0ceff2f142ad59cb6e2c75119a73332fc65ff694"
+      "bytes": 4377,
+      "sha256": "7c227f486bc59cb74205451f276992d851c40b796bfb0c59ad115f429391e2b3"
     },
     {
       "path": "crates/dennett-observability/tests/redaction.rs",
-      "bytes": 2505,
-      "sha256": "9ab97c12a0e0d21c83aad913101adb2add8c4f7ef3854de8d66506d5f8bd0eac"
+      "bytes": 2490,
+      "sha256": "db9d2566bf84135cd3967ae9c6ea8eda87e4d204ee48aefb4128f9d4dee6c73c"
     },
     {
       "path": "crates/dennett-observability/tests/startup_transaction.rs",
@@ -881,7 +891,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "ca5a8644340e56142f872063d95b497df6a6c1cb6bf41a3c1568b70eb38092c8"
+      "sha256": "8bd4a05dfe846063eaa739dca99d5715146838d3a99be88e7cb6680e0dc81a64"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1490,8 +1500,8 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 25142,
-      "sha256": "035c3d1da6c20794f14009fd00612fa14a824bf20a67a9162be4b8fa0e8fd1ba"
+      "bytes": 25632,
+      "sha256": "df9b64674342e813bcafda7ae6b4f2fc80929e9bde0d0fd2d91b9196eb59b3bf"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
@@ -1675,8 +1685,8 @@
     },
     {
       "path": "planning/milestones/M02_project_workspace_and_review.json",
-      "bytes": 39593,
-      "sha256": "14e99e72db45465a304521ef928c7f9a6536b7872f1607e192f8ddf624d76baf"
+      "bytes": 40075,
+      "sha256": "de9557b94d18f6c17f4feb400c6f6cf57667b5c376e0b8cf4fc36027ce1ca12c"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -2060,8 +2070,8 @@
     },
     {
       "path": "services/head/src/conversation.rs",
-      "bytes": 61254,
-      "sha256": "bd8cb213b5486fd7c210cd0ca461f6733fb9b6fb0595d0cdb02dc3d67b7b526d"
+      "bytes": 61100,
+      "sha256": "efd08486eddfe0ec52234239afc37b1a6c8fb7873cb2cc970d712713b07a1b2c"
     },
     {
       "path": "services/head/src/draft.rs",
@@ -2075,8 +2085,8 @@
     },
     {
       "path": "services/head/src/main.rs",
-      "bytes": 3300,
-      "sha256": "6cb8873e88c5e4ba4d29063e9cadbe8863e7fb2d9ecb194d1c07f351031a8478"
+      "bytes": 3176,
+      "sha256": "d690ebb89f03ca4f9dbc423c413352c2212699c15d836d40430e599d639edb82"
     },
     {
       "path": "services/head/src/session.rs",
@@ -2140,18 +2150,18 @@
     },
     {
       "path": "services/node/src/lib.rs",
-      "bytes": 14028,
-      "sha256": "639df47508390def516f98eca09fae4a943bc2e8329c2a782ce05774724304d5"
+      "bytes": 13869,
+      "sha256": "3cda48e87bd1622baba13ade201e0e89b991e822ae20736c3e39df77ccd6b2d5"
     },
     {
       "path": "services/node/src/main.rs",
-      "bytes": 2939,
-      "sha256": "3cbe3413d6532750c8c0a3aeb1c6bb312bc4360c299fcbb020da3b0350af1325"
+      "bytes": 2601,
+      "sha256": "81a2c566e987df314a27cedf762d96570190aa5e3a5ced9c807e9ac9acdf1d8a"
     },
     {
       "path": "services/node/src/runtime_host.rs",
-      "bytes": 62762,
-      "sha256": "6da7d1d413c7955fdb9888d5e56d56f519a6113cd377c7a4655cbff0749bb30a"
+      "bytes": 66750,
+      "sha256": "f79da39d138528215f8289d298655ed7af4ba0f9ee12dfa355cc21895ae76dd9"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",
@@ -2215,8 +2225,8 @@
     },
     {
       "path": "tests/catalog/m02.seed.json",
-      "bytes": 26541,
-      "sha256": "6306d6985da7e65a83bd5d404f0a76f3115f4078eb34dda7caae93b122aed561"
+      "bytes": 27166,
+      "sha256": "4b6ac81ca0e38c9248661c76caf4bc13036db1ba1161069aacf79eb474074aa8"
     },
     {
       "path": "tests/contracts/README.md",

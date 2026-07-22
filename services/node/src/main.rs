@@ -1,6 +1,6 @@
 use dennett_observability::{
-    DiagnosticEvent, DiagnosticExit, LocalDiagnostics, LocalDiagnosticsConfig, init, init_local,
-    record,
+    DiagnosticEvent, DiagnosticEventKind, DiagnosticExit, LocalDiagnostics, LocalDiagnosticsConfig,
+    init, init_local, record,
 };
 
 #[tokio::main]
@@ -10,12 +10,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(config) => config,
         Err(error) => {
             record(
-                DiagnosticEvent::error(
-                    "node.configuration_failed",
-                    "startup",
-                    "Node configuration validation failed",
-                )
-                .error_code(error.diagnostic_code()),
+                DiagnosticEvent::new(DiagnosticEventKind::NodeConfigurationFailed)
+                    .error_code(error.diagnostic_code()),
             );
             finish_diagnostics(
                 diagnostics,
@@ -29,12 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = dennett_node::run(config, async {
         if tokio::signal::ctrl_c().await.is_err() {
             record(
-                DiagnosticEvent::error(
-                    "node.shutdown_signal_failed",
-                    "shutdown",
-                    "Node could not wait for the explicit shutdown signal",
-                )
-                .error_code("node.shutdown_signal_failure"),
+                DiagnosticEvent::new(DiagnosticEventKind::NodeShutdownSignalFailed)
+                    .error_code("node.shutdown_signal_failure"),
             );
             std::future::pending::<()>().await;
         }
@@ -47,12 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(error) => {
             record(
-                DiagnosticEvent::error(
-                    "node.run_failed",
-                    "runtime",
-                    "Node stopped after a handled runtime failure",
-                )
-                .error_code(error.diagnostic_code()),
+                DiagnosticEvent::new(DiagnosticEventKind::NodeRunFailed)
+                    .error_code(error.diagnostic_code()),
             );
             finish_diagnostics(
                 diagnostics,
