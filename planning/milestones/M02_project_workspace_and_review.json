@@ -117,7 +117,7 @@
       "version": 1,
       "id": "WP-M02-002",
       "title": "Define additive project workspace contracts",
-      "status": "IN_PROGRESS",
+      "status": "REVIEW",
       "milestone": "M02",
       "vertical_slice": "VS-M02-01",
       "risk": "R4",
@@ -146,6 +146,7 @@
         "protocols",
         "generated",
         "crates/dennett-contracts",
+        "Cargo.lock",
         "tools/protocol_codegen.py",
         "tools/tests/test_protocol_codegen.py",
         "tests/catalog",
@@ -183,7 +184,8 @@
       "notes": [
         "Generated Rust and TypeScript clients dominate the gross diff budget and must not be hand-edited.",
         "The contract exposes snapshot identity and receipts rather than raw Git CLI or Codex SDK payloads.",
-        "DEC-0006 resolved stable project identity, optional portable .dennett identity and shared memory, simple local project policy, relocatable local bindings and the bounded M02 lifecycle."
+        "DEC-0006 resolved stable project identity, optional portable .dennett identity and shared memory, simple local project policy, relocatable local bindings and the bounded M02 lifecycle.",
+        "Cargo.lock is in scope only for the serde_json dev-dependency used by contract serialization tests."
       ]
     },
     {

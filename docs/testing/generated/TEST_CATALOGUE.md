@@ -8,7 +8,7 @@
 
 ## Summary
 
-- Status: `automated` 33, `manual` 2, `specified` 28
+- Status: `automated` 34, `manual` 2, `specified` 27
 - Risk: `R1` 8, `R2` 32, `R3` 23
 - Domain: `accessibility` 2, `adapters` 1, `agents` 14, `architecture` 1, `artifacts` 2, `authentication` 1, `cancellation` 1, `checkpoints` 1, `ci` 1, `compatibility` 3, `conflicts` 2, `connectors` 1, `contracts` 1, `control` 1, `desktop` 20, `devices` 2, `documentation` 2, `effects` 1, `evidence` 1, `execution` 6, `filesystem` 4, `git` 3, `head` 3, `instructions` 1, `ipc` 2, `lifecycle` 2, `memory` 5, `node` 6, `observability` 5, `planning` 4, `privacy` 1, `project-chat` 2, `projects` 8, `protocol` 4, `providers` 8, `recovery` 15, `reliability` 1, `repository` 8, `review` 9, `rust` 1, `security` 5, `sessions` 5, `storage` 3, `streaming` 2, `sync` 3, `tauri` 1, `testing` 8, `tooling` 1, `trust` 4, `ux` 3, `workspace` 10
 
@@ -62,9 +62,9 @@
 | `TEST-M02-PROJECT-TRUST-001` | Restricted projects cannot execute or self-elevate | `execution`, `projects`, `security`, `trust` | `R3` | `specified` | `critical` | `trust` | `planned` |
 | `TEST-M02-PROJECT-MISSING-001` | Missing project locations preserve metadata and block execution | `desktop`, `projects`, `recovery` | `R2` | `specified` | `high` | `projects` | `planned` |
 | `TEST-M01-PROTOCOL-EPOCH-001` | M01 protocol epoch replaces the scaffold before production consumers | `compatibility`, `desktop`, `node`, `protocol` | `R3` | `automated` | `critical` | `protocol` | `automated` |
+| `TEST-M02-PROTOCOL-ADDITIVE-001` | M02 workspace contracts extend the accepted protocol additively | `compatibility`, `projects`, `protocol`, `review` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-BREAKING-001` | Protocol compatibility gate rejects breaking changes | `compatibility`, `protocol` | `R2` | `automated` | `critical` | `protocol` | `automated` |
 | `TEST-PROTOCOL-GENERATION-001` | Protocol clients regenerate deterministically from canonical schemas | `protocol`, `repository` | `R2` | `automated` | `critical` | `protocol` | `automated` |
-| `TEST-M02-PROTOCOL-ADDITIVE-001` | M02 workspace contracts extend the accepted protocol additively | `compatibility`, `projects`, `protocol`, `review` | `R2` | `specified` | `critical` | `protocol` | `planned` |
 | `TEST-PR-FAST-GATE-001` | Pull request fast gate covers every M00 required check | `ci`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-PRODUCT-IDENTITY-001` | Canonical repository identity uses Dennett and no license file | `contracts`, `documentation`, `repository` | `R2` | `automated` | `critical` | `repository` | `automated` |
 | `TEST-BOOTSTRAP-CLEAN-001` | Clean checkout bootstrap installs pinned development dependencies | `repository`, `tooling` | `R1` | `automated` | `critical` | `repository` | `automated` |

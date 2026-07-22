@@ -5,8 +5,10 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { CommandAccepted, CommandMetadata, ErrorEnvelope } from "../../common/v1/common_pb";
+import type { CommandAccepted, CommandMetadata, ErrorEnvelope, StableRef } from "../../common/v1/common_pb";
 import { file_dennett_common_v1_common } from "../../common/v1/common_pb";
+import type { PortableMetadataAction, PortableProjectMetadata, ProjectTrustState, RebindPortableMetadataAction, WorkspaceFailure } from "./workspace_pb";
+import { file_dennett_control_v1_workspace } from "./workspace_pb";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
@@ -15,7 +17,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file dennett/control/v1/project.proto.
  */
 export const file_dennett_control_v1_project: GenFile = /*@__PURE__*/
-  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvcHJvamVjdC5wcm90bxISZGVubmV0dC5jb250cm9sLnYxIrMBCg5Qcm9qZWN0U3VtbWFyeRISCgpwcm9qZWN0X2lkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIvCgVzdGF0ZRgDIAEoDjIgLmRlbm5ldHQuY29udHJvbC52MS5Qcm9qZWN0U3RhdGUSEAoIcmV2aXNpb24YBCABKAQSNAoQbGFzdF9hY3Rpdml0eV9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi6AEKB1Byb2plY3QSEgoKcHJvamVjdF9pZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSEAoIcm9vdF91cmkYAyABKAkSLwoFc3RhdGUYBCABKA4yIC5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFN0YXRlEhAKCHJldmlzaW9uGAUgASgEEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wInMKFENyZWF0ZVByb2plY3RSZXF1ZXN0EjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kTWV0YWRhdGESFAoMZGlzcGxheV9uYW1lGAIgASgJEhAKCHJvb3RfdXJpGAMgASgJImAKFUNyZWF0ZVByb2plY3RBY2NlcHRlZBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZEFjY2VwdGVkEhIKCnByb2plY3RfaWQYAiABKAkilAEKFUNyZWF0ZVByb2plY3RSZXNwb25zZRI9CghhY2NlcHRlZBgBIAEoCzIpLmRlbm5ldHQuY29udHJvbC52MS5DcmVhdGVQcm9qZWN0QWNjZXB0ZWRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIlcKE0xpc3RQcm9qZWN0c1JlcXVlc3QSEQoJcGFnZV9zaXplGAEgASgNEhIKCnBhZ2VfdG9rZW4YAiABKAkSGQoRY2xpZW50X3Nlc3Npb25faWQYAyABKAkifgoSTGlzdFByb2plY3RzUmVzdWx0EjQKCHByb2plY3RzGAEgAygLMiIuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3RTdW1tYXJ5EhcKD25leHRfcGFnZV90b2tlbhgCIAEoCRIZChFzbmFwc2hvdF9yZXZpc2lvbhgDIAEoBCKOAQoUTGlzdFByb2plY3RzUmVzcG9uc2USOAoGcmVzdWx0GAEgASgLMiYuZGVubmV0dC5jb250cm9sLnYxLkxpc3RQcm9qZWN0c1Jlc3VsdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUiQgoRR2V0UHJvamVjdFJlcXVlc3QSEgoKcHJvamVjdF9pZBgBIAEoCRIZChFjbGllbnRfc2Vzc2lvbl9pZBgCIAEoCSKCAQoSR2V0UHJvamVjdFJlc3BvbnNlEi4KB3Byb2plY3QYASABKAsyGy5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdEgAEjEKBWVycm9yGAIgASgLMiAuZGVubmV0dC5jb21tb24udjEuRXJyb3JFbnZlbG9wZUgAQgkKB291dGNvbWUqmgEKDFByb2plY3RTdGF0ZRIdChlQUk9KRUNUX1NUQVRFX1VOU1BFQ0lGSUVEEAASFwoTUFJPSkVDVF9TVEFURV9SRUFEWRABEhkKFVBST0pFQ1RfU1RBVEVfTUlTU0lORxACEhoKFlBST0pFQ1RfU1RBVEVfREVUQUNIRUQQAxIbChdQUk9KRUNUX1NUQVRFX1JFQURfT05MWRAEMrYCCg5Qcm9qZWN0U2VydmljZRJkCg1DcmVhdGVQcm9qZWN0EiguZGVubmV0dC5jb250cm9sLnYxLkNyZWF0ZVByb2plY3RSZXF1ZXN0GikuZGVubmV0dC5jb250cm9sLnYxLkNyZWF0ZVByb2plY3RSZXNwb25zZRJhCgxMaXN0UHJvamVjdHMSJy5kZW5uZXR0LmNvbnRyb2wudjEuTGlzdFByb2plY3RzUmVxdWVzdBooLmRlbm5ldHQuY29udHJvbC52MS5MaXN0UHJvamVjdHNSZXNwb25zZRJbCgpHZXRQcm9qZWN0EiUuZGVubmV0dC5jb250cm9sLnYxLkdldFByb2plY3RSZXF1ZXN0GiYuZGVubmV0dC5jb250cm9sLnYxLkdldFByb2plY3RSZXNwb25zZWIGcHJvdG8z", [file_dennett_common_v1_common, file_google_protobuf_timestamp]);
+  fileDesc("CiBkZW5uZXR0L2NvbnRyb2wvdjEvcHJvamVjdC5wcm90bxISZGVubmV0dC5jb250cm9sLnYxIrMBCg5Qcm9qZWN0U3VtbWFyeRISCgpwcm9qZWN0X2lkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIvCgVzdGF0ZRgDIAEoDjIgLmRlbm5ldHQuY29udHJvbC52MS5Qcm9qZWN0U3RhdGUSEAoIcmV2aXNpb24YBCABKAQSNAoQbGFzdF9hY3Rpdml0eV9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAikgIKB1Byb2plY3QSEgoKcHJvamVjdF9pZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSFAoIcm9vdF91cmkYAyABKAlCAhgBEi8KBXN0YXRlGAQgASgOMiAuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3RTdGF0ZRIQCghyZXZpc2lvbhgFIAEoBBIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIkChxwcmltYXJ5X3dvcmtzcGFjZV9iaW5kaW5nX2lkGAggASgJIncKFENyZWF0ZVByb2plY3RSZXF1ZXN0EjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kTWV0YWRhdGESFAoMZGlzcGxheV9uYW1lGAIgASgJEhQKCHJvb3RfdXJpGAMgASgJQgIYASJgChVDcmVhdGVQcm9qZWN0QWNjZXB0ZWQSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRBY2NlcHRlZBISCgpwcm9qZWN0X2lkGAIgASgJIpQBChVDcmVhdGVQcm9qZWN0UmVzcG9uc2USPQoIYWNjZXB0ZWQYASABKAsyKS5kZW5uZXR0LmNvbnRyb2wudjEuQ3JlYXRlUHJvamVjdEFjY2VwdGVkSAASMQoFZXJyb3IYAiABKAsyIC5kZW5uZXR0LmNvbW1vbi52MS5FcnJvckVudmVsb3BlSABCCQoHb3V0Y29tZSJXChNMaXN0UHJvamVjdHNSZXF1ZXN0EhEKCXBhZ2Vfc2l6ZRgBIAEoDRISCgpwYWdlX3Rva2VuGAIgASgJEhkKEWNsaWVudF9zZXNzaW9uX2lkGAMgASgJIn4KEkxpc3RQcm9qZWN0c1Jlc3VsdBI0Cghwcm9qZWN0cxgBIAMoCzIiLmRlbm5ldHQuY29udHJvbC52MS5Qcm9qZWN0U3VtbWFyeRIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkSGQoRc25hcHNob3RfcmV2aXNpb24YAyABKAQijgEKFExpc3RQcm9qZWN0c1Jlc3BvbnNlEjgKBnJlc3VsdBgBIAEoCzImLmRlbm5ldHQuY29udHJvbC52MS5MaXN0UHJvamVjdHNSZXN1bHRIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIkIKEUdldFByb2plY3RSZXF1ZXN0EhIKCnByb2plY3RfaWQYASABKAkSGQoRY2xpZW50X3Nlc3Npb25faWQYAiABKAkiggEKEkdldFByb2plY3RSZXNwb25zZRIuCgdwcm9qZWN0GAEgASgLMhsuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3RIABIxCgVlcnJvchgCIAEoCzIgLmRlbm5ldHQuY29tbW9uLnYxLkVycm9yRW52ZWxvcGVIAEIJCgdvdXRjb21lIoQEChlQcm9qZWN0TG9jYXRpb25JbnNwZWN0aW9uEhUKDWluc3BlY3Rpb25faWQYASABKAkSRgoRcmVnaXN0cmF0aW9uX2tpbmQYAiABKA4yKy5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFJlZ2lzdHJhdGlvbktpbmQSEAoIcm9vdF91cmkYAyABKAkSHgoWc3VnZ2VzdGVkX2Rpc3BsYXlfbmFtZRgEIAEoCRIXCg9sb2NhdGlvbl9leGlzdHMYBSABKAgSFgoObG9jYXRpb25fZW1wdHkYBiABKAgSRgoRcG9ydGFibGVfbWV0YWRhdGEYByABKAsyKy5kZW5uZXR0LmNvbnRyb2wudjEuUG9ydGFibGVQcm9qZWN0TWV0YWRhdGESQwoRZGV0ZWN0ZWRfZmVhdHVyZXMYCCADKA4yKC5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdFNvdXJjZUZlYXR1cmUSNwoRbG9jYXRpb25faWRlbnRpdHkYCSABKAsyHC5kZW5uZXR0LmNvbW1vbi52MS5TdGFibGVSZWYSLwoLb2JzZXJ2ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCmV4cGlyZXNfYXQYCyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIpQBCh1JbnNwZWN0UHJvamVjdExvY2F0aW9uUmVxdWVzdBJGChFyZWdpc3RyYXRpb25fa2luZBgBIAEoDjIrLmRlbm5ldHQuY29udHJvbC52MS5Qcm9qZWN0UmVnaXN0cmF0aW9uS2luZBIQCghyb290X3VyaRgCIAEoCRIZChFjbGllbnRfc2Vzc2lvbl9pZBgDIAEoCSKnAQoeSW5zcGVjdFByb2plY3RMb2NhdGlvblJlc3BvbnNlEkMKCmluc3BlY3Rpb24YASABKAsyLS5kZW5uZXR0LmNvbnRyb2wudjEuUHJvamVjdExvY2F0aW9uSW5zcGVjdGlvbkgAEjUKBWVycm9yGAIgASgLMiQuZGVubmV0dC5jb250cm9sLnYxLldvcmtzcGFjZUZhaWx1cmVIAEIJCgdvdXRjb21lIsICChZSZWdpc3RlclByb2plY3RSZXF1ZXN0EjMKB2NvbW1hbmQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kTWV0YWRhdGESFQoNaW5zcGVjdGlvbl9pZBgCIAEoCRIUCgxkaXNwbGF5X25hbWUYAyABKAkSTAoYcG9ydGFibGVfbWV0YWRhdGFfYWN0aW9uGAQgASgOMiouZGVubmV0dC5jb250cm9sLnYxLlBvcnRhYmxlTWV0YWRhdGFBY3Rpb24SQgoTaW5pdGlhbF90cnVzdF9zdGF0ZRgFIAEoDjIlLmRlbm5ldHQuY29udHJvbC52MS5Qcm9qZWN0VHJ1c3RTdGF0ZRI0Cg50cnVzdF9kZWNpc2lvbhgGIAEoCzIcLmRlbm5ldHQuY29tbW9uLnYxLlN0YWJsZVJlZiKAAQoXUmVnaXN0ZXJQcm9qZWN0QWNjZXB0ZWQSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRBY2NlcHRlZBISCgpwcm9qZWN0X2lkGAIgASgJEhwKFHdvcmtzcGFjZV9iaW5kaW5nX2lkGAMgASgJIpwBChdSZWdpc3RlclByb2plY3RSZXNwb25zZRI/CghhY2NlcHRlZBgBIAEoCzIrLmRlbm5ldHQuY29udHJvbC52MS5SZWdpc3RlclByb2plY3RBY2NlcHRlZEgAEjUKBWVycm9yGAIgASgLMiQuZGVubmV0dC5jb250cm9sLnYxLldvcmtzcGFjZUZhaWx1cmVIAEIJCgdvdXRjb21lIvkBCh1SZWJpbmRQcm9qZWN0V29ya3NwYWNlUmVxdWVzdBIzCgdjb21tYW5kGAEgASgLMiIuZGVubmV0dC5jb21tb24udjEuQ29tbWFuZE1ldGFkYXRhEhIKCnByb2plY3RfaWQYAiABKAkSJAocY3VycmVudF93b3Jrc3BhY2VfYmluZGluZ19pZBgDIAEoCRIVCg1pbnNwZWN0aW9uX2lkGAQgASgJElIKGHBvcnRhYmxlX21ldGFkYXRhX2FjdGlvbhgFIAEoDjIwLmRlbm5ldHQuY29udHJvbC52MS5SZWJpbmRQb3J0YWJsZU1ldGFkYXRhQWN0aW9uIocBCh5SZWJpbmRQcm9qZWN0V29ya3NwYWNlQWNjZXB0ZWQSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRBY2NlcHRlZBISCgpwcm9qZWN0X2lkGAIgASgJEhwKFHdvcmtzcGFjZV9iaW5kaW5nX2lkGAMgASgJIqoBCh5SZWJpbmRQcm9qZWN0V29ya3NwYWNlUmVzcG9uc2USRgoIYWNjZXB0ZWQYASABKAsyMi5kZW5uZXR0LmNvbnRyb2wudjEuUmViaW5kUHJvamVjdFdvcmtzcGFjZUFjY2VwdGVkSAASNQoFZXJyb3IYAiABKAsyJC5kZW5uZXR0LmNvbnRyb2wudjEuV29ya3NwYWNlRmFpbHVyZUgAQgkKB291dGNvbWUi9QEKFlNldFByb2plY3RUcnVzdFJlcXVlc3QSMwoHY29tbWFuZBgBIAEoCzIiLmRlbm5ldHQuY29tbW9uLnYxLkNvbW1hbmRNZXRhZGF0YRISCgpwcm9qZWN0X2lkGAIgASgJEjoKC3RydXN0X3N0YXRlGAMgASgOMiUuZGVubmV0dC5jb250cm9sLnYxLlByb2plY3RUcnVzdFN0YXRlEiAKGGV4cGVjdGVkX3BvbGljeV9yZXZpc2lvbhgEIAEoBBI0Cg50cnVzdF9kZWNpc2lvbhgFIAEoCzIcLmRlbm5ldHQuY29tbW9uLnYxLlN0YWJsZVJlZiKTAQoXU2V0UHJvamVjdFRydXN0UmVzcG9uc2USNgoIYWNjZXB0ZWQYASABKAsyIi5kZW5uZXR0LmNvbW1vbi52MS5Db21tYW5kQWNjZXB0ZWRIABI1CgVlcnJvchgCIAEoCzIkLmRlbm5ldHQuY29udHJvbC52MS5Xb3Jrc3BhY2VGYWlsdXJlSABCCQoHb3V0Y29tZSqaAQoMUHJvamVjdFN0YXRlEh0KGVBST0pFQ1RfU1RBVEVfVU5TUEVDSUZJRUQQABIXChNQUk9KRUNUX1NUQVRFX1JFQURZEAESGQoVUFJPSkVDVF9TVEFURV9NSVNTSU5HEAISGgoWUFJPSkVDVF9TVEFURV9ERVRBQ0hFRBADEhsKF1BST0pFQ1RfU1RBVEVfUkVBRF9PTkxZEAQqnwEKF1Byb2plY3RSZWdpc3RyYXRpb25LaW5kEikKJVBST0pFQ1RfUkVHSVNUUkFUSU9OX0tJTkRfVU5TUEVDSUZJRUQQABIqCiZQUk9KRUNUX1JFR0lTVFJBVElPTl9LSU5EX0NSRUFURV9FTVBUWRABEi0KKVBST0pFQ1RfUkVHSVNUUkFUSU9OX0tJTkRfQVRUQUNIX0VYSVNUSU5HEAIqhQIKFFByb2plY3RTb3VyY2VGZWF0dXJlEiYKIlBST0pFQ1RfU09VUkNFX0ZFQVRVUkVfVU5TUEVDSUZJRUQQABIvCitQUk9KRUNUX1NPVVJDRV9GRUFUVVJFX1ZFUlNJT05FRF9SRVBPU0lUT1JZEAESLAooUFJPSkVDVF9TT1VSQ0VfRkVBVFVSRV9JTlNUUlVDVElPTl9GSUxFUxACEjQKMFBST0pFQ1RfU09VUkNFX0ZFQVRVUkVfUE9SVEFCTEVfUFJPSkVDVF9NRVRBREFUQRADEjAKLFBST0pFQ1RfU09VUkNFX0ZFQVRVUkVfU0hBUkVEX1BST0pFQ1RfTUVNT1JZEAQylQYKDlByb2plY3RTZXJ2aWNlEmkKDUNyZWF0ZVByb2plY3QSKC5kZW5uZXR0LmNvbnRyb2wudjEuQ3JlYXRlUHJvamVjdFJlcXVlc3QaKS5kZW5uZXR0LmNvbnRyb2wudjEuQ3JlYXRlUHJvamVjdFJlc3BvbnNlIgOIAgESYQoMTGlzdFByb2plY3RzEicuZGVubmV0dC5jb250cm9sLnYxLkxpc3RQcm9qZWN0c1JlcXVlc3QaKC5kZW5uZXR0LmNvbnRyb2wudjEuTGlzdFByb2plY3RzUmVzcG9uc2USWwoKR2V0UHJvamVjdBIlLmRlbm5ldHQuY29udHJvbC52MS5HZXRQcm9qZWN0UmVxdWVzdBomLmRlbm5ldHQuY29udHJvbC52MS5HZXRQcm9qZWN0UmVzcG9uc2USfwoWSW5zcGVjdFByb2plY3RMb2NhdGlvbhIxLmRlbm5ldHQuY29udHJvbC52MS5JbnNwZWN0UHJvamVjdExvY2F0aW9uUmVxdWVzdBoyLmRlbm5ldHQuY29udHJvbC52MS5JbnNwZWN0UHJvamVjdExvY2F0aW9uUmVzcG9uc2USagoPUmVnaXN0ZXJQcm9qZWN0EiouZGVubmV0dC5jb250cm9sLnYxLlJlZ2lzdGVyUHJvamVjdFJlcXVlc3QaKy5kZW5uZXR0LmNvbnRyb2wudjEuUmVnaXN0ZXJQcm9qZWN0UmVzcG9uc2USfwoWUmViaW5kUHJvamVjdFdvcmtzcGFjZRIxLmRlbm5ldHQuY29udHJvbC52MS5SZWJpbmRQcm9qZWN0V29ya3NwYWNlUmVxdWVzdBoyLmRlbm5ldHQuY29udHJvbC52MS5SZWJpbmRQcm9qZWN0V29ya3NwYWNlUmVzcG9uc2USagoPU2V0UHJvamVjdFRydXN0EiouZGVubmV0dC5jb250cm9sLnYxLlNldFByb2plY3RUcnVzdFJlcXVlc3QaKy5kZW5uZXR0LmNvbnRyb2wudjEuU2V0UHJvamVjdFRydXN0UmVzcG9uc2ViBnByb3RvMw", [file_dennett_common_v1_common, file_dennett_control_v1_workspace, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message dennett.control.v1.ProjectSummary
@@ -69,9 +71,12 @@ export type Project = Message<"dennett.control.v1.Project"> & {
   displayName: string;
 
   /**
-   * root_uri is local-sensitive and must not be copied into telemetry labels.
+   * Legacy M01 projection of the primary binding location. It is
+   * local-sensitive, never identity or permission authority, and must not be
+   * copied into telemetry labels.
    *
-   * @generated from field: string root_uri = 3;
+   * @generated from field: string root_uri = 3 [deprecated = true];
+   * @deprecated
    */
   rootUri: string;
 
@@ -94,6 +99,11 @@ export type Project = Message<"dennett.control.v1.Project"> & {
    * @generated from field: google.protobuf.Timestamp updated_at = 7;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string primary_workspace_binding_id = 8;
+   */
+  primaryWorkspaceBindingId: string;
 };
 
 /**
@@ -104,6 +114,10 @@ export const ProjectSchema: GenMessage<Project> = /*@__PURE__*/
   messageDesc(file_dennett_control_v1_project, 1);
 
 /**
+ * Legacy M01 empty-project compatibility request. Servers must reject an
+ * existing non-empty location and direct callers to InspectProjectLocation ->
+ * RegisterProject, so this route cannot bypass .dennett inspection.
+ *
  * @generated from message dennett.control.v1.CreateProjectRequest
  */
 export type CreateProjectRequest = Message<"dennett.control.v1.CreateProjectRequest"> & {
@@ -118,7 +132,8 @@ export type CreateProjectRequest = Message<"dennett.control.v1.CreateProjectRequ
   displayName: string;
 
   /**
-   * @generated from field: string root_uri = 3;
+   * @generated from field: string root_uri = 3 [deprecated = true];
+   * @deprecated
    */
   rootUri: string;
 };
@@ -322,6 +337,405 @@ export const GetProjectResponseSchema: GenMessage<GetProjectResponse> = /*@__PUR
   messageDesc(file_dennett_control_v1_project, 9);
 
 /**
+ * ProjectLocationInspection is a read-only, expiring observation. root_uri is
+ * a location, never project identity or permission authority.
+ *
+ * @generated from message dennett.control.v1.ProjectLocationInspection
+ */
+export type ProjectLocationInspection = Message<"dennett.control.v1.ProjectLocationInspection"> & {
+  /**
+   * @generated from field: string inspection_id = 1;
+   */
+  inspectionId: string;
+
+  /**
+   * @generated from field: dennett.control.v1.ProjectRegistrationKind registration_kind = 2;
+   */
+  registrationKind: ProjectRegistrationKind;
+
+  /**
+   * @generated from field: string root_uri = 3;
+   */
+  rootUri: string;
+
+  /**
+   * @generated from field: string suggested_display_name = 4;
+   */
+  suggestedDisplayName: string;
+
+  /**
+   * @generated from field: bool location_exists = 5;
+   */
+  locationExists: boolean;
+
+  /**
+   * @generated from field: bool location_empty = 6;
+   */
+  locationEmpty: boolean;
+
+  /**
+   * @generated from field: dennett.control.v1.PortableProjectMetadata portable_metadata = 7;
+   */
+  portableMetadata?: PortableProjectMetadata | undefined;
+
+  /**
+   * @generated from field: repeated dennett.control.v1.ProjectSourceFeature detected_features = 8;
+   */
+  detectedFeatures: ProjectSourceFeature[];
+
+  /**
+   * @generated from field: dennett.common.v1.StableRef location_identity = 9;
+   */
+  locationIdentity?: StableRef | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp observed_at = 10;
+   */
+  observedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp expires_at = 11;
+   */
+  expiresAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.ProjectLocationInspection.
+ * Use `create(ProjectLocationInspectionSchema)` to create a new message.
+ */
+export const ProjectLocationInspectionSchema: GenMessage<ProjectLocationInspection> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 10);
+
+/**
+ * @generated from message dennett.control.v1.InspectProjectLocationRequest
+ */
+export type InspectProjectLocationRequest = Message<"dennett.control.v1.InspectProjectLocationRequest"> & {
+  /**
+   * @generated from field: dennett.control.v1.ProjectRegistrationKind registration_kind = 1;
+   */
+  registrationKind: ProjectRegistrationKind;
+
+  /**
+   * @generated from field: string root_uri = 2;
+   */
+  rootUri: string;
+
+  /**
+   * @generated from field: string client_session_id = 3;
+   */
+  clientSessionId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.InspectProjectLocationRequest.
+ * Use `create(InspectProjectLocationRequestSchema)` to create a new message.
+ */
+export const InspectProjectLocationRequestSchema: GenMessage<InspectProjectLocationRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 11);
+
+/**
+ * @generated from message dennett.control.v1.InspectProjectLocationResponse
+ */
+export type InspectProjectLocationResponse = Message<"dennett.control.v1.InspectProjectLocationResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.InspectProjectLocationResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.ProjectLocationInspection inspection = 1;
+     */
+    value: ProjectLocationInspection;
+    case: "inspection";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.WorkspaceFailure error = 2;
+     */
+    value: WorkspaceFailure;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.InspectProjectLocationResponse.
+ * Use `create(InspectProjectLocationResponseSchema)` to create a new message.
+ */
+export const InspectProjectLocationResponseSchema: GenMessage<InspectProjectLocationResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 12);
+
+/**
+ * @generated from message dennett.control.v1.RegisterProjectRequest
+ */
+export type RegisterProjectRequest = Message<"dennett.control.v1.RegisterProjectRequest"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandMetadata command = 1;
+   */
+  command?: CommandMetadata | undefined;
+
+  /**
+   * The Node revalidates this inspection before committing any folder change.
+   *
+   * @generated from field: string inspection_id = 2;
+   */
+  inspectionId: string;
+
+  /**
+   * @generated from field: string display_name = 3;
+   */
+  displayName: string;
+
+  /**
+   * @generated from field: dennett.control.v1.PortableMetadataAction portable_metadata_action = 4;
+   */
+  portableMetadataAction: PortableMetadataAction;
+
+  /**
+   * UNSPECIFIED and RESTRICTED both register fail-closed. TRUSTED_BOUNDED is
+   * accepted only with a Trust-issued decision that the Node validates as an
+   * explicit current-user grant. Portable metadata cannot supply that record.
+   * When USE_EXISTING resolves to an already registered local Project ID,
+   * initial_trust_state must be UNSPECIFIED and trust_decision absent: the
+   * existing local policy is preserved and changes use SetProjectTrust.
+   *
+   * @generated from field: dennett.control.v1.ProjectTrustState initial_trust_state = 5;
+   */
+  initialTrustState: ProjectTrustState;
+
+  /**
+   * @generated from field: dennett.common.v1.StableRef trust_decision = 6;
+   */
+  trustDecision?: StableRef | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.RegisterProjectRequest.
+ * Use `create(RegisterProjectRequestSchema)` to create a new message.
+ */
+export const RegisterProjectRequestSchema: GenMessage<RegisterProjectRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 13);
+
+/**
+ * RegisterProjectAccepted allocates stable identities but does not claim that
+ * registration, metadata creation or projection publication completed.
+ *
+ * @generated from message dennett.control.v1.RegisterProjectAccepted
+ */
+export type RegisterProjectAccepted = Message<"dennett.control.v1.RegisterProjectAccepted"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandAccepted command = 1;
+   */
+  command?: CommandAccepted | undefined;
+
+  /**
+   * @generated from field: string project_id = 2;
+   */
+  projectId: string;
+
+  /**
+   * @generated from field: string workspace_binding_id = 3;
+   */
+  workspaceBindingId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.RegisterProjectAccepted.
+ * Use `create(RegisterProjectAcceptedSchema)` to create a new message.
+ */
+export const RegisterProjectAcceptedSchema: GenMessage<RegisterProjectAccepted> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 14);
+
+/**
+ * @generated from message dennett.control.v1.RegisterProjectResponse
+ */
+export type RegisterProjectResponse = Message<"dennett.control.v1.RegisterProjectResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.RegisterProjectResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.RegisterProjectAccepted accepted = 1;
+     */
+    value: RegisterProjectAccepted;
+    case: "accepted";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.WorkspaceFailure error = 2;
+     */
+    value: WorkspaceFailure;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.RegisterProjectResponse.
+ * Use `create(RegisterProjectResponseSchema)` to create a new message.
+ */
+export const RegisterProjectResponseSchema: GenMessage<RegisterProjectResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 15);
+
+/**
+ * @generated from message dennett.control.v1.RebindProjectWorkspaceRequest
+ */
+export type RebindProjectWorkspaceRequest = Message<"dennett.control.v1.RebindProjectWorkspaceRequest"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandMetadata command = 1;
+   */
+  command?: CommandMetadata | undefined;
+
+  /**
+   * @generated from field: string project_id = 2;
+   */
+  projectId: string;
+
+  /**
+   * @generated from field: string current_workspace_binding_id = 3;
+   */
+  currentWorkspaceBindingId: string;
+
+  /**
+   * @generated from field: string inspection_id = 4;
+   */
+  inspectionId: string;
+
+  /**
+   * @generated from field: dennett.control.v1.RebindPortableMetadataAction portable_metadata_action = 5;
+   */
+  portableMetadataAction: RebindPortableMetadataAction;
+};
+
+/**
+ * Describes the message dennett.control.v1.RebindProjectWorkspaceRequest.
+ * Use `create(RebindProjectWorkspaceRequestSchema)` to create a new message.
+ */
+export const RebindProjectWorkspaceRequestSchema: GenMessage<RebindProjectWorkspaceRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 16);
+
+/**
+ * @generated from message dennett.control.v1.RebindProjectWorkspaceAccepted
+ */
+export type RebindProjectWorkspaceAccepted = Message<"dennett.control.v1.RebindProjectWorkspaceAccepted"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandAccepted command = 1;
+   */
+  command?: CommandAccepted | undefined;
+
+  /**
+   * @generated from field: string project_id = 2;
+   */
+  projectId: string;
+
+  /**
+   * @generated from field: string workspace_binding_id = 3;
+   */
+  workspaceBindingId: string;
+};
+
+/**
+ * Describes the message dennett.control.v1.RebindProjectWorkspaceAccepted.
+ * Use `create(RebindProjectWorkspaceAcceptedSchema)` to create a new message.
+ */
+export const RebindProjectWorkspaceAcceptedSchema: GenMessage<RebindProjectWorkspaceAccepted> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 17);
+
+/**
+ * @generated from message dennett.control.v1.RebindProjectWorkspaceResponse
+ */
+export type RebindProjectWorkspaceResponse = Message<"dennett.control.v1.RebindProjectWorkspaceResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.RebindProjectWorkspaceResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.control.v1.RebindProjectWorkspaceAccepted accepted = 1;
+     */
+    value: RebindProjectWorkspaceAccepted;
+    case: "accepted";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.WorkspaceFailure error = 2;
+     */
+    value: WorkspaceFailure;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.RebindProjectWorkspaceResponse.
+ * Use `create(RebindProjectWorkspaceResponseSchema)` to create a new message.
+ */
+export const RebindProjectWorkspaceResponseSchema: GenMessage<RebindProjectWorkspaceResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 18);
+
+/**
+ * @generated from message dennett.control.v1.SetProjectTrustRequest
+ */
+export type SetProjectTrustRequest = Message<"dennett.control.v1.SetProjectTrustRequest"> & {
+  /**
+   * @generated from field: dennett.common.v1.CommandMetadata command = 1;
+   */
+  command?: CommandMetadata | undefined;
+
+  /**
+   * @generated from field: string project_id = 2;
+   */
+  projectId: string;
+
+  /**
+   * UNSPECIFIED is invalid. Every change requires a Trust-issued current-user
+   * decision and a non-zero exact policy revision; project files,
+   * instructions and model output cannot mint either authority.
+   *
+   * @generated from field: dennett.control.v1.ProjectTrustState trust_state = 3;
+   */
+  trustState: ProjectTrustState;
+
+  /**
+   * @generated from field: uint64 expected_policy_revision = 4;
+   */
+  expectedPolicyRevision: bigint;
+
+  /**
+   * @generated from field: dennett.common.v1.StableRef trust_decision = 5;
+   */
+  trustDecision?: StableRef | undefined;
+};
+
+/**
+ * Describes the message dennett.control.v1.SetProjectTrustRequest.
+ * Use `create(SetProjectTrustRequestSchema)` to create a new message.
+ */
+export const SetProjectTrustRequestSchema: GenMessage<SetProjectTrustRequest> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 19);
+
+/**
+ * @generated from message dennett.control.v1.SetProjectTrustResponse
+ */
+export type SetProjectTrustResponse = Message<"dennett.control.v1.SetProjectTrustResponse"> & {
+  /**
+   * @generated from oneof dennett.control.v1.SetProjectTrustResponse.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: dennett.common.v1.CommandAccepted accepted = 1;
+     */
+    value: CommandAccepted;
+    case: "accepted";
+  } | {
+    /**
+     * @generated from field: dennett.control.v1.WorkspaceFailure error = 2;
+     */
+    value: WorkspaceFailure;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message dennett.control.v1.SetProjectTrustResponse.
+ * Use `create(SetProjectTrustResponseSchema)` to create a new message.
+ */
+export const SetProjectTrustResponseSchema: GenMessage<SetProjectTrustResponse> = /*@__PURE__*/
+  messageDesc(file_dennett_control_v1_project, 20);
+
+/**
  * @generated from enum dennett.control.v1.ProjectState
  */
 export enum ProjectState {
@@ -358,11 +772,74 @@ export const ProjectStateSchema: GenEnum<ProjectState> = /*@__PURE__*/
   enumDesc(file_dennett_control_v1_project, 0);
 
 /**
+ * @generated from enum dennett.control.v1.ProjectRegistrationKind
+ */
+export enum ProjectRegistrationKind {
+  /**
+   * @generated from enum value: PROJECT_REGISTRATION_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: PROJECT_REGISTRATION_KIND_CREATE_EMPTY = 1;
+   */
+  CREATE_EMPTY = 1,
+
+  /**
+   * @generated from enum value: PROJECT_REGISTRATION_KIND_ATTACH_EXISTING = 2;
+   */
+  ATTACH_EXISTING = 2,
+}
+
+/**
+ * Describes the enum dennett.control.v1.ProjectRegistrationKind.
+ */
+export const ProjectRegistrationKindSchema: GenEnum<ProjectRegistrationKind> = /*@__PURE__*/
+  enumDesc(file_dennett_control_v1_project, 1);
+
+/**
+ * @generated from enum dennett.control.v1.ProjectSourceFeature
+ */
+export enum ProjectSourceFeature {
+  /**
+   * @generated from enum value: PROJECT_SOURCE_FEATURE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: PROJECT_SOURCE_FEATURE_VERSIONED_REPOSITORY = 1;
+   */
+  VERSIONED_REPOSITORY = 1,
+
+  /**
+   * @generated from enum value: PROJECT_SOURCE_FEATURE_INSTRUCTION_FILES = 2;
+   */
+  INSTRUCTION_FILES = 2,
+
+  /**
+   * @generated from enum value: PROJECT_SOURCE_FEATURE_PORTABLE_PROJECT_METADATA = 3;
+   */
+  PORTABLE_PROJECT_METADATA = 3,
+
+  /**
+   * @generated from enum value: PROJECT_SOURCE_FEATURE_SHARED_PROJECT_MEMORY = 4;
+   */
+  SHARED_PROJECT_MEMORY = 4,
+}
+
+/**
+ * Describes the enum dennett.control.v1.ProjectSourceFeature.
+ */
+export const ProjectSourceFeatureSchema: GenEnum<ProjectSourceFeature> = /*@__PURE__*/
+  enumDesc(file_dennett_control_v1_project, 2);
+
+/**
  * @generated from service dennett.control.v1.ProjectService
  */
 export const ProjectService: GenService<{
   /**
    * @generated from rpc dennett.control.v1.ProjectService.CreateProject
+   * @deprecated
    */
   createProject: {
     methodKind: "unary";
@@ -384,6 +861,38 @@ export const ProjectService: GenService<{
     methodKind: "unary";
     input: typeof GetProjectRequestSchema;
     output: typeof GetProjectResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.ProjectService.InspectProjectLocation
+   */
+  inspectProjectLocation: {
+    methodKind: "unary";
+    input: typeof InspectProjectLocationRequestSchema;
+    output: typeof InspectProjectLocationResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.ProjectService.RegisterProject
+   */
+  registerProject: {
+    methodKind: "unary";
+    input: typeof RegisterProjectRequestSchema;
+    output: typeof RegisterProjectResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.ProjectService.RebindProjectWorkspace
+   */
+  rebindProjectWorkspace: {
+    methodKind: "unary";
+    input: typeof RebindProjectWorkspaceRequestSchema;
+    output: typeof RebindProjectWorkspaceResponseSchema;
+  },
+  /**
+   * @generated from rpc dennett.control.v1.ProjectService.SetProjectTrust
+   */
+  setProjectTrust: {
+    methodKind: "unary";
+    input: typeof SetProjectTrustRequestSchema;
+    output: typeof SetProjectTrustResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_dennett_control_v1_project, 0);

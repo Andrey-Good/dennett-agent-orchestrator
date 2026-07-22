@@ -27,6 +27,17 @@ EPOCH_MIGRATION_MANIFEST = PROTOCOLS / "epoch-migrations" / "m00-to-m01.json"
 APPROVED_EPOCH_MIGRATION_SHA256 = (
     "211f06392875667913d7dcccda8ef2dce3b25774788e0682621844874f4d9546"
 )
+M02_INITIAL_DESCRIPTOR_FILES = (
+    "dennett/control/v1/project.proto",
+    "dennett/control/v1/workspace.proto",
+)
+# This approval checksum locks every initial M02 field, enum, oneof, option and
+# service method. Buf remains the wire-compatibility authority; additive future
+# changes intentionally update this checksum during review instead of escaping
+# detection merely because they are absent from origin/main today.
+APPROVED_M02_INITIAL_DESCRIPTOR_SHA256 = (
+    "43c715e8e0fe743fdac38a3551280cf2dfd172dad5d253dd4ce258ab869ca275"
+)
 COMPARISON_BUF_CONFIG = """version: v2
 modules:
   - path: proto
@@ -59,11 +70,34 @@ def _field(
     )
 
 
+def _workspace_outcome(
+    success_name: str,
+    success_type: str,
+) -> tuple[FieldContract, ...]:
+    return (
+        _field(
+            success_name,
+            1,
+            "TYPE_MESSAGE",
+            type_name=success_type,
+            oneof_index=0,
+        ),
+        _field(
+            "error",
+            2,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceFailure",
+            oneof_index=0,
+        ),
+    )
+
+
 EXPECTED_DESCRIPTOR_FILES = {
     "dennett/common/v1/common.proto",
     "dennett/control/v1/project.proto",
     "dennett/control/v1/session.proto",
     "dennett/control/v1/system.proto",
+    "dennett/control/v1/workspace.proto",
     "dennett/sync/v1/watch.proto",
 }
 EXPECTED_ENUM_VALUES: dict[str, tuple[tuple[str, int], ...]] = {
@@ -91,6 +125,190 @@ EXPECTED_ENUM_VALUES: dict[str, tuple[tuple[str, int], ...]] = {
         ("TURN_DELIVERY_MODE_UNSPECIFIED", 0),
         ("TURN_DELIVERY_MODE_NEW_TURN", 1),
         ("TURN_DELIVERY_MODE_STEER_NOW", 2),
+    ),
+    ".dennett.control.v1.ProjectRegistrationKind": (
+        ("PROJECT_REGISTRATION_KIND_UNSPECIFIED", 0),
+        ("PROJECT_REGISTRATION_KIND_CREATE_EMPTY", 1),
+        ("PROJECT_REGISTRATION_KIND_ATTACH_EXISTING", 2),
+    ),
+    ".dennett.control.v1.ProjectSourceFeature": (
+        ("PROJECT_SOURCE_FEATURE_UNSPECIFIED", 0),
+        ("PROJECT_SOURCE_FEATURE_VERSIONED_REPOSITORY", 1),
+        ("PROJECT_SOURCE_FEATURE_INSTRUCTION_FILES", 2),
+        ("PROJECT_SOURCE_FEATURE_PORTABLE_PROJECT_METADATA", 3),
+        ("PROJECT_SOURCE_FEATURE_SHARED_PROJECT_MEMORY", 4),
+    ),
+    ".dennett.control.v1.WorkspaceKind": (
+        ("WORKSPACE_KIND_UNSPECIFIED", 0),
+        ("WORKSPACE_KIND_FOLDER", 1),
+        ("WORKSPACE_KIND_VERSIONED_CHECKOUT", 2),
+        ("WORKSPACE_KIND_ISOLATED_CHECKOUT", 3),
+        ("WORKSPACE_KIND_REMOTE", 4),
+    ),
+    ".dennett.control.v1.WorkspaceAvailability": (
+        ("WORKSPACE_AVAILABILITY_UNSPECIFIED", 0),
+        ("WORKSPACE_AVAILABILITY_AVAILABLE", 1),
+        ("WORKSPACE_AVAILABILITY_MISSING", 2),
+        ("WORKSPACE_AVAILABILITY_INACCESSIBLE", 3),
+        ("WORKSPACE_AVAILABILITY_DETACHED", 4),
+    ),
+    ".dennett.control.v1.WorkspaceAccessMode": (
+        ("WORKSPACE_ACCESS_MODE_UNSPECIFIED", 0),
+        ("WORKSPACE_ACCESS_MODE_READ_ONLY", 1),
+        ("WORKSPACE_ACCESS_MODE_READ_WRITE", 2),
+    ),
+    ".dennett.control.v1.ProjectTrustState": (
+        ("PROJECT_TRUST_STATE_UNSPECIFIED", 0),
+        ("PROJECT_TRUST_STATE_RESTRICTED", 1),
+        ("PROJECT_TRUST_STATE_TRUSTED_BOUNDED", 2),
+        ("PROJECT_TRUST_STATE_REVOKED", 3),
+    ),
+    ".dennett.control.v1.PortableProjectMetadataState": (
+        ("PORTABLE_PROJECT_METADATA_STATE_UNSPECIFIED", 0),
+        ("PORTABLE_PROJECT_METADATA_STATE_ABSENT", 1),
+        ("PORTABLE_PROJECT_METADATA_STATE_PRESENT_VALID", 2),
+        ("PORTABLE_PROJECT_METADATA_STATE_INVALID", 3),
+        ("PORTABLE_PROJECT_METADATA_STATE_IDENTITY_CONFLICT", 4),
+        ("PORTABLE_PROJECT_METADATA_STATE_UNSUPPORTED_VERSION", 5),
+    ),
+    ".dennett.control.v1.SharedProjectMemoryState": (
+        ("SHARED_PROJECT_MEMORY_STATE_UNSPECIFIED", 0),
+        ("SHARED_PROJECT_MEMORY_STATE_ABSENT", 1),
+        ("SHARED_PROJECT_MEMORY_STATE_PRESENT", 2),
+        ("SHARED_PROJECT_MEMORY_STATE_INVALID", 3),
+    ),
+    ".dennett.control.v1.PortableMetadataAction": (
+        ("PORTABLE_METADATA_ACTION_UNSPECIFIED", 0),
+        ("PORTABLE_METADATA_ACTION_LEAVE_ABSENT", 1),
+        ("PORTABLE_METADATA_ACTION_USE_EXISTING", 2),
+        ("PORTABLE_METADATA_ACTION_CREATE_MINIMAL", 3),
+        ("PORTABLE_METADATA_ACTION_FORK_WITH_NEW_IDENTITY", 4),
+    ),
+    ".dennett.control.v1.RebindPortableMetadataAction": (
+        ("REBIND_PORTABLE_METADATA_ACTION_UNSPECIFIED", 0),
+        ("REBIND_PORTABLE_METADATA_ACTION_LEAVE_ABSENT", 1),
+        ("REBIND_PORTABLE_METADATA_ACTION_USE_EXISTING", 2),
+        ("REBIND_PORTABLE_METADATA_ACTION_CREATE_MINIMAL", 3),
+    ),
+    ".dennett.control.v1.WorkspaceProjectionState": (
+        ("WORKSPACE_PROJECTION_STATE_UNSPECIFIED", 0),
+        ("WORKSPACE_PROJECTION_STATE_READY", 1),
+        ("WORKSPACE_PROJECTION_STATE_STALE", 2),
+        ("WORKSPACE_PROJECTION_STATE_CONFLICT", 3),
+        ("WORKSPACE_PROJECTION_STATE_RECOVERY_REQUIRED", 4),
+    ),
+    ".dennett.control.v1.FileChangeKind": (
+        ("FILE_CHANGE_KIND_UNSPECIFIED", 0),
+        ("FILE_CHANGE_KIND_ADDED", 1),
+        ("FILE_CHANGE_KIND_MODIFIED", 2),
+        ("FILE_CHANGE_KIND_DELETED", 3),
+        ("FILE_CHANGE_KIND_RENAMED", 4),
+    ),
+    ".dennett.control.v1.FileReviewState": (
+        ("FILE_REVIEW_STATE_UNSPECIFIED", 0),
+        ("FILE_REVIEW_STATE_UNREVIEWED", 1),
+        ("FILE_REVIEW_STATE_REVIEWED", 2),
+        ("FILE_REVIEW_STATE_CHANGES_REQUESTED", 3),
+        ("FILE_REVIEW_STATE_ACCEPTED", 4),
+    ),
+    ".dennett.control.v1.WorkspaceOperationKind": (
+        ("WORKSPACE_OPERATION_KIND_UNSPECIFIED", 0),
+        ("WORKSPACE_OPERATION_KIND_APPLY_FILE_CHANGES", 1),
+        ("WORKSPACE_OPERATION_KIND_RUN_COMMAND", 2),
+        ("WORKSPACE_OPERATION_KIND_RUN_TEST", 3),
+        ("WORKSPACE_OPERATION_KIND_CREATE_CHECKPOINT", 4),
+        ("WORKSPACE_OPERATION_KIND_RESTORE_CHECKPOINT", 5),
+        ("WORKSPACE_OPERATION_KIND_REVIEW_ACTION", 6),
+    ),
+    ".dennett.control.v1.WorkspaceOperationState": (
+        ("WORKSPACE_OPERATION_STATE_UNSPECIFIED", 0),
+        ("WORKSPACE_OPERATION_STATE_ACCEPTED", 1),
+        ("WORKSPACE_OPERATION_STATE_RUNNING", 2),
+        ("WORKSPACE_OPERATION_STATE_SUCCEEDED", 3),
+        ("WORKSPACE_OPERATION_STATE_FAILED", 4),
+        ("WORKSPACE_OPERATION_STATE_CANCELLED", 5),
+        ("WORKSPACE_OPERATION_STATE_TIMED_OUT", 6),
+        ("WORKSPACE_OPERATION_STATE_RECOVERY_REQUIRED", 7),
+    ),
+    ".dennett.control.v1.WorkspaceFailureKind": (
+        ("WORKSPACE_FAILURE_KIND_UNSPECIFIED", 0),
+        ("WORKSPACE_FAILURE_KIND_STALE_SNAPSHOT", 1),
+        ("WORKSPACE_FAILURE_KIND_SCOPE_DENIED", 2),
+        ("WORKSPACE_FAILURE_KIND_CONFLICT", 3),
+        ("WORKSPACE_FAILURE_KIND_CANCELLED", 4),
+        ("WORKSPACE_FAILURE_KIND_LOCATION_MISSING", 5),
+        ("WORKSPACE_FAILURE_KIND_ADAPTER_RETRYABLE", 6),
+        ("WORKSPACE_FAILURE_KIND_ADAPTER_TERMINAL", 7),
+        ("WORKSPACE_FAILURE_KIND_VALIDATION", 8),
+        ("WORKSPACE_FAILURE_KIND_RECOVERY_REQUIRED", 9),
+    ),
+    ".dennett.control.v1.ExecutionKind": (
+        ("EXECUTION_KIND_UNSPECIFIED", 0),
+        ("EXECUTION_KIND_COMMAND", 1),
+        ("EXECUTION_KIND_TEST", 2),
+    ),
+    ".dennett.control.v1.ExecutionTerminalKind": (
+        ("EXECUTION_TERMINAL_KIND_UNSPECIFIED", 0),
+        ("EXECUTION_TERMINAL_KIND_SUCCEEDED", 1),
+        ("EXECUTION_TERMINAL_KIND_FAILED", 2),
+        ("EXECUTION_TERMINAL_KIND_TIMED_OUT", 3),
+        ("EXECUTION_TERMINAL_KIND_CANCELLED", 4),
+        ("EXECUTION_TERMINAL_KIND_SPAWN_FAILED", 5),
+        ("EXECUTION_TERMINAL_KIND_RECOVERY_REQUIRED", 6),
+    ),
+    ".dennett.control.v1.TestOutcome": (
+        ("TEST_OUTCOME_UNSPECIFIED", 0),
+        ("TEST_OUTCOME_PASSED", 1),
+        ("TEST_OUTCOME_FAILED", 2),
+        ("TEST_OUTCOME_TIMED_OUT", 3),
+        ("TEST_OUTCOME_CANCELLED", 4),
+        ("TEST_OUTCOME_SPAWN_FAILED", 5),
+        ("TEST_OUTCOME_RECOVERY_REQUIRED", 6),
+    ),
+    ".dennett.control.v1.ArtifactState": (
+        ("ARTIFACT_STATE_UNSPECIFIED", 0),
+        ("ARTIFACT_STATE_AVAILABLE", 1),
+        ("ARTIFACT_STATE_MISSING", 2),
+        ("ARTIFACT_STATE_OVERSIZED", 3),
+        ("ARTIFACT_STATE_OUT_OF_SCOPE", 4),
+        ("ARTIFACT_STATE_UNSUPPORTED", 5),
+    ),
+    ".dennett.control.v1.ArtifactKind": (
+        ("ARTIFACT_KIND_UNSPECIFIED", 0),
+        ("ARTIFACT_KIND_FILE", 1),
+        ("ARTIFACT_KIND_DIRECTORY", 2),
+        ("ARTIFACT_KIND_REPORT", 3),
+        ("ARTIFACT_KIND_BINARY", 4),
+        ("ARTIFACT_KIND_PATCH", 5),
+        ("ARTIFACT_KIND_OTHER", 6),
+    ),
+    ".dennett.control.v1.CheckpointState": (
+        ("CHECKPOINT_STATE_UNSPECIFIED", 0),
+        ("CHECKPOINT_STATE_AVAILABLE", 1),
+        ("CHECKPOINT_STATE_RESTORING", 2),
+        ("CHECKPOINT_STATE_RESTORED", 3),
+        ("CHECKPOINT_STATE_PARTIALLY_APPLIED", 4),
+        ("CHECKPOINT_STATE_RECOVERY_REQUIRED", 5),
+    ),
+    ".dennett.control.v1.ReviewState": (
+        ("REVIEW_STATE_UNSPECIFIED", 0),
+        ("REVIEW_STATE_PENDING", 1),
+        ("REVIEW_STATE_IN_REVIEW", 2),
+        ("REVIEW_STATE_CHANGES_REQUESTED", 3),
+        ("REVIEW_STATE_APPROVED", 4),
+        ("REVIEW_STATE_STALE", 5),
+    ),
+    ".dennett.control.v1.ReviewActionKind": (
+        ("REVIEW_ACTION_KIND_UNSPECIFIED", 0),
+        ("REVIEW_ACTION_KIND_REQUEST_CHANGES", 1),
+        ("REVIEW_ACTION_KIND_APPROVE", 2),
+        ("REVIEW_ACTION_KIND_CONTINUE_REVIEWING", 3),
+    ),
+    ".dennett.control.v1.ReviewCommentState": (
+        ("REVIEW_COMMENT_STATE_UNSPECIFIED", 0),
+        ("REVIEW_COMMENT_STATE_OPEN", 1),
+        ("REVIEW_COMMENT_STATE_RESOLVED", 2),
+        ("REVIEW_COMMENT_STATE_OUTDATED", 3),
     ),
 }
 EXPECTED_SERVICE_METHODS: dict[str, tuple[MethodContract, ...]] = {
@@ -146,6 +364,34 @@ EXPECTED_SERVICE_METHODS: dict[str, tuple[MethodContract, ...]] = {
             False,
             False,
         ),
+        (
+            "InspectProjectLocation",
+            ".dennett.control.v1.InspectProjectLocationRequest",
+            ".dennett.control.v1.InspectProjectLocationResponse",
+            False,
+            False,
+        ),
+        (
+            "RegisterProject",
+            ".dennett.control.v1.RegisterProjectRequest",
+            ".dennett.control.v1.RegisterProjectResponse",
+            False,
+            False,
+        ),
+        (
+            "RebindProjectWorkspace",
+            ".dennett.control.v1.RebindProjectWorkspaceRequest",
+            ".dennett.control.v1.RebindProjectWorkspaceResponse",
+            False,
+            False,
+        ),
+        (
+            "SetProjectTrust",
+            ".dennett.control.v1.SetProjectTrustRequest",
+            ".dennett.control.v1.SetProjectTrustResponse",
+            False,
+            False,
+        ),
     ),
     ".dennett.control.v1.SessionService": (
         (
@@ -194,6 +440,71 @@ EXPECTED_SERVICE_METHODS: dict[str, tuple[MethodContract, ...]] = {
             "DiscardComposerDraft",
             ".dennett.control.v1.DiscardComposerDraftRequest",
             ".dennett.control.v1.DiscardComposerDraftResponse",
+            False,
+            False,
+        ),
+    ),
+    ".dennett.control.v1.WorkspaceService": (
+        (
+            "GetWorkspace",
+            ".dennett.control.v1.GetWorkspaceRequest",
+            ".dennett.control.v1.GetWorkspaceResponse",
+            False,
+            False,
+        ),
+        (
+            "WatchWorkspace",
+            ".dennett.control.v1.WatchWorkspaceRequest",
+            ".dennett.control.v1.WatchWorkspaceResponse",
+            False,
+            True,
+        ),
+        (
+            "GetWorkspaceDiff",
+            ".dennett.control.v1.GetWorkspaceDiffRequest",
+            ".dennett.control.v1.GetWorkspaceDiffResponse",
+            False,
+            False,
+        ),
+        (
+            "ApplyFileChanges",
+            ".dennett.control.v1.ApplyFileChangesRequest",
+            ".dennett.control.v1.ApplyFileChangesResponse",
+            False,
+            False,
+        ),
+        (
+            "RunWorkspaceCommand",
+            ".dennett.control.v1.RunWorkspaceCommandRequest",
+            ".dennett.control.v1.RunWorkspaceCommandResponse",
+            False,
+            False,
+        ),
+        (
+            "CancelWorkspaceOperation",
+            ".dennett.control.v1.CancelWorkspaceOperationRequest",
+            ".dennett.control.v1.CancelWorkspaceOperationResponse",
+            False,
+            False,
+        ),
+        (
+            "CreateCheckpoint",
+            ".dennett.control.v1.CreateCheckpointRequest",
+            ".dennett.control.v1.CreateCheckpointResponse",
+            False,
+            False,
+        ),
+        (
+            "RestoreCheckpoint",
+            ".dennett.control.v1.RestoreCheckpointRequest",
+            ".dennett.control.v1.RestoreCheckpointResponse",
+            False,
+            False,
+        ),
+        (
+            "SubmitReviewAction",
+            ".dennett.control.v1.SubmitReviewActionRequest",
+            ".dennett.control.v1.SubmitReviewActionResponse",
             False,
             False,
         ),
@@ -1094,6 +1405,808 @@ EXPECTED_ONEOFS: dict[str, dict[str, tuple[FieldContract, ...]]] = {
     },
 }
 
+# M02 extends the accepted M01 epoch additively. These are semantic minimums:
+# Buf owns wire compatibility, while this list prevents a superficially
+# additive schema from omitting identity, exact revisions, receipts or errors.
+M02_REQUIRED_MESSAGE_FIELDS: dict[str, tuple[FieldContract, ...]] = {
+    ".dennett.control.v1.ProjectLocationInspection": (
+        _field("inspection_id", 1, "TYPE_STRING"),
+        _field("root_uri", 3, "TYPE_STRING"),
+        _field(
+            "portable_metadata",
+            7,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.PortableProjectMetadata",
+        ),
+        _field(
+            "location_identity",
+            9,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.RegisterProjectRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("inspection_id", 2, "TYPE_STRING"),
+        _field(
+            "portable_metadata_action",
+            4,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.PortableMetadataAction",
+        ),
+        _field(
+            "initial_trust_state",
+            5,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ProjectTrustState",
+        ),
+        _field(
+            "trust_decision",
+            6,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.RegisterProjectAccepted": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandAccepted",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.RebindProjectWorkspaceRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("current_workspace_binding_id", 3, "TYPE_STRING"),
+        _field("inspection_id", 4, "TYPE_STRING"),
+        _field(
+            "portable_metadata_action",
+            5,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.RebindPortableMetadataAction",
+        ),
+    ),
+    ".dennett.control.v1.SetProjectTrustRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field(
+            "trust_state",
+            3,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ProjectTrustState",
+        ),
+        _field(
+            "expected_policy_revision",
+            4,
+            "TYPE_UINT64",
+        ),
+        _field(
+            "trust_decision",
+            5,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.PortableProjectMetadata": (
+        _field(
+            "state",
+            1,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.PortableProjectMetadataState",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("schema_version", 3, "TYPE_STRING"),
+        _field(
+            "shared_memory_state",
+            4,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.SharedProjectMemoryState",
+        ),
+        _field("minimal_structure_creation_available", 5, "TYPE_BOOL"),
+    ),
+    ".dennett.control.v1.ProjectAccessPolicy": (
+        _field("project_id", 1, "TYPE_STRING"),
+        _field(
+            "trust_state",
+            2,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ProjectTrustState",
+        ),
+        _field("revision", 3, "TYPE_UINT64"),
+        _field(
+            "policy_ref",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.WorkspaceBinding": (
+        _field("workspace_binding_id", 1, "TYPE_STRING"),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("device_id", 3, "TYPE_STRING"),
+        _field("location_uri", 4, "TYPE_STRING"),
+        _field(
+            "availability",
+            6,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.WorkspaceAvailability",
+        ),
+        _field(
+            "access_mode",
+            7,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.WorkspaceAccessMode",
+        ),
+        _field(
+            "portable_metadata",
+            9,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.PortableProjectMetadata",
+        ),
+        _field("record_revision", 11, "TYPE_UINT64"),
+    ),
+    ".dennett.control.v1.WorkspaceRevision": (
+        _field("workspace_binding_id", 1, "TYPE_STRING"),
+        _field("sequence", 2, "TYPE_UINT64"),
+        _field("snapshot_id", 3, "TYPE_STRING"),
+        _field("observed_at", 4, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+    ),
+    ".dennett.control.v1.WorkspaceFailure": (
+        _field(
+            "kind",
+            1,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.WorkspaceFailureKind",
+        ),
+        _field(
+            "error",
+            2,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.ErrorEnvelope",
+        ),
+        _field(
+            "current_revision",
+            3,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "conflicting_paths",
+            4,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.WorkspacePath",
+        ),
+    ),
+    ".dennett.control.v1.FileChange": (
+        _field("file_change_id", 1, "TYPE_STRING"),
+        _field(
+            "path",
+            3,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspacePath",
+        ),
+        _field(
+            "base_revision",
+            5,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "resulting_revision",
+            6,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field("conflict", 9, "TYPE_BOOL"),
+    ),
+    ".dennett.control.v1.WorkspaceDiff": (
+        _field("diff_id", 1, "TYPE_STRING"),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "from_revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "to_revision",
+            5,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "content",
+            7,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.WorkspaceOperationReceipt": (
+        _field("workspace_operation_id", 1, "TYPE_STRING"),
+        _field("command_id", 2, "TYPE_STRING"),
+        _field("correlation_id", 3, "TYPE_STRING"),
+        _field("project_id", 4, "TYPE_STRING"),
+        _field("workspace_binding_id", 5, "TYPE_STRING"),
+        _field(
+            "state",
+            7,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.WorkspaceOperationState",
+        ),
+        _field(
+            "base_revision",
+            8,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "resulting_revision",
+            9,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+    ),
+    ".dennett.control.v1.CommandReceipt": (
+        _field("command_receipt_id", 1, "TYPE_STRING"),
+        _field("workspace_operation_id", 2, "TYPE_STRING"),
+        _field("command_id", 3, "TYPE_STRING"),
+        _field("correlation_id", 4, "TYPE_STRING"),
+        _field(
+            "observed_revision",
+            7,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "terminal_kind",
+            10,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ExecutionTerminalKind",
+        ),
+        _field(
+            "output_evidence",
+            14,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+        _field(
+            "failure",
+            16,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceFailure",
+        ),
+    ),
+    ".dennett.control.v1.TestReceipt": (
+        _field("test_receipt_id", 1, "TYPE_STRING"),
+        _field("command_receipt_id", 2, "TYPE_STRING"),
+        _field(
+            "verified_revision",
+            5,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "outcome",
+            7,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.TestOutcome",
+        ),
+        _field("stale", 12, "TYPE_BOOL"),
+        _field(
+            "failure",
+            14,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceFailure",
+        ),
+    ),
+    ".dennett.control.v1.ArtifactDescriptor": (
+        _field("artifact_id", 1, "TYPE_STRING"),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "produced_revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field("source_command_id", 5, "TYPE_STRING"),
+        _field(
+            "state",
+            7,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ArtifactState",
+        ),
+        _field(
+            "path",
+            8,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspacePath",
+        ),
+        _field(
+            "content",
+            9,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.CheckpointDescriptor": (
+        _field("checkpoint_id", 1, "TYPE_STRING"),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "base_revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "captured_revision",
+            5,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "touched_paths",
+            9,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.WorkspacePath",
+        ),
+        _field(
+            "external_effects",
+            11,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+        _field(
+            "provider_continuation",
+            12,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.ReviewRecord": (
+        _field("review_id", 1, "TYPE_STRING"),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "state",
+            5,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ReviewState",
+        ),
+        _field(
+            "comments",
+            6,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.ReviewComment",
+        ),
+        _field("test_receipt_ids", 7, "TYPE_STRING", label="LABEL_REPEATED"),
+    ),
+    ".dennett.control.v1.WorkspaceSnapshot": (
+        _field("project_id", 1, "TYPE_STRING"),
+        _field(
+            "binding",
+            2,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceBinding",
+        ),
+        _field(
+            "access_policy",
+            3,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.ProjectAccessPolicy",
+        ),
+        _field(
+            "workspace_revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field("projection_revision", 5, "TYPE_UINT64"),
+        _field(
+            "changes",
+            7,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.FileChange",
+        ),
+        _field(
+            "command_receipts",
+            9,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.CommandReceipt",
+        ),
+        _field(
+            "test_receipts",
+            10,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.TestReceipt",
+        ),
+        _field(
+            "artifacts",
+            11,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.ArtifactDescriptor",
+        ),
+        _field(
+            "checkpoints",
+            12,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.CheckpointDescriptor",
+        ),
+        _field(
+            "review",
+            13,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.ReviewRecord",
+        ),
+    ),
+    ".dennett.control.v1.WorkspaceDelta": (
+        _field("base_projection_revision", 1, "TYPE_UINT64"),
+        _field("new_projection_revision", 2, "TYPE_UINT64"),
+        _field(
+            "mutations",
+            3,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.control.v1.WorkspaceMutation",
+        ),
+        _field("committed_at", 4, "TYPE_MESSAGE", type_name=".google.protobuf.Timestamp"),
+    ),
+    ".dennett.control.v1.WorkspaceOperationAccepted": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandAccepted",
+        ),
+        _field(
+            "allocated_refs",
+            2,
+            "TYPE_MESSAGE",
+            label="LABEL_REPEATED",
+            type_name=".dennett.common.v1.StableRef",
+        ),
+    ),
+    ".dennett.control.v1.ApplyFileChangesRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "base_revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+    ),
+    ".dennett.control.v1.RunWorkspaceCommandRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "base_revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+    ),
+    ".dennett.control.v1.CancelWorkspaceOperationRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field("workspace_operation_id", 4, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.CancelWorkspaceOperationAccepted": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandAccepted",
+        ),
+        _field("target_workspace_operation_id", 2, "TYPE_STRING"),
+    ),
+    ".dennett.control.v1.CreateCheckpointRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "base_revision",
+            4,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+    ),
+    ".dennett.control.v1.RestoreCheckpointRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field("checkpoint_id", 4, "TYPE_STRING"),
+        _field(
+            "expected_current_revision",
+            5,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+    ),
+    ".dennett.control.v1.SubmitReviewActionRequest": (
+        _field(
+            "command",
+            1,
+            "TYPE_MESSAGE",
+            type_name=".dennett.common.v1.CommandMetadata",
+        ),
+        _field("project_id", 2, "TYPE_STRING"),
+        _field("workspace_binding_id", 3, "TYPE_STRING"),
+        _field(
+            "expected_revision",
+            5,
+            "TYPE_MESSAGE",
+            type_name=".dennett.control.v1.WorkspaceRevision",
+        ),
+        _field(
+            "action",
+            6,
+            "TYPE_ENUM",
+            type_name=".dennett.control.v1.ReviewActionKind",
+        ),
+    ),
+}
+
+M02_REQUIRED_ONEOFS: dict[str, dict[str, tuple[FieldContract, ...]]] = {
+    ".dennett.control.v1.InspectProjectLocationResponse": {
+        "outcome": _workspace_outcome(
+            "inspection", ".dennett.control.v1.ProjectLocationInspection"
+        )
+    },
+    ".dennett.control.v1.RegisterProjectResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.RegisterProjectAccepted"
+        )
+    },
+    ".dennett.control.v1.RebindProjectWorkspaceResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.RebindProjectWorkspaceAccepted"
+        )
+    },
+    ".dennett.control.v1.SetProjectTrustResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.common.v1.CommandAccepted"
+        )
+    },
+    ".dennett.control.v1.WorkspaceOperationReceipt": {
+        "terminal": (
+            _field(
+                "success",
+                12,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceOperationSuccess",
+                oneof_index=0,
+            ),
+            _field(
+                "failure",
+                13,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceFailure",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.WorkspaceMutation": {
+        "mutation": (
+            _field(
+                "upsert_binding",
+                1,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceBinding",
+                oneof_index=0,
+            ),
+            _field(
+                "update_access_policy",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ProjectAccessPolicy",
+                oneof_index=0,
+            ),
+            _field(
+                "update_projection_state",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceProjectionStateUpdate",
+                oneof_index=0,
+            ),
+            _field(
+                "upsert_file_change",
+                4,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.FileChange",
+                oneof_index=0,
+            ),
+            _field("remove_file_change_id", 5, "TYPE_STRING", oneof_index=0),
+            _field(
+                "upsert_operation",
+                6,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceOperationReceipt",
+                oneof_index=0,
+            ),
+            _field(
+                "upsert_command_receipt",
+                7,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.CommandReceipt",
+                oneof_index=0,
+            ),
+            _field(
+                "upsert_test_receipt",
+                8,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.TestReceipt",
+                oneof_index=0,
+            ),
+            _field(
+                "upsert_artifact",
+                9,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ArtifactDescriptor",
+                oneof_index=0,
+            ),
+            _field("remove_artifact_id", 10, "TYPE_STRING", oneof_index=0),
+            _field(
+                "upsert_checkpoint",
+                11,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.CheckpointDescriptor",
+                oneof_index=0,
+            ),
+            _field(
+                "upsert_review",
+                12,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.ReviewRecord",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.WorkspaceWatchFrame": {
+        "frame": (
+            _field(
+                "snapshot",
+                2,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceSnapshot",
+                oneof_index=0,
+            ),
+            _field(
+                "delta",
+                3,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceDelta",
+                oneof_index=0,
+            ),
+            _field(
+                "heartbeat",
+                4,
+                "TYPE_MESSAGE",
+                type_name=".dennett.sync.v1.WatchHeartbeat",
+                oneof_index=0,
+            ),
+            _field(
+                "resync_required",
+                5,
+                "TYPE_MESSAGE",
+                type_name=".dennett.sync.v1.ResyncRequired",
+                oneof_index=0,
+            ),
+            _field(
+                "error",
+                6,
+                "TYPE_MESSAGE",
+                type_name=".dennett.control.v1.WorkspaceFailure",
+                oneof_index=0,
+            ),
+        )
+    },
+    ".dennett.control.v1.GetWorkspaceResponse": {
+        "outcome": _workspace_outcome(
+            "snapshot", ".dennett.control.v1.WorkspaceSnapshot"
+        )
+    },
+    ".dennett.control.v1.GetWorkspaceDiffResponse": {
+        "outcome": _workspace_outcome("diff", ".dennett.control.v1.WorkspaceDiff")
+    },
+    ".dennett.control.v1.ApplyFileChangesResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.WorkspaceOperationAccepted"
+        )
+    },
+    ".dennett.control.v1.RunWorkspaceCommandResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.WorkspaceOperationAccepted"
+        )
+    },
+    ".dennett.control.v1.CancelWorkspaceOperationResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.CancelWorkspaceOperationAccepted"
+        )
+    },
+    ".dennett.control.v1.CreateCheckpointResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.WorkspaceOperationAccepted"
+        )
+    },
+    ".dennett.control.v1.RestoreCheckpointResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.WorkspaceOperationAccepted"
+        )
+    },
+    ".dennett.control.v1.SubmitReviewActionResponse": {
+        "outcome": _workspace_outcome(
+            "accepted", ".dennett.control.v1.WorkspaceOperationAccepted"
+        )
+    },
+}
+
+EXPECTED_ONEOFS.update(M02_REQUIRED_ONEOFS)
+
 
 @dataclass(frozen=True)
 class EpochMigration:
@@ -1358,6 +2471,21 @@ def _descriptor_field_contract(field: Mapping[str, object]) -> FieldContract:
     )
 
 
+def m02_initial_descriptor_sha256(
+    files: Mapping[str, Mapping[str, object]],
+) -> str | None:
+    if any(name not in files for name in M02_INITIAL_DESCRIPTOR_FILES):
+        return None
+    selected = [files[name] for name in M02_INITIAL_DESCRIPTOR_FILES]
+    canonical = json.dumps(
+        selected,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def descriptor_contract_differences(payload: Mapping[str, object]) -> list[str]:
     raw_files = payload.get("file")
     if not isinstance(raw_files, list):
@@ -1401,6 +2529,16 @@ def descriptor_contract_differences(payload: Mapping[str, object]) -> list[str]:
                 differences.append(f"{name}: malformed service descriptor")
                 continue
             services[f".{package}.{raw_service['name']}"] = raw_service
+
+    m02_hash = m02_initial_descriptor_sha256(files)
+    if (
+        m02_hash is not None
+        and m02_hash != APPROVED_M02_INITIAL_DESCRIPTOR_SHA256
+    ):
+        differences.append(
+            "M02 initial descriptor approval hash is "
+            f"{m02_hash}, expected {APPROVED_M02_INITIAL_DESCRIPTOR_SHA256}"
+        )
 
     if set(files) != EXPECTED_DESCRIPTOR_FILES:
         differences.append(
@@ -1480,6 +2618,24 @@ def descriptor_contract_differences(payload: Mapping[str, object]) -> list[str]:
         )
         if actual != expected:
             differences.append(f"{message_name} fields are {actual}, expected {expected}")
+
+    for message_name, required in M02_REQUIRED_MESSAGE_FIELDS.items():
+        message = messages.get(message_name)
+        if message is None:
+            differences.append(f"missing M02 contract message {message_name}")
+            continue
+        raw_fields = message.get("field", [])
+        if not isinstance(raw_fields, list):
+            differences.append(f"{message_name} has no field list")
+            continue
+        actual = {
+            _descriptor_field_contract(field)
+            for field in raw_fields
+            if isinstance(field, dict)
+        }
+        missing = tuple(field for field in required if field not in actual)
+        if missing:
+            differences.append(f"{message_name} is missing required M02 fields {missing}")
 
     for message_name, expected_oneofs in EXPECTED_ONEOFS.items():
         message = messages.get(message_name)
@@ -1573,8 +2729,11 @@ def check_descriptor_contract() -> None:
     differences = descriptor_contract_differences(build_descriptor_set())
     if differences:
         details = "\n".join(f"- {difference}" for difference in differences)
-        raise ProtocolCheckError(f"M01 descriptor contract differs:\n{details}")
-    print("M01 descriptor contract matches exact services, fields, oneofs and streams.")
+        raise ProtocolCheckError(f"accepted descriptor contract differs:\n{details}")
+    print(
+        "Accepted M01 surface and required M02 workspace contracts match "
+        "services, fields, oneofs and streams."
+    )
 
 
 def _manifest_string_list(payload: object, field: str) -> tuple[str, ...]:

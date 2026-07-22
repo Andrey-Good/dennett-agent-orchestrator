@@ -45,7 +45,7 @@ Critical, non-retired cases block the `release` channel unless evidence or an ex
 | `release` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-M02-PROJECT-UI-001` | `R2` | `specified` | `planned` | missing evidence |
-| `release` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `specified` | `planned` | missing evidence |
+| `release` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `automated` | `automated` | evidence available |
 | `release` | `TEST-M02-REVIEW-A11Y-001` | `R2` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-M02-REVIEW-DESIGN-001` | `R2` | `specified` | `planned` | missing evidence |
 | `release` | `TEST-M02-REVIEW-UI-001` | `R2` | `specified` | `planned` | missing evidence |

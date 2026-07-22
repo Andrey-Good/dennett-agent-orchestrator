@@ -4,6 +4,10 @@ plugins:
   - remote: buf.build/community/neoeinstein-prost:v0.5.0
     revision: 1
     out: generated/rust
+    opt:
+      - boxed=.dennett.control.v1.WorkspaceWatchFrame.frame.snapshot
+      - boxed=.dennett.control.v1.GetWorkspaceResponse.outcome.snapshot
+      - boxed=.dennett.control.v1.GetWorkspaceResponse.outcome.error
   - remote: buf.build/community/neoeinstein-tonic:v0.5.0
     revision: 1
     out: generated/rust

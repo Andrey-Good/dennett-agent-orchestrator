@@ -13,7 +13,7 @@ Current milestone: `M02` — Project workspace and review (status: `ACTIVE`).
 | `WP-M02-001` | `MERGED` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `R2` | `automated` | `node` |
 | `WP-M02-001` | `MERGED` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `R2` | `automated` | `observability` |
 | `WP-M02-001` | `MERGED` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `R2` | `automated` | `security` |
-| `WP-M02-002` | `IN_PROGRESS` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `specified` | `protocol` |
+| `WP-M02-002` | `IN_PROGRESS` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `automated` | `protocol` |
 | `WP-M02-002` | `IN_PROGRESS` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
 | `WP-M02-002` | `IN_PROGRESS` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
 | `WP-M02-003` | `REFINED` | `TEST-M02-INSTRUCTION-CHANGE-001` | `R3` | `specified` | `projects` |
