@@ -4,6 +4,41 @@
 
 > Source: `tests/catalog/*.json`. Regenerate with `uv run python tools/generate_test_catalogue.py`.
 
-No current milestone.
+Current milestone: `M02` — Project workspace and review (status: `ACTIVE`).
 
-Promote one `REFINED` milestone to `ACTIVE` to generate its package acceptance plan.
+- Package status: `MERGE_READY` 1, `REFINED` 8
+
+| Work Package | Package status | Acceptance case | Risk | Case status | Owner |
+| --- | --- | --- | --- | --- | --- |
+| `WP-M02-001` | `MERGE_READY` | `TEST-M02-DIAGNOSTIC-LIFECYCLE-001` | `R2` | `automated` | `node` |
+| `WP-M02-001` | `MERGE_READY` | `TEST-M02-DIAGNOSTIC-PERSISTENCE-001` | `R2` | `automated` | `observability` |
+| `WP-M02-001` | `MERGE_READY` | `TEST-M02-DIAGNOSTIC-REDACTION-001` | `R2` | `automated` | `security` |
+| `WP-M02-002` | `REFINED` | `TEST-M02-PROTOCOL-ADDITIVE-001` | `R2` | `specified` | `protocol` |
+| `WP-M02-002` | `REFINED` | `TEST-PROTOCOL-BREAKING-001` | `R2` | `automated` | `protocol` |
+| `WP-M02-002` | `REFINED` | `TEST-PROTOCOL-GENERATION-001` | `R2` | `automated` | `protocol` |
+| `WP-M02-003` | `REFINED` | `TEST-M02-INSTRUCTION-CHANGE-001` | `R3` | `specified` | `projects` |
+| `WP-M02-003` | `REFINED` | `TEST-M02-PROJECT-CREATE-IMPORT-001` | `R3` | `specified` | `projects` |
+| `WP-M02-003` | `REFINED` | `TEST-M02-PROJECT-MISSING-001` | `R2` | `specified` | `projects` |
+| `WP-M02-003` | `REFINED` | `TEST-M02-PROJECT-TRUST-001` | `R3` | `specified` | `trust` |
+| `WP-M02-004` | `REFINED` | `TEST-M02-CHECKPOINT-RECOVERY-001` | `R3` | `specified` | `recovery` |
+| `WP-M02-004` | `REFINED` | `TEST-M02-EXTERNAL-CHANGE-001` | `R3` | `specified` | `workspace` |
+| `WP-M02-004` | `REFINED` | `TEST-M02-FILESYSTEM-SCOPE-001` | `R3` | `specified` | `security` |
+| `WP-M02-004` | `REFINED` | `TEST-M02-WORKSPACE-SNAPSHOT-001` | `R3` | `specified` | `workspace` |
+| `WP-M02-005` | `REFINED` | `TEST-M02-ARTIFACT-COLLECTION-001` | `R2` | `specified` | `artifacts` |
+| `WP-M02-005` | `REFINED` | `TEST-M02-COMMAND-CANCEL-001` | `R3` | `specified` | `execution` |
+| `WP-M02-005` | `REFINED` | `TEST-M02-COMMAND-TRUST-001` | `R3` | `specified` | `trust` |
+| `WP-M02-005` | `REFINED` | `TEST-M02-TEST-RECEIPT-001` | `R3` | `specified` | `execution` |
+| `WP-M02-006` | `REFINED` | `TEST-M02-CODEX-PROJECT-EDIT-001` | `R3` | `specified` | `agents` |
+| `WP-M02-006` | `REFINED` | `TEST-M02-CODEX-PROJECT-RECOVERY-001` | `R3` | `specified` | `agents` |
+| `WP-M02-006` | `REFINED` | `TEST-M02-GIT-CONFLICT-001` | `R3` | `specified` | `workspace` |
+| `WP-M02-006` | `REFINED` | `TEST-M02-GIT-WORKTREE-001` | `R3` | `specified` | `workspace` |
+| `WP-M02-007` | `REFINED` | `TEST-M02-REVIEW-A11Y-001` | `R2` | `specified` | `desktop` |
+| `WP-M02-007` | `REFINED` | `TEST-M02-REVIEW-DESIGN-001` | `R2` | `specified` | `desktop` |
+| `WP-M02-008` | `REFINED` | `TEST-M02-PROJECT-UI-001` | `R2` | `specified` | `desktop` |
+| `WP-M02-008` | `REFINED` | `TEST-M02-REVIEW-A11Y-001` | `R2` | `specified` | `desktop` |
+| `WP-M02-008` | `REFINED` | `TEST-M02-REVIEW-CORRECTION-001` | `R3` | `specified` | `review` |
+| `WP-M02-008` | `REFINED` | `TEST-M02-REVIEW-UI-001` | `R2` | `specified` | `desktop` |
+| `WP-M02-009` | `REFINED` | `TEST-M02-CODEX-PROJECT-EDIT-001` | `R3` | `specified` | `agents` |
+| `WP-M02-009` | `REFINED` | `TEST-M02-E2E-001` | `R3` | `specified` | `quality` |
+| `WP-M02-009` | `REFINED` | `TEST-M02-FAILURE-RECOVERY-001` | `R3` | `specified` | `quality` |
+| `WP-M02-009` | `REFINED` | `TEST-M02-OWNER-ACCEPTANCE-001` | `R3` | `specified` | `owner` |

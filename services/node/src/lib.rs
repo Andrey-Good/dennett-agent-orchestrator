@@ -14,7 +14,7 @@ use dennett_memory_core::session::{SessionJournal, SessionJournalError};
 use dennett_storage_sqlite::SqliteControlStore;
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,6 +28,12 @@ pub const AGENT_RUNTIME_ENV: &str = "DENNETT_AGENT_RUNTIME";
 const SYSTEM_WATCH_CAPACITY: usize = 128;
 const SESSION_WATCH_CAPACITY: usize = 128;
 const NODE_INSTANCE_LOCK_FILE: &str = "dennett-node.lock";
+const CONTROL_DATABASE_FILE: &str = "control.sqlite3";
+const CONTROL_DATABASE_TRANSIENT_FILES: [&str; 3] = [
+    "control.sqlite3-journal",
+    "control.sqlite3-shm",
+    "control.sqlite3-wal",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NodeConfig {
@@ -60,13 +66,7 @@ impl NodeConfig {
             authority_epoch,
             env!("CARGO_PKG_VERSION"),
         )?;
-        config.data_dir = std::env::var_os(DATA_DIR_ENV)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::temp_dir()
-                    .join("dennett-node")
-                    .join(installation_id)
-            });
+        config.data_dir = diagnostic_data_dir_from_environment();
         config.project_root = std::env::var_os(PROJECT_ROOT_ENV)
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
@@ -121,25 +121,63 @@ impl NodeConfig {
     }
 }
 
+#[must_use]
+pub fn diagnostic_data_dir_from_environment() -> PathBuf {
+    std::env::var_os(DATA_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let installation = std::env::var(INSTALLATION_ID_ENV)
+                .ok()
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 128
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                })
+                .unwrap_or_else(|| "unconfigured".to_owned());
+            dennett_observability::default_user_data_root()
+                .join("installations")
+                .join(installation)
+        })
+}
+
 pub async fn run<F>(config: NodeConfig, shutdown: F) -> Result<(), NodeRunError>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    let data_root_guard = dennett_observability::guard_local_data_root(&config.data_dir)?;
+    data_root_guard.ensure_unchanged()?;
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeConfigurationValidated,
+        )
+        .status("ready"),
+    );
     tracing::info!(
         phase = "local_ipc_configuration",
         authority_epoch = config.authority_epoch,
         "validated Node local IPC configuration"
     );
-    tokio::fs::create_dir_all(&config.data_dir)
-        .await
-        .map_err(TransportError::from)?;
     let standalone_workspace = config.data_dir.join("standalone-workspace");
-    tokio::fs::create_dir_all(&standalone_workspace)
-        .await
-        .map_err(TransportError::from)?;
-    let _instance_lock = NodeInstanceLock::acquire(&config.data_dir)?;
+    data_root_guard.ensure_child_directory("standalone-workspace")?;
+    let _instance_lock = NodeInstanceLock::acquire(&data_root_guard)?;
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeInstanceLockAcquired,
+        )
+        .status("ready"),
+    );
     let endpoint = LocalEndpoint::for_installation(config.installation_id.clone())?;
-    let store = Arc::new(SqliteControlStore::open(config.data_dir.join("control.sqlite3")).await?);
+    let _control_file_guard = data_root_guard.open_or_create_regular_file(CONTROL_DATABASE_FILE)?;
+    for name in CONTROL_DATABASE_TRANSIENT_FILES {
+        data_root_guard.validate_optional_regular_file(name)?;
+    }
+    data_root_guard.ensure_unchanged()?;
+    let control_database_path = data_root_guard.stable_child_path(CONTROL_DATABASE_FILE)?;
+    let store = SqliteControlStore::open(control_database_path).await?;
+    data_root_guard.ensure_unchanged()?;
+    let store = Arc::new(store);
     let coordinator = SessionCoordinator::new(
         SessionJournal::new(store.clone()),
         config.authority_epoch,
@@ -160,6 +198,15 @@ where
         AgentRuntimeSelection::Codex => Arc::new(runtime_host::HostedAgentRuntime::start().await?),
     };
     let runtime_descriptor = runtime.describe().await?;
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeRuntimeReady,
+        )
+        .provider(dennett_observability::DiagnosticProvider::from_adapter_id(
+            &runtime_descriptor.adapter_id,
+        ))
+        .status("ready"),
+    );
     let mut system_snapshot = SystemSnapshot::empty(config.authority_epoch);
     system_snapshot.runtime = Some(runtime_descriptor);
     let projection = Arc::new(SystemProjection::new(
@@ -195,9 +242,24 @@ where
         phase = "local_ipc_listen",
         "starting authenticated Node IPC"
     );
-    run_local_server(endpoint, system_service, session_service, shutdown)
+    dennett_observability::record(
+        dennett_observability::DiagnosticEvent::new(
+            dennett_observability::DiagnosticEventKind::NodeIpcStartRequested,
+        )
+        .status("starting"),
+    );
+    let result = run_local_server(endpoint, system_service, session_service, shutdown)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    if result.is_ok() {
+        dennett_observability::record(
+            dennett_observability::DiagnosticEvent::new(
+                dennett_observability::DiagnosticEventKind::NodeIpcStopped,
+            )
+            .status("stopped"),
+        );
+    }
+    result
 }
 
 struct NodeInstanceLock {
@@ -205,14 +267,10 @@ struct NodeInstanceLock {
 }
 
 impl NodeInstanceLock {
-    fn acquire(data_dir: &std::path::Path) -> Result<Self, NodeRunError> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(data_dir.join(NODE_INSTANCE_LOCK_FILE))
-            .map_err(|_| NodeRunError::InstanceLockUnavailable)?;
+    fn acquire(
+        data_root: &dennett_observability::LocalDataRootGuard,
+    ) -> Result<Self, NodeRunError> {
+        let file = data_root.open_or_create_regular_file(NODE_INSTANCE_LOCK_FILE)?;
         file.try_lock_exclusive()
             .map_err(|_| NodeRunError::AlreadyRunning)?;
         Ok(Self { _file: file })
@@ -237,6 +295,8 @@ fn project_id_for(project_root: &std::path::Path) -> ProjectId {
 
 #[derive(Debug, thiserror::Error)]
 pub enum NodeRunError {
+    #[error("the local data root is unsafe or unavailable")]
+    DataRoot(#[from] dennett_observability::DiagnosticsError),
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
@@ -253,6 +313,22 @@ pub enum NodeRunError {
     Runtime(#[from] RuntimeError),
 }
 
+impl NodeRunError {
+    #[must_use]
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::DataRoot(_) => "node.data_root_unavailable",
+            Self::Transport(_) => "node.transport_failure",
+            Self::Session(_) => "node.session_failure",
+            Self::Conversation(_) => "node.conversation_failure",
+            Self::AlreadyRunning => "node.already_running",
+            Self::InstanceLockUnavailable => "node.instance_lock_unavailable",
+            Self::RuntimeHost(error) => error.diagnostic_code(),
+            Self::Runtime(error) => error.code.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NodeConfigError {
     #[error("DENNETT_INSTALLATION_ID is required")]
@@ -265,6 +341,19 @@ pub enum NodeConfigError {
     InvalidNodeVersion,
     #[error("DENNETT_AGENT_RUNTIME must be fake or codex")]
     InvalidAgentRuntime,
+}
+
+impl NodeConfigError {
+    #[must_use]
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::MissingInstallationIdentity => "node.config.installation_missing",
+            Self::InvalidInstallationIdentity => "node.config.installation_invalid",
+            Self::InvalidAuthorityEpoch => "node.config.authority_epoch_invalid",
+            Self::InvalidNodeVersion => "node.config.version_invalid",
+            Self::InvalidAgentRuntime => "node.config.runtime_invalid",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -287,15 +376,79 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn run_rejects_a_relative_data_root_before_opening_canonical_state() {
+        let relative = PathBuf::from(format!(
+            "relative-dennett-data-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let config = NodeConfig::new("unsafe-relative-root", 1, "0.1.0")
+            .expect("Node config")
+            .with_paths(relative.clone(), std::env::temp_dir());
+        let error = run(config, async {})
+            .await
+            .expect_err("relative data root must fail closed");
+        assert!(matches!(
+            error,
+            NodeRunError::DataRoot(dennett_observability::DiagnosticsError::InvalidProfileRoot)
+        ));
+        assert!(!relative.exists());
+    }
+
+    #[tokio::test]
+    async fn run_rejects_preplanted_database_and_sidecar_links() {
+        for name in std::iter::once(CONTROL_DATABASE_FILE).chain(CONTROL_DATABASE_TRANSIENT_FILES) {
+            let directory = tempfile::tempdir().expect("temporary profile parent");
+            let profile = directory.path().join("profile");
+            std::fs::create_dir(&profile).expect("profile");
+            let outside = directory.path().join("outside.sqlite3");
+            std::fs::write(&outside, b"outside").expect("outside file");
+            let link = profile.join(name);
+            if !create_file_link(&outside, &link) {
+                return;
+            }
+            let config = NodeConfig::new("unsafe-database-link", 1, "0.1.0")
+                .expect("Node config")
+                .with_paths(profile, std::env::temp_dir());
+
+            let error = run(config, async {})
+                .await
+                .expect_err("linked database entry must fail closed");
+            assert!(matches!(error, NodeRunError::DataRoot(_)), "entry: {name}");
+            assert_eq!(
+                std::fs::read(&outside).expect("outside file"),
+                b"outside",
+                "entry: {name}"
+            );
+        }
+    }
+
     #[test]
     fn one_process_owns_a_profile_lock_at_a_time() {
         let directory = tempfile::tempdir().expect("temporary profile");
-        let first = NodeInstanceLock::acquire(directory.path()).expect("first lock");
+        let root = dennett_observability::guard_local_data_root(directory.path())
+            .expect("guarded profile");
+        let first = NodeInstanceLock::acquire(&root).expect("first lock");
         assert!(matches!(
-            NodeInstanceLock::acquire(directory.path()),
+            NodeInstanceLock::acquire(&root),
             Err(NodeRunError::AlreadyRunning)
         ));
         drop(first);
-        NodeInstanceLock::acquire(directory.path()).expect("lock released");
+        NodeInstanceLock::acquire(&root).expect("lock released");
+    }
+
+    #[cfg(unix)]
+    fn create_file_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(target, link).expect("file symlink");
+        true
+    }
+
+    #[cfg(windows)]
+    fn create_file_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+        if let Err(error) = std::os::windows::fs::symlink_file(target, link) {
+            eprintln!("skipping symlink assertion: {error}");
+            return false;
+        }
+        true
     }
 }

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "AB-M02-002",
+  "title": "Build controlled real-project execution",
+  "status": "DRAFT",
+  "packages": ["WP-M02-003", "WP-M02-004", "WP-M02-005", "WP-M02-006"],
+  "execution": {
+    "order": "dependency",
+    "max_parallel": 1,
+    "stop_after_packages": 4,
+    "merge_after_each": true,
+    "require_green_main": true
+  },
+  "limits": {
+    "max_risk": "R3",
+    "new_production_dependencies": "allow only mature bounded filesystem or Git support that is not already available through the platform or Codex runtime",
+    "architecture_changes": "implement the documented Node workspace and execution managers without moving authority into UI, provider or storage adapters",
+    "external_effects": "local project filesystem and process effects allowed only through reviewed trust, claim, receipt and recovery boundaries; remote effects forbidden",
+    "public_breaking_changes": "forbidden"
+  },
+  "stop_conditions": [
+    "owner or detached R3 gate is unresolved at a package merge boundary",
+    "a path, project instruction or model output can expand its own authority",
+    "a partial file, command or Git effect lacks a deterministic recovery state",
+    "two writers can mutate one workspace without ownership",
+    "required test fails after two bounded repair attempts",
+    "main becomes red",
+    "merge conflict"
+  ],
+  "reporting": {
+    "on_package_start": true,
+    "on_package_end": true,
+    "on_decision": true,
+    "periodic_noise": false
+  }
+}

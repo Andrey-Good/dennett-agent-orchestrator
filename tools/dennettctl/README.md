@@ -1,3 +1,11 @@
 # dennettctl
 
-Операционный CLI поверх публичного Node/Head API: status, doctor, runs, effects reconciliation, sync, backup, update и scenario execution. CLI не читает internal tables напрямую.
+Операционный CLI поверх публичного Node/Head API. В текущем M02-срезе команда
+`doctor --data-dir <path> [--component dennett-node] [--json]` читает только
+типизированную локальную диагностическую сводку: состояние последнего запуска,
+активные или оставшиеся после сбоя маркеры и объём ротируемых логов. CLI не
+читает внутренние таблицы и не выводит промты, ответы, секреты или содержимое
+проектных файлов.
+
+Остальные будущие команды (`runs`, reconciliation, sync, backup, update и
+scenario execution) остаются вне текущего среза.

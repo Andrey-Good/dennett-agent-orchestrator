@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "AB-M02-003",
+  "title": "Design implement and qualify project review",
+  "status": "DRAFT",
+  "packages": ["WP-M02-007", "WP-M02-008", "WP-M02-009"],
+  "execution": {
+    "order": "dependency",
+    "max_parallel": 1,
+    "stop_after_packages": 3,
+    "merge_after_each": true,
+    "require_green_main": true
+  },
+  "limits": {
+    "max_risk": "R3",
+    "new_production_dependencies": "forbidden unless the approved design requires an accessibility-safe primitive unavailable in the existing stack",
+    "architecture_changes": "forbid authority, trust, provider and persistence redesign during presentation implementation",
+    "external_effects": "forbidden during design and UI qualification; live Codex qualification is a bounded read/write test against a disposable local fixture",
+    "public_breaking_changes": "forbidden"
+  },
+  "stop_conditions": [
+    "owner has not approved the editable Figma review flow before renderer implementation",
+    "fixture or placeholder evidence appears as live project state",
+    "ordinary review requires raw logs or technical protocol knowledge",
+    "native Windows behavior diverges materially from the approved design",
+    "required test fails after two bounded repair attempts",
+    "main becomes red",
+    "merge conflict"
+  ],
+  "reporting": {
+    "on_package_start": true,
+    "on_package_end": true,
+    "on_decision": true,
+    "periodic_noise": false
+  }
+}

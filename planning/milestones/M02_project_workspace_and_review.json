@@ -1,0 +1,756 @@
+{
+  "version": 1,
+  "id": "M02",
+  "title": "Project workspace and review",
+  "status": "ACTIVE",
+  "outcome": "A user creates or imports a real local project, asks the direct Codex-backed project agent to change it, receives version-bound file, test, artifact and checkpoint evidence, and can request correction, accept the result or recover without silent data loss.",
+  "non_goals": [
+    "managed background Runs, Action Inbox, Agent Radar and durable background restart, which belong to M03",
+    "production Memory Fabric retrieval, multi-device sync, mobile, voice or ambient interaction",
+    "providers other than Codex or local models before their adapters and credentials are available",
+    "turning the desktop into a full IDE or terminal emulator",
+    "force-push, shared-branch merge, release publication or arbitrary remote Git effects without a separately reviewed Effect Claim and permission path",
+    "final installer, long soak, hardware fault, backup and broad release qualification, which remain production-hardening work"
+  ],
+  "owner_decisions": [
+    "DEC-0006"
+  ],
+  "vertical_slices": [
+    {
+      "id": "VS-M02-01",
+      "title": "Diagnosable project authority",
+      "work_packages": ["WP-M02-001", "WP-M02-002", "WP-M02-003"]
+    },
+    {
+      "id": "VS-M02-02",
+      "title": "Controlled project work",
+      "work_packages": ["WP-M02-004", "WP-M02-005", "WP-M02-006"]
+    },
+    {
+      "id": "VS-M02-03",
+      "title": "Human review and recovery",
+      "work_packages": ["WP-M02-007", "WP-M02-008", "WP-M02-009"]
+    }
+  ],
+  "work_packages": [
+    {
+      "version": 1,
+      "id": "WP-M02-001",
+      "title": "Persist privacy-safe local diagnostics",
+      "status": "MERGE_READY",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-01",
+      "risk": "R2",
+      "outcome": "The local development and Personal Quiet profiles retain bounded structured diagnostic logs and lifecycle evidence across process restart, expose a human-readable local diagnostic summary, and prove that correlation survives without recording prompts, responses, credentials or hidden reasoning.",
+      "non_goals": [
+        "making telemetry or debug logs canonical user state",
+        "requiring an OpenTelemetry Collector, Grafana or a hosted observability vendor",
+        "building the final Diagnostics desktop workspace",
+        "collecting raw project files, prompts, model output, secrets, screenshots or hidden reasoning",
+        "claiming an exact root cause when the operating system or provider supplies no evidence"
+      ],
+      "requirement_refs": [
+        "ARCH-80:Observability",
+        "ARCH-83:PersonalQuietObservability",
+        "SPEC-70:Observability",
+        "OWNER:M02Diagnosability"
+      ],
+      "architecture_refs": [
+        "docs/architecture/80_Dennett_System_Architecture_and_Runtime_Topology.md#40-opentelemetry-как-общий-каркас",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#33-операционная-модель",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#35-default-observability-profiles"
+      ],
+      "depends_on": ["WP-M01-007"],
+      "allowed_roots": [
+        "crates/dennett-observability",
+        "services/node",
+        "services/head",
+        "services/adapter-host-node",
+        "tools/dennettctl",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "blog/notes",
+        "Cargo.toml",
+        "Cargo.lock",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["apps", "protocols", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["privacy-safe tracing fields, component lifecycle and explicit diagnostic context"],
+        "writes": ["bounded local diagnostic files, lifecycle markers and derived human-readable summaries outside canonical user memory"]
+      },
+      "contract_changes": {"public_api": true, "protocol": false, "persistent_schema": true, "migration": false},
+      "security_effects": {"permission_change": true, "external_effect": false, "secret_access": false},
+      "acceptance": [
+        "TEST-M02-DIAGNOSTIC-PERSISTENCE-001",
+        "TEST-M02-DIAGNOSTIC-REDACTION-001",
+        "TEST-M02-DIAGNOSTIC-LIFECYCLE-001"
+      ],
+      "required_commands": [
+        "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test -p dennett-observability -p dennett-node -p dennett-head",
+        "mise exec -- corepack pnpm --filter @dennett/adapter-host-node test",
+        "mise exec -- just check"
+      ],
+      "observability": [
+        "the package instruments its own startup, rotation, retention, flush and abnormal-previous-exit states",
+        "tests inspect serialized output and reject private content, credentials and unregistered high-cardinality fields"
+      ],
+      "rollback": [
+        "disable file-backed diagnostics and retain console tracing without changing canonical sessions or project data",
+        "remove only diagnostic files through their typed retention policy; never delete audit or user data"
+      ],
+      "owner_decision": {"required_before_start": false, "required_before_merge": false},
+      "estimate": {"target_agent_hours": 5, "max_diff_lines": 8200},
+      "notes": [
+        "This is a reliability prerequisite for later filesystem, command and Git mutations, not a production observability platform.",
+        "The owner explicitly prioritized reconstructing failures from logs before M02 began.",
+        "A mature bounded logging capability is preferred over a custom logging framework; retention and redaction remain Dennett-owned policy.",
+        "The lifecycle files are a new pre-release diagnostic schema, so no user-data migration exists yet; changing their private ACL or mode is an explicit permission change.",
+        "The diff budget was raised after detached closure review required capability-based filesystem access, non-blocking lifecycle checkpoints, bounded shutdown and adversarial runtime-host race tests; the final increase covers component-wise no-follow root traversal, capability-bound Linux SQLite paths, durable corrupt-sequence recovery, bounded interrupted writes and the closure evidence itself, closing observed reliability and privacy failures rather than adding product scope."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-002",
+      "title": "Define additive project workspace contracts",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-01",
+      "risk": "R4",
+      "outcome": "Additive provider-neutral contracts describe project registration, trust state, workspace identity, snapshots, file changes, command and test receipts, artifacts, checkpoints and review actions without exposing filesystem, Git or Codex implementation types.",
+      "non_goals": [
+        "implementing storage, filesystem, Git, provider or desktop behavior",
+        "breaking the accepted M01 protocol epoch",
+        "modeling managed Runs or arbitrary external connectors",
+        "encoding a full IDE protocol"
+      ],
+      "requirement_refs": [
+        "M02:ExitGate",
+        "SPEC-60:ProjectWorkspace",
+        "SPEC-60:ChangesReviewCheckpoints",
+        "ARCH-80:ProjectChatLocalEdit",
+        "ARCH-83:M02ProjectWorkspace"
+      ],
+      "architecture_refs": [
+        "docs/specifications/01_Dennett_Specification_Index_and_Shared_Contracts.md",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#17-files-and-project-explorer",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#18-changes-review-and-checkpoints",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#92-milestone-2--project-workspace-and-review"
+      ],
+      "depends_on": ["WP-M02-001"],
+      "allowed_roots": [
+        "protocols",
+        "generated",
+        "crates/dennett-contracts",
+        "tools/protocol_codegen.py",
+        "tools/tests/test_protocol_codegen.py",
+        "tests/catalog",
+        "docs/testing/generated",
+        "planning",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["apps", "services", "adapters", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["accepted M01 command, result, watch and error envelopes plus canonical M02 workspace semantics"],
+        "writes": ["additive Protobuf sources, generated clients and stable provider-neutral workspace value types"]
+      },
+      "contract_changes": {"public_api": true, "protocol": true, "persistent_schema": false, "migration": false},
+      "security_effects": {"permission_change": false, "external_effect": false, "secret_access": false},
+      "acceptance": [
+        "TEST-M02-PROTOCOL-ADDITIVE-001",
+        "TEST-PROTOCOL-GENERATION-001",
+        "TEST-PROTOCOL-BREAKING-001"
+      ],
+      "required_commands": [
+        "mise exec -- uv run --project . --frozen python -m unittest tools.tests.test_protocol_codegen",
+        "mise exec -- uv run --project . --frozen python tools/protocol_codegen.py check",
+        "mise exec -- just check"
+      ],
+      "observability": [
+        "every mutating request retains command and correlation identity",
+        "error envelopes distinguish stale snapshot, scope denial, conflict, cancellation, missing location and retryable adapter failure"
+      ],
+      "rollback": ["revert the additive fields and services before a production M02 client ships; preserve the accepted M01 surface unchanged"],
+      "owner_decision": {"required_before_start": true, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 5, "max_diff_lines": 12000},
+      "notes": [
+        "Generated Rust and TypeScript clients dominate the gross diff budget and must not be hand-edited.",
+        "The contract exposes snapshot identity and receipts rather than raw Git CLI or Codex SDK payloads.",
+        "DEC-0006 must resolve stable project identity, relocatable device-local bindings and the bounded M02 lifecycle before this contract is implemented."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-003",
+      "title": "Own real project registration and trust",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-01",
+      "risk": "R3",
+      "outcome": "The Node durably registers an empty project or existing local folder, resolves canonical location identity, detects Git and instruction sources, presents a bounded trust preview, and restores ready, restricted or missing projects without treating a path or project file as permission authority.",
+      "non_goals": [
+        "deleting source folders or project memory",
+        "cloning remote repositories or importing portable memory packs",
+        "executing project code before Trusted-Bounded authorization",
+        "semantic indexing of project memory",
+        "desktop visual implementation beyond transport-neutral fixtures"
+      ],
+      "requirement_refs": [
+        "SPEC-70:PRJ-01",
+        "SPEC-70:PRJ-02",
+        "SPEC-70:PRJ-08",
+        "SPEC-70:PRJ-13",
+        "SPEC-30:WorkspaceTrust",
+        "ARCH-80:WorkspaceManager"
+      ],
+      "architecture_refs": [
+        "docs/specifications/30_Dennett_Trust_Identity_Autonomy_and_Permissions.md#13-workspace-и-project-trust",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#14-projects-hub",
+        "docs/architecture/80_Dennett_System_Architecture_and_Runtime_Topology.md#152-workspace-manager"
+      ],
+      "depends_on": ["WP-M02-002"],
+      "allowed_roots": [
+        "crates/dennett-contracts",
+        "crates/dennett-trust-core",
+        "services/node",
+        "services/head",
+        "adapters/storage/sqlite",
+        "adapters/transport/local-ipc",
+        "apps/desktop/src/lib",
+        "apps/desktop/src-tauri/src/system_bridge",
+        "tests/catalog",
+        "tests/integration",
+        "tests/simulation",
+        "docs/testing/generated",
+        "planning",
+        "Cargo.toml",
+        "Cargo.lock",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["services/adapter-host-node", "apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["user-selected location, filesystem metadata, Git identity, instruction manifests and explicit trust choice"],
+        "writes": ["Node-owned durable project registry, trust record, instruction fingerprints and system projection"]
+      },
+      "contract_changes": {"public_api": true, "protocol": false, "persistent_schema": true, "migration": true},
+      "security_effects": {"permission_change": true, "external_effect": true, "secret_access": false},
+      "acceptance": [
+        "TEST-M02-PROJECT-CREATE-IMPORT-001",
+        "TEST-M02-PROJECT-TRUST-001",
+        "TEST-M02-PROJECT-MISSING-001",
+        "TEST-M02-INSTRUCTION-CHANGE-001"
+      ],
+      "required_commands": [
+        "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test -p dennett-trust-core -p dennett-storage-sqlite -p dennett-node -p dennett-local-ipc",
+        "mise exec -- corepack pnpm --filter @dennett/desktop test",
+        "mise exec -- just check"
+      ],
+      "observability": [
+        "registration, canonicalization, trust decisions, missing-location transitions and instruction fingerprint changes are correlated without logging raw file contents",
+        "security-sensitive project changes produce explicit events and actionable safe error codes"
+      ],
+      "rollback": [
+        "remove a project registration without deleting its folder or session history",
+        "roll back the schema only through an explicit export-compatible development migration; never reinterpret an existing registry silently"
+      ],
+      "owner_decision": {"required_before_start": false, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 8, "max_diff_lines": 7500},
+      "notes": [
+        "Project location and trust are durable Node-owned state; the React client never writes paths or grants directly to SQLite.",
+        "An empty project creates only the selected directory and one direct session; it does not invent agents or workflows.",
+        "R3 review covers path canonicalization, symlink and junction handling, trust-sensitive changes and migration recovery."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-004",
+      "title": "Control workspace snapshots and file effects",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-02",
+      "risk": "R3",
+      "outcome": "A Node-owned workspace manager pins an exact base snapshot, applies scoped file mutations through claims and receipts, detects concurrent external changes and path escapes, and can compare or restore a checkpoint without overwriting unrelated human work.",
+      "non_goals": [
+        "running project-defined commands or tests",
+        "Git remote operations",
+        "parallel background Runs",
+        "a full filesystem indexer or IDE editor",
+        "pretending that already-completed external effects can be undone by a file checkpoint"
+      ],
+      "requirement_refs": [
+        "M02:WorkspaceSnapshot",
+        "M02:ParallelOwnership",
+        "SPEC-70:PRJ-04",
+        "SPEC-70:PRJ-07",
+        "SPEC-70:TRU-02",
+        "ARCH-82:WorkspaceManager"
+      ],
+      "architecture_refs": [
+        "docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#33-workspace-manager",
+        "docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#342-filesystem-policy",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#36-undo-redo-checkpoints-and-recovery"
+      ],
+      "depends_on": ["WP-M02-003"],
+      "allowed_roots": [
+        "crates/dennett-contracts",
+        "crates/dennett-effect-core",
+        "crates/dennett-trust-core",
+        "services/node",
+        "services/head",
+        "adapters/storage/sqlite",
+        "adapters/transport/local-ipc",
+        "tests/catalog",
+        "tests/integration",
+        "tests/simulation",
+        "docs/testing/generated",
+        "planning",
+        "Cargo.toml",
+        "Cargo.lock",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "services/adapter-host-node", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["registered project root, trust grant, current filesystem facts and prior workspace revision"],
+        "writes": ["Node-owned workspace leases, snapshot manifests, file effect claims and receipts, checkpoints and conflict state"]
+      },
+      "contract_changes": {"public_api": true, "protocol": false, "persistent_schema": true, "migration": true},
+      "security_effects": {"permission_change": false, "external_effect": true, "secret_access": false},
+      "acceptance": [
+        "TEST-M02-WORKSPACE-SNAPSHOT-001",
+        "TEST-M02-FILESYSTEM-SCOPE-001",
+        "TEST-M02-EXTERNAL-CHANGE-001",
+        "TEST-M02-CHECKPOINT-RECOVERY-001"
+      ],
+      "required_commands": [
+        "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test -p dennett-effect-core -p dennett-node -p dennett-head -p dennett-storage-sqlite",
+        "mise exec -- just check"
+      ],
+      "observability": [
+        "each mutation records project, workspace, base revision, command, effect, target classification and terminal receipt without raw content",
+        "stale, escaped, partially applied, cancelled and recovery-required states remain distinguishable after restart"
+      ],
+      "rollback": [
+        "disable mutation admission while retaining read-only project access and existing checkpoint evidence",
+        "restore only files proven to belong to the selected checkpoint and stop on external divergence"
+      ],
+      "owner_decision": {"required_before_start": false, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 10, "max_diff_lines": 8500},
+      "notes": [
+        "One interactive writer may use the selected project workspace; leases and worktrees appear only for real concurrency, risky experiments or explicit isolation.",
+        "Snapshot identity is content and metadata evidence, not a promise that every large or ignored file is copied.",
+        "Filesystem writes remain local consequential effects even when no remote service is involved."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-005",
+      "title": "Run version-bound project checks and artifacts",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-02",
+      "risk": "R3",
+      "outcome": "Trusted projects run bounded local commands and tests through a supervised Node adapter with streamed output, cancellation and resource limits, while each receipt and collected artifact is tied to the exact workspace revision it verified.",
+      "non_goals": [
+        "running code in Restricted projects",
+        "an interactive general-purpose terminal UI",
+        "package installation, network access or secret injection without separate grants",
+        "managed background Run durability",
+        "treating a stale green test as evidence for newer files"
+      ],
+      "requirement_refs": [
+        "M02:VersionBoundTests",
+        "SPEC-70:PRJ-04",
+        "SPEC-70:TRU-01",
+        "ARCH-80:LocalExecutionManager",
+        "ARCH-83:M02ProjectWorkspace"
+      ],
+      "architecture_refs": [
+        "docs/architecture/80_Dennett_System_Architecture_and_Runtime_Topology.md#153-local-execution-manager",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#92-milestone-2--project-workspace-and-review",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#18-changes-review-and-checkpoints"
+      ],
+      "depends_on": ["WP-M02-004"],
+      "allowed_roots": [
+        "crates/dennett-contracts",
+        "crates/dennett-effect-core",
+        "crates/dennett-trust-core",
+        "services/node",
+        "services/head",
+        "adapters/storage/sqlite",
+        "adapters/transport/local-ipc",
+        "tests/catalog",
+        "tests/fixtures",
+        "tests/integration",
+        "tests/simulation",
+        "docs/testing/generated",
+        "planning",
+        "Cargo.toml",
+        "Cargo.lock",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "services/adapter-host-node", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["trusted workspace revision, exact command request, execution grant and declared artifact collection paths"],
+        "writes": ["Node-owned process lifecycle, bounded stdout and stderr evidence, command and test receipts, artifact metadata and terminal state"]
+      },
+      "contract_changes": {"public_api": true, "protocol": false, "persistent_schema": true, "migration": true},
+      "security_effects": {"permission_change": false, "external_effect": true, "secret_access": false},
+      "acceptance": [
+        "TEST-M02-TEST-RECEIPT-001",
+        "TEST-M02-COMMAND-CANCEL-001",
+        "TEST-M02-COMMAND-TRUST-001",
+        "TEST-M02-ARTIFACT-COLLECTION-001"
+      ],
+      "required_commands": [
+        "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test -p dennett-node -p dennett-head -p dennett-effect-core",
+        "mise exec -- just check"
+      ],
+      "observability": [
+        "command phase, executable identity, bounded argument classification, cwd workspace ID, duration, exit status, cancellation and output truncation are correlated",
+        "environment values, secrets and private output are excluded from generic telemetry and retained only as policy-bounded evidence when required"
+      ],
+      "rollback": [
+        "disable command admission and preserve file review without deleting existing receipts or artifacts",
+        "terminate supervised children and mark uncertain termination explicitly rather than claiming cancellation"
+      ],
+      "owner_decision": {"required_before_start": false, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 8, "max_diff_lines": 7000},
+      "notes": [
+        "The first adapter supports the Windows native certification path and deterministic cross-platform fakes.",
+        "A test result becomes stale immediately when its bound workspace revision changes."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-006",
+      "title": "Integrate Codex with local Git workspaces",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-02",
+      "risk": "R3",
+      "outcome": "The existing Codex runtime executes against the selected authoritative workspace, emits normalized file and command activity, and uses a local Git adapter for repository discovery, dirty-state evidence, optional isolated worktrees, conflict detection, local commits and explicit cleanup without automatic remote publication.",
+      "non_goals": [
+        "replacing Codex-native sessions, tools, checkpoints or event streams when their semantics satisfy the contract",
+        "force push, shared-branch merge, release publication or destructive history rewrite",
+        "supporting additional providers or local models",
+        "parallel managed Runs",
+        "making Git mandatory for ordinary folders"
+      ],
+      "requirement_refs": [
+        "SPEC-20:OrdinaryCodeChange",
+        "SPEC-70:PRJ-04",
+        "SPEC-70:PRJ-07",
+        "SPEC-30:GitPublication",
+        "ARCH-80:ProjectChatLocalEdit",
+        "OWNER:CodexOnlyRuntime"
+      ],
+      "architecture_refs": [
+        "docs/specifications/20_Dennett_Agentic_Control_Fabric.md#211-обычная-code-change",
+        "docs/architecture/80_Dennett_System_Architecture_and_Runtime_Topology.md#50-project-chat-и-локальная-правка",
+        "docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#333-worktrees"
+      ],
+      "depends_on": ["WP-M02-005"],
+      "allowed_roots": [
+        "crates/dennett-agent-core",
+        "crates/dennett-contracts",
+        "crates/dennett-effect-core",
+        "services/adapter-host-node",
+        "services/node",
+        "services/head",
+        "adapters/storage/sqlite",
+        "adapters/transport/local-ipc",
+        "tests/catalog",
+        "tests/fixtures",
+        "tests/integration",
+        "tests/simulation",
+        "docs/testing/generated",
+        "planning",
+        "Cargo.toml",
+        "Cargo.lock",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "adapters/model-providers", "adapters/local-models", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["authoritative workspace handle, Git facts, project instructions, runtime controls and active Codex continuation"],
+        "writes": ["Node-owned Git/worktree lifecycle and normalized receipts; provider continuation remains owned by the Codex adapter"]
+      },
+      "contract_changes": {"public_api": true, "protocol": false, "persistent_schema": true, "migration": true},
+      "security_effects": {"permission_change": false, "external_effect": true, "secret_access": false},
+      "acceptance": [
+        "TEST-M02-GIT-WORKTREE-001",
+        "TEST-M02-GIT-CONFLICT-001",
+        "TEST-M02-CODEX-PROJECT-EDIT-001",
+        "TEST-M02-CODEX-PROJECT-RECOVERY-001"
+      ],
+      "required_commands": [
+        "mise exec -- corepack pnpm --filter @dennett/adapter-host-node test",
+        "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test -p dennett-agent-core -p dennett-node -p dennett-head",
+        "mise exec -- just check"
+      ],
+      "observability": [
+        "one trace joins session, Codex turn, workspace revision, Git base, file effects, test receipts and terminal outcome",
+        "worktree creation, dirty base, merge conflict, cleanup and provider failure remain distinguishable without logging file contents"
+      ],
+      "rollback": [
+        "retain the provider-neutral fake and direct read-only project chat while disabling project mutation through the Codex adapter",
+        "keep unresolved worktrees and branches discoverable for manual recovery instead of deleting uncertain work"
+      ],
+      "owner_decision": {"required_before_start": false, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 10, "max_diff_lines": 9500},
+      "notes": [
+        "Single interactive work remains simple; worktrees are required for concurrent writers, risky experiments or explicit isolation, not as bureaucracy around every prompt.",
+        "Local commits are reversible project state. Push and pull-request creation are separate consequential remote effects and are not M02 exit requirements.",
+        "Live ChatGPT-subscription qualification is manual and never enters the credential-free CI gate."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-007",
+      "title": "Approve the project review workbench design",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-03",
+      "risk": "R2",
+      "outcome": "An editable Figma prototype defines the owner-approved Files, Changes, diff, tests, artifacts and checkpoint review flow using the accepted monochrome Mica shell before substantial renderer implementation begins.",
+      "non_goals": [
+        "implementing backend or renderer behavior",
+        "redesigning the accepted Project Chat shell without owner direction",
+        "copying generated-image UX semantics",
+        "building every future project, artifact or IDE screen"
+      ],
+      "requirement_refs": [
+        "SPEC-60:FilesProjectExplorer",
+        "SPEC-60:ChangesReviewCheckpoints",
+        "SPEC-60:ProgressiveDisclosure",
+        "OWNER:FigmaBeforeSubstantialUi"
+      ],
+      "architecture_refs": [
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#17-files-and-project-explorer",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#18-changes-review-and-checkpoints",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#50-desktop-testing"
+      ],
+      "depends_on": ["WP-M02-006"],
+      "allowed_roots": [
+        "docs/design",
+        "planning",
+        "tests/catalog",
+        "docs/testing/generated",
+        "blog/notes",
+        "blog/assets",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["apps", "crates", "services", "adapters", "protocols", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["real M02 project, change, test, artifact and checkpoint fixtures plus the accepted M01 visual direction"],
+        "writes": ["editable design artifact, deterministic design fixtures and owner-review evidence only"]
+      },
+      "contract_changes": {"public_api": false, "protocol": false, "persistent_schema": false, "migration": false},
+      "security_effects": {"permission_change": false, "external_effect": false, "secret_access": false},
+      "acceptance": ["TEST-M02-REVIEW-DESIGN-001", "TEST-M02-REVIEW-A11Y-001"],
+      "required_commands": [
+        "python tools/verify_docs.py",
+        "python tools/verify_planning.py"
+      ],
+      "observability": ["design evidence records fixture, viewport, commit and owner decision without private project content"],
+      "rollback": ["discard the unapproved design artifact without changing the accepted M01 renderer or backend contracts"],
+      "owner_decision": {"required_before_start": false, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 4, "max_diff_lines": 3000},
+      "notes": [
+        "The owner evaluates visual and UX behavior, not implementation layers.",
+        "Native Mica behavior is verified later in the Windows application even if the Figma frame represents its visual result."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-008",
+      "title": "Implement truthful project review interactions",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-03",
+      "risk": "R2",
+      "outcome": "The approved desktop workbench creates and imports projects, opens real files, diffs, test receipts, artifacts and checkpoints, lets the user request corrections or invoke guarded accept and rollback commands, and never renders fixture evidence as live state.",
+      "non_goals": [
+        "a full source-code editor, shell or Git client",
+        "unapproved redesign of the accepted Mica shell",
+        "managed Runs, Inbox or Radar",
+        "remote push or pull-request publication",
+        "reading local persistence directly from React or Tauri"
+      ],
+      "requirement_refs": [
+        "M02:OwnerGate",
+        "SPEC-60:ProjectsHub",
+        "SPEC-60:ProjectWorkspace",
+        "SPEC-60:ChangesReviewCheckpoints",
+        "SPEC-70:UI-06"
+      ],
+      "architecture_refs": [
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#14-projects-hub",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#15-project-workspace--основная-рабочая-среда",
+        "docs/specifications/60_Dennett_Desktop_Application_Business_Logic.md#18-changes-review-and-checkpoints",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#50-desktop-testing"
+      ],
+      "depends_on": ["WP-M02-007"],
+      "allowed_roots": [
+        "apps/desktop",
+        "adapters/transport/local-ipc",
+        "services/node",
+        "services/head",
+        "tests/catalog",
+        "tests/fixtures",
+        "tests/integration",
+        "docs/design",
+        "docs/testing/generated",
+        "planning",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["services/adapter-host-node", "crates/dennett-memory-core", "docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["typed Node snapshots and watch deltas for projects, workspaces, reviews, tests, artifacts and checkpoints"],
+        "writes": ["presentation state and stable commands; durable project and review state remains Node or Head owned"]
+      },
+      "contract_changes": {"public_api": true, "protocol": false, "persistent_schema": false, "migration": false},
+      "security_effects": {"permission_change": false, "external_effect": false, "secret_access": false},
+      "acceptance": [
+        "TEST-M02-PROJECT-UI-001",
+        "TEST-M02-REVIEW-UI-001",
+        "TEST-M02-REVIEW-A11Y-001",
+        "TEST-M02-REVIEW-CORRECTION-001"
+      ],
+      "required_commands": [
+        "mise exec -- corepack pnpm --filter @dennett/desktop typecheck",
+        "mise exec -- corepack pnpm --filter @dennett/desktop test",
+        "mise exec -- corepack pnpm --filter @dennett/desktop build",
+        "mise exec -- just check"
+      ],
+      "observability": [
+        "every visible mutation invokes a stable command ID and shows pending, committed, stale, failed or recovery-required state",
+        "ordinary review decisions are understandable without opening raw logs"
+      ],
+      "rollback": ["disable M02 mutation commands and retain the accepted M01 chat plus read-only project evidence"],
+      "owner_decision": {"required_before_start": false, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 9, "max_diff_lines": 9500},
+      "notes": [
+        "Implementation begins only after the owner approves WP-M02-007 visual and interaction behavior.",
+        "Right-panel sections remain hidden when no real data exists; placeholder artifacts are forbidden in the native path."
+      ]
+    },
+    {
+      "version": 1,
+      "id": "WP-M02-009",
+      "title": "Qualify and accept M02 project work",
+      "status": "REFINED",
+      "milestone": "M02",
+      "vertical_slice": "VS-M02-03",
+      "risk": "R3",
+      "outcome": "One real small repository completes the M02 owner scenario through the native application, while deterministic fault scenarios prove project restore, stale detection, cancellation, partial failure, checkpoint recovery, worktree conflict and privacy-safe diagnostics before milestone acceptance.",
+      "non_goals": [
+        "M03 background Run restart and control surfaces",
+        "multi-device, mobile, voice or production Memory Fabric qualification",
+        "all-provider conformance beyond the Codex and deterministic fake runtimes",
+        "final public installer, broad soak, physical power-loss or release-signing qualification"
+      ],
+      "requirement_refs": [
+        "M02:ExitGate",
+        "SPEC-70:PRJ-01",
+        "SPEC-70:PRJ-02",
+        "SPEC-70:PRJ-04",
+        "SPEC-70:PRJ-07",
+        "SPEC-70:PRJ-08",
+        "SPEC-70:TRU-01",
+        "SPEC-70:TRU-02"
+      ],
+      "architecture_refs": [
+        "docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md#5-m02--project-workspace-and-review",
+        "docs/specifications/70_Dennett_End_to_End_Validation_and_Architecture_Handoff.md#9-проекты-и-project-chats",
+        "docs/architecture/83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md#92-milestone-2--project-workspace-and-review"
+      ],
+      "depends_on": ["WP-M02-008"],
+      "allowed_roots": [
+        "apps/desktop",
+        "crates",
+        "services",
+        "adapters",
+        "protocols",
+        "generated",
+        "tests",
+        "tools",
+        "docs/design",
+        "docs/runbooks",
+        "docs/testing/generated",
+        "planning",
+        "blog",
+        "Cargo.toml",
+        "Cargo.lock",
+        "pnpm-lock.yaml",
+        "REPOSITORY_MANIFEST.json",
+        "REPOSITORY_CHECKSUMS.sha256",
+        "docs/CHECKSUMS.sha256"
+      ],
+      "forbidden_roots": ["docs/specifications", "docs/architecture"],
+      "state_ownership": {
+        "reads": ["all accepted M02 contracts, implementation evidence, owner-approved design and a disposable real-project fixture"],
+        "writes": ["qualification tests, runbooks, completion evidence, milestone status and publishable M02 blog evidence"]
+      },
+      "contract_changes": {"public_api": false, "protocol": false, "persistent_schema": false, "migration": false},
+      "security_effects": {"permission_change": false, "external_effect": false, "secret_access": true},
+      "acceptance": [
+        "TEST-M02-E2E-001",
+        "TEST-M02-FAILURE-RECOVERY-001",
+        "TEST-M02-CODEX-PROJECT-EDIT-001",
+        "TEST-M02-OWNER-ACCEPTANCE-001"
+      ],
+      "required_commands": [
+        "mise exec -- just check",
+        "mise exec -- corepack pnpm --filter @dennett/desktop test",
+        "mise exec -- uv run --project . --frozen python tools/run_in_toolchain.py cargo test --workspace",
+        "manual native Windows owner scenario and live Codex project-edit canary"
+      ],
+      "observability": [
+        "qualification demonstrates one joined privacy-safe trace from owner command through workspace, Codex, file, test, Git and review terminal state",
+        "the diagnostic bundle explains injected failures without exposing fixture content or ChatGPT authentication"
+      ],
+      "rollback": [
+        "hold M02 in QUALIFYING and keep the last accepted M01 public state if any hard gate fails",
+        "preserve recoverable workspaces and evidence while disabling unsafe mutation paths"
+      ],
+      "owner_decision": {"required_before_start": false, "required_before_merge": true},
+      "estimate": {"target_agent_hours": 8, "max_diff_lines": 7500},
+      "notes": [
+        "The owner judges whether the ordinary project task, diff and recovery flow is understandable without reading technical logs.",
+        "Deeper all-project and long-soak testing remains mandatory before final production release, as requested after M01.",
+        "The M02 blog installment is published only after factual, editorial, privacy and independent review gates pass."
+      ]
+    }
+  ],
+  "batches": ["AB-M02-001", "AB-M02-002", "AB-M02-003"],
+  "owner_acceptance": [
+    "A user can create an empty project or add an existing folder and reopen it after restarting Dennett",
+    "An unfamiliar repository remains Restricted until the user grants Trusted-Bounded access and project instructions cannot expand permissions",
+    "A direct Codex-backed chat can change a real file and run a focused check without creating a managed workflow",
+    "Every diff, test result, artifact and checkpoint visibly belongs to one exact workspace revision",
+    "The user can understand what changed, request a correction, accept the result or recover without reading raw logs",
+    "External human edits, missing folders, cancellation, partial command failure and process restart produce honest recoverable states rather than silent overwrite or false completion",
+    "Concurrent writers never mutate one shared workspace without explicit ownership or isolation",
+    "The Files and Changes experience matches the owner-approved Figma checkpoint and preserves the accepted M01 monochrome Mica shell"
+  ]
+}

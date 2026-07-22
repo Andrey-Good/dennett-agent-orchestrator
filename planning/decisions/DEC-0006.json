@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "DEC-0006",
+  "work_package": "WP-M02-002",
+  "severity": "red",
+  "question": "Which project identity, folder-binding and bounded lifecycle semantics should M02 make authoritative?",
+  "context": "The accepted M01 implementation derives a project identifier from its current folder path. That was sufficient for one local conversation but is unsafe for M02: moving a folder can create a second logical identity, while reusing a path can accidentally inherit the wrong history or trust. M02 also needs explicit semantics for ordinary non-Git folders, imported repository trust and the difference between removing a registration and deleting user files. This decision establishes only the smallest durable boundary needed for create, attach, missing and rebind; archive, clone, transfer, remote publication and destructive deletion remain deferred.",
+  "options": [
+    {
+      "id": "A",
+      "description": "Keep path-derived identity and treat each moved folder as a new project",
+      "benefits": [
+        "requires the smallest immediate schema and migration change"
+      ],
+      "costs": [
+        "project history and trust cannot follow an intentional folder move",
+        "a reused path can be confused with an older logical project",
+        "later provider, device and memory work must replace the identity model"
+      ],
+      "risks": [
+        "silent history split or unsafe trust reuse after filesystem changes"
+      ]
+    },
+    {
+      "id": "B",
+      "description": "Use a stable generated Project ID with separate relocatable device-local WorkspaceBindings",
+      "benefits": [
+        "project identity survives folder moves and supports later devices and providers",
+        "filesystem location, repository fingerprint, availability and trust-sensitive fingerprints remain explicit observations",
+        "remove registration can be safe by default because source deletion is a separate unsupported operation"
+      ],
+      "costs": [
+        "introduces the first project registry migration and explicit rebind flow",
+        "requires conflict checks when a location or repository fingerprint changes"
+      ],
+      "risks": [
+        "an incomplete migration could strand an M01 path-derived project unless compatibility is tested"
+      ]
+    }
+  ],
+  "recommendation": "B",
+  "reason": "Stable logical identity plus a separate local binding matches the canonical ownership model, prevents path reuse from becoming authority, and is the smallest design that remains valid when Dennett later adds more providers or devices. Under this option unknown imports begin Restricted; normal execution requires Trusted-Bounded authority; plain folders use bounded before-image checkpoints unless Git is explicitly initialized; M02 exposes only diff, test and checkpoint evidence, and never deletes source files or publishes remotely.",
+  "default_if_deferred": "stop",
+  "needed_by": "WP-M02-002",
+  "status": "open",
+  "resolution": null
+}

@@ -9,6 +9,7 @@ use dennett_agent_core::{
     SteerRuntimeTurnRequest, SteeringAcknowledgement,
 };
 use dennett_kernel::{DennettError, DennettResult};
+use dennett_observability::{DiagnosticEvent, DiagnosticEventKind};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -31,6 +32,7 @@ const HOST_CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
 const HOST_STARTUP_TIMEOUT: Duration = Duration::from_secs(65);
 const HOST_EVENT_CAPACITY: usize = 128;
 const MAX_HOST_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_HOST_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 const SAFE_HOST_ENVIRONMENT: &[&str] = &[
     "ALLUSERSPROFILE",
     "APPDATA",
@@ -68,8 +70,77 @@ const SAFE_HOST_ENVIRONMENT: &[&str] = &[
 ];
 
 type TurnKey = (String, String);
-type PendingResponse = oneshot::Sender<Result<Value, RuntimeError>>;
+type PendingResponseSender = oneshot::Sender<Result<Value, RuntimeError>>;
 type TurnSender = mpsc::Sender<Result<RuntimeEvent, RuntimeError>>;
+
+struct PendingRequest {
+    generation: u64,
+    sender: PendingResponseSender,
+}
+
+#[derive(Default)]
+struct HostCoordination {
+    generation: u64,
+    fenced: bool,
+    pending: HashMap<String, PendingRequest>,
+}
+
+enum PendingResponseDisposition {
+    Deliver(PendingResponseSender),
+    Reject(PendingResponseSender),
+    Ignore,
+    Unknown,
+}
+
+impl HostCoordination {
+    fn admit(&mut self, request_id: String, sender: PendingResponseSender) -> Option<u64> {
+        if self.fenced {
+            return None;
+        }
+        let generation = self.generation;
+        let replaced = self
+            .pending
+            .insert(request_id, PendingRequest { generation, sender });
+        debug_assert!(replaced.is_none(), "runtime request IDs must be unique");
+        Some(generation)
+    }
+
+    fn take_response(&mut self, request_id: &str) -> PendingResponseDisposition {
+        if self.fenced {
+            return self
+                .pending
+                .remove(request_id)
+                .map_or(PendingResponseDisposition::Ignore, |pending| {
+                    PendingResponseDisposition::Reject(pending.sender)
+                });
+        }
+        match self.pending.remove(request_id) {
+            Some(pending) if pending.generation == self.generation => {
+                PendingResponseDisposition::Deliver(pending.sender)
+            }
+            Some(pending) => PendingResponseDisposition::Reject(pending.sender),
+            None => PendingResponseDisposition::Unknown,
+        }
+    }
+
+    fn fence(&mut self) -> Option<Vec<PendingResponseSender>> {
+        if self.fenced {
+            return None;
+        }
+        self.fenced = true;
+        self.generation = self.generation.saturating_add(1);
+        Some(
+            self.pending
+                .drain()
+                .map(|(_, pending)| pending.sender)
+                .collect(),
+        )
+    }
+
+    const fn accepts_response(&self, generation: u64) -> bool {
+        !self.fenced && self.generation == generation
+    }
+}
 
 #[derive(Clone)]
 pub struct HostedAgentRuntime {
@@ -78,7 +149,7 @@ pub struct HostedAgentRuntime {
 
 struct RuntimeHostInner {
     writer: Mutex<ChildStdin>,
-    pending: Mutex<HashMap<String, PendingResponse>>,
+    coordination: Mutex<HostCoordination>,
     turns: Mutex<HashMap<TurnKey, TurnSender>>,
     child: StdMutex<Child>,
 }
@@ -106,12 +177,20 @@ impl HostedAgentRuntime {
             .arg(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         command.env_clear().envs(sanitized_host_environment());
-        let mut child = command
-            .spawn()
-            .map_err(|_| RuntimeHostStartError::SpawnFailed)?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                dennett_observability::record(
+                    DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostSpawnFailed)
+                        .error_code("runtime_host.spawn_failed")
+                        .retryable(true),
+                );
+                return Err(RuntimeHostStartError::SpawnFailed);
+            }
+        };
         let writer = child
             .stdin
             .take()
@@ -120,23 +199,47 @@ impl HostedAgentRuntime {
             .stdout
             .take()
             .ok_or(RuntimeHostStartError::SpawnFailed)?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(RuntimeHostStartError::SpawnFailed)?;
         let inner = Arc::new(RuntimeHostInner {
             writer: Mutex::new(writer),
-            pending: Mutex::new(HashMap::new()),
+            coordination: Mutex::new(HostCoordination::default()),
             turns: Mutex::new(HashMap::new()),
             child: StdMutex::new(child),
         });
         tokio::spawn(read_host(BufReader::new(stdout), Arc::downgrade(&inner)));
+        tokio::spawn(read_host_diagnostics(BufReader::new(stderr)));
         let runtime = Self { inner };
-        let health = runtime
+        let health = match runtime
             .call_with_timeout("health", json!({}), HOST_STARTUP_TIMEOUT)
             .await
-            .map_err(|_| RuntimeHostStartError::HandshakeFailed)?;
+        {
+            Ok(health) => health,
+            Err(error) => {
+                fail_host(&runtime.inner).await;
+                dennett_observability::record(
+                    DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostHandshakeFailed)
+                        .error_code(error.code.as_str())
+                        .retryable(error.retryable),
+                );
+                return Err(RuntimeHostStartError::HandshakeFailed);
+            }
+        };
         if health.get("status").and_then(Value::as_str) != Some("healthy")
             || health.get("protocolVersion").and_then(Value::as_u64) != Some(HOST_PROTOCOL_VERSION)
         {
+            fail_host(&runtime.inner).await;
+            dennett_observability::record(
+                DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostProtocolMismatch)
+                    .error_code("runtime_host.protocol_mismatch"),
+            );
             return Err(RuntimeHostStartError::HandshakeFailed);
         }
+        dennett_observability::record(
+            DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostReady).status("ready"),
+        );
         Ok(runtime)
     }
 
@@ -164,38 +267,84 @@ impl HostedAgentRuntime {
             return Err(RuntimeError::new(RuntimeErrorCode::InvalidRequest));
         }
         let (sender, receiver) = oneshot::channel();
-        self.inner
-            .pending
+        let generation = self
+            .inner
+            .coordination
             .lock()
             .await
-            .insert(request_id.clone(), sender);
-        let write_result = async {
-            let mut writer = self.inner.writer.lock().await;
-            writer.write_all(&encoded).await?;
-            writer.write_all(b"\n").await?;
-            writer.flush().await
+            .admit(request_id.clone(), sender)
+            .ok_or_else(provider_unavailable)?;
+        enum ControlIoFailure {
+            Write,
+            ResponseClosed,
         }
-        .await;
-        if write_result.is_err() {
-            self.inner.pending.lock().await.remove(&request_id);
-            fail_host(&self.inner).await;
-            return Err(RuntimeError::retryable(
-                RuntimeErrorCode::ProviderUnavailable,
-            ));
-        }
-        match tokio::time::timeout(timeout, receiver).await {
+        let operation = async {
+            {
+                let mut writer = self.inner.writer.lock().await;
+                writer
+                    .write_all(&encoded)
+                    .await
+                    .map_err(|_| ControlIoFailure::Write)?;
+                writer
+                    .write_all(b"\n")
+                    .await
+                    .map_err(|_| ControlIoFailure::Write)?;
+                writer.flush().await.map_err(|_| ControlIoFailure::Write)?;
+            }
+            let result = receiver
+                .await
+                .map_err(|_| ControlIoFailure::ResponseClosed)?;
+            Ok(validate_control_result(&self.inner.coordination, generation, result).await)
+        };
+        match tokio::time::timeout(timeout, operation).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) | Err(_) => {
-                self.inner.pending.lock().await.remove(&request_id);
+            Ok(Err(ControlIoFailure::Write)) => {
+                fail_host(&self.inner).await;
+                dennett_observability::record(
+                    DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostWriteFailed)
+                        .error_code("provider_unavailable")
+                        .retryable(true),
+                );
+                Err(provider_unavailable())
+            }
+            Ok(Err(ControlIoFailure::ResponseClosed)) => {
+                fail_host(&self.inner).await;
+                dennett_observability::record(
+                    DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostResponseChannelClosed)
+                        .error_code("provider_unavailable")
+                        .retryable(true),
+                );
+                Err(provider_unavailable())
+            }
+            Err(_) => {
                 // A timed-out control request has an unknown external result.
                 // Fence the dedicated host before callers may persist failure
                 // or retry against a replacement runtime.
                 fail_host(&self.inner).await;
-                Err(RuntimeError::retryable(
-                    RuntimeErrorCode::ProviderUnavailable,
-                ))
+                dennett_observability::record(
+                    DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostControlTimeout)
+                        .error_code("provider_unavailable")
+                        .retryable(true),
+                );
+                Err(provider_unavailable())
             }
         }
+    }
+}
+
+fn provider_unavailable() -> RuntimeError {
+    RuntimeError::retryable(RuntimeErrorCode::ProviderUnavailable)
+}
+
+async fn validate_control_result(
+    coordination: &Mutex<HostCoordination>,
+    generation: u64,
+    result: Result<Value, RuntimeError>,
+) -> Result<Value, RuntimeError> {
+    if coordination.lock().await.accepts_response(generation) {
+        result
+    } else {
+        Err(provider_unavailable())
     }
 }
 
@@ -418,9 +567,21 @@ where
         let line = match read_bounded_frame(&mut reader).await {
             Ok(Some(line)) => line,
             Ok(None) => break,
-            Err(_) => {
+            Err(error) => {
                 if let Some(inner) = inner.upgrade() {
+                    let (kind, error_code) = if error.kind() == std::io::ErrorKind::InvalidData {
+                        (
+                            DiagnosticEventKind::RuntimeHostFrameTooLarge,
+                            "runtime_host.frame_too_large",
+                        )
+                    } else {
+                        (
+                            DiagnosticEventKind::RuntimeHostReadFailed,
+                            "runtime_host.read_failed",
+                        )
+                    };
                     fail_host(&inner).await;
+                    record_host_failure(kind, error_code);
                 }
                 return;
             }
@@ -428,6 +589,10 @@ where
         let Ok(line) = String::from_utf8(line) else {
             if let Some(inner) = inner.upgrade() {
                 fail_host(&inner).await;
+                record_host_failure(
+                    DiagnosticEventKind::RuntimeHostInvalidUtf8,
+                    "runtime_host.invalid_utf8",
+                );
             }
             return;
         };
@@ -438,10 +603,92 @@ where
     }
     if let Some(inner) = inner.upgrade() {
         fail_host(&inner).await;
+        record_host_failure(
+            DiagnosticEventKind::RuntimeHostStdoutEof,
+            "runtime_host.stdout_eof",
+        );
+    }
+}
+
+async fn read_host_diagnostics<R>(mut reader: BufReader<R>)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut unclassified_reported = false;
+    loop {
+        let line = match read_bounded_frame_with_limit(&mut reader, MAX_HOST_DIAGNOSTIC_BYTES).await
+        {
+            Ok(Some(line)) => line,
+            Ok(None) => return,
+            Err(error) => {
+                let (kind, error_code) = if error.kind() == std::io::ErrorKind::InvalidData {
+                    (
+                        DiagnosticEventKind::RuntimeHostStderrFrameTooLarge,
+                        "runtime_host.stderr_frame_too_large",
+                    )
+                } else {
+                    (
+                        DiagnosticEventKind::RuntimeHostStderrReadFailed,
+                        "runtime_host.stderr_read_failed",
+                    )
+                };
+                record_host_failure(kind, error_code);
+                return;
+            }
+        };
+        let diagnostic = String::from_utf8(line)
+            .ok()
+            .as_deref()
+            .map_or(HostDiagnostic::Unclassified, classify_host_diagnostic);
+        match diagnostic {
+            HostDiagnostic::UnhandledFailure => record_host_failure(
+                DiagnosticEventKind::RuntimeHostUnhandledFailure,
+                "runtime_host.unhandled_failure",
+            ),
+            HostDiagnostic::Unclassified if !unclassified_reported => {
+                unclassified_reported = true;
+                record_host_failure(
+                    DiagnosticEventKind::RuntimeHostStderrUnclassified,
+                    "runtime_host.stderr_unclassified",
+                );
+            }
+            HostDiagnostic::Unclassified => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostDiagnostic {
+    UnhandledFailure,
+    Unclassified,
+}
+
+fn classify_host_diagnostic(line: &str) -> HostDiagnostic {
+    let Ok(Value::Object(message)) = serde_json::from_str::<Value>(line) else {
+        return HostDiagnostic::Unclassified;
+    };
+    if message.len() == 2
+        && message.get("v").and_then(Value::as_u64) == Some(HOST_PROTOCOL_VERSION)
+        && message.get("diagnosticCode").and_then(Value::as_str)
+            == Some("runtime_host.unhandled_failure")
+    {
+        HostDiagnostic::UnhandledFailure
+    } else {
+        HostDiagnostic::Unclassified
     }
 }
 
 async fn read_bounded_frame<R>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    read_bounded_frame_with_limit(reader, MAX_HOST_MESSAGE_BYTES).await
+}
+
+async fn read_bounded_frame_with_limit<R>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<Vec<u8>>>
 where
     R: tokio::io::AsyncBufRead + Unpin,
 {
@@ -458,7 +705,7 @@ where
             }
             let newline = available.iter().position(|byte| *byte == b'\n');
             let payload_len = newline.unwrap_or(available.len());
-            if line.len().saturating_add(payload_len) > MAX_HOST_MESSAGE_BYTES {
+            if line.len().saturating_add(payload_len) > max_bytes {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "runtime host frame exceeds the protocol limit",
@@ -483,24 +730,61 @@ where
 async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
     let Ok(message) = serde_json::from_str::<Value>(line) else {
         fail_host(inner).await;
+        record_host_failure(
+            DiagnosticEventKind::RuntimeHostInvalidJson,
+            "runtime_host.invalid_json",
+        );
         return;
     };
     if message.get("v").and_then(Value::as_u64) != Some(HOST_PROTOCOL_VERSION) {
         fail_host(inner).await;
+        record_host_failure(
+            DiagnosticEventKind::RuntimeHostProtocolVersionInvalid,
+            "runtime_host.protocol_version_invalid",
+        );
         return;
     }
     if let Some(id) = message.get("id").and_then(Value::as_str) {
-        if let Some(sender) = inner.pending.lock().await.remove(id) {
-            let result = if let Some(error) = message.get("error") {
-                Err(parse_error(error))
-            } else {
-                message
-                    .get("result")
-                    .cloned()
-                    .ok_or_else(|| RuntimeError::new(RuntimeErrorCode::ProtocolViolation))
-            };
-            let _ = sender.send(result);
+        let disposition = {
+            let mut coordination = inner.coordination.lock().await;
+            coordination.take_response(id)
+        };
+        let sender = match disposition {
+            PendingResponseDisposition::Deliver(sender) => sender,
+            PendingResponseDisposition::Reject(sender) => {
+                let _ = sender.send(Err(provider_unavailable()));
+                fail_host(inner).await;
+                return;
+            }
+            PendingResponseDisposition::Ignore => return,
+            PendingResponseDisposition::Unknown => {
+                fail_host(inner).await;
+                record_host_failure(
+                    DiagnosticEventKind::RuntimeHostUnknownResponse,
+                    "runtime_host.unknown_response",
+                );
+                return;
+            }
+        };
+        let result = match (message.get("error"), message.get("result")) {
+            (Some(error), None) => parse_error(error).map_or_else(
+                || Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation)),
+                Err,
+            ),
+            (None, Some(result)) => Ok(result.clone()),
+            _ => Err(RuntimeError::new(RuntimeErrorCode::ProtocolViolation)),
+        };
+        let protocol_violation = result
+            .as_ref()
+            .is_err_and(|error| error.code == RuntimeErrorCode::ProtocolViolation);
+        if protocol_violation {
+            fail_host(inner).await;
+            record_host_failure(
+                DiagnosticEventKind::RuntimeHostInvalidResponse,
+                "runtime_host.invalid_response",
+            );
         }
+        let _ = sender.send(result);
         return;
     }
     match message.get("event").and_then(Value::as_str) {
@@ -513,6 +797,10 @@ async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
                 Ok(event) => event,
                 Err(()) => {
                     fail_host(inner).await;
+                    record_host_failure(
+                        DiagnosticEventKind::RuntimeHostInvalidEvent,
+                        "runtime_host.invalid_event",
+                    );
                     return;
                 }
             };
@@ -523,29 +811,50 @@ async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
         Some("runtime_error") => {
             let Some(session_id) = message.get("sessionId").and_then(Value::as_str) else {
                 fail_host(inner).await;
+                record_host_failure(
+                    DiagnosticEventKind::RuntimeHostInvalidScope,
+                    "runtime_host.invalid_scope",
+                );
                 return;
             };
             let Some(turn_id) = message.get("turnId").and_then(Value::as_str) else {
                 fail_host(inner).await;
+                record_host_failure(
+                    DiagnosticEventKind::RuntimeHostInvalidScope,
+                    "runtime_host.invalid_scope",
+                );
                 return;
             };
-            let error = message.get("error").map_or_else(
-                || RuntimeError::new(RuntimeErrorCode::ProtocolViolation),
-                parse_error,
-            );
+            let Some(error) = message.get("error").and_then(parse_error) else {
+                fail_host(inner).await;
+                record_host_failure(
+                    DiagnosticEventKind::RuntimeHostInvalidError,
+                    "runtime_host.invalid_error",
+                );
+                return;
+            };
             let key = (session_id.to_owned(), turn_id.to_owned());
             try_deliver_turn_message(inner, &key, Err(error), true).await;
         }
-        _ => fail_host(inner).await,
+        _ => {
+            fail_host(inner).await;
+            record_host_failure(
+                DiagnosticEventKind::RuntimeHostUnknownEvent,
+                "runtime_host.unknown_event",
+            );
+        }
     }
 }
 
 async fn fail_host(inner: &RuntimeHostInner) {
+    let Some(pending) = inner.coordination.lock().await.fence() else {
+        return;
+    };
     if let Ok(mut child) = inner.child.lock() {
         let _ = child.start_kill();
     }
-    let error = RuntimeError::retryable(RuntimeErrorCode::ProviderUnavailable);
-    for (_, sender) in inner.pending.lock().await.drain() {
+    let error = provider_unavailable();
+    for sender in pending {
         let _ = sender.send(Err(error.clone()));
     }
     let senders = inner
@@ -558,6 +867,19 @@ async fn fail_host(inner: &RuntimeHostInner) {
     for sender in senders {
         let _ = sender.try_send(Err(error.clone()));
     }
+    dennett_observability::record(
+        DiagnosticEvent::new(DiagnosticEventKind::RuntimeHostFenced)
+            .error_code("provider_unavailable")
+            .retryable(true),
+    );
+}
+
+fn record_host_failure(kind: DiagnosticEventKind, error_code: &'static str) {
+    dennett_observability::record(
+        DiagnosticEvent::new(kind)
+            .error_code(error_code)
+            .retryable(true),
+    );
 }
 
 async fn try_deliver_turn_message(
@@ -904,7 +1226,7 @@ fn parse_steering(
     Ok(acknowledgement)
 }
 
-fn parse_error(value: &Value) -> RuntimeError {
+fn parse_error(value: &Value) -> Option<RuntimeError> {
     let code = match value.get("code").and_then(Value::as_str) {
         Some("invalid_request") => RuntimeErrorCode::InvalidRequest,
         Some("unsupported") => RuntimeErrorCode::Unsupported,
@@ -912,19 +1234,14 @@ fn parse_error(value: &Value) -> RuntimeError {
         Some("scope_mismatch") => RuntimeErrorCode::ScopeMismatch,
         Some("continuation_unavailable") => RuntimeErrorCode::ContinuationUnavailable,
         Some("provider_unavailable") => RuntimeErrorCode::ProviderUnavailable,
-        _ => RuntimeErrorCode::ProviderFailure,
+        Some("provider_failure") => RuntimeErrorCode::ProviderFailure,
+        _ => return None,
     };
-    RuntimeError {
+    Some(RuntimeError {
         code,
-        retryable: value
-            .get("retryable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        recoverable: value
-            .get("recoverable")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    }
+        retryable: value.get("retryable").and_then(Value::as_bool)?,
+        recoverable: value.get("recoverable").and_then(Value::as_bool)?,
+    })
 }
 
 fn required_string(value: &Value, field: &str) -> Result<String, RuntimeError> {
@@ -1002,6 +1319,17 @@ pub enum RuntimeHostStartError {
     HandshakeFailed,
 }
 
+impl RuntimeHostStartError {
+    #[must_use]
+    pub const fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::HostMissing => "runtime_host.missing",
+            Self::SpawnFailed => "runtime_host.spawn_failed",
+            Self::HandshakeFailed => "runtime_host.handshake_failed",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,6 +1365,181 @@ mod tests {
                 .expect("frame"),
             b"{\"v\":1}".to_vec()
         );
+    }
+
+    #[tokio::test]
+    async fn request_admission_cannot_cross_a_concurrent_fence() {
+        let coordination = Arc::new(Mutex::new(HostCoordination::default()));
+        let mut held = coordination.lock().await;
+        let (admitted_sender, admitted_receiver) = oneshot::channel();
+        assert_eq!(
+            held.admit("already-admitted".to_owned(), admitted_sender),
+            Some(0)
+        );
+
+        let race_barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let racing_coordination = coordination.clone();
+        let racing_barrier = race_barrier.clone();
+        let racing_admission = tokio::spawn(async move {
+            let (sender, _receiver) = oneshot::channel();
+            racing_barrier.wait().await;
+            racing_coordination
+                .lock()
+                .await
+                .admit("racing-admission".to_owned(), sender)
+        });
+
+        race_barrier.wait().await;
+        tokio::task::yield_now().await;
+        let drained = held.fence().expect("first fence transition");
+        assert_eq!(held.generation, 1);
+        assert!(held.fenced);
+        assert!(held.pending.is_empty());
+        drop(held);
+
+        let error = provider_unavailable();
+        for sender in drained {
+            let _ = sender.send(Err(error.clone()));
+        }
+        let admitted_result = admitted_receiver
+            .await
+            .expect("fence must resolve every admitted request")
+            .expect_err("fence must reject the admitted request");
+        assert_eq!(admitted_result.code, RuntimeErrorCode::ProviderUnavailable);
+        assert_eq!(
+            racing_admission.await.expect("racing admission task"),
+            None,
+            "an admission queued at the fence boundary must observe the fence"
+        );
+        assert!(coordination.lock().await.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn buffered_response_is_rejected_after_its_generation_is_fenced() {
+        let coordination = Arc::new(Mutex::new(HostCoordination::default()));
+        let (sender, receiver) = oneshot::channel();
+        let generation = coordination
+            .lock()
+            .await
+            .admit("buffered-response".to_owned(), sender)
+            .expect("request admission");
+        let sender = match coordination.lock().await.take_response("buffered-response") {
+            PendingResponseDisposition::Deliver(sender) => sender,
+            _ => panic!("current-generation response must be deliverable"),
+        };
+        sender
+            .send(Ok(json!({ "status": "buffered-success" })))
+            .expect("buffer response before validation");
+
+        let buffered_barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let validation_barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let validating_coordination = coordination.clone();
+        let validating_buffered_barrier = buffered_barrier.clone();
+        let validating_validation_barrier = validation_barrier.clone();
+        let validation = tokio::spawn(async move {
+            let buffered = receiver.await.expect("buffered host response");
+            validating_buffered_barrier.wait().await;
+            validating_validation_barrier.wait().await;
+            validate_control_result(&validating_coordination, generation, buffered).await
+        });
+
+        buffered_barrier.wait().await;
+        let drained = coordination
+            .lock()
+            .await
+            .fence()
+            .expect("first fence transition");
+        assert!(drained.is_empty(), "response sender was already detached");
+        validation_barrier.wait().await;
+
+        let error = validation
+            .await
+            .expect("response validation task")
+            .expect_err("buffered success must not cross a later fence");
+        assert_eq!(error.code, RuntimeErrorCode::ProviderUnavailable);
+    }
+
+    #[tokio::test]
+    async fn control_timeout_covers_a_blocked_stdin_write_and_fences_the_host() {
+        let temp = tempfile::tempdir().expect("temporary runtime host");
+        let script = temp.path().join("blocked-stdin-runtime-host.mjs");
+        std::fs::write(
+            &script,
+            r#"
+import readline from "node:readline";
+const write = value => process.stdout.write(JSON.stringify(value) + "\n");
+const input = readline.createInterface({ input: process.stdin });
+input.on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method === "health") {
+    write({ v: 1, id: request.id, result: { status: "healthy", protocolVersion: 1 } });
+    input.pause();
+    process.stdin.pause();
+  }
+});
+"#,
+        )
+        .expect("write blocked-stdin fixture");
+        let script = configured_host_script(Some(script.into_os_string()))
+            .expect("canonical blocked-stdin fixture");
+        let runtime = HostedAgentRuntime::start_process(Path::new("node"), &script)
+            .await
+            .expect("start blocked-stdin fixture");
+
+        let error = runtime
+            .call_with_timeout(
+                "blocked",
+                json!({ "payload": "x".repeat(512 * 1024) }),
+                Duration::from_millis(100),
+            )
+            .await
+            .expect_err("blocked write must time out");
+        assert_eq!(error.code, RuntimeErrorCode::ProviderUnavailable);
+        let coordination = runtime.inner.coordination.lock().await;
+        assert!(coordination.fenced);
+        assert_eq!(coordination.generation, 1);
+        assert!(coordination.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_response_fences_the_host_without_self_deadlock() {
+        let temp = tempfile::tempdir().expect("temporary runtime host");
+        let script = temp.path().join("unknown-response-runtime-host.mjs");
+        std::fs::write(
+            &script,
+            r#"
+import readline from "node:readline";
+const write = value => process.stdout.write(JSON.stringify(value) + "\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method === "health") {
+    write({ v: 1, id: request.id, result: { status: "healthy", protocolVersion: 1 } });
+    setTimeout(() => write({ v: 1, id: "unknown-response", result: {} }), 10);
+  }
+});
+"#,
+        )
+        .expect("write unknown-response fixture");
+        let script = configured_host_script(Some(script.into_os_string()))
+            .expect("canonical unknown-response fixture");
+        let runtime = HostedAgentRuntime::start_process(Path::new("node"), &script)
+            .await
+            .expect("start unknown-response fixture");
+
+        let error = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match runtime.describe().await {
+                    Ok(_) => tokio::task::yield_now().await,
+                    Err(error) => break error,
+                }
+            }
+        })
+        .await
+        .expect("unknown response handling must remain bounded");
+        assert_eq!(error.code, RuntimeErrorCode::ProviderUnavailable);
+        let coordination = runtime.inner.coordination.lock().await;
+        assert!(coordination.fenced);
+        assert!(coordination.pending.is_empty());
     }
 
     #[tokio::test]
@@ -1187,6 +1690,26 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
         assert_eq!(
             names,
             vec![OsString::from("PATH"), OsString::from("LOCALAPPDATA")]
+        );
+    }
+
+    #[test]
+    fn stderr_diagnostics_accept_only_the_fixed_safe_schema() {
+        assert_eq!(
+            classify_host_diagnostic(
+                r#"{"v":1,"diagnosticCode":"runtime_host.unhandled_failure"}"#
+            ),
+            HostDiagnostic::UnhandledFailure
+        );
+        assert_eq!(
+            classify_host_diagnostic("sk-proj-private-provider-secret"),
+            HostDiagnostic::Unclassified
+        );
+        assert_eq!(
+            classify_host_diagnostic(
+                r#"{"v":1,"diagnosticCode":"runtime_host.unhandled_failure","detail":"private"}"#
+            ),
+            HostDiagnostic::Unclassified
         );
     }
 

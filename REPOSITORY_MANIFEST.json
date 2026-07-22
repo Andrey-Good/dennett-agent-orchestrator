@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 463,
+  "file_count": 481,
   "files": [
     {
       "path": ".editorconfig",
@@ -70,13 +70,13 @@
     },
     {
       "path": "Cargo.lock",
-      "bytes": 54863,
-      "sha256": "52db703cb026dec73f2b01b5ef12ac25d8391735b88b79b3ecc85e6bb8e50f14"
+      "bytes": 64811,
+      "sha256": "05c3b8188e05c44db0dd2933959767970d79d12053e6b1e0a124bcbea74f785f"
     },
     {
       "path": "Cargo.toml",
-      "bytes": 1651,
-      "sha256": "38875a3bd040170a90386986bd86b36c3065ebca95add34928bd3af02131076a"
+      "bytes": 1707,
+      "sha256": "bdad58ae571fe96320aecfbf38d8bed287fe2722dfb63abd8dae202d4d5ca314"
     },
     {
       "path": "GOVERNANCE.md",
@@ -609,6 +609,11 @@
       "sha256": "53ee27d8ae01282ea0fe19a9e9ad02123702fcb94ee95a58d0499b5dde70af0a"
     },
     {
+      "path": "blog/notes/M02_capture.md",
+      "bytes": 16361,
+      "sha256": "d61db4144ab13134d574ba6373b0bf8d809c10f783df2b2a5e592d88e44cb8be"
+    },
+    {
       "path": "blog/notes/README.md",
       "bytes": 331,
       "sha256": "c6b268638d6a98dbdae6ec4dc182affccb3f2a88e2e3f45a0262d0db4e366bde"
@@ -765,18 +770,63 @@
     },
     {
       "path": "crates/dennett-observability/Cargo.toml",
-      "bytes": 223,
-      "sha256": "84bd7a4097862cc74ae13535eced61aafdf7c7472ac764b83d8bd1c4bf3e5c84"
+      "bytes": 544,
+      "sha256": "860b74c6355dabf38a102a05e1434fd69035e05a47a8c58bb0c7e8821dd4a7d7"
     },
     {
       "path": "crates/dennett-observability/README.md",
-      "bytes": 308,
-      "sha256": "f92aba0af526542f886da9209c0d736e767f620baa168fc0ea6f9bac63b593c9"
+      "bytes": 4912,
+      "sha256": "a64a7ba250084c74400bd2f6b9a1ee62e832cebb93ab045ff7b118d5ded0f38a"
     },
     {
       "path": "crates/dennett-observability/src/lib.rs",
-      "bytes": 424,
-      "sha256": "32cec69a87a55f34177014f95122a313be8ce34e8b63db31d619f58a8be9dbfb"
+      "bytes": 45571,
+      "sha256": "aef3e9a4c587f0445fc7682bb1425580c0cc61f8c0f59e8d1011807c1098eb40"
+    },
+    {
+      "path": "crates/dennett-observability/src/lifecycle.rs",
+      "bytes": 79197,
+      "sha256": "7083e7d0a0c0d773a96dc43fecc3a4c2c4a5f8f3691f41b057714c41811cc6b8"
+    },
+    {
+      "path": "crates/dennett-observability/src/secure_fs.rs",
+      "bytes": 31762,
+      "sha256": "4770f9dc14e264a9459044bcfce72837f055b782f37dbd3e19a86ed02036dd0d"
+    },
+    {
+      "path": "crates/dennett-observability/src/writer.rs",
+      "bytes": 20472,
+      "sha256": "cacbcbf92498ae080e311ac8484c64d22ac03e37e741b8dd86944e8deb846c13"
+    },
+    {
+      "path": "crates/dennett-observability/tests/console.rs",
+      "bytes": 1506,
+      "sha256": "d52d7b21876c569e9005314f06ef06005ed626d9d825f52c97b6f7086697ec8a"
+    },
+    {
+      "path": "crates/dennett-observability/tests/drop_accounting.rs",
+      "bytes": 1234,
+      "sha256": "e37ade7723f9584a90470cdabb8bb53525bd4ad35e82a0cfc5f3627602bf6720"
+    },
+    {
+      "path": "crates/dennett-observability/tests/nonblocking.rs",
+      "bytes": 1345,
+      "sha256": "76ed4c48b95a564f50cf57686c93f79d745226da270b1d6128d5a65fa1c48a39"
+    },
+    {
+      "path": "crates/dennett-observability/tests/persistence.rs",
+      "bytes": 4377,
+      "sha256": "7c227f486bc59cb74205451f276992d851c40b796bfb0c59ad115f429391e2b3"
+    },
+    {
+      "path": "crates/dennett-observability/tests/redaction.rs",
+      "bytes": 2490,
+      "sha256": "db9d2566bf84135cd3967ae9c6ea8eda87e4d204ee48aefb4128f9d4dee6c73c"
+    },
+    {
+      "path": "crates/dennett-observability/tests/startup_transaction.rs",
+      "bytes": 917,
+      "sha256": "dee5ed627cbd0cc667957a40144e8c4ad49bdee750afc294b1648d980fa86933"
     },
     {
       "path": "crates/dennett-sync-core/AGENTS.md",
@@ -846,7 +896,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "859853c3e86fad3a5b686884eec84fda26a41e08316b31afbe7420f64891bb1f"
+      "sha256": "ea1a308e2431b76ce71942a253642865b3548b5d492e40038a0a1cef7bba9f5e"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1455,28 +1505,28 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 17663,
-      "sha256": "5e8c8b657bf2bc3a1c5143a91a05f7d74b3a166a0823dd14b4fa02d850150531"
+      "bytes": 25850,
+      "sha256": "541df74295d56e643fce428db261bb67f749c4dcb5ecf207cbdc372104b5a517"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 302,
-      "sha256": "5e5d79dab90a1756d3169e8045aabad2b5a5bdff9b6b9776921edc005fb6ddcc"
+      "bytes": 3516,
+      "sha256": "a63fe08cc6fe5583fba6d6d3d08ae7b2ed6747ee01f4f35930fa2bc7ad4a5713"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
-      "bytes": 3469,
-      "sha256": "24171d92029b923dce7cbb06cd44c04714bc2da6be33765218a1670aac4fe3f0"
+      "bytes": 5852,
+      "sha256": "31b965955e08b847c177f69cf2413a25bf35d4b787e1526f085554df62f5e026"
     },
     {
       "path": "docs/testing/generated/TEST_CATALOGUE.md",
-      "bytes": 7695,
-      "sha256": "b6dc0b723328cb667335b3eaa905f461437768a7b198c5bff69d3c1d4f61c374"
+      "bytes": 13447,
+      "sha256": "e4e1fff888d769cf3da2f9d166a2eaed6ad94b70c71ba1a55e684be6ebd46dc7"
     },
     {
       "path": "docs/testing/generated/TEST_DEBT.md",
-      "bytes": 712,
-      "sha256": "a84b6196c149d5cef882dec17d421d3d2d06d7697e41992e384b9a09484ffa9b"
+      "bytes": 2742,
+      "sha256": "1a87f37b9e9c09e7410f46bd5ab9b98ee8ad785d6224736a8dfa880ef6609388"
     },
     {
       "path": "generated/README.md",
@@ -1584,6 +1634,21 @@
       "sha256": "251d1b59e66af1cf106d9d681e46c55936a4d0f719038eaa4dcf517ec190abd3"
     },
     {
+      "path": "planning/batches/AB-M02-001.json",
+      "bytes": 1294,
+      "sha256": "a25f27c7ac378893e641985ac0ae9f14158d3d56c38886939750b06d7fa0fa28"
+    },
+    {
+      "path": "planning/batches/AB-M02-002.json",
+      "bytes": 1490,
+      "sha256": "3235fed7b9b2e4b376d8c3f05685962d9e4199fdaf39171ca7065089c27959b8"
+    },
+    {
+      "path": "planning/batches/AB-M02-003.json",
+      "bytes": 1439,
+      "sha256": "b096a3e545643f964f445d4b95d6f4e6f5ee6a16f252dfdd5fe97cfcd13ca5de"
+    },
+    {
       "path": "planning/decisions/DEC-0001.json",
       "bytes": 1405,
       "sha256": "60644221a94a586ba74c2cb28d968b884ae057237590069b9ca61fafdc541cf7"
@@ -1609,6 +1674,11 @@
       "sha256": "783221eff850c86ca8014bdabfe54c8fac3f19f9986152e59a8ed3f8884f7aeb"
     },
     {
+      "path": "planning/decisions/DEC-0006.json",
+      "bytes": 2995,
+      "sha256": "71c8f32b0fbf9e1aca14a9adf8a0449e7acf2069c4c826b4eca3838b0b3a96ce"
+    },
+    {
       "path": "planning/milestones/M00_repository_and_contracts.json",
       "bytes": 29928,
       "sha256": "c4373263457a7bff9bcd94c5cff5ad8d2c7bc922c159ce5f525223fa6e4fd9b9"
@@ -1617,6 +1687,11 @@
       "path": "planning/milestones/M01_local_desktop_conversation.json",
       "bytes": 47634,
       "sha256": "ff84ca79cc6c8b9c66d74d0221df6bdbb695a1531f18ffc972354a0c82de1057"
+    },
+    {
+      "path": "planning/milestones/M02_project_workspace_and_review.json",
+      "bytes": 40260,
+      "sha256": "a96dbc473783ccae5818f2b36cb82d2bcb386bfabfbaa0916759a30b8dace78c"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1702,6 +1777,11 @@
       "path": "planning/results/WP-M01-007.json",
       "bytes": 9147,
       "sha256": "683669c67ca1bbf880ce0aca38ab20fee25b4d67f9586327c661ac7bc73971ae"
+    },
+    {
+      "path": "planning/results/WP-M02-001.json",
+      "bytes": 7984,
+      "sha256": "82faf1684f63be0f0cb7ea2a0bed45dd0fa882f5882f8ffa25bf22004d0341db"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
@@ -1930,8 +2010,8 @@
     },
     {
       "path": "services/adapter-host-node/src/index.ts",
-      "bytes": 7002,
-      "sha256": "1e43df161b41768a788dd301de7e45bd0fc4024b82627c6493b660d3dbccd61c"
+      "bytes": 7389,
+      "sha256": "3e95a3dac969b78e1daf5f73282ee515f2e35be9882ec6b22d8e9ebc6e8be0c3"
     },
     {
       "path": "services/adapter-host-node/src/runtime-contract.ts",
@@ -2000,8 +2080,8 @@
     },
     {
       "path": "services/head/src/conversation.rs",
-      "bytes": 58288,
-      "sha256": "18564125046b9aad4d62298f2d0bf347ee22f69017ad72cce2c4802bb76c1a55"
+      "bytes": 61100,
+      "sha256": "efd08486eddfe0ec52234239afc37b1a6c8fb7873cb2cc970d712713b07a1b2c"
     },
     {
       "path": "services/head/src/draft.rs",
@@ -2015,8 +2095,8 @@
     },
     {
       "path": "services/head/src/main.rs",
-      "bytes": 1641,
-      "sha256": "aa8bc721f7e9abcc29652dcdeaa4ff892710b86b7fca5a90d8409e1a4cb43287"
+      "bytes": 3176,
+      "sha256": "d690ebb89f03ca4f9dbc423c413352c2212699c15d836d40430e599d639edb82"
     },
     {
       "path": "services/head/src/session.rs",
@@ -2080,18 +2160,18 @@
     },
     {
       "path": "services/node/src/lib.rs",
-      "bytes": 10926,
-      "sha256": "08af07f47e82f6fb63a2098d116c3924f99e0d107a9d7e150eb3bd07fb1ed8e9"
+      "bytes": 17047,
+      "sha256": "b2090b43600b96dc8e491589172c808ff1a920b94a69af8ab6a4443ad5c62d7d"
     },
     {
       "path": "services/node/src/main.rs",
-      "bytes": 422,
-      "sha256": "a588ed71136e3a318280b96228fca190b5a7bae360bfb3c1eeee1e1113d266ab"
+      "bytes": 2601,
+      "sha256": "81a2c566e987df314a27cedf762d96570190aa5e3a5ced9c807e9ac9acdf1d8a"
     },
     {
       "path": "services/node/src/runtime_host.rs",
-      "bytes": 48846,
-      "sha256": "7847cac1fef3776e299e20b40688f73ca2900b48234e88e531df6d433b7f79eb"
+      "bytes": 68561,
+      "sha256": "7d9772de72112d0f4a4e145d3904a6bb99955a30ff94f830fa880b6894363fb7"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",
@@ -2107,6 +2187,11 @@
       "path": "services/node/tests/desktop_lifecycle.rs",
       "bytes": 6539,
       "sha256": "aaf9b14d2155672c2b9e0018dd23d0cd420d4a3796eed7552242914322cae8bc"
+    },
+    {
+      "path": "services/node/tests/diagnostic_lifecycle.rs",
+      "bytes": 8084,
+      "sha256": "de23043c1595534fff3621947146b2941a1599c0a9147a070e4b54d02b5961b4"
     },
     {
       "path": "services/sensor-worker/AGENTS.md",
@@ -2147,6 +2232,11 @@
       "path": "tests/catalog/m01.seed.json",
       "bytes": 27755,
       "sha256": "47791b91c9d0bde60d7b20b6e16b463f1ed6cbe528ddcde96e321584046003b7"
+    },
+    {
+      "path": "tests/catalog/m02.seed.json",
+      "bytes": 27549,
+      "sha256": "210b4140d00ad4df23bc0b101798d822f4c83908cbd9a1c08db95aaaf1e0fe85"
     },
     {
       "path": "tests/contracts/README.md",
@@ -2210,18 +2300,18 @@
     },
     {
       "path": "tools/dennettctl/Cargo.toml",
-      "bytes": 180,
-      "sha256": "e99781910dccc834214c877eca6c9ff4600983038b18070a8eaaef3390f2c4e9"
+      "bytes": 298,
+      "sha256": "fc72f817897a00f7e9bb53a507229a77178562f0bcee1d8a1fadda52d7c5cfd1"
     },
     {
       "path": "tools/dennettctl/README.md",
-      "bytes": 238,
-      "sha256": "2aed945014fa5cce08d9f6fe405d4c7d36605d496fc83089062ebed707efbe15"
+      "bytes": 862,
+      "sha256": "78697caafab43f24d224f61ea13da270d71925224ee9f125be3a7d8570a7e185"
     },
     {
       "path": "tools/dennettctl/src/main.rs",
-      "bytes": 373,
-      "sha256": "5e83b0cc5a80431ea6451ea6a2f4b8e91bcbda08d97d1e3486badd3132d36ad7"
+      "bytes": 4781,
+      "sha256": "14a99fc448bb16bb633ed14415e1e6cb70ad4c3e7a427e038cf45dc37283906c"
     },
     {
       "path": "tools/doctor.py",

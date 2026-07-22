@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "AB-M02-001",
+  "title": "Build the diagnosable M02 contract foundation",
+  "status": "RUNNING",
+  "packages": ["WP-M02-001", "WP-M02-002"],
+  "execution": {
+    "order": "dependency",
+    "max_parallel": 1,
+    "stop_after_packages": 2,
+    "merge_after_each": true,
+    "require_green_main": true
+  },
+  "limits": {
+    "max_risk": "R4",
+    "new_production_dependencies": "allow one mature local tracing writer only when its pinned footprint and failure behavior are reviewed",
+    "architecture_changes": "additive observability plus the owner-approved stable Project ID and WorkspaceBinding contract from DEC-0006; no implementation ownership change",
+    "external_effects": "forbidden",
+    "public_breaking_changes": "forbidden"
+  },
+  "stop_conditions": [
+    "diagnostics capture prompt, response, credential, hidden reasoning or unrestricted project content",
+    "the protocol requires a breaking change to the accepted M01 epoch",
+    "required test fails after two bounded repair attempts",
+    "scope expands into project mutation implementation or desktop review UI",
+    "main becomes red",
+    "merge conflict"
+  ],
+  "reporting": {
+    "on_package_start": true,
+    "on_package_end": true,
+    "on_decision": true,
+    "periodic_noise": false
+  }
+}
