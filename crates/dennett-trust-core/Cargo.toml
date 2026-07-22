@@ -6,4 +6,6 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
 dennett-contracts = { path = "../dennett-contracts" }

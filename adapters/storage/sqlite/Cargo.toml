@@ -16,6 +16,7 @@ dennett-contracts = { path = "../../../crates/dennett-contracts" }
 dennett-agent-core = { path = "../../../crates/dennett-agent-core" }
 dennett-memory-core = { path = "../../../crates/dennett-memory-core" }
 dennett-sync-core = { path = "../../../crates/dennett-sync-core" }
+dennett-trust-core = { path = "../../../crates/dennett-trust-core" }
 
 [dev-dependencies]
 tempfile.workspace = true

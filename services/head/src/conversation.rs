@@ -1,10 +1,13 @@
 use crate::draft::{ComposerDraftApplication, SessionOperationLocks};
+use crate::project::{
+    ProjectApplication, ProjectApplicationError, ProjectAuthorityPermit, project_summary,
+};
 use crate::session::{
     AcceptedTurn, AgentActivityUpdate, SessionCoordinator, SessionSubscription,
     UserSteerCompletion, UserSteerRequest,
 };
 use crate::system::{
-    ProjectSummary, SessionSummary, SystemHealth, SystemMutation, SystemProjection,
+    ProjectState, ProjectSummary, SessionSummary, SystemHealth, SystemMutation, SystemProjection,
 };
 use dennett_agent_core::{
     AgentRuntimePort, CancelDisposition, CancelRuntimeTurnRequest, CancellationAcknowledgement,
@@ -19,8 +22,9 @@ use dennett_memory_core::session::{
     SessionJournalError, SessionNativeExtension, SessionResult, SessionTurnOutcome,
     SessionTurnRole, SessionTurnState,
 };
+use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -54,6 +58,17 @@ struct RuntimeTurnInput {
     context_handles: Vec<String>,
     runtime_controls: Vec<RuntimeControlSelection>,
     workspace_path: String,
+}
+
+struct ConversationWorkspace {
+    path: String,
+    project_authority: Option<ProjectAuthorityPermit>,
+}
+
+impl ConversationWorkspace {
+    fn into_runtime_parts(self) -> (String, Option<ProjectAuthorityPermit>) {
+        (self.path, self.project_authority)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -98,6 +113,8 @@ pub struct ConversationApplication {
     system: Arc<SystemProjection>,
     runtime: Arc<dyn AgentRuntimePort>,
     project: LocalProject,
+    projects: Option<Arc<ProjectApplication>>,
+    allow_unregistered_project_fixture: bool,
     continuations: Arc<dyn RuntimeContinuationPort>,
     active_turns: Arc<Mutex<HashMap<(SessionId, TurnId), ActiveTurnControl>>>,
     drafts: Option<ComposerDraftApplication>,
@@ -118,6 +135,8 @@ impl ConversationApplication {
             system,
             runtime,
             project,
+            projects: None,
+            allow_unregistered_project_fixture: false,
             continuations: Arc::new(InMemoryRuntimeContinuationStore::default()),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             drafts: None,
@@ -145,6 +164,24 @@ impl ConversationApplication {
     }
 
     #[must_use]
+    pub fn with_projects(mut self, projects: Arc<ProjectApplication>) -> Self {
+        self.projects = Some(projects);
+        self
+    }
+
+    /// Enables the pre-registry M01 project fixture in debug/test builds.
+    ///
+    /// Production callers must attach `ProjectApplication`; otherwise only
+    /// standalone chats are admitted and project scope fails closed.
+    #[cfg(debug_assertions)]
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_unregistered_project_fixture_for_tests(mut self) -> Self {
+        self.allow_unregistered_project_fixture = true;
+        self
+    }
+
+    #[must_use]
     pub fn project(&self) -> &LocalProject {
         &self.project
     }
@@ -154,16 +191,57 @@ impl ConversationApplication {
         create_command_id: CommandId,
         default_title: String,
     ) -> Result<ProjectSessionSnapshot, ConversationError> {
+        let registered_projects = match &self.projects {
+            Some(projects) => projects.list_projects().await?,
+            None => Vec::new(),
+        };
+        let registered_ids = registered_projects
+            .iter()
+            .map(|project| project.project.project_id)
+            .collect::<HashSet<_>>();
+        let fixture_project = self.projects.is_none() && self.allow_unregistered_project_fixture;
         let mut restored = self
             .sessions
             .restore_all()
             .await?
             .into_iter()
-            .filter(|snapshot| self.scope_is_local(snapshot.session.project_id))
+            .filter(|snapshot| {
+                snapshot.session.project_id.is_none()
+                    || if self.projects.is_some() {
+                        snapshot
+                            .session
+                            .project_id
+                            .is_some_and(|project_id| registered_ids.contains(&project_id))
+                    } else if fixture_project {
+                        snapshot.session.project_id == Some(self.project.project_id)
+                    } else {
+                        false
+                    }
+            })
             .collect::<Vec<_>>();
-        if !restored
-            .iter()
-            .any(|snapshot| snapshot.session.project_id == Some(self.project.project_id))
+        if self.projects.is_some() {
+            for project_id in &registered_ids {
+                if !restored
+                    .iter()
+                    .any(|snapshot| snapshot.session.project_id == Some(*project_id))
+                {
+                    restored.push(
+                        self.sessions
+                            .create_session(
+                                bootstrap_session_command_id(*project_id),
+                                Some(*project_id),
+                                default_title.clone(),
+                                unix_time_ms(),
+                            )
+                            .await?
+                            .snapshot,
+                    );
+                }
+            }
+        } else if fixture_project
+            && !restored
+                .iter()
+                .any(|snapshot| snapshot.session.project_id == Some(self.project.project_id))
         {
             restored.push(
                 self.sessions
@@ -173,6 +251,17 @@ impl ConversationApplication {
                         default_title,
                         unix_time_ms(),
                     )
+                    .await?
+                    .snapshot,
+            );
+        } else if !fixture_project
+            && !restored
+                .iter()
+                .any(|snapshot| snapshot.session.project_id.is_none())
+        {
+            restored.push(
+                self.sessions
+                    .create_session(create_command_id, None, default_title, unix_time_ms())
                     .await?
                     .snapshot,
             );
@@ -232,11 +321,21 @@ impl ConversationApplication {
             .max_by_key(|snapshot| snapshot.session.last_activity_unix_ms)
             .cloned()
             .ok_or(ConversationError::SessionUnavailable)?;
-        let mut mutations = vec![SystemMutation::UpsertProject(ProjectSummary {
-            project_id: self.project.project_id.0.to_string(),
-            display_name: self.project.display_name.clone(),
-            revision: 1,
-        })];
+        let mut mutations = if self.projects.is_some() {
+            registered_projects
+                .iter()
+                .map(|project| SystemMutation::UpsertProject(project_summary(project)))
+                .collect::<Vec<_>>()
+        } else if fixture_project {
+            vec![SystemMutation::UpsertProject(ProjectSummary {
+                project_id: self.project.project_id.0.to_string(),
+                display_name: self.project.display_name.clone(),
+                state: ProjectState::Ready,
+                revision: 1,
+            })]
+        } else {
+            Vec::new()
+        };
         mutations.extend(
             restored
                 .iter()
@@ -257,7 +356,7 @@ impl ConversationApplication {
         project_id: Option<ProjectId>,
         title: String,
     ) -> Result<SessionCommit, ConversationError> {
-        self.require_scope(project_id)?;
+        self.require_scope(project_id).await?;
         let commit = self
             .sessions
             .create_session(command_id, project_id, title, unix_time_ms())
@@ -290,7 +389,7 @@ impl ConversationApplication {
             delivery_mode,
             expected_active_turn_id,
         } = request;
-        self.require_scope(project_id)?;
+        self.require_scope(project_id).await?;
         if text.trim().is_empty() {
             return Err(ConversationError::InvalidRequest);
         }
@@ -317,6 +416,9 @@ impl ConversationApplication {
             {
                 return Err(ConversationError::ScopeMismatch);
             }
+            let workspace_authority = self
+                .workspace_for(project_id, trace.correlation_id.clone())
+                .await?;
             self.require_native_steering().await?;
             let accepted = self
                 .deliver_native_steer(
@@ -328,6 +430,7 @@ impl ConversationApplication {
                     text,
                 )
                 .await?;
+            drop(workspace_authority);
             if let Some(drafts) = &self.drafts
                 && let Err(error) = drafts.discard_accepted(session_id, command_id).await
             {
@@ -347,6 +450,9 @@ impl ConversationApplication {
                 {
                     return Err(ConversationError::ScopeMismatch);
                 }
+                let workspace_authority = self
+                    .workspace_for(project_id, trace.correlation_id.clone())
+                    .await?;
                 self.require_native_steering().await?;
                 let accepted = self
                     .deliver_native_steer(
@@ -358,6 +464,7 @@ impl ConversationApplication {
                         text,
                     )
                     .await?;
+                drop(workspace_authority);
                 if let Some(drafts) = &self.drafts
                     && let Err(error) = drafts.discard_accepted(session_id, command_id).await
                 {
@@ -381,6 +488,18 @@ impl ConversationApplication {
         } else if expected_active_turn_id.is_some() {
             return Err(ConversationError::ScopeMismatch);
         }
+        // Revalidate trust and filesystem identity after acquiring the turn
+        // gate, immediately before admitting a new provider effect. A replayed
+        // normal turn does not execute the provider again and therefore does
+        // not require the current workspace to remain trusted or present.
+        let workspace = if existing.is_none() {
+            Some(
+                self.workspace_for(project_id, trace.correlation_id.clone())
+                    .await?,
+            )
+        } else {
+            None
+        };
         let admission_revision = self.sessions.restore(session_id).await?.session.revision;
         let accepted = self
             .sessions
@@ -401,6 +520,9 @@ impl ConversationApplication {
         drop(draft_guard);
         let turn_id = accepted.agent_turn_id;
         if !accepted.replayed {
+            let (workspace_path, project_authority) = workspace
+                .expect("a newly accepted turn always has workspace admission")
+                .into_runtime_parts();
             let (cancel_signal, cancel_rx) = watch::channel(false);
             let (phase, _) = watch::channel(ActiveTurnPhase::Preparing);
             self.active_turns.lock().await.insert(
@@ -418,7 +540,6 @@ impl ConversationApplication {
                 ))])
                 .await;
             let application = self.clone();
-            let workspace_path = self.workspace_for(project_id).to_owned();
             let project_span_id = project_id.map(|id| id.0.to_string()).unwrap_or_default();
             let diagnostic = dennett_observability::DiagnosticEvent::new(
                 dennett_observability::DiagnosticEventKind::HeadTurnAccepted,
@@ -459,6 +580,7 @@ impl ConversationApplication {
                                 runtime_controls,
                                 workspace_path,
                             },
+                            project_authority,
                             cancel_rx,
                             span,
                         )
@@ -677,7 +799,7 @@ impl ConversationApplication {
         turn_id: TurnId,
     ) -> Result<CancellationAcknowledgement, ConversationError> {
         let snapshot = self.sessions.restore(session_id).await?;
-        self.require_scope(project_id)?;
+        self.require_scope(project_id).await?;
         if snapshot.session.project_id != project_id {
             return Err(ConversationError::ScopeMismatch);
         }
@@ -856,9 +978,7 @@ impl ConversationApplication {
         session_id: SessionId,
     ) -> Result<ProjectSessionSnapshot, ConversationError> {
         let snapshot = self.sessions.restore(session_id).await?;
-        if !self.scope_is_local(snapshot.session.project_id) {
-            return Err(ConversationError::ScopeMismatch);
-        }
+        self.require_scope(snapshot.session.project_id).await?;
         Ok(snapshot)
     }
 
@@ -871,9 +991,7 @@ impl ConversationApplication {
             );
             error
         })?;
-        if !self.scope_is_local(snapshot.session.project_id) {
-            return Err(ConversationError::ScopeMismatch);
-        }
+        self.require_scope(snapshot.session.project_id).await?;
         Ok(())
     }
 
@@ -882,6 +1000,7 @@ impl ConversationApplication {
         session_id: SessionId,
         turn_id: TurnId,
         input: RuntimeTurnInput,
+        project_authority: Option<ProjectAuthorityPermit>,
         mut cancel_rx: watch::Receiver<bool>,
         trace_span: tracing::Span,
     ) {
@@ -1022,6 +1141,11 @@ impl ConversationApplication {
                 }
             },
         };
+        // `set_project_trust` and rebinding take the exclusive side of this
+        // gate. Once start_turn returns, the provider effect is linearly
+        // ordered before a later revoke; until then a revoke cannot slip
+        // between workspace validation and provider admission.
+        drop(project_authority);
         let mut output = String::new();
         loop {
             let next = match tokio::time::timeout_at(deadline_at, turn.next_event()).await {
@@ -1459,25 +1583,65 @@ impl ConversationApplication {
         }
     }
 
-    fn scope_is_local(&self, project_id: Option<ProjectId>) -> bool {
-        project_id.is_none() || project_id == Some(self.project.project_id)
-    }
-
-    fn require_scope(&self, project_id: Option<ProjectId>) -> Result<(), ConversationError> {
-        if self.scope_is_local(project_id) {
+    async fn require_scope(&self, project_id: Option<ProjectId>) -> Result<(), ConversationError> {
+        let Some(project_id) = project_id else {
+            return Ok(());
+        };
+        if let Some(projects) = &self.projects {
+            projects
+                .get_project(project_id)
+                .await
+                .map(|_| ())
+                .map_err(|error| match error {
+                    ProjectApplicationError::ProjectNotFound => ConversationError::ScopeMismatch,
+                    other => other.into(),
+                })
+        } else if self.allow_unregistered_project_fixture && project_id == self.project.project_id {
             Ok(())
         } else {
             Err(ConversationError::ScopeMismatch)
         }
     }
 
-    fn workspace_for(&self, project_id: Option<ProjectId>) -> &str {
-        if project_id.is_some() {
-            &self.project.workspace_path
+    async fn workspace_for(
+        &self,
+        project_id: Option<ProjectId>,
+        correlation_id: String,
+    ) -> Result<ConversationWorkspace, ConversationError> {
+        let Some(project_id) = project_id else {
+            return Ok(ConversationWorkspace {
+                path: self.project.standalone_workspace_path.clone(),
+                project_authority: None,
+            });
+        };
+        if let Some(projects) = &self.projects {
+            let workspace = projects
+                .prepare_agent_workspace(project_id, correlation_id)
+                .await?;
+            let (path, authority) = workspace.into_runtime_parts();
+            Ok(ConversationWorkspace {
+                path,
+                project_authority: Some(authority),
+            })
+        } else if self.allow_unregistered_project_fixture && project_id == self.project.project_id {
+            Ok(ConversationWorkspace {
+                path: self.project.workspace_path.clone(),
+                project_authority: None,
+            })
         } else {
-            &self.project.standalone_workspace_path
+            Err(ConversationError::ScopeMismatch)
         }
     }
+}
+
+fn bootstrap_session_command_id(project_id: ProjectId) -> CommandId {
+    let digest =
+        Sha256::digest(format!("dennett:project-direct-session:{}", project_id.0).as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    CommandId(uuid::Uuid::from_bytes(bytes))
 }
 
 fn record_span_text(span: &tracing::Span, field_name: &str, value: &str) {
@@ -1587,7 +1751,7 @@ fn runtime_continuation_error(error: RuntimeContinuationError) -> RuntimeError {
     }
 }
 
-fn session_summary(snapshot: &ProjectSessionSnapshot) -> SessionSummary {
+pub(crate) fn session_summary(snapshot: &ProjectSessionSnapshot) -> SessionSummary {
     SessionSummary {
         session_id: snapshot.session.session_id.0.to_string(),
         project_id: snapshot
@@ -1621,6 +1785,8 @@ pub enum ConversationError {
     ScopeMismatch,
     #[error("conversation session is unavailable")]
     SessionUnavailable,
+    #[error(transparent)]
+    Project(#[from] ProjectApplicationError),
     #[error(transparent)]
     Session(#[from] SessionJournalError),
     #[error(transparent)]

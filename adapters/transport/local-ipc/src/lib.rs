@@ -15,11 +15,13 @@ pub use auth::{HandshakePolicy, SessionRegistry};
 #[cfg(feature = "client")]
 pub use client::{
     AuthenticatedSessionWatch, AuthenticatedSystemClient, AuthenticatedSystemWatch, ClientCommand,
-    ClientConfig, ClientError, ClientSendTurnRequest,
+    ClientConfig, ClientError, ClientRebindProjectRequest, ClientRegisterProjectRequest,
+    ClientSendTurnRequest, ClientSetProjectTrustRequest,
 };
 #[cfg(feature = "server")]
 pub use service::{
-    SessionServiceAdapter, SystemServiceAdapter, run_local_server, run_system_server,
+    ProjectServiceAdapter, SessionServiceAdapter, SystemServiceAdapter, run_local_server,
+    run_system_server,
 };
 pub use transport::{LocalEndpoint, PeerIdentity, TransportError};
 
@@ -30,3 +32,8 @@ pub const DEFAULT_MAX_MESSAGE_BYTES: u64 = 32 * 1024 * 1024;
 pub const SYSTEM_WATCH_FEATURE: &str = "system-watch";
 pub const SESSION_CONVERSATION_FEATURE: &str = "session-conversation-v1";
 pub const COMPOSER_DRAFT_FEATURE: &str = "composer-draft-v1";
+pub const PROJECT_WORKSPACE_FEATURE: &str = "project-workspace-v1";
+/// StableRef kind minted by the authenticated desktop bridge for an explicit
+/// current-user project trust decision. The server additionally binds its ID
+/// to the mutating command identity before forwarding it to Head.
+pub const PROJECT_TRUST_DECISION_REF_KIND: &str = "project_trust_decision";

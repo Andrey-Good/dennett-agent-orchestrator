@@ -1,7 +1,7 @@
 use crate::protocol::dennett::control::v1::{ClientHello, CompatibilityMode, ServerWelcome};
 use crate::{
-    COMPOSER_DRAFT_FEATURE, DEFAULT_MAX_MESSAGE_BYTES, M01_PROTOCOL_VERSION, PeerIdentity,
-    SESSION_CONVERSATION_FEATURE, SYSTEM_WATCH_FEATURE,
+    COMPOSER_DRAFT_FEATURE, DEFAULT_MAX_MESSAGE_BYTES, M01_PROTOCOL_VERSION,
+    PROJECT_WORKSPACE_FEATURE, PeerIdentity, SESSION_CONVERSATION_FEATURE, SYSTEM_WATCH_FEATURE,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -46,6 +46,7 @@ impl HandshakePolicy {
                 SYSTEM_WATCH_FEATURE.to_owned(),
                 SESSION_CONVERSATION_FEATURE.to_owned(),
                 COMPOSER_DRAFT_FEATURE.to_owned(),
+                PROJECT_WORKSPACE_FEATURE.to_owned(),
             ],
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             bootstrap_capability_ttl: DEFAULT_BOOTSTRAP_CAPABILITY_TTL,

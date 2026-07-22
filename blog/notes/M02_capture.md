@@ -21,6 +21,13 @@ privacy_risks:
 - 2026-07-22 — A detached real Node was killed and restarted in tests. The next process retained the earlier logs, labelled the previous exit `unclean`, and did not persist the project path. A blocked diagnostics directory also proved that logging failure does not prevent Node startup.
 - 2026-07-22 — Two detached closure reviews blocked the first implementation. They found that a lossless logging queue could freeze Node on a bad disk, concurrent startup could lose lifecycle evidence on Windows, a truncated marker could disable diagnostics permanently, and adapter-host failures collapsed into one generic fence.
 - 2026-07-22 — The repair changed the writer to a bounded non-blocking queue with visible drop counts, gave every process run a UUID, made lifecycle publication atomic, recovered corrupt markers, bounded logs by age and bytes, and introduced a strict adapter-host stderr code channel. A 48-thread lifecycle race and two real child-process stderr tests now pass.
+- 2026-07-22 — The owner resolved the project-identity boundary: a generated Project ID identifies the logical project, a path is only this installation's binding, `.dennett` is optional shared project state, and local trust remains a simple `project_id -> policy` decision outside the repository.
+- 2026-07-22 — WP-M02-003 implemented capability-relative folder inspection, explicit minimal `.dennett` creation, durable SQLite registration and trust, authenticated ProjectService transport, legacy M01 import and workspace admission. Inspecting an existing folder without `.dennett` leaves it byte-for-byte unchanged and returns an explicit creation option.
+- 2026-07-22 — A real same-folder rebind test exposed a self-conflict: the first implementation minted a second binding ID before replacing the existing binding, so its own uniqueness rule rejected the operation. Rebind now preserves the binding identity when the filesystem location is unchanged and allocates a new one only for an actual move.
+- 2026-07-22 — The full package suite exposed an inherited M01 shortcut. Old conversation tests assumed that a configured path implied authority; the new registry correctly made the legacy project Restricted. The tests now record an explicit bounded trust decision before agent work instead of weakening the production admission rule.
+- 2026-07-22 — Concurrent replay tests forced registration and trust mutations through per-command single-flight locks. Two identical requests now share one durable operation and one folder effect; a completed command can still be replayed after later trust revocation because replay returns its old receipt instead of performing a new effect.
+- 2026-07-22 — A final self-audit found that the instruction scan advertised a 20,000-entry bound but collected the whole directory before enforcing it. The iterator now stops while reading, uses one look-ahead entry to distinguish a complete scan from truncation, and has a regression proving an oversized tree reports incomplete evidence without unbounded allocation.
+- 2026-07-22 — The repository gate passed in 234.2 seconds. The focused Rust package run passed 105 tests, and a sequential desktop run passed 59 tests. One earlier desktop run ended without an assertion after two Vitest pools competed in the same worktree; rerunning the canonical package script with one worker distinguished runner contention from a product failure.
 
 ## Decision turns
 
@@ -28,6 +35,9 @@ privacy_risks:
 - Hypothesis: the existing trace correlation was sufficient for debugging. Evidence: `dennett-observability` currently initializes console tracing but does not persist rotating logs or crash evidence. Change: make a privacy-safe local diagnostic baseline an early M02 package rather than postponing all observability to production hardening.
 - Hypothesis: Git meant commit/push integration. Clarification: Git first supplies base identity, isolation, conflict detection and rollback. Remote push and pull-request creation remain guarded effects and are not allowed to define the core M02 exit gate.
 - Hypothesis: a canonicalized path could continue to identify a project. Counterexample: moving the folder would split one project into two identities, while reusing a path could inherit the wrong history or trust. Recommendation: stable generated Project ID plus a separate relocatable WorkspaceBinding.
+- Hypothesis: stronger trust needed a device fingerprint, user fingerprint and source-tree integrity check. Owner objection: ordinary edits would create recurring friction while the UI already exposes the active project policy. Change: keep one local Project ID policy, never let project files grant authority, and add stricter evidence only when a demonstrated threat requires it.
+- Hypothesis: importing an existing folder could create the conventional metadata immediately. Owner correction: inspection and mutation are different user actions. Change: absence of `.dennett` produces an offer; `CreateMinimal` is an explicit idempotent operation, while `LeaveAbsent` registers a local-only project without touching the folder.
+- Hypothesis: a successful completed command should always revalidate the current workspace before returning. Counterexample: after a later trust revocation, an idempotent retry of an already completed turn was rejected even though it would execute no provider or filesystem effect. Change: durable replay is resolved first; current workspace admission remains mandatory before every new effect.
 
 ## Measurements and tests
 
@@ -36,6 +46,10 @@ privacy_risks:
 - Full gate wall time after dependency installation: 237.7 seconds.
 - Live-provider tests remained intentionally ignored in the credential-free gate; deterministic fake/runtime, restart, cancellation, SQLite and IPC tests passed.
 - WP-M02-001 targeted tests: privacy-safe log persistence, token-shaped secret rejection, lifecycle retention, 48-way concurrent startup, corrupt-marker recovery, subscriber-init rollback, handled startup failure, abrupt detached-Node termination/restart, adapter-host stderr classification and diagnostics-degraded startup all pass.
+- WP-M02-003 focused gate: 105 Rust tests passed across trust, SQLite, Node and authenticated local IPC; two unchanged live-subscription M01 canaries remained ignored by this credential-free command.
+- Full repository gate after the bounded-enumeration repair: `mise exec -- just check` passed in 227.1 seconds, including format, Clippy with warnings denied, the Rust workspace, Python suites, TypeScript type checks, protocol generation and compatibility, documentation, planning and repository metadata.
+- Desktop regression gate: 59 tests in four files passed sequentially, covering native recovery, drafts, standalone chats, same-turn steering, copy behavior, accessibility and fixture truthfulness. The latest contention-free run took 97.8 seconds on the shared workstation.
+- The working diff contains more than 11,200 added lines and about 160 removed lines, above the original 7,500-line review trigger. The excess is not being treated as permission to skip review: it includes the SQLite state machine, capability-safe Windows/Linux filesystem behavior, authenticated transport and adversarial restart/concurrency tests, and remains subject to an independent DRY/KISS and security review before owner acceptance.
 
 ## Visual candidates
 
@@ -46,11 +60,12 @@ privacy_risks:
 ## Quotes worth preserving
 
 - Owner: "Меня больше стабильность волнует, если случиться какая то ошибка, сможешь ли по логам узнать ошибку и ее причину, чтобы исправить."
+- Owner: "Молодец что спросил меня о бизнес логике. Подобные обсуждения дают улучшения проекту."
 
 ## Known limitations and open threads
 
-- The M02 Work Packages and 28-case acceptance catalogue are specified but not yet implemented.
-- `DEC-0006` is intentionally open: implementation of project identity and lifecycle cannot begin until the owner accepts or rejects the stable-ID recommendation.
+- WP-M02-003 is implemented and locally qualified but is not merged until its independent review and explicit owner checkpoint are complete.
+- The four catalogue cases referenced by WP-M02-003 remain milestone-spanning: desktop import belongs to WP-M02-008, bounded command execution to WP-M02-005, and provider instruction delivery to WP-M02-006. The registry-level behavior is tested now; the catalogue must not claim the later layers are already automated.
 - The exact Files/Changes/Diff layout requires an owner-approved Figma checkpoint before implementation.
 - Persistent rotating logs, crash markers and a local diagnostic summary are implemented in WP-M02-001; support-bundle export and a desktop Diagnostics workspace remain later work.
 - The default Git integration policy must distinguish local reversible work from remote consequential effects.
@@ -214,3 +229,29 @@ privacy_risks:
   failed with `EBADF` (`Bad file descriptor`). The repair keeps chmod relative
   to the capability directory through `cap-std` and adds a Unix regression
   proving both the profile and diagnostics directory use mode `0700`.
+
+## Project-registry closure review
+
+- The first WP-M02-003 review found a real time-of-check/time-of-use gap: a
+  project could be inspected as trusted, then revoked before the provider
+  accepted the turn. Admission now holds a short per-project authority permit;
+  revocation and rebinding take the other side of the same gate. The default
+  conversation constructor also fails closed for project scope unless the real
+  registry is attached. The old shortcut survives only as an explicit debug
+  test fixture.
+- The same reviewer noticed that renaming a complete `project.json` was atomic
+  but not necessarily crash-durable. Metadata publication now uses
+  platform-appropriate write-through and synchronization around the temporary
+  file, replacement and containing directory. This distinction mattered:
+  "readers never see half a file" is weaker than "the file survives sudden
+  power loss."
+- A focused follow-up review marked both findings closed with no remaining
+  actionable P0-P2 issue. Targeted qualification after the authority repair
+  passed 15 Head conversation tests, 39 Node tests and 32 local-IPC tests.
+- The first real Codex canary rerun failed for the right reason: the old M01
+  scenario assumed its temporary project was trusted at startup, while M02 now
+  migrates it as Restricted. Weakening admission would have made the test green
+  and the product wrong. The canary was changed to grant Trusted-Bounded through
+  the authenticated public IPC first. Both subscription-backed flows then
+  passed: native in-flight steering, and session continuation across a real
+  Node restart with project and full-access file effects.

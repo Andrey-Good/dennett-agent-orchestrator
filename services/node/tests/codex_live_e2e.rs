@@ -1,11 +1,12 @@
 #![cfg(windows)]
 
 use dennett_local_ipc::protocol::dennett::control::v1::{
-    SessionSnapshot, TurnActivityStatus, TurnDeliveryMode, TurnRole, TurnState, session_mutation,
-    session_watch_frame,
+    ProjectTrustState, SessionSnapshot, TurnActivityStatus, TurnDeliveryMode, TurnRole, TurnState,
+    session_mutation, session_watch_frame,
 };
 use dennett_local_ipc::{
     AuthenticatedSystemClient, ClientCommand, ClientConfig, ClientSendTurnRequest,
+    ClientSetProjectTrustRequest,
 };
 use dennett_node::{
     AGENT_RUNTIME_ENV, AUTHORITY_EPOCH_ENV, DATA_DIR_ENV, INSTALLATION_ID_ENV, PROJECT_ROOT_ENV,
@@ -73,6 +74,7 @@ async fn live_desktop_ipc_survives_node_restart_and_continues_codex_session() {
         .collect::<Vec<_>>();
     let project_id = client.bootstrap().active_project_id.clone();
     let session_id = client.bootstrap().active_session_id.clone();
+    trust_legacy_project(&mut client, &project_id, "codex-live-restart-project-trust").await;
     let first = send_live_turn(
         &mut client,
         &project_id,
@@ -173,6 +175,7 @@ async fn live_desktop_ipc_steers_active_codex_turn_without_restart() {
         .collect::<Vec<_>>();
     let project_id = client.bootstrap().active_project_id.clone();
     let session_id = client.bootstrap().active_session_id.clone();
+    trust_legacy_project(&mut client, &project_id, "codex-live-steer-project-trust").await;
 
     let steered =
         send_live_steered_turn(&mut client, &project_id, &session_id, &runtime_controls).await;
@@ -307,6 +310,22 @@ async fn send_live_turn(
     wait_for_completed_turn(&mut watch).await;
     drop(watch);
     session_snapshot(client, session_id).await
+}
+
+async fn trust_legacy_project(
+    client: &mut AuthenticatedSystemClient,
+    project_id: &str,
+    idempotency_key: &str,
+) {
+    client
+        .set_project_trust(ClientSetProjectTrustRequest {
+            command: ClientCommand::new(idempotency_key, Some(1)),
+            project_id: project_id.to_owned(),
+            trust_state: ProjectTrustState::TrustedBounded,
+            expected_policy_revision: 1,
+        })
+        .await
+        .expect("grant the live project bounded trust through authenticated IPC");
 }
 
 async fn session_snapshot(

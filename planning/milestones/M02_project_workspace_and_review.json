@@ -192,7 +192,7 @@
       "version": 1,
       "id": "WP-M02-003",
       "title": "Own real project registration and trust",
-      "status": "IN_PROGRESS",
+      "status": "REVIEW",
       "milestone": "M02",
       "vertical_slice": "VS-M02-01",
       "risk": "R3",
@@ -231,6 +231,7 @@
         "tests/integration",
         "tests/simulation",
         "docs/testing/generated",
+        "blog/notes",
         "planning",
         "Cargo.toml",
         "Cargo.lock",
@@ -271,7 +272,19 @@
         "An empty project creates only the selected directory and one direct session; it does not invent agents or workflows.",
         "Adding an existing folder detects .dennett first and, when it is absent, explicitly offers creation of the minimal portable identity and shared-memory structure without silently modifying the folder.",
         "Ordinary source changes do not reset project trust; project files and instructions can request capabilities but cannot grant or expand local authority.",
-        "R3 review covers path canonicalization, symlink and junction handling, trust-sensitive changes and migration recovery."
+        "WP-M02-003 defines the minimal portable structure as .dennett/project.json containing only format_version and project_id plus a tracked .dennett/memory/ container that does not claim to be a valid Memory Fabric pack until its later milestone writes a canonical manifest. It contains no permissions, chats, secrets, provider settings or machine paths.",
+        "A plain folder without portable metadata may be rebound automatically only when the Node can prove the same local filesystem identity. A cross-volume copy without portable identity is registered as a new project; M02 does not guess identity from display name or source content.",
+        "Invalid or unsupported .dennett metadata is never overwritten by registration. The user may explicitly attach the folder as local-only while leaving that metadata untouched; repair or replacement is a later explicit flow.",
+        "Registration uses a durable prepared/filesystem-applied/committed operation keyed by command identity so retry after a partial local folder effect produces one project, one binding and one direct session rather than deleting user files or duplicating state.",
+        "The schema-v2 M01 configured project keeps its existing path-derived Project ID as a one-time legacy stable ID so session history is not rewritten. Its current path becomes a binding only when that legacy identity matches; otherwise history remains Missing until explicit rebind, and its initial M02 trust policy is Restricted.",
+        "For M02 the Trust-issued decision is a bridge-attested local-user decision: ProjectService accepts it only on an authenticated current client session and authority epoch, with the documented decision kind and an ID equal to the mutating command ID, then persists that evidence with the policy revision. An arbitrary StableRef, project file or model output is not a grant.",
+        "WP-M02-003 persists and enforces Restricted versus Trusted-Bounded admission and blocks Missing projects. Exact filesystem, command and Codex effect scopes are enforced and proven by WP-M02-004 through WP-M02-006; this package must not equate stored trust with unrestricted provider access.",
+        "Instruction discovery and fingerprint invalidation are completed here. Provider-turn delivery remains a WP-M02-006 conformance obligation because the current runtime request intentionally preserves provider-native workspace instruction loading.",
+        "R3 review covers path canonicalization, symlink and junction handling, trust-sensitive changes and migration recovery.",
+        "Implementation qualification passed 106 focused Rust tests, 15 targeted Head conversation tests, 59 sequential desktop regressions, two real subscription-backed Codex canaries and the final full repository gate.",
+        "A self-audit found that instruction discovery applied its entry count after collecting one directory. The final implementation bounds enumeration while reading and proves incomplete evidence for an oversized tree.",
+        "Detached closure review found and verified two repairs: project trust revocation and rebinding are now linearly ordered with provider admission, including a fail-closed constructor path when no registry is installed; portable project metadata publication now uses durable write-through or sync semantics appropriate to the host platform.",
+        "The implementation is larger than the original 7,500-line review trigger because it includes one durable SQLite state machine, capability-safe folder effects, authenticated transport and adversarial restart/concurrency coverage. The estimate is not rewritten retrospectively; the package remains in REVIEW until closure review and explicit owner acceptance."
       ]
     },
     {

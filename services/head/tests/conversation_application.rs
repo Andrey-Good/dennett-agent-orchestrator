@@ -56,6 +56,7 @@ fn application(
                 standalone_workspace_path: "C:\\test-scratch".to_owned(),
             },
         )
+        .with_unregistered_project_fixture_for_tests()
         .with_turn_timeout(timeout),
         project_id,
     )
@@ -493,6 +494,48 @@ async fn complete_turn_streams_ordered_deltas_and_command_retry_does_not_rerun_p
 }
 
 #[tokio::test]
+async fn project_scope_fails_closed_without_project_registry() {
+    let coordinator = SessionCoordinator::new(
+        SessionJournal::new(Arc::new(InMemorySessionEventStore::default())),
+        7,
+        16,
+    );
+    let project_id = ProjectId::new();
+    let system = Arc::new(SystemProjection::new(SystemSnapshot::empty(7), 16));
+    let application = ConversationApplication::new(
+        coordinator,
+        system.clone(),
+        Arc::new(ScriptedFakeAgentRuntime::default()),
+        LocalProject {
+            project_id,
+            display_name: "Unregistered project".to_owned(),
+            workspace_path: "C:\\unregistered".to_owned(),
+            standalone_workspace_path: "C:\\scratch".to_owned(),
+        },
+    );
+
+    let active = application
+        .initialize(CommandId::new(), "Standalone".to_owned())
+        .await
+        .expect("initialize standalone fallback");
+    assert_eq!(active.session.project_id, None);
+    assert!(
+        system
+            .bootstrap()
+            .await
+            .expect("system snapshot")
+            .projects
+            .is_empty()
+    );
+
+    let error = application
+        .create_session(CommandId::new(), Some(project_id), "Denied".to_owned())
+        .await
+        .expect_err("unregistered project scope must fail closed");
+    assert!(matches!(error, ConversationError::ScopeMismatch));
+}
+
+#[tokio::test]
 async fn initialization_and_restore_are_isolated_to_one_project() {
     let coordinator = SessionCoordinator::new(
         SessionJournal::new(Arc::new(InMemorySessionEventStore::default())),
@@ -520,7 +563,8 @@ async fn initialization_and_restore_are_isolated_to_one_project() {
             workspace_path: "C:\\owned".to_owned(),
             standalone_workspace_path: "C:\\scratch".to_owned(),
         },
-    );
+    )
+    .with_unregistered_project_fixture_for_tests();
     let active = application
         .initialize(CommandId::new(), "Unused".to_owned())
         .await

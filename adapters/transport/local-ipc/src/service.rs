@@ -7,6 +7,9 @@ use crate::protocol::dennett::common::v1::{
 use crate::protocol::dennett::control::v1::bootstrap_response;
 use crate::protocol::dennett::control::v1::get_health_response;
 use crate::protocol::dennett::control::v1::handshake_response;
+use crate::protocol::dennett::control::v1::project_service_server::ProjectService;
+#[cfg(windows)]
+use crate::protocol::dennett::control::v1::project_service_server::ProjectServiceServer;
 use crate::protocol::dennett::control::v1::session_service_server::SessionService;
 #[cfg(windows)]
 use crate::protocol::dennett::control::v1::session_service_server::SessionServiceServer;
@@ -38,6 +41,24 @@ use crate::protocol::dennett::control::v1::{
     TurnState, TurnTerminal, TurnTextAppend, WatchSessionRequest, WatchSessionResponse,
 };
 use crate::protocol::dennett::control::v1::{
+    CreateProjectAccepted, CreateProjectRequest, CreateProjectResponse, GetProjectRequest,
+    GetProjectResponse, InspectProjectLocationRequest, InspectProjectLocationResponse,
+    ListProjectsRequest, ListProjectsResponse, ListProjectsResult,
+    PortableMetadataAction as WirePortableMetadataAction,
+    PortableProjectMetadata as WirePortableProjectMetadata,
+    PortableProjectMetadataState as WirePortableProjectMetadataState, Project as WireProject,
+    ProjectLocationInspection as WireProjectLocationInspection,
+    ProjectRegistrationKind as WireProjectRegistrationKind,
+    ProjectSourceFeature as WireProjectSourceFeature, ProjectTrustState as WireProjectTrustState,
+    RebindPortableMetadataAction as WireRebindAction, RebindProjectWorkspaceAccepted,
+    RebindProjectWorkspaceRequest, RebindProjectWorkspaceResponse, RegisterProjectAccepted,
+    RegisterProjectRequest, RegisterProjectResponse, SetProjectTrustRequest,
+    SetProjectTrustResponse, SharedProjectMemoryState as WireSharedProjectMemoryState,
+    WorkspaceFailure, WorkspaceFailureKind, create_project_response, get_project_response,
+    inspect_project_location_response, list_projects_response, rebind_project_workspace_response,
+    register_project_response, set_project_trust_response,
+};
+use crate::protocol::dennett::control::v1::{
     cancel_turn_response, create_session_response, discard_composer_draft_response,
     get_composer_draft_response, save_composer_draft_response, send_turn_response,
     session_mutation, session_watch_frame, turn_snapshot, turn_terminal,
@@ -46,17 +67,28 @@ use crate::protocol::dennett::sync::v1::{
     ResyncReason as WireResyncReason, ResyncRequired, WatchCursor as WireWatchCursor,
     WatchHeartbeat,
 };
-use crate::{LocalEndpoint, PeerIdentity, SessionRegistry, TransportError};
+use crate::{
+    LocalEndpoint, PROJECT_TRUST_DECISION_REF_KIND, PeerIdentity, SessionRegistry, TransportError,
+};
 use dennett_agent_core::{RuntimeControlSelection, RuntimeDescriptor, RuntimeKind};
-use dennett_contracts::{CommandId, ProjectId, SessionId, TurnId};
+use dennett_contracts::{
+    CommandId, PortableMetadataAction, PortableProjectMetadataState, ProjectId,
+    ProjectInspectionId, ProjectTrustState as DomainProjectTrustState,
+    RebindPortableMetadataAction, SessionId, TurnId, WorkspaceBindingId,
+};
 use dennett_head::conversation::{
     ConversationApplication, ConversationError, ConversationTurnRequest, TraceContext,
     TurnDeliveryMode,
 };
 use dennett_head::draft::{ComposerDraftApplication, DraftApplicationError, DraftSaveOutcome};
+use dennett_head::project::{
+    InspectProjectLocationCommand, ProjectApplication, ProjectApplicationError,
+    ProjectLocationError, RebindProjectCommand, RegisterProjectCommand, SetProjectTrustCommand,
+};
 use dennett_head::system::{
-    ProjectSummary, SessionSummary, SystemDelta, SystemHealth, SystemMutation, SystemSnapshot,
-    SystemStateError, SystemStatePort, SystemWatchFrame as DomainWatchFrame,
+    ProjectState as DomainProjectState, ProjectSummary, SessionSummary, SystemDelta, SystemHealth,
+    SystemMutation, SystemSnapshot, SystemStateError, SystemStatePort,
+    SystemWatchFrame as DomainWatchFrame,
 };
 use dennett_memory_core::session::{
     CommittedSessionEvent, ProjectSessionSnapshot, ProjectSessionState, SafeSessionError,
@@ -68,6 +100,11 @@ use dennett_sync_core::admission::{
 };
 use dennett_sync_core::draft::DraftRecord;
 use dennett_sync_core::watch::{ResyncReason, WatchCursor, WatchFrame};
+use dennett_trust_core::project_registry::{
+    ProjectAggregate, ProjectLocationInspection, ProjectRegistrationKind, ProjectRegistryError,
+    ProjectTrustDecisionError, SharedProjectMemoryState, TrustDecisionRef, WorkspaceAccessMode,
+    WorkspaceAvailability, WorkspaceKind,
+};
 use futures_core::Stream;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -226,6 +263,512 @@ impl<S: SystemStatePort + 'static> SystemService for SystemServiceAdapter<S> {
             Err(error) => get_health_response::Outcome::Error(state_error(error)),
         };
         Ok(Response::new(GetHealthResponse {
+            outcome: Some(outcome),
+        }))
+    }
+}
+
+const DEFAULT_PROJECT_PAGE_SIZE: usize = 50;
+const MAX_PROJECT_PAGE_SIZE: usize = 200;
+const PROJECT_INSPECTION_TTL_MS: u64 = 5 * 60 * 1_000;
+const PROJECT_PAGE_TOKEN_VERSION: &str = "p1";
+
+#[derive(Clone)]
+pub struct ProjectServiceAdapter {
+    application: Arc<ProjectApplication>,
+    sessions: SessionRegistry,
+    admissions: Arc<dyn CommandAdmissionPort>,
+}
+
+impl ProjectServiceAdapter {
+    #[must_use]
+    pub fn new(
+        application: Arc<ProjectApplication>,
+        sessions: SessionRegistry,
+        admissions: Arc<dyn CommandAdmissionPort>,
+    ) -> Self {
+        Self {
+            application,
+            sessions,
+            admissions,
+        }
+    }
+
+    fn authenticate<T>(
+        &self,
+        request: &Request<T>,
+        client_session_id: &str,
+    ) -> Result<crate::auth::AuthenticatedSession, AuthError> {
+        self.sessions
+            .authorize_active(&peer(request)?, client_session_id)
+    }
+
+    fn authenticated_command<T>(
+        &self,
+        request: &Request<T>,
+        command: Option<&CommandMetadata>,
+    ) -> Result<(CommandMetadata, CommandId), ProjectTransportError> {
+        let command = command_from(command)?;
+        let authenticated = self.authenticate(request, &command.client_session_id)?;
+        if command.authority_epoch_seen != authenticated.authority_epoch {
+            return Err(AuthError::AuthorityEpochChanged.into());
+        }
+        let command_id = CommandId(parse_uuid(&command.command_id)?);
+        Ok((command, command_id))
+    }
+
+    async fn accept(
+        &self,
+        command: &CommandMetadata,
+        command_id: CommandId,
+        operation_kind: &str,
+        intent_hash: [u8; 32],
+    ) -> Result<CommandAccepted, ProjectTransportError> {
+        let receipt = self
+            .admissions
+            .admit(CommandAdmissionRequest {
+                command_id,
+                idempotency_key: command.idempotency_key.clone(),
+                correlation_id: command.correlation_id.clone(),
+                operation_kind: operation_kind.to_owned(),
+                intent_hash,
+                admitted_at_unix_ms: unix_time_ms(),
+            })
+            .await?;
+        Ok(CommandAccepted {
+            command_id: receipt.command_id.0.to_string(),
+            correlation_id: receipt.correlation_id,
+            operation_id: receipt.operation_id.0.to_string(),
+            accepted_revision: receipt.accepted_revision,
+        })
+    }
+
+    #[allow(deprecated)]
+    async fn create_project_inner(
+        &self,
+        request: Request<CreateProjectRequest>,
+    ) -> Result<CreateProjectAccepted, ProjectTransportError> {
+        let (command, command_id) =
+            self.authenticated_command(&request, request.get_ref().command.as_ref())?;
+        let body = request.into_inner();
+        let display_name = validated_nonempty(body.display_name)?;
+        let root_uri = validated_nonempty(body.root_uri)?;
+        let intent_hash = command_intent_hash(
+            "create_project_legacy",
+            command.expected_revision,
+            &[
+                display_name.as_str(),
+                root_uri.as_str(),
+                "leave_absent",
+                "restricted",
+            ],
+        );
+        let observed_at_unix_ms = unix_time_ms();
+        let inspection = self
+            .application
+            .inspect_location(InspectProjectLocationCommand {
+                registration_kind: ProjectRegistrationKind::CreateEmpty,
+                root_uri,
+                observed_at_unix_ms,
+                expires_at_unix_ms: observed_at_unix_ms.saturating_add(PROJECT_INSPECTION_TTL_MS),
+            })
+            .await?;
+        if (inspection.location_exists && !inspection.location_empty)
+            || inspection.portable_metadata_state != PortableProjectMetadataState::Absent
+        {
+            return Err(ProjectApplicationError::InvalidRequest.into());
+        }
+        let mut accepted = self
+            .accept(&command, command_id, "create_project_legacy", intent_hash)
+            .await?;
+        let registered = self
+            .application
+            .register_project(RegisterProjectCommand {
+                command_id,
+                correlation_id: command.correlation_id,
+                intent_sha256: intent_hash,
+                inspection_id: inspection.inspection_id,
+                display_name,
+                portable_metadata_action: PortableMetadataAction::LeaveAbsent,
+                initial_trust_state: None,
+                trust_decision: None,
+                committed_at_unix_ms: unix_time_ms(),
+            })
+            .await?;
+        accepted.operation_id = registered.operation.plan.operation_id.0.to_string();
+        Ok(CreateProjectAccepted {
+            command: Some(accepted),
+            project_id: registered.project.project.project_id.0.to_string(),
+        })
+    }
+
+    async fn list_projects_inner(
+        &self,
+        request: Request<ListProjectsRequest>,
+    ) -> Result<ListProjectsResult, ProjectTransportError> {
+        self.authenticate(&request, &request.get_ref().client_session_id)?;
+        let body = request.into_inner();
+        let page_size = normalized_project_page_size(body.page_size)?;
+        let projects = self.application.list_projects().await?;
+        let snapshot_revision = project_list_snapshot_revision(&projects);
+        let offset = decode_project_page_token(&body.page_token, snapshot_revision)?;
+        if offset > projects.len() {
+            return Err(ProjectTransportError::InvalidRequest);
+        }
+        let end = offset.saturating_add(page_size).min(projects.len());
+        let next_page_token = if end < projects.len() {
+            encode_project_page_token(snapshot_revision, end)
+        } else {
+            String::new()
+        };
+        Ok(ListProjectsResult {
+            projects: projects[offset..end]
+                .iter()
+                .map(project_summary_to_wire)
+                .collect(),
+            next_page_token,
+            snapshot_revision,
+        })
+    }
+
+    async fn get_project_inner(
+        &self,
+        request: Request<GetProjectRequest>,
+    ) -> Result<WireProject, ProjectTransportError> {
+        self.authenticate(&request, &request.get_ref().client_session_id)?;
+        let body = request.into_inner();
+        let project = self
+            .application
+            .get_project(parse_project_id(&body.project_id)?)
+            .await?;
+        Ok(project_to_project_wire(&project))
+    }
+
+    async fn inspect_project_location_inner(
+        &self,
+        request: Request<InspectProjectLocationRequest>,
+    ) -> Result<WireProjectLocationInspection, ProjectTransportError> {
+        self.authenticate(&request, &request.get_ref().client_session_id)?;
+        let body = request.into_inner();
+        let registration_kind = project_registration_kind_from_wire(body.registration_kind)?;
+        let root_uri = validated_nonempty(body.root_uri)?;
+        let observed_at_unix_ms = unix_time_ms();
+        let inspection = self
+            .application
+            .inspect_location(InspectProjectLocationCommand {
+                registration_kind,
+                root_uri,
+                observed_at_unix_ms,
+                expires_at_unix_ms: observed_at_unix_ms.saturating_add(PROJECT_INSPECTION_TTL_MS),
+            })
+            .await?;
+        Ok(project_inspection_to_wire(&inspection))
+    }
+
+    async fn register_project_inner(
+        &self,
+        request: Request<RegisterProjectRequest>,
+    ) -> Result<RegisterProjectAccepted, ProjectTransportError> {
+        let (command, command_id) =
+            self.authenticated_command(&request, request.get_ref().command.as_ref())?;
+        let body = request.into_inner();
+        let inspection_id = ProjectInspectionId(parse_uuid(&body.inspection_id)?);
+        let display_name = validated_nonempty(body.display_name)?;
+        let portable_metadata_action =
+            portable_metadata_action_from_wire(body.portable_metadata_action)?;
+        let initial_trust_state = initial_project_trust_from_wire(body.initial_trust_state)?;
+        let trust_decision = optional_bridge_trust_decision(body.trust_decision, command_id)?;
+        validate_initial_trust_request(initial_trust_state, trust_decision.as_ref())?;
+
+        let action = body.portable_metadata_action.to_string();
+        let trust_state = body.initial_trust_state.to_string();
+        let (decision_presence, decision_kind, decision_id) =
+            trust_ref_intent_fields(trust_decision.as_ref());
+        let intent_hash = command_intent_hash(
+            "register_project",
+            command.expected_revision,
+            &[
+                body.inspection_id.as_str(),
+                display_name.as_str(),
+                action.as_str(),
+                trust_state.as_str(),
+                decision_presence,
+                decision_kind,
+                decision_id,
+            ],
+        );
+        let mut accepted = self
+            .accept(&command, command_id, "register_project", intent_hash)
+            .await?;
+        let registered = self
+            .application
+            .register_project(RegisterProjectCommand {
+                command_id,
+                correlation_id: command.correlation_id,
+                intent_sha256: intent_hash,
+                inspection_id,
+                display_name,
+                portable_metadata_action,
+                initial_trust_state,
+                trust_decision,
+                committed_at_unix_ms: unix_time_ms(),
+            })
+            .await?;
+        accepted.operation_id = registered.operation.plan.operation_id.0.to_string();
+        Ok(RegisterProjectAccepted {
+            command: Some(accepted),
+            project_id: registered.project.project.project_id.0.to_string(),
+            workspace_binding_id: registered.operation.plan.binding_id.0.to_string(),
+        })
+    }
+
+    async fn rebind_project_workspace_inner(
+        &self,
+        request: Request<RebindProjectWorkspaceRequest>,
+    ) -> Result<RebindProjectWorkspaceAccepted, ProjectTransportError> {
+        let (command, command_id) =
+            self.authenticated_command(&request, request.get_ref().command.as_ref())?;
+        let body = request.into_inner();
+        let project_id = parse_project_id(&body.project_id)?;
+        let current_binding_id =
+            WorkspaceBindingId(parse_uuid(&body.current_workspace_binding_id)?);
+        let inspection_id = ProjectInspectionId(parse_uuid(&body.inspection_id)?);
+        let portable_metadata_action = rebind_action_from_wire(body.portable_metadata_action)?;
+        let action = body.portable_metadata_action.to_string();
+        let intent_hash = command_intent_hash(
+            "rebind_project_workspace",
+            command.expected_revision,
+            &[
+                body.project_id.as_str(),
+                body.current_workspace_binding_id.as_str(),
+                body.inspection_id.as_str(),
+                action.as_str(),
+            ],
+        );
+        let accepted = self
+            .accept(
+                &command,
+                command_id,
+                "rebind_project_workspace",
+                intent_hash,
+            )
+            .await?;
+        let receipt = self
+            .application
+            .rebind_project(RebindProjectCommand {
+                command_id,
+                correlation_id: command.correlation_id,
+                intent_sha256: intent_hash,
+                project_id,
+                current_binding_id,
+                inspection_id,
+                portable_metadata_action,
+                committed_at_unix_ms: unix_time_ms(),
+            })
+            .await?;
+        Ok(RebindProjectWorkspaceAccepted {
+            command: Some(accepted),
+            project_id: receipt.project_id.0.to_string(),
+            workspace_binding_id: receipt.primary_binding.binding_id.0.to_string(),
+        })
+    }
+
+    async fn set_project_trust_inner(
+        &self,
+        request: Request<SetProjectTrustRequest>,
+    ) -> Result<CommandAccepted, ProjectTransportError> {
+        let (command, command_id) =
+            self.authenticated_command(&request, request.get_ref().command.as_ref())?;
+        let body = request.into_inner();
+        let project_id = parse_project_id(&body.project_id)?;
+        let target_state = explicit_project_trust_from_wire(body.trust_state)?;
+        if body.expected_policy_revision == 0
+            || command
+                .expected_revision
+                .is_some_and(|revision| revision != body.expected_policy_revision)
+        {
+            return Err(ProjectTransportError::InvalidRequest);
+        }
+        let trust_decision = bridge_trust_decision(body.trust_decision, command_id)?;
+        let target = body.trust_state.to_string();
+        let expected = body.expected_policy_revision.to_string();
+        let intent_hash = command_intent_hash(
+            "set_project_trust",
+            command.expected_revision,
+            &[
+                body.project_id.as_str(),
+                target.as_str(),
+                expected.as_str(),
+                trust_decision.kind.as_str(),
+                trust_decision.id.as_str(),
+            ],
+        );
+        let accepted = self
+            .accept(&command, command_id, "set_project_trust", intent_hash)
+            .await?;
+
+        // Project policy keeps the bridge decision durably. This makes a retry
+        // after a committed update but lost IPC response idempotent even though
+        // the policy API itself is an exact compare-and-set operation.
+        let project = self.application.get_project(project_id).await?;
+        let already_committed = body
+            .expected_policy_revision
+            .checked_add(1)
+            .is_some_and(|revision| project.access_policy.revision == revision)
+            && project.access_policy.trust_state == target_state
+            && project.access_policy.last_decision.as_ref() == Some(&trust_decision);
+        if !already_committed {
+            self.application
+                .set_project_trust(SetProjectTrustCommand {
+                    command_id,
+                    correlation_id: command.correlation_id,
+                    project_id,
+                    target_state,
+                    expected_policy_revision: body.expected_policy_revision,
+                    trust_decision,
+                    committed_at_unix_ms: unix_time_ms(),
+                })
+                .await?;
+        }
+        Ok(accepted)
+    }
+}
+
+#[tonic::async_trait]
+impl ProjectService for ProjectServiceAdapter {
+    async fn create_project(
+        &self,
+        request: Request<CreateProjectRequest>,
+    ) -> Result<Response<CreateProjectResponse>, Status> {
+        let correlation = request
+            .get_ref()
+            .command
+            .as_ref()
+            .map_or("", |command| command.correlation_id.as_str())
+            .to_owned();
+        let outcome = match self.create_project_inner(request).await {
+            Ok(accepted) => create_project_response::Outcome::Accepted(accepted),
+            Err(error) => create_project_response::Outcome::Error(
+                project_transport_failure(error, &correlation)
+                    .error
+                    .unwrap_or_else(|| internal_error("project_failure", "project.failure")),
+            ),
+        };
+        Ok(Response::new(CreateProjectResponse {
+            outcome: Some(outcome),
+        }))
+    }
+
+    async fn list_projects(
+        &self,
+        request: Request<ListProjectsRequest>,
+    ) -> Result<Response<ListProjectsResponse>, Status> {
+        let outcome = match self.list_projects_inner(request).await {
+            Ok(result) => list_projects_response::Outcome::Result(result),
+            Err(error) => list_projects_response::Outcome::Error(
+                project_transport_failure(error, "")
+                    .error
+                    .unwrap_or_else(|| internal_error("project_failure", "project.failure")),
+            ),
+        };
+        Ok(Response::new(ListProjectsResponse {
+            outcome: Some(outcome),
+        }))
+    }
+
+    async fn get_project(
+        &self,
+        request: Request<GetProjectRequest>,
+    ) -> Result<Response<GetProjectResponse>, Status> {
+        let outcome = match self.get_project_inner(request).await {
+            Ok(project) => get_project_response::Outcome::Project(project),
+            Err(error) => get_project_response::Outcome::Error(
+                project_transport_failure(error, "")
+                    .error
+                    .unwrap_or_else(|| internal_error("project_failure", "project.failure")),
+            ),
+        };
+        Ok(Response::new(GetProjectResponse {
+            outcome: Some(outcome),
+        }))
+    }
+
+    async fn inspect_project_location(
+        &self,
+        request: Request<InspectProjectLocationRequest>,
+    ) -> Result<Response<InspectProjectLocationResponse>, Status> {
+        let outcome = match self.inspect_project_location_inner(request).await {
+            Ok(inspection) => inspect_project_location_response::Outcome::Inspection(inspection),
+            Err(error) => inspect_project_location_response::Outcome::Error(
+                project_transport_failure(error, ""),
+            ),
+        };
+        Ok(Response::new(InspectProjectLocationResponse {
+            outcome: Some(outcome),
+        }))
+    }
+
+    async fn register_project(
+        &self,
+        request: Request<RegisterProjectRequest>,
+    ) -> Result<Response<RegisterProjectResponse>, Status> {
+        let correlation = request
+            .get_ref()
+            .command
+            .as_ref()
+            .map_or("", |command| command.correlation_id.as_str())
+            .to_owned();
+        let outcome = match self.register_project_inner(request).await {
+            Ok(accepted) => register_project_response::Outcome::Accepted(accepted),
+            Err(error) => register_project_response::Outcome::Error(project_transport_failure(
+                error,
+                &correlation,
+            )),
+        };
+        Ok(Response::new(RegisterProjectResponse {
+            outcome: Some(outcome),
+        }))
+    }
+
+    async fn rebind_project_workspace(
+        &self,
+        request: Request<RebindProjectWorkspaceRequest>,
+    ) -> Result<Response<RebindProjectWorkspaceResponse>, Status> {
+        let correlation = request
+            .get_ref()
+            .command
+            .as_ref()
+            .map_or("", |command| command.correlation_id.as_str())
+            .to_owned();
+        let outcome = match self.rebind_project_workspace_inner(request).await {
+            Ok(accepted) => rebind_project_workspace_response::Outcome::Accepted(accepted),
+            Err(error) => rebind_project_workspace_response::Outcome::Error(
+                project_transport_failure(error, &correlation),
+            ),
+        };
+        Ok(Response::new(RebindProjectWorkspaceResponse {
+            outcome: Some(outcome),
+        }))
+    }
+
+    async fn set_project_trust(
+        &self,
+        request: Request<SetProjectTrustRequest>,
+    ) -> Result<Response<SetProjectTrustResponse>, Status> {
+        let correlation = request
+            .get_ref()
+            .command
+            .as_ref()
+            .map_or("", |command| command.correlation_id.as_str())
+            .to_owned();
+        let outcome = match self.set_project_trust_inner(request).await {
+            Ok(accepted) => set_project_trust_response::Outcome::Accepted(accepted),
+            Err(error) => set_project_trust_response::Outcome::Error(project_transport_failure(
+                error,
+                &correlation,
+            )),
+        };
+        Ok(Response::new(SetProjectTrustResponse {
             outcome: Some(outcome),
         }))
     }
@@ -928,6 +1471,7 @@ pub async fn run_local_server<S, F>(
     endpoint: LocalEndpoint,
     system: SystemServiceAdapter<S>,
     sessions: SessionServiceAdapter,
+    projects: ProjectServiceAdapter,
     shutdown: F,
 ) -> Result<(), TransportError>
 where
@@ -946,6 +1490,11 @@ where
                 .max_decoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize)
                 .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize),
         )
+        .add_service(
+            ProjectServiceServer::new(projects)
+                .max_decoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize)
+                .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize),
+        )
         .serve_with_incoming_shutdown(incoming, shutdown)
         .await
         .map_err(TransportError::from)
@@ -956,6 +1505,7 @@ pub async fn run_local_server<S, F>(
     _endpoint: LocalEndpoint,
     _system: SystemServiceAdapter<S>,
     _sessions: SessionServiceAdapter,
+    _projects: ProjectServiceAdapter,
     _shutdown: F,
 ) -> Result<(), TransportError>
 where
@@ -1051,7 +1601,12 @@ fn project_to_wire(project: &ProjectSummary) -> WireProjectSummary {
     WireProjectSummary {
         project_id: project.project_id.clone(),
         display_name: project.display_name.clone(),
-        state: ProjectState::Ready as i32,
+        state: match project.state {
+            DomainProjectState::Ready => ProjectState::Ready,
+            DomainProjectState::Missing => ProjectState::Missing,
+            DomainProjectState::Detached => ProjectState::Detached,
+            DomainProjectState::ReadOnly => ProjectState::ReadOnly,
+        } as i32,
         revision: project.revision,
         last_activity_at: None,
     }
@@ -1800,6 +2355,845 @@ fn draft_to_wire(draft: &DraftRecord) -> ComposerDraft {
     }
 }
 
+#[derive(Debug)]
+enum ProjectTransportError {
+    Auth(AuthError),
+    Admission(CommandAdmissionError),
+    Application(ProjectApplicationError),
+    InvalidRequest,
+    PageSnapshotChanged,
+}
+
+impl From<AuthError> for ProjectTransportError {
+    fn from(error: AuthError) -> Self {
+        Self::Auth(error)
+    }
+}
+
+impl From<CommandAdmissionError> for ProjectTransportError {
+    fn from(error: CommandAdmissionError) -> Self {
+        Self::Admission(error)
+    }
+}
+
+impl From<ProjectApplicationError> for ProjectTransportError {
+    fn from(error: ProjectApplicationError) -> Self {
+        Self::Application(error)
+    }
+}
+
+impl From<ServiceError> for ProjectTransportError {
+    fn from(error: ServiceError) -> Self {
+        match error {
+            ServiceError::Auth(error) => Self::Auth(error),
+            ServiceError::Admission(error) => Self::Admission(error),
+            ServiceError::InvalidRequest => Self::InvalidRequest,
+        }
+    }
+}
+
+fn validated_nonempty(value: String) -> Result<String, ProjectTransportError> {
+    if value.trim().is_empty() || value.len() > 32 * 1_024 || value.contains('\0') {
+        Err(ProjectTransportError::InvalidRequest)
+    } else {
+        Ok(value)
+    }
+}
+
+fn project_registration_kind_from_wire(
+    value: i32,
+) -> Result<ProjectRegistrationKind, ProjectTransportError> {
+    match WireProjectRegistrationKind::try_from(value)
+        .map_err(|_| ProjectTransportError::InvalidRequest)?
+    {
+        WireProjectRegistrationKind::CreateEmpty => Ok(ProjectRegistrationKind::CreateEmpty),
+        WireProjectRegistrationKind::AttachExisting => Ok(ProjectRegistrationKind::AttachExisting),
+        WireProjectRegistrationKind::Unspecified => Err(ProjectTransportError::InvalidRequest),
+    }
+}
+
+fn portable_metadata_action_from_wire(
+    value: i32,
+) -> Result<PortableMetadataAction, ProjectTransportError> {
+    match WirePortableMetadataAction::try_from(value)
+        .map_err(|_| ProjectTransportError::InvalidRequest)?
+    {
+        WirePortableMetadataAction::LeaveAbsent => Ok(PortableMetadataAction::LeaveAbsent),
+        WirePortableMetadataAction::UseExisting => Ok(PortableMetadataAction::UseExisting),
+        WirePortableMetadataAction::CreateMinimal => Ok(PortableMetadataAction::CreateMinimal),
+        WirePortableMetadataAction::ForkWithNewIdentity => {
+            Ok(PortableMetadataAction::ForkWithNewIdentity)
+        }
+        WirePortableMetadataAction::Unspecified => Err(ProjectTransportError::InvalidRequest),
+    }
+}
+
+fn rebind_action_from_wire(
+    value: i32,
+) -> Result<RebindPortableMetadataAction, ProjectTransportError> {
+    match WireRebindAction::try_from(value).map_err(|_| ProjectTransportError::InvalidRequest)? {
+        WireRebindAction::LeaveAbsent => Ok(RebindPortableMetadataAction::LeaveAbsent),
+        WireRebindAction::UseExisting => Ok(RebindPortableMetadataAction::UseExisting),
+        WireRebindAction::CreateMinimal => Ok(RebindPortableMetadataAction::CreateMinimal),
+        WireRebindAction::Unspecified => Err(ProjectTransportError::InvalidRequest),
+    }
+}
+
+fn initial_project_trust_from_wire(
+    value: i32,
+) -> Result<Option<DomainProjectTrustState>, ProjectTransportError> {
+    match WireProjectTrustState::try_from(value)
+        .map_err(|_| ProjectTransportError::InvalidRequest)?
+    {
+        WireProjectTrustState::Unspecified => Ok(None),
+        WireProjectTrustState::Restricted => Ok(Some(DomainProjectTrustState::Restricted)),
+        WireProjectTrustState::TrustedBounded => Ok(Some(DomainProjectTrustState::TrustedBounded)),
+        WireProjectTrustState::Revoked => Ok(Some(DomainProjectTrustState::Revoked)),
+    }
+}
+
+fn explicit_project_trust_from_wire(
+    value: i32,
+) -> Result<DomainProjectTrustState, ProjectTransportError> {
+    initial_project_trust_from_wire(value)?.ok_or(ProjectTransportError::InvalidRequest)
+}
+
+fn optional_bridge_trust_decision(
+    value: Option<StableRef>,
+    command_id: CommandId,
+) -> Result<Option<TrustDecisionRef>, ProjectTransportError> {
+    value
+        .map(|value| validate_bridge_trust_decision(value, command_id))
+        .transpose()
+}
+
+fn bridge_trust_decision(
+    value: Option<StableRef>,
+    command_id: CommandId,
+) -> Result<TrustDecisionRef, ProjectTransportError> {
+    validate_bridge_trust_decision(
+        value.ok_or(ProjectTransportError::Application(
+            ProjectApplicationError::TrustDecisionMissing,
+        ))?,
+        command_id,
+    )
+}
+
+fn validate_bridge_trust_decision(
+    value: StableRef,
+    command_id: CommandId,
+) -> Result<TrustDecisionRef, ProjectTransportError> {
+    let decision = TrustDecisionRef::new(value.kind, value.id)
+        .map_err(ProjectApplicationError::TrustDecision)?;
+    if decision.kind != PROJECT_TRUST_DECISION_REF_KIND || decision.id != command_id.0.to_string() {
+        let error = if decision.kind != PROJECT_TRUST_DECISION_REF_KIND {
+            ProjectTrustDecisionError::InvalidKind
+        } else {
+            ProjectTrustDecisionError::CommandMismatch
+        };
+        return Err(ProjectApplicationError::TrustDecision(error).into());
+    }
+    Ok(decision)
+}
+
+fn validate_initial_trust_request(
+    state: Option<DomainProjectTrustState>,
+    decision: Option<&TrustDecisionRef>,
+) -> Result<(), ProjectTransportError> {
+    match (state, decision) {
+        (Some(DomainProjectTrustState::TrustedBounded), Some(_))
+        | (None | Some(DomainProjectTrustState::Restricted), None) => Ok(()),
+        (Some(DomainProjectTrustState::Revoked), _)
+        | (Some(DomainProjectTrustState::TrustedBounded), None)
+        | (None | Some(DomainProjectTrustState::Restricted), Some(_)) => {
+            Err(ProjectTransportError::InvalidRequest)
+        }
+    }
+}
+
+fn trust_ref_intent_fields(decision: Option<&TrustDecisionRef>) -> (&str, &str, &str) {
+    decision.map_or(("absent", "", ""), |decision| {
+        ("present", decision.kind.as_str(), decision.id.as_str())
+    })
+}
+
+fn normalized_project_page_size(value: u32) -> Result<usize, ProjectTransportError> {
+    if value == 0 {
+        return Ok(DEFAULT_PROJECT_PAGE_SIZE);
+    }
+    let value = usize::try_from(value).map_err(|_| ProjectTransportError::InvalidRequest)?;
+    if value > MAX_PROJECT_PAGE_SIZE {
+        Err(ProjectTransportError::InvalidRequest)
+    } else {
+        Ok(value)
+    }
+}
+
+fn project_list_snapshot_revision(projects: &[ProjectAggregate]) -> u64 {
+    fn field(hasher: &mut Sha256, value: &[u8]) {
+        hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+        hasher.update(value);
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"dennett.project-list-snapshot.v1\0");
+    hasher.update(
+        u64::try_from(projects.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for aggregate in projects {
+        field(
+            &mut hasher,
+            aggregate.project.project_id.0.to_string().as_bytes(),
+        );
+        hasher.update(aggregate.project.revision.to_be_bytes());
+        hasher.update(aggregate.access_policy.revision.to_be_bytes());
+        for binding in &aggregate.bindings {
+            field(&mut hasher, binding.binding_id.0.to_string().as_bytes());
+            hasher.update(binding.record_revision.to_be_bytes());
+        }
+    }
+    let digest = hasher.finalize();
+    let mut revision = u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 prefix"));
+    if revision == 0 {
+        revision = 1;
+    }
+    revision
+}
+
+fn encode_project_page_token(snapshot_revision: u64, offset: usize) -> String {
+    format!("{PROJECT_PAGE_TOKEN_VERSION}:{snapshot_revision:016x}:{offset}")
+}
+
+fn decode_project_page_token(
+    value: &str,
+    snapshot_revision: u64,
+) -> Result<usize, ProjectTransportError> {
+    if value.is_empty() {
+        return Ok(0);
+    }
+    if value.len() > 128 {
+        return Err(ProjectTransportError::InvalidRequest);
+    }
+    let mut parts = value.split(':');
+    let version = parts.next();
+    let revision = parts.next();
+    let offset = parts.next();
+    if version != Some(PROJECT_PAGE_TOKEN_VERSION) || parts.next().is_some() {
+        return Err(ProjectTransportError::InvalidRequest);
+    }
+    let revision = u64::from_str_radix(revision.ok_or(ProjectTransportError::InvalidRequest)?, 16)
+        .map_err(|_| ProjectTransportError::InvalidRequest)?;
+    if revision != snapshot_revision {
+        return Err(ProjectTransportError::PageSnapshotChanged);
+    }
+    offset
+        .ok_or(ProjectTransportError::InvalidRequest)?
+        .parse::<usize>()
+        .map_err(|_| ProjectTransportError::InvalidRequest)
+}
+
+fn project_summary_to_wire(project: &ProjectAggregate) -> WireProjectSummary {
+    WireProjectSummary {
+        project_id: project.project.project_id.0.to_string(),
+        display_name: project.project.display_name.clone(),
+        state: project_state_to_wire(project),
+        revision: project.project.revision,
+        last_activity_at: Some(timestamp(project.project.updated_at_unix_ms)),
+    }
+}
+
+#[allow(deprecated)]
+fn project_to_project_wire(project: &ProjectAggregate) -> WireProject {
+    let primary = primary_binding(project);
+    WireProject {
+        project_id: project.project.project_id.0.to_string(),
+        display_name: project.project.display_name.clone(),
+        root_uri: primary.map_or_else(String::new, |binding| {
+            binding.location.path.expose_local().to_owned()
+        }),
+        state: project_state_to_wire(project),
+        revision: project.project.revision,
+        created_at: Some(timestamp(project.project.created_at_unix_ms)),
+        updated_at: Some(timestamp(project.project.updated_at_unix_ms)),
+        primary_workspace_binding_id: project.project.primary_binding_id.0.to_string(),
+    }
+}
+
+fn primary_binding(
+    project: &ProjectAggregate,
+) -> Option<&dennett_trust_core::project_registry::WorkspaceBinding> {
+    project
+        .bindings
+        .iter()
+        .find(|binding| binding.binding_id == project.project.primary_binding_id)
+}
+
+fn project_state_to_wire(project: &ProjectAggregate) -> i32 {
+    let state = match primary_binding(project) {
+        Some(binding) if binding.availability == WorkspaceAvailability::Missing => {
+            ProjectState::Missing
+        }
+        Some(binding) if binding.availability == WorkspaceAvailability::Detached => {
+            ProjectState::Detached
+        }
+        Some(binding)
+            if binding.availability == WorkspaceAvailability::Inaccessible
+                || binding.access_mode == WorkspaceAccessMode::ReadOnly =>
+        {
+            ProjectState::ReadOnly
+        }
+        Some(_) => ProjectState::Ready,
+        None => ProjectState::Detached,
+    };
+    state as i32
+}
+
+fn project_inspection_to_wire(
+    inspection: &ProjectLocationInspection,
+) -> WireProjectLocationInspection {
+    let mut detected_features = Vec::with_capacity(4);
+    if matches!(
+        inspection.workspace_kind,
+        WorkspaceKind::VersionedCheckout | WorkspaceKind::IsolatedCheckout
+    ) {
+        detected_features.push(WireProjectSourceFeature::VersionedRepository as i32);
+    }
+    if inspection.instruction_source_count != 0 {
+        detected_features.push(WireProjectSourceFeature::InstructionFiles as i32);
+    }
+    if inspection.portable_metadata_state != PortableProjectMetadataState::Absent {
+        detected_features.push(WireProjectSourceFeature::PortableProjectMetadata as i32);
+    }
+    if inspection.shared_memory_state != SharedProjectMemoryState::Absent {
+        detected_features.push(WireProjectSourceFeature::SharedProjectMemory as i32);
+    }
+    let location_identity = inspection
+        .source_identity
+        .map(|identity| ("workspace_source_identity", identity))
+        .or_else(|| {
+            inspection
+                .prospective_parent_identity
+                .map(|identity| ("workspace_parent_identity", identity))
+        })
+        .map(|(kind, identity)| StableRef {
+            kind: kind.to_owned(),
+            id: hex(identity.as_bytes()),
+        });
+    WireProjectLocationInspection {
+        inspection_id: inspection.inspection_id.0.to_string(),
+        registration_kind: match inspection.registration_kind {
+            ProjectRegistrationKind::CreateEmpty => WireProjectRegistrationKind::CreateEmpty,
+            ProjectRegistrationKind::AttachExisting => WireProjectRegistrationKind::AttachExisting,
+        } as i32,
+        root_uri: inspection.location.path.expose_local().to_owned(),
+        suggested_display_name: inspection.suggested_display_name.clone(),
+        location_exists: inspection.location_exists,
+        location_empty: inspection.location_empty,
+        portable_metadata: Some(WirePortableProjectMetadata {
+            state: portable_metadata_state_to_wire(inspection.portable_metadata_state),
+            project_id: inspection
+                .portable_project_id
+                .map_or_else(String::new, |project_id| project_id.0.to_string()),
+            schema_version: if inspection.portable_metadata_state
+                == PortableProjectMetadataState::PresentValid
+            {
+                "1".to_owned()
+            } else {
+                String::new()
+            },
+            shared_memory_state: shared_memory_state_to_wire(inspection.shared_memory_state),
+            minimal_structure_creation_available: inspection.minimal_structure_creation_available,
+        }),
+        detected_features,
+        location_identity,
+        observed_at: Some(timestamp(inspection.observed_at_unix_ms)),
+        expires_at: Some(timestamp(inspection.expires_at_unix_ms)),
+    }
+}
+
+fn portable_metadata_state_to_wire(state: PortableProjectMetadataState) -> i32 {
+    (match state {
+        PortableProjectMetadataState::Absent => WirePortableProjectMetadataState::Absent,
+        PortableProjectMetadataState::PresentValid => {
+            WirePortableProjectMetadataState::PresentValid
+        }
+        PortableProjectMetadataState::Invalid => WirePortableProjectMetadataState::Invalid,
+        PortableProjectMetadataState::IdentityConflict => {
+            WirePortableProjectMetadataState::IdentityConflict
+        }
+        PortableProjectMetadataState::UnsupportedVersion => {
+            WirePortableProjectMetadataState::UnsupportedVersion
+        }
+    }) as i32
+}
+
+fn shared_memory_state_to_wire(state: SharedProjectMemoryState) -> i32 {
+    (match state {
+        SharedProjectMemoryState::Absent => WireSharedProjectMemoryState::Absent,
+        SharedProjectMemoryState::Present => WireSharedProjectMemoryState::Present,
+        SharedProjectMemoryState::Invalid => WireSharedProjectMemoryState::Invalid,
+    }) as i32
+}
+
+fn hex(value: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(value.len() * 2);
+    for byte in value {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn project_transport_failure(
+    error: ProjectTransportError,
+    correlation_id: &str,
+) -> WorkspaceFailure {
+    match error {
+        ProjectTransportError::Auth(error) => {
+            let kind = if error == AuthError::AuthorityEpochChanged {
+                WorkspaceFailureKind::StaleSnapshot
+            } else {
+                WorkspaceFailureKind::ScopeDenied
+            };
+            let mut envelope = auth_error(error);
+            envelope.correlation_id = correlation_id.to_owned();
+            workspace_failure(kind, envelope)
+        }
+        ProjectTransportError::Admission(error) => {
+            let envelope = service_error(ServiceError::Admission(error), correlation_id);
+            let kind = match error {
+                CommandAdmissionError::InvalidRequest => WorkspaceFailureKind::Validation,
+                CommandAdmissionError::IdempotencyConflict => WorkspaceFailureKind::Conflict,
+                CommandAdmissionError::StorageUnavailable => WorkspaceFailureKind::AdapterRetryable,
+                CommandAdmissionError::IntegrityFailure => WorkspaceFailureKind::RecoveryRequired,
+            };
+            workspace_failure(kind, envelope)
+        }
+        ProjectTransportError::Application(error) => {
+            project_application_failure(error, correlation_id)
+        }
+        ProjectTransportError::InvalidRequest => workspace_failure(
+            WorkspaceFailureKind::Validation,
+            safe_project_error("project_request_invalid", correlation_id, false, true, None),
+        ),
+        ProjectTransportError::PageSnapshotChanged => workspace_failure(
+            WorkspaceFailureKind::StaleSnapshot,
+            safe_project_error(
+                "project_list_snapshot_stale",
+                correlation_id,
+                true,
+                false,
+                None,
+            ),
+        ),
+    }
+}
+
+fn project_application_failure(
+    error: ProjectApplicationError,
+    correlation_id: &str,
+) -> WorkspaceFailure {
+    match error {
+        ProjectApplicationError::InvalidRequest => project_failure(
+            WorkspaceFailureKind::Validation,
+            "project_request_invalid",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::ProjectNotFound => project_failure(
+            WorkspaceFailureKind::LocationMissing,
+            "project_not_found",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::BindingNotFound => project_failure(
+            WorkspaceFailureKind::LocationMissing,
+            "project_binding_not_found",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::TrustDecisionMissing => project_failure(
+            WorkspaceFailureKind::ScopeDenied,
+            "project_trust_decision_missing",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::RecoveryRequired => project_failure(
+            WorkspaceFailureKind::RecoveryRequired,
+            "project_recovery_required",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::ProjectRestricted => project_failure(
+            WorkspaceFailureKind::ScopeDenied,
+            "project_restricted",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::ProjectRevoked => project_failure(
+            WorkspaceFailureKind::ScopeDenied,
+            "project_revoked",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::ProjectMissing => project_failure(
+            WorkspaceFailureKind::LocationMissing,
+            "project_location_missing",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::ProjectDetached => project_failure(
+            WorkspaceFailureKind::LocationMissing,
+            "project_location_detached",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::ProjectInaccessible => project_failure(
+            WorkspaceFailureKind::AdapterTerminal,
+            "project_location_inaccessible",
+            correlation_id,
+            false,
+            true,
+            None,
+        ),
+        ProjectApplicationError::ConcurrentChange => project_failure(
+            WorkspaceFailureKind::StaleSnapshot,
+            "project_concurrent_change",
+            correlation_id,
+            true,
+            false,
+            None,
+        ),
+        ProjectApplicationError::Location(error) => project_location_failure(error, correlation_id),
+        ProjectApplicationError::Registry(error) => project_registry_failure(error, correlation_id),
+        ProjectApplicationError::TrustDecision(error) => {
+            project_trust_decision_failure(error, correlation_id)
+        }
+        ProjectApplicationError::Session(error) => project_session_failure(error, correlation_id),
+    }
+}
+
+fn project_location_failure(error: ProjectLocationError, correlation_id: &str) -> WorkspaceFailure {
+    let (kind, code, retryable, user_action_required) = match error {
+        ProjectLocationError::InvalidRequest => (
+            WorkspaceFailureKind::Validation,
+            "project_location_invalid",
+            false,
+            true,
+        ),
+        ProjectLocationError::Missing => (
+            WorkspaceFailureKind::LocationMissing,
+            "project_location_missing",
+            false,
+            true,
+        ),
+        ProjectLocationError::Inaccessible => (
+            WorkspaceFailureKind::AdapterTerminal,
+            "project_location_inaccessible",
+            false,
+            true,
+        ),
+        ProjectLocationError::UnsafeLink => (
+            WorkspaceFailureKind::ScopeDenied,
+            "project_location_unsafe_link",
+            false,
+            true,
+        ),
+        ProjectLocationError::IdentityChanged => (
+            WorkspaceFailureKind::Conflict,
+            "project_location_identity_changed",
+            true,
+            false,
+        ),
+        ProjectLocationError::PortableMetadataConflict => (
+            WorkspaceFailureKind::Conflict,
+            "project_metadata_conflict",
+            false,
+            true,
+        ),
+        ProjectLocationError::InspectionIncomplete => (
+            WorkspaceFailureKind::Validation,
+            "project_inspection_incomplete",
+            false,
+            true,
+        ),
+        ProjectLocationError::RecoveryRequired => (
+            WorkspaceFailureKind::RecoveryRequired,
+            "project_registration_recovery_required",
+            false,
+            true,
+        ),
+        ProjectLocationError::AdapterUnavailable => (
+            WorkspaceFailureKind::AdapterRetryable,
+            "project_location_adapter_unavailable",
+            true,
+            false,
+        ),
+    };
+    project_failure(
+        kind,
+        code,
+        correlation_id,
+        retryable,
+        user_action_required,
+        None,
+    )
+}
+
+fn project_registry_failure(error: ProjectRegistryError, correlation_id: &str) -> WorkspaceFailure {
+    let (kind, code, retryable, user_action_required, current_revision) = match error {
+        ProjectRegistryError::InvalidInput(_) => (
+            WorkspaceFailureKind::Validation,
+            "project_registry_input_invalid",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::NotFound(_) => (
+            WorkspaceFailureKind::LocationMissing,
+            "project_registry_entity_not_found",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::InspectionExpired => (
+            WorkspaceFailureKind::StaleSnapshot,
+            "project_inspection_expired",
+            true,
+            false,
+            None,
+        ),
+        ProjectRegistryError::RevisionConflict { actual, .. } => (
+            WorkspaceFailureKind::Conflict,
+            "project_revision_conflict",
+            true,
+            false,
+            Some(actual),
+        ),
+        ProjectRegistryError::IdempotencyConflict => (
+            WorkspaceFailureKind::Conflict,
+            "project_idempotency_conflict",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::CanonicalLocationConflict { .. } => (
+            WorkspaceFailureKind::Conflict,
+            "project_location_already_bound",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::ProjectAlreadyExists => (
+            WorkspaceFailureKind::Conflict,
+            "project_already_exists",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::BindingProjectMismatch => (
+            WorkspaceFailureKind::Validation,
+            "project_binding_mismatch",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::SourceIdentityConflict => (
+            WorkspaceFailureKind::Conflict,
+            "project_source_identity_conflict",
+            true,
+            true,
+            None,
+        ),
+        ProjectRegistryError::PortableProjectConflict => (
+            WorkspaceFailureKind::Conflict,
+            "project_portable_identity_conflict",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::InvalidStateTransition => (
+            WorkspaceFailureKind::RecoveryRequired,
+            "project_registration_state_invalid",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::TrustDecisionRejected => (
+            WorkspaceFailureKind::ScopeDenied,
+            "project_trust_decision_rejected",
+            false,
+            true,
+            None,
+        ),
+        ProjectRegistryError::StorageUnavailable => (
+            WorkspaceFailureKind::AdapterRetryable,
+            "project_registry_unavailable",
+            true,
+            false,
+            None,
+        ),
+        ProjectRegistryError::IntegrityFailure(_) => (
+            WorkspaceFailureKind::RecoveryRequired,
+            "project_registry_integrity_failure",
+            false,
+            true,
+            None,
+        ),
+    };
+    project_failure(
+        kind,
+        code,
+        correlation_id,
+        retryable,
+        user_action_required,
+        current_revision,
+    )
+}
+
+fn project_trust_decision_failure(
+    error: ProjectTrustDecisionError,
+    correlation_id: &str,
+) -> WorkspaceFailure {
+    let code = match error {
+        ProjectTrustDecisionError::InvalidReference => "project_trust_reference_invalid",
+        ProjectTrustDecisionError::InvalidKind => "project_trust_reference_kind_invalid",
+        ProjectTrustDecisionError::CommandMismatch => "project_trust_reference_command_mismatch",
+    };
+    project_failure(
+        WorkspaceFailureKind::ScopeDenied,
+        code,
+        correlation_id,
+        false,
+        true,
+        None,
+    )
+}
+
+fn project_session_failure(
+    error: dennett_memory_core::session::SessionJournalError,
+    correlation_id: &str,
+) -> WorkspaceFailure {
+    use dennett_memory_core::session::SessionJournalError;
+    let (kind, code, retryable, user_action_required, current_revision) = match error {
+        SessionJournalError::NotFound => (
+            WorkspaceFailureKind::RecoveryRequired,
+            "project_session_missing",
+            false,
+            true,
+            None,
+        ),
+        SessionJournalError::RevisionConflict { actual, .. } => (
+            WorkspaceFailureKind::Conflict,
+            "project_session_revision_conflict",
+            true,
+            false,
+            Some(actual),
+        ),
+        SessionJournalError::IdempotencyConflict => (
+            WorkspaceFailureKind::Conflict,
+            "project_session_idempotency_conflict",
+            false,
+            true,
+            None,
+        ),
+        SessionJournalError::StorageUnavailable => (
+            WorkspaceFailureKind::AdapterRetryable,
+            "project_session_storage_unavailable",
+            true,
+            false,
+            None,
+        ),
+        SessionJournalError::InvalidTransition(_)
+        | SessionJournalError::IntegrityFailure(_)
+        | SessionJournalError::UnsupportedSchemaVersion { .. }
+        | SessionJournalError::UnsupportedEventPayloadVersion { .. }
+        | SessionJournalError::MigrationFailure => (
+            WorkspaceFailureKind::RecoveryRequired,
+            "project_session_recovery_required",
+            false,
+            true,
+            None,
+        ),
+    };
+    project_failure(
+        kind,
+        code,
+        correlation_id,
+        retryable,
+        user_action_required,
+        current_revision,
+    )
+}
+
+fn project_failure(
+    kind: WorkspaceFailureKind,
+    code: &str,
+    correlation_id: &str,
+    retryable: bool,
+    user_action_required: bool,
+    current_revision: Option<u64>,
+) -> WorkspaceFailure {
+    workspace_failure(
+        kind,
+        safe_project_error(
+            code,
+            correlation_id,
+            retryable,
+            user_action_required,
+            current_revision,
+        ),
+    )
+}
+
+fn workspace_failure(kind: WorkspaceFailureKind, error: ErrorEnvelope) -> WorkspaceFailure {
+    WorkspaceFailure {
+        kind: kind as i32,
+        error: Some(error),
+        current_revision: None,
+        conflicting_paths: Vec::new(),
+    }
+}
+
+fn safe_project_error(
+    code: &str,
+    correlation_id: &str,
+    retryable: bool,
+    user_action_required: bool,
+    current_revision: Option<u64>,
+) -> ErrorEnvelope {
+    ErrorEnvelope {
+        code: code.to_owned(),
+        message_key: format!("project.{code}"),
+        correlation_id: correlation_id.to_owned(),
+        retryable,
+        user_action_required,
+        details_handle: String::new(),
+        current_revision,
+    }
+}
+
 fn auth_error(error: AuthError) -> ErrorEnvelope {
     ErrorEnvelope {
         code: error.code().to_owned(),
@@ -1864,6 +3258,11 @@ fn parse_optional_project_id(value: &str) -> Result<Option<ProjectId>, ServiceEr
 }
 
 fn conversation_error(error: ConversationError, correlation_id: &str) -> ErrorEnvelope {
+    if let ConversationError::Project(error) = error {
+        return project_application_failure(error, correlation_id)
+            .error
+            .unwrap_or_else(|| internal_error("project_failure", "project.failure"));
+    }
     let (code, retryable, user_action_required, current_revision) = match error {
         ConversationError::InvalidRequest => ("conversation_request_invalid", false, true, None),
         ConversationError::TurnAlreadyActive => {
@@ -1881,6 +3280,7 @@ fn conversation_error(error: ConversationError, correlation_id: &str) -> ErrorEn
         ) => ("session_revision_stale", true, false, Some(actual)),
         ConversationError::Session(_) => ("session_journal_unavailable", true, false, None),
         ConversationError::Runtime(error) => (error.code.as_str(), error.retryable, false, None),
+        ConversationError::Project(_) => unreachable!("project errors return above"),
     };
     ErrorEnvelope {
         code: code.to_owned(),
@@ -1970,16 +3370,26 @@ fn internal_error(code: &str, message_key: &str) -> ErrorEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::dennett::control::v1::project_service_server::ProjectService;
     use crate::protocol::dennett::control::v1::system_service_server::SystemService;
     use crate::{HandshakePolicy, SessionRegistry};
     use dennett_agent_core::FakeAgentRuntime;
     use dennett_head::conversation::LocalProject;
     use dennett_head::draft::SessionOperationLocks;
+    use dennett_head::project::ProjectLocationPort;
     use dennett_head::session::SessionCoordinator;
     use dennett_head::system::{SystemMutation, SystemProjection};
     use dennett_memory_core::session::{InMemorySessionEventStore, SessionJournal};
+    use dennett_storage_sqlite::SqliteControlStore;
     use dennett_sync_core::admission::InMemoryCommandAdmissionStore;
     use dennett_sync_core::draft::InMemoryDraftCache;
+    use dennett_trust_core::project_registry::{
+        CanonicalLocationKey, CanonicalWorkspaceLocation, RegistrationFilesystemObservation,
+        SensitiveAbsolutePath, WorkspaceBinding, WorkspaceSourceIdentity,
+    };
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use tempfile::TempDir;
     use tonic::codegen::tokio_stream::StreamExt;
 
     #[cfg(windows)]
@@ -2001,6 +3411,812 @@ mod tests {
         let mut request = Request::new(value);
         request.extensions_mut().insert(peer());
         request
+    }
+
+    #[derive(Default)]
+    struct RecordingProjectLocations {
+        registration_actions: Mutex<Vec<PortableMetadataAction>>,
+        rebind_actions: Mutex<Vec<RebindPortableMetadataAction>>,
+    }
+
+    impl RecordingProjectLocations {
+        fn registration_actions(&self) -> Vec<PortableMetadataAction> {
+            self.registration_actions
+                .lock()
+                .expect("project location actions poisoned")
+                .clone()
+        }
+
+        fn canonical_location(path: &Path) -> CanonicalWorkspaceLocation {
+            let display = path.to_string_lossy().into_owned();
+            let digest = Sha256::digest(display.as_bytes());
+            let mut key = [0_u8; 32];
+            key.copy_from_slice(&digest);
+            CanonicalWorkspaceLocation {
+                path: SensitiveAbsolutePath::new(display).expect("absolute test project path"),
+                key: CanonicalLocationKey::new(key),
+            }
+        }
+
+        fn source_identity(path: &Path) -> WorkspaceSourceIdentity {
+            let digest = Sha256::digest(path.to_string_lossy().as_bytes());
+            let mut identity = [0_u8; 32];
+            identity.copy_from_slice(&digest);
+            WorkspaceSourceIdentity::new(identity)
+        }
+
+        fn observation(
+            inspection: &ProjectLocationInspection,
+            action: PortableMetadataAction,
+            project_id: ProjectId,
+        ) -> RegistrationFilesystemObservation {
+            let (portable_metadata_state, portable_project_id) = match action {
+                PortableMetadataAction::LeaveAbsent => (
+                    inspection.portable_metadata_state,
+                    inspection.portable_project_id,
+                ),
+                PortableMetadataAction::UseExisting
+                | PortableMetadataAction::CreateMinimal
+                | PortableMetadataAction::ForkWithNewIdentity => {
+                    (PortableProjectMetadataState::PresentValid, Some(project_id))
+                }
+            };
+            RegistrationFilesystemObservation {
+                location: inspection.location.clone(),
+                source_identity: inspection.source_identity,
+                workspace_kind: inspection.workspace_kind,
+                availability: WorkspaceAvailability::Available,
+                access_mode: inspection.access_mode,
+                portable_metadata_state,
+                portable_project_id,
+                instruction_fingerprint: inspection.instruction_fingerprint,
+                instruction_source_count: inspection.instruction_source_count,
+                observed_at_unix_ms: unix_time_ms(),
+            }
+        }
+    }
+
+    #[tonic::async_trait]
+    impl ProjectLocationPort for RecordingProjectLocations {
+        async fn inspect(
+            &self,
+            command: InspectProjectLocationCommand,
+        ) -> Result<ProjectLocationInspection, ProjectLocationError> {
+            let path = PathBuf::from(&command.root_uri);
+            if !path.is_dir() {
+                return Err(ProjectLocationError::Missing);
+            }
+            let metadata_absent = !path.join(".dennett").exists();
+            Ok(ProjectLocationInspection {
+                inspection_id: ProjectInspectionId::new(),
+                registration_kind: command.registration_kind,
+                location: Self::canonical_location(&path),
+                suggested_display_name: path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Test project")
+                    .to_owned(),
+                location_exists: true,
+                location_empty: std::fs::read_dir(&path)
+                    .map_err(|_| ProjectLocationError::Inaccessible)?
+                    .next()
+                    .is_none(),
+                source_identity: Some(Self::source_identity(&path)),
+                prospective_parent_identity: None,
+                workspace_kind: WorkspaceKind::Folder,
+                availability: WorkspaceAvailability::Available,
+                access_mode: WorkspaceAccessMode::ReadWrite,
+                portable_metadata_state: if metadata_absent {
+                    PortableProjectMetadataState::Absent
+                } else {
+                    PortableProjectMetadataState::Invalid
+                },
+                portable_project_id: None,
+                shared_memory_state: SharedProjectMemoryState::Absent,
+                minimal_structure_creation_available: metadata_absent,
+                instruction_fingerprint: None,
+                instruction_source_count: 0,
+                instruction_discovery_incomplete: false,
+                observed_at_unix_ms: command.observed_at_unix_ms,
+                expires_at_unix_ms: command.expires_at_unix_ms,
+            })
+        }
+
+        async fn apply_registration_effect(
+            &self,
+            inspection: &ProjectLocationInspection,
+            action: PortableMetadataAction,
+            project_id: ProjectId,
+        ) -> Result<RegistrationFilesystemObservation, ProjectLocationError> {
+            self.registration_actions
+                .lock()
+                .expect("project location actions poisoned")
+                .push(action);
+            if action == PortableMetadataAction::CreateMinimal {
+                std::fs::create_dir_all(
+                    Path::new(inspection.location.path.expose_local()).join(".dennett"),
+                )
+                .map_err(|_| ProjectLocationError::AdapterUnavailable)?;
+            }
+            Ok(Self::observation(inspection, action, project_id))
+        }
+
+        async fn apply_rebind_effect(
+            &self,
+            inspection: &ProjectLocationInspection,
+            action: RebindPortableMetadataAction,
+            project_id: ProjectId,
+        ) -> Result<RegistrationFilesystemObservation, ProjectLocationError> {
+            self.rebind_actions
+                .lock()
+                .expect("project rebind actions poisoned")
+                .push(action);
+            let action = match action {
+                RebindPortableMetadataAction::LeaveAbsent => PortableMetadataAction::LeaveAbsent,
+                RebindPortableMetadataAction::UseExisting => PortableMetadataAction::UseExisting,
+                RebindPortableMetadataAction::CreateMinimal => {
+                    PortableMetadataAction::CreateMinimal
+                }
+            };
+            Ok(Self::observation(inspection, action, project_id))
+        }
+
+        async fn observe_binding(
+            &self,
+            binding: &WorkspaceBinding,
+            observed_at_unix_ms: u64,
+        ) -> Result<RegistrationFilesystemObservation, ProjectLocationError> {
+            Ok(RegistrationFilesystemObservation {
+                location: binding.location.clone(),
+                source_identity: binding.source_identity,
+                workspace_kind: binding.kind,
+                availability: binding.availability,
+                access_mode: binding.access_mode,
+                portable_metadata_state: binding.portable_metadata_state,
+                portable_project_id: binding.portable_project_id,
+                instruction_fingerprint: None,
+                instruction_source_count: 0,
+                observed_at_unix_ms,
+            })
+        }
+    }
+
+    struct ProjectServiceFixture {
+        service: ProjectServiceAdapter,
+        locations: Arc<RecordingProjectLocations>,
+        client_session_id: String,
+        workspace: PathBuf,
+        _temp: TempDir,
+    }
+
+    async fn project_service_fixture() -> ProjectServiceFixture {
+        let temp = tempfile::tempdir().expect("project service tempdir");
+        let workspace = temp.path().join("workspace-without-dennett");
+        std::fs::create_dir(&workspace).expect("create project workspace");
+        let store = Arc::new(
+            SqliteControlStore::open(temp.path().join("control.sqlite3"))
+                .await
+                .expect("open project control store"),
+        );
+        let locations = Arc::new(RecordingProjectLocations::default());
+        let coordinator = SessionCoordinator::new(SessionJournal::new(store.clone()), 7, 16);
+        let system = Arc::new(SystemProjection::new(SystemSnapshot::empty(7), 16));
+        let application = Arc::new(ProjectApplication::new(
+            store.clone(),
+            locations.clone(),
+            coordinator,
+            system,
+        ));
+        let registry = SessionRegistry::new(HandshakePolicy::m01("install", "node", 7));
+        let welcome = registry
+            .issue(
+                &peer(),
+                crate::protocol::dennett::control::v1::ClientHello {
+                    client_component: "dennett-desktop-shell".to_owned(),
+                    component_version: "0.1.0".to_owned(),
+                    protocol_versions: vec![1],
+                    installation_id: "install".to_owned(),
+                    device_id: "device".to_owned(),
+                    session_challenge: vec![17; 32],
+                    requested_features: vec![crate::PROJECT_WORKSPACE_FEATURE.to_owned()],
+                },
+            )
+            .expect("project handshake");
+        registry
+            .consume_bootstrap(&peer(), &welcome.client_session_id, &welcome.session_proof)
+            .expect("project bootstrap");
+        let service = ProjectServiceAdapter::new(application, registry, store);
+        ProjectServiceFixture {
+            service,
+            locations,
+            client_session_id: welcome.client_session_id,
+            workspace,
+            _temp: temp,
+        }
+    }
+
+    async fn inspect_fixture_location(
+        fixture: &ProjectServiceFixture,
+    ) -> WireProjectLocationInspection {
+        let response = fixture
+            .service
+            .inspect_project_location(request(InspectProjectLocationRequest {
+                registration_kind: WireProjectRegistrationKind::AttachExisting as i32,
+                root_uri: fixture.workspace.to_string_lossy().into_owned(),
+                client_session_id: fixture.client_session_id.clone(),
+            }))
+            .await
+            .expect("inspect project transport")
+            .into_inner();
+        match response.outcome.expect("inspection outcome") {
+            inspect_project_location_response::Outcome::Inspection(inspection) => inspection,
+            inspect_project_location_response::Outcome::Error(error) => {
+                panic!("unexpected inspection error: {error:?}")
+            }
+        }
+    }
+
+    fn register_request(
+        metadata: CommandMetadata,
+        inspection_id: String,
+        display_name: &str,
+        action: WirePortableMetadataAction,
+        trust_state: WireProjectTrustState,
+        trust_decision: Option<StableRef>,
+    ) -> RegisterProjectRequest {
+        RegisterProjectRequest {
+            command: Some(metadata),
+            inspection_id,
+            display_name: display_name.to_owned(),
+            portable_metadata_action: action as i32,
+            initial_trust_state: trust_state as i32,
+            trust_decision,
+        }
+    }
+
+    fn expect_workspace_error(
+        outcome: Option<register_project_response::Outcome>,
+    ) -> WorkspaceFailure {
+        match outcome.expect("register project outcome") {
+            register_project_response::Outcome::Error(error) => error,
+            register_project_response::Outcome::Accepted(accepted) => {
+                panic!("unexpected accepted project: {accepted:?}")
+            }
+        }
+    }
+
+    fn expect_registered(
+        outcome: Option<register_project_response::Outcome>,
+    ) -> RegisterProjectAccepted {
+        match outcome.expect("registration outcome") {
+            register_project_response::Outcome::Accepted(accepted) => accepted,
+            register_project_response::Outcome::Error(error) => {
+                panic!("unexpected registration error: {error:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn folder_without_dennett_is_inspected_read_only_and_created_only_by_explicit_action() {
+        let fixture = project_service_fixture().await;
+        let dennett = fixture.workspace.join(".dennett");
+        assert!(!dennett.exists());
+
+        let inspection = inspect_fixture_location(&fixture).await;
+        let metadata = inspection
+            .portable_metadata
+            .as_ref()
+            .expect("portable metadata observation");
+        assert_eq!(
+            metadata.state,
+            WirePortableProjectMetadataState::Absent as i32
+        );
+        assert!(metadata.minimal_structure_creation_available);
+        assert!(!dennett.exists(), "inspection must not mutate the folder");
+        assert!(fixture.locations.registration_actions().is_empty());
+
+        let command_id = CommandId::new();
+        let metadata = command(command_id, "explicit-minimal", &fixture.client_session_id);
+        let rejected = fixture
+            .service
+            .register_project(request(register_request(
+                metadata.clone(),
+                inspection.inspection_id.clone(),
+                "Explicit project",
+                WirePortableMetadataAction::Unspecified,
+                WireProjectTrustState::Restricted,
+                None,
+            )))
+            .await
+            .expect("unspecified action response")
+            .into_inner();
+        let failure = expect_workspace_error(rejected.outcome);
+        assert_eq!(failure.kind, WorkspaceFailureKind::Validation as i32);
+        assert_eq!(
+            failure.error.expect("validation error").code,
+            "project_request_invalid"
+        );
+        assert!(!dennett.exists());
+        assert!(fixture.locations.registration_actions().is_empty());
+
+        let accepted = fixture
+            .service
+            .register_project(request(register_request(
+                metadata,
+                inspection.inspection_id,
+                "Explicit project",
+                WirePortableMetadataAction::CreateMinimal,
+                WireProjectTrustState::Restricted,
+                None,
+            )))
+            .await
+            .expect("explicit minimal response")
+            .into_inner();
+        assert!(matches!(
+            accepted.outcome,
+            Some(register_project_response::Outcome::Accepted(_))
+        ));
+        assert_eq!(
+            fixture.locations.registration_actions(),
+            vec![PortableMetadataAction::CreateMinimal]
+        );
+        assert!(
+            dennett.is_dir(),
+            "only the explicit action creates .dennett"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_authority_epoch_is_rejected_before_admission_or_folder_effect() {
+        let fixture = project_service_fixture().await;
+        let inspection = inspect_fixture_location(&fixture).await;
+        let command_id = CommandId::new();
+        let mut stale = command(command_id, "stale-epoch", &fixture.client_session_id);
+        stale.authority_epoch_seen = 6;
+        let rejected = fixture
+            .service
+            .register_project(request(register_request(
+                stale,
+                inspection.inspection_id.clone(),
+                "Stale request",
+                WirePortableMetadataAction::LeaveAbsent,
+                WireProjectTrustState::Restricted,
+                None,
+            )))
+            .await
+            .expect("stale epoch response")
+            .into_inner();
+        let failure = expect_workspace_error(rejected.outcome);
+        assert_eq!(failure.kind, WorkspaceFailureKind::StaleSnapshot as i32);
+        let error = failure.error.expect("stale epoch error");
+        assert_eq!(error.code, "ipc_authority_epoch_changed");
+        assert!(error.retryable);
+        assert!(fixture.locations.registration_actions().is_empty());
+
+        let accepted = fixture
+            .service
+            .register_project(request(register_request(
+                command(command_id, "stale-epoch", &fixture.client_session_id),
+                inspection.inspection_id,
+                "Fresh snapshot",
+                WirePortableMetadataAction::LeaveAbsent,
+                WireProjectTrustState::Restricted,
+                None,
+            )))
+            .await
+            .expect("fresh epoch response")
+            .into_inner();
+        assert!(matches!(
+            accepted.outcome,
+            Some(register_project_response::Outcome::Accepted(_))
+        ));
+        assert_eq!(
+            fixture.locations.registration_actions(),
+            vec![PortableMetadataAction::LeaveAbsent]
+        );
+    }
+
+    #[tokio::test]
+    async fn trust_reference_requires_bridge_kind_and_current_command_identity() {
+        let fixture = project_service_fixture().await;
+        let inspection = inspect_fixture_location(&fixture).await;
+        let command_id = CommandId::new();
+        let metadata = command(command_id, "trust-reference", &fixture.client_session_id);
+
+        for (decision, expected_code) in [
+            (
+                StableRef {
+                    kind: "project_file".to_owned(),
+                    id: command_id.0.to_string(),
+                },
+                "project_trust_reference_kind_invalid",
+            ),
+            (
+                StableRef {
+                    kind: PROJECT_TRUST_DECISION_REF_KIND.to_owned(),
+                    id: CommandId::new().0.to_string(),
+                },
+                "project_trust_reference_command_mismatch",
+            ),
+        ] {
+            let rejected = fixture
+                .service
+                .register_project(request(register_request(
+                    metadata.clone(),
+                    inspection.inspection_id.clone(),
+                    "Trusted project",
+                    WirePortableMetadataAction::LeaveAbsent,
+                    WireProjectTrustState::TrustedBounded,
+                    Some(decision),
+                )))
+                .await
+                .expect("invalid trust reference response")
+                .into_inner();
+            let failure = expect_workspace_error(rejected.outcome);
+            assert_eq!(failure.kind, WorkspaceFailureKind::ScopeDenied as i32);
+            assert_eq!(failure.error.expect("trust error").code, expected_code);
+            assert!(fixture.locations.registration_actions().is_empty());
+        }
+
+        let accepted = fixture
+            .service
+            .register_project(request(register_request(
+                metadata,
+                inspection.inspection_id,
+                "Trusted project",
+                WirePortableMetadataAction::LeaveAbsent,
+                WireProjectTrustState::TrustedBounded,
+                Some(StableRef {
+                    kind: PROJECT_TRUST_DECISION_REF_KIND.to_owned(),
+                    id: command_id.0.to_string(),
+                }),
+            )))
+            .await
+            .expect("valid trust reference response")
+            .into_inner();
+        assert!(matches!(
+            accepted.outcome,
+            Some(register_project_response::Outcome::Accepted(_))
+        ));
+        assert_eq!(fixture.locations.registration_actions().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn registration_retry_reuses_receipts_without_reapplying_the_folder_effect() {
+        let fixture = project_service_fixture().await;
+        let inspection = inspect_fixture_location(&fixture).await;
+        let inspection_id = inspection.inspection_id;
+        let command_id = CommandId::new();
+        let metadata = command(command_id, "registration-retry", &fixture.client_session_id);
+        let body = register_request(
+            metadata.clone(),
+            inspection_id.clone(),
+            "Retry project",
+            WirePortableMetadataAction::LeaveAbsent,
+            WireProjectTrustState::Restricted,
+            None,
+        );
+
+        let first = fixture
+            .service
+            .register_project(request(body.clone()))
+            .await
+            .expect("first registration")
+            .into_inner();
+        let replay = fixture
+            .service
+            .register_project(request(body))
+            .await
+            .expect("registration replay")
+            .into_inner();
+        let first = expect_registered(first.outcome);
+        let replay = expect_registered(replay.outcome);
+        assert_eq!(first.project_id, replay.project_id);
+        assert_eq!(first.workspace_binding_id, replay.workspace_binding_id);
+        assert_eq!(first.command, replay.command);
+        assert_eq!(
+            fixture.locations.registration_actions(),
+            vec![PortableMetadataAction::LeaveAbsent]
+        );
+
+        let conflict = fixture
+            .service
+            .register_project(request(register_request(
+                metadata,
+                inspection_id,
+                "Changed intent",
+                WirePortableMetadataAction::LeaveAbsent,
+                WireProjectTrustState::Restricted,
+                None,
+            )))
+            .await
+            .expect("conflicting replay response")
+            .into_inner();
+        let failure = expect_workspace_error(conflict.outcome);
+        assert_eq!(failure.kind, WorkspaceFailureKind::Conflict as i32);
+        assert_eq!(
+            failure.error.expect("idempotency conflict").code,
+            "command_idempotency_conflict"
+        );
+        assert_eq!(fixture.locations.registration_actions().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_registration_replay_applies_the_folder_effect_once() {
+        let fixture = project_service_fixture().await;
+        let inspection = inspect_fixture_location(&fixture).await;
+        let command_id = CommandId::new();
+        let body = register_request(
+            command(
+                command_id,
+                "concurrent-registration-retry",
+                &fixture.client_session_id,
+            ),
+            inspection.inspection_id,
+            "Concurrent retry project",
+            WirePortableMetadataAction::CreateMinimal,
+            WireProjectTrustState::Restricted,
+            None,
+        );
+        let first = fixture.service.clone();
+        let second = fixture.service.clone();
+
+        let (first, second) = tokio::join!(
+            first.register_project(request(body.clone())),
+            second.register_project(request(body))
+        );
+        let first = expect_registered(
+            first
+                .expect("first registration response")
+                .into_inner()
+                .outcome,
+        );
+        let second = expect_registered(
+            second
+                .expect("second registration response")
+                .into_inner()
+                .outcome,
+        );
+
+        assert_eq!(first.project_id, second.project_id);
+        assert_eq!(first.workspace_binding_id, second.workspace_binding_id);
+        assert_eq!(
+            first
+                .command
+                .as_ref()
+                .expect("first acceptance")
+                .operation_id,
+            second
+                .command
+                .as_ref()
+                .expect("second acceptance")
+                .operation_id
+        );
+        assert_eq!(
+            fixture.locations.registration_actions(),
+            vec![PortableMetadataAction::CreateMinimal]
+        );
+    }
+
+    #[tokio::test]
+    async fn trust_update_retry_recognizes_the_durable_decision() {
+        let fixture = project_service_fixture().await;
+        let inspection = inspect_fixture_location(&fixture).await;
+        let registration_id = CommandId::new();
+        let registration = fixture
+            .service
+            .register_project(request(register_request(
+                command(
+                    registration_id,
+                    "trust-retry-registration",
+                    &fixture.client_session_id,
+                ),
+                inspection.inspection_id,
+                "Trust retry project",
+                WirePortableMetadataAction::LeaveAbsent,
+                WireProjectTrustState::Restricted,
+                None,
+            )))
+            .await
+            .expect("register project for trust retry")
+            .into_inner();
+        let registered = match registration.outcome.expect("registration outcome") {
+            register_project_response::Outcome::Accepted(accepted) => accepted,
+            register_project_response::Outcome::Error(error) => {
+                panic!("unexpected registration error: {error:?}")
+            }
+        };
+
+        let trust_command_id = CommandId::new();
+        let mut trust_metadata = command(
+            trust_command_id,
+            "trust-update-retry",
+            &fixture.client_session_id,
+        );
+        trust_metadata.expected_revision = Some(1);
+        let trust_decision_id = trust_command_id.0.to_string();
+        let body = SetProjectTrustRequest {
+            command: Some(trust_metadata.clone()),
+            project_id: registered.project_id.clone(),
+            trust_state: WireProjectTrustState::TrustedBounded as i32,
+            expected_policy_revision: 1,
+            trust_decision: Some(StableRef {
+                kind: PROJECT_TRUST_DECISION_REF_KIND.to_owned(),
+                id: trust_decision_id.clone(),
+            }),
+        };
+        let first = fixture.service.clone();
+        let second = fixture.service.clone();
+        let (first, second) = tokio::join!(
+            first.set_project_trust(request(body.clone())),
+            second.set_project_trust(request(body.clone()))
+        );
+        let replay = fixture
+            .service
+            .set_project_trust(request(body))
+            .await
+            .expect("durable trust update replay");
+        for response in [
+            first.expect("first trust update").into_inner(),
+            second.expect("concurrent trust update replay").into_inner(),
+            replay.into_inner(),
+        ] {
+            assert!(matches!(
+                response.outcome,
+                Some(set_project_trust_response::Outcome::Accepted(_))
+            ));
+        }
+        let project = fixture
+            .service
+            .application
+            .get_project(ProjectId(
+                uuid::Uuid::parse_str(&registered.project_id).expect("registered project id"),
+            ))
+            .await
+            .expect("load trusted project");
+        assert_eq!(
+            project.access_policy.trust_state,
+            DomainProjectTrustState::TrustedBounded
+        );
+        assert_eq!(project.access_policy.revision, 2);
+        assert_eq!(
+            project
+                .access_policy
+                .last_decision
+                .as_ref()
+                .map(|decision| decision.id.as_str()),
+            Some(trust_decision_id.as_str())
+        );
+
+        let conflict = fixture
+            .service
+            .set_project_trust(request(SetProjectTrustRequest {
+                command: Some(trust_metadata),
+                project_id: registered.project_id,
+                trust_state: WireProjectTrustState::Restricted as i32,
+                expected_policy_revision: 1,
+                trust_decision: Some(StableRef {
+                    kind: PROJECT_TRUST_DECISION_REF_KIND.to_owned(),
+                    id: trust_decision_id,
+                }),
+            }))
+            .await
+            .expect("conflicting trust replay")
+            .into_inner();
+        let failure = match conflict.outcome.expect("trust outcome") {
+            set_project_trust_response::Outcome::Error(error) => error,
+            set_project_trust_response::Outcome::Accepted(accepted) => {
+                panic!("unexpected trust acceptance: {accepted:?}")
+            }
+        };
+        assert_eq!(failure.kind, WorkspaceFailureKind::Conflict as i32);
+        assert_eq!(
+            failure.error.expect("trust conflict").code,
+            "command_idempotency_conflict"
+        );
+    }
+
+    #[test]
+    fn project_pagination_is_bounded_and_tokens_are_snapshot_bound() {
+        assert_eq!(normalized_project_page_size(0).expect("default"), 50);
+        assert_eq!(normalized_project_page_size(1).expect("minimum"), 1);
+        assert_eq!(normalized_project_page_size(200).expect("maximum"), 200);
+        assert!(matches!(
+            normalized_project_page_size(201),
+            Err(ProjectTransportError::InvalidRequest)
+        ));
+
+        let token = encode_project_page_token(0xabc, 50);
+        assert_eq!(
+            decode_project_page_token(&token, 0xabc).expect("matching snapshot token"),
+            50
+        );
+        assert!(matches!(
+            decode_project_page_token(&token, 0xdef),
+            Err(ProjectTransportError::PageSnapshotChanged)
+        ));
+        assert!(matches!(
+            decode_project_page_token("invalid", 0xabc),
+            Err(ProjectTransportError::InvalidRequest)
+        ));
+    }
+
+    #[test]
+    fn project_and_conversation_errors_use_safe_retry_semantics() {
+        for (error, expected_kind, expected_code, retryable, user_action) in [
+            (
+                ProjectApplicationError::ProjectRestricted,
+                WorkspaceFailureKind::ScopeDenied,
+                "project_restricted",
+                false,
+                true,
+            ),
+            (
+                ProjectApplicationError::ProjectRevoked,
+                WorkspaceFailureKind::ScopeDenied,
+                "project_revoked",
+                false,
+                true,
+            ),
+            (
+                ProjectApplicationError::ProjectMissing,
+                WorkspaceFailureKind::LocationMissing,
+                "project_location_missing",
+                false,
+                true,
+            ),
+            (
+                ProjectApplicationError::ProjectDetached,
+                WorkspaceFailureKind::LocationMissing,
+                "project_location_detached",
+                false,
+                true,
+            ),
+            (
+                ProjectApplicationError::ProjectInaccessible,
+                WorkspaceFailureKind::AdapterTerminal,
+                "project_location_inaccessible",
+                false,
+                true,
+            ),
+            (
+                ProjectApplicationError::ConcurrentChange,
+                WorkspaceFailureKind::StaleSnapshot,
+                "project_concurrent_change",
+                true,
+                false,
+            ),
+        ] {
+            let failure = project_application_failure(error, "correlation-safe");
+            assert_eq!(failure.kind, expected_kind as i32);
+            let envelope = failure.error.expect("safe project envelope");
+            assert_eq!(envelope.code, expected_code);
+            assert_eq!(envelope.correlation_id, "correlation-safe");
+            assert_eq!(envelope.retryable, retryable);
+            assert_eq!(envelope.user_action_required, user_action);
+            assert!(envelope.details_handle.is_empty());
+        }
+
+        let conversation = conversation_error(
+            ConversationError::Project(ProjectApplicationError::ConcurrentChange),
+            "conversation-correlation",
+        );
+        assert_eq!(conversation.code, "project_concurrent_change");
+        assert_eq!(conversation.correlation_id, "conversation-correlation");
+        assert!(conversation.retryable);
+        assert!(!conversation.user_action_required);
+
+        let internal = project_registry_failure(
+            ProjectRegistryError::IntegrityFailure("C:\\private\\owner\\workspace"),
+            "safe-registry",
+        );
+        let rendered = format!("{internal:?}");
+        assert!(!rendered.contains("private"));
+        assert!(!rendered.contains("owner"));
+        assert_eq!(
+            internal.error.expect("registry failure").code,
+            "project_registry_integrity_failure"
+        );
     }
 
     #[test]
@@ -2202,17 +4418,20 @@ mod tests {
             Arc::new(InMemoryDraftCache::default()),
             SessionOperationLocks::default(),
         );
-        let application = Arc::new(ConversationApplication::new(
-            coordinator,
-            system.clone(),
-            Arc::new(FakeAgentRuntime),
-            LocalProject {
-                project_id,
-                display_name: "Test project".to_owned(),
-                workspace_path: "C:\\test-project".to_owned(),
-                standalone_workspace_path: "C:\\test-scratch".to_owned(),
-            },
-        ));
+        let application = Arc::new(
+            ConversationApplication::new(
+                coordinator,
+                system.clone(),
+                Arc::new(FakeAgentRuntime),
+                LocalProject {
+                    project_id,
+                    display_name: "Test project".to_owned(),
+                    workspace_path: "C:\\test-project".to_owned(),
+                    standalone_workspace_path: "C:\\test-scratch".to_owned(),
+                },
+            )
+            .with_unregistered_project_fixture_for_tests(),
+        );
         let registry = SessionRegistry::new(HandshakePolicy::m01("install", "node", 7));
         let welcome = registry
             .issue(
@@ -2504,6 +4723,7 @@ mod tests {
             .apply(vec![SystemMutation::UpsertProject(ProjectSummary {
                 project_id: "large-project".to_owned(),
                 display_name: large_display_name.clone(),
+                state: DomainProjectState::Ready,
                 revision: 1,
             })])
             .await;

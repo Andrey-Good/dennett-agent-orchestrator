@@ -2,6 +2,7 @@ use crate::protocol::dennett::common::v1::ErrorEnvelope;
 use crate::protocol::dennett::common::v1::{CommandAccepted, CommandMetadata, StableRef};
 use crate::protocol::dennett::control::v1::bootstrap_response;
 use crate::protocol::dennett::control::v1::handshake_response;
+use crate::protocol::dennett::control::v1::project_service_client::ProjectServiceClient;
 use crate::protocol::dennett::control::v1::session_service_client::SessionServiceClient;
 use crate::protocol::dennett::control::v1::system_service_client::SystemServiceClient;
 use crate::protocol::dennett::control::v1::system_watch_frame;
@@ -14,6 +15,16 @@ use crate::protocol::dennett::control::v1::{
     WatchSessionRequest, WatchSessionResponse,
 };
 use crate::protocol::dennett::control::v1::{
+    CreateProjectAccepted, CreateProjectRequest, GetProjectRequest, InspectProjectLocationRequest,
+    ListProjectsRequest, ListProjectsResult, PortableMetadataAction, Project,
+    ProjectLocationInspection, ProjectRegistrationKind, ProjectTrustState,
+    RebindPortableMetadataAction, RebindProjectWorkspaceAccepted, RebindProjectWorkspaceRequest,
+    RegisterProjectAccepted, RegisterProjectRequest, SetProjectTrustRequest, WorkspaceFailure,
+    create_project_response, get_project_response, inspect_project_location_response,
+    list_projects_response, rebind_project_workspace_response, register_project_response,
+    set_project_trust_response,
+};
+use crate::protocol::dennett::control::v1::{
     cancel_turn_response, create_session_response, discard_composer_draft_response,
     get_composer_draft_response, save_composer_draft_response, send_turn_response,
     session_watch_frame,
@@ -21,7 +32,8 @@ use crate::protocol::dennett::control::v1::{
 use crate::transport::connect_channel;
 use crate::{
     COMPOSER_DRAFT_FEATURE, DEFAULT_MAX_MESSAGE_BYTES, LocalEndpoint, M01_PROTOCOL_VERSION,
-    SESSION_CONVERSATION_FEATURE, SYSTEM_WATCH_FEATURE, TransportError,
+    PROJECT_TRUST_DECISION_REF_KIND, PROJECT_WORKSPACE_FEATURE, SESSION_CONVERSATION_FEATURE,
+    SYSTEM_WATCH_FEATURE, TransportError,
 };
 use std::time::Duration;
 use tonic::codec::Streaming;
@@ -50,6 +62,32 @@ pub struct ClientSendTurnRequest {
     pub expected_active_turn_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientRegisterProjectRequest {
+    pub command: ClientCommand,
+    pub inspection_id: String,
+    pub display_name: String,
+    pub portable_metadata_action: PortableMetadataAction,
+    pub initial_trust_state: ProjectTrustState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientRebindProjectRequest {
+    pub command: ClientCommand,
+    pub project_id: String,
+    pub current_workspace_binding_id: String,
+    pub inspection_id: String,
+    pub portable_metadata_action: RebindPortableMetadataAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientSetProjectTrustRequest {
+    pub command: ClientCommand,
+    pub project_id: String,
+    pub trust_state: ProjectTrustState,
+    pub expected_policy_revision: u64,
+}
+
 impl ClientConfig {
     #[must_use]
     pub fn m01(
@@ -65,6 +103,7 @@ impl ClientConfig {
                 SYSTEM_WATCH_FEATURE.to_owned(),
                 SESSION_CONVERSATION_FEATURE.to_owned(),
                 COMPOSER_DRAFT_FEATURE.to_owned(),
+                PROJECT_WORKSPACE_FEATURE.to_owned(),
             ],
             rpc_deadline: DEFAULT_RPC_DEADLINE,
         }
@@ -74,6 +113,7 @@ impl ClientConfig {
 pub struct AuthenticatedSystemClient {
     inner: SystemServiceClient<Channel>,
     sessions: SessionServiceClient<Channel>,
+    projects: ProjectServiceClient<Channel>,
     client_session_id: String,
     bootstrap: BootstrapSnapshot,
     rpc_deadline: Duration,
@@ -155,7 +195,10 @@ impl AuthenticatedSystemClient {
         }
         Ok(Self {
             inner,
-            sessions: SessionServiceClient::new(channel)
+            sessions: SessionServiceClient::new(channel.clone())
+                .max_decoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize)
+                .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize),
+            projects: ProjectServiceClient::new(channel)
                 .max_decoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize)
                 .max_encoding_message_size(DEFAULT_MAX_MESSAGE_BYTES as usize),
             client_session_id,
@@ -420,6 +463,244 @@ impl AuthenticatedSystemClient {
         }
     }
 
+    #[deprecated(note = "use inspect_project_location followed by register_project")]
+    #[allow(deprecated)]
+    pub async fn create_project_legacy(
+        &mut self,
+        command: ClientCommand,
+        display_name: String,
+        root_uri: String,
+    ) -> Result<CreateProjectAccepted, ClientError> {
+        let expected_command_id = command.command_id.clone();
+        let expected_correlation_id = command.correlation_id.clone();
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.projects.create_project(CreateProjectRequest {
+                command: Some(self.command_metadata(command)),
+                display_name,
+                root_uri,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("create_project"))??
+        .into_inner();
+        match response.outcome {
+            Some(create_project_response::Outcome::Accepted(accepted)) => {
+                validate_command_accepted(
+                    accepted.command.as_ref(),
+                    &expected_command_id,
+                    &expected_correlation_id,
+                )?;
+                Ok(accepted)
+            }
+            Some(create_project_response::Outcome::Error(error)) => Err(ClientError::Remote(error)),
+            None => Err(ClientError::MalformedResponse("create project outcome")),
+        }
+    }
+
+    pub async fn list_projects(
+        &mut self,
+        page_size: u32,
+        page_token: String,
+    ) -> Result<ListProjectsResult, ClientError> {
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.projects.list_projects(ListProjectsRequest {
+                page_size,
+                page_token,
+                client_session_id: self.client_session_id.clone(),
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("list_projects"))??
+        .into_inner();
+        match response.outcome {
+            Some(list_projects_response::Outcome::Result(result)) => Ok(result),
+            Some(list_projects_response::Outcome::Error(error)) => Err(ClientError::Remote(error)),
+            None => Err(ClientError::MalformedResponse("list projects outcome")),
+        }
+    }
+
+    pub async fn get_project(&mut self, project_id: String) -> Result<Project, ClientError> {
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.projects.get_project(GetProjectRequest {
+                project_id,
+                client_session_id: self.client_session_id.clone(),
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("get_project"))??
+        .into_inner();
+        match response.outcome {
+            Some(get_project_response::Outcome::Project(project)) => Ok(project),
+            Some(get_project_response::Outcome::Error(error)) => Err(ClientError::Remote(error)),
+            None => Err(ClientError::MalformedResponse("get project outcome")),
+        }
+    }
+
+    pub async fn inspect_project_location(
+        &mut self,
+        registration_kind: ProjectRegistrationKind,
+        root_uri: String,
+    ) -> Result<ProjectLocationInspection, ClientError> {
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.projects
+                .inspect_project_location(InspectProjectLocationRequest {
+                    registration_kind: registration_kind as i32,
+                    root_uri,
+                    client_session_id: self.client_session_id.clone(),
+                }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("inspect_project_location"))??
+        .into_inner();
+        match response.outcome {
+            Some(inspect_project_location_response::Outcome::Inspection(inspection)) => {
+                Ok(inspection)
+            }
+            Some(inspect_project_location_response::Outcome::Error(error)) => {
+                Err(ClientError::Workspace(Box::new(error)))
+            }
+            None => Err(ClientError::MalformedResponse(
+                "inspect project location outcome",
+            )),
+        }
+    }
+
+    pub async fn register_project(
+        &mut self,
+        request: ClientRegisterProjectRequest,
+    ) -> Result<RegisterProjectAccepted, ClientError> {
+        let ClientRegisterProjectRequest {
+            command,
+            inspection_id,
+            display_name,
+            portable_metadata_action,
+            initial_trust_state,
+        } = request;
+        let expected_command_id = command.command_id.clone();
+        let expected_correlation_id = command.correlation_id.clone();
+        let trust_decision = (initial_trust_state == ProjectTrustState::TrustedBounded)
+            .then(|| project_trust_decision_ref(&command));
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.projects.register_project(RegisterProjectRequest {
+                command: Some(self.command_metadata(command)),
+                inspection_id,
+                display_name,
+                portable_metadata_action: portable_metadata_action as i32,
+                initial_trust_state: initial_trust_state as i32,
+                trust_decision,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("register_project"))??
+        .into_inner();
+        match response.outcome {
+            Some(register_project_response::Outcome::Accepted(accepted)) => {
+                validate_command_accepted(
+                    accepted.command.as_ref(),
+                    &expected_command_id,
+                    &expected_correlation_id,
+                )?;
+                Ok(accepted)
+            }
+            Some(register_project_response::Outcome::Error(error)) => {
+                Err(ClientError::Workspace(Box::new(error)))
+            }
+            None => Err(ClientError::MalformedResponse("register project outcome")),
+        }
+    }
+
+    pub async fn rebind_project_workspace(
+        &mut self,
+        request: ClientRebindProjectRequest,
+    ) -> Result<RebindProjectWorkspaceAccepted, ClientError> {
+        let ClientRebindProjectRequest {
+            command,
+            project_id,
+            current_workspace_binding_id,
+            inspection_id,
+            portable_metadata_action,
+        } = request;
+        let expected_command_id = command.command_id.clone();
+        let expected_correlation_id = command.correlation_id.clone();
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.projects
+                .rebind_project_workspace(RebindProjectWorkspaceRequest {
+                    command: Some(self.command_metadata(command)),
+                    project_id,
+                    current_workspace_binding_id,
+                    inspection_id,
+                    portable_metadata_action: portable_metadata_action as i32,
+                }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("rebind_project_workspace"))??
+        .into_inner();
+        match response.outcome {
+            Some(rebind_project_workspace_response::Outcome::Accepted(accepted)) => {
+                validate_command_accepted(
+                    accepted.command.as_ref(),
+                    &expected_command_id,
+                    &expected_correlation_id,
+                )?;
+                Ok(accepted)
+            }
+            Some(rebind_project_workspace_response::Outcome::Error(error)) => {
+                Err(ClientError::Workspace(Box::new(error)))
+            }
+            None => Err(ClientError::MalformedResponse(
+                "rebind project workspace outcome",
+            )),
+        }
+    }
+
+    pub async fn set_project_trust(
+        &mut self,
+        request: ClientSetProjectTrustRequest,
+    ) -> Result<CommandAccepted, ClientError> {
+        let ClientSetProjectTrustRequest {
+            command,
+            project_id,
+            trust_state,
+            expected_policy_revision,
+        } = request;
+        let expected_command_id = command.command_id.clone();
+        let expected_correlation_id = command.correlation_id.clone();
+        let trust_decision = project_trust_decision_ref(&command);
+        let response = tokio::time::timeout(
+            self.rpc_deadline,
+            self.projects.set_project_trust(SetProjectTrustRequest {
+                command: Some(self.command_metadata(command)),
+                project_id,
+                trust_state: trust_state as i32,
+                expected_policy_revision,
+                trust_decision: Some(trust_decision),
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::DeadlineExceeded("set_project_trust"))??
+        .into_inner();
+        match response.outcome {
+            Some(set_project_trust_response::Outcome::Accepted(accepted)) => {
+                validate_command_accepted(
+                    Some(&accepted),
+                    &expected_command_id,
+                    &expected_correlation_id,
+                )?;
+                Ok(accepted)
+            }
+            Some(set_project_trust_response::Outcome::Error(error)) => {
+                Err(ClientError::Workspace(Box::new(error)))
+            }
+            None => Err(ClientError::MalformedResponse("set project trust outcome")),
+        }
+    }
+
     fn command_metadata(&self, command: ClientCommand) -> CommandMetadata {
         CommandMetadata {
             idempotency_key: command.command_id.clone(),
@@ -430,6 +711,13 @@ impl AuthenticatedSystemClient {
             expected_revision: command.expected_revision,
             client_session_id: self.client_session_id.clone(),
         }
+    }
+}
+
+fn project_trust_decision_ref(command: &ClientCommand) -> StableRef {
+    StableRef {
+        kind: PROJECT_TRUST_DECISION_REF_KIND.to_owned(),
+        id: command.command_id.clone(),
     }
 }
 
@@ -755,6 +1043,8 @@ pub enum ClientError {
     DeadlineExceeded(&'static str),
     #[error("Node rejected local IPC request: {0:?}")]
     Remote(ErrorEnvelope),
+    #[error("Node rejected project workspace request: {0:?}")]
+    Workspace(Box<WorkspaceFailure>),
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error("local IPC request failed: {0}")]
@@ -773,6 +1063,12 @@ impl ClientError {
             Self::WatchInvariant(code) => watch_invariant_code(code),
             Self::DeadlineExceeded(_) => "ipc_request_deadline_exceeded",
             Self::Remote(error) => &error.code,
+            Self::Workspace(failure) => failure
+                .error
+                .as_ref()
+                .map_or("project_workspace_failure_malformed", |error| {
+                    error.code.as_str()
+                }),
             Self::Transport(TransportError::UnsupportedPlatform) => "ipc_platform_unsupported",
             Self::Transport(TransportError::InvalidInstallationId) => {
                 "ipc_installation_identity_invalid"
@@ -798,6 +1094,7 @@ impl ClientError {
             | Self::WatchInvariant(_)
             | Self::DeadlineExceeded(_) => true,
             Self::Remote(error) => error.retryable,
+            Self::Workspace(failure) => failure.error.as_ref().is_some_and(|error| error.retryable),
             Self::Transport(TransportError::Io(_) | TransportError::Channel(_)) => true,
             Self::Grpc(status) => matches!(
                 status.code(),
@@ -815,6 +1112,10 @@ impl ClientError {
     pub fn user_action_required(&self) -> bool {
         match self {
             Self::Remote(error) => error.user_action_required,
+            Self::Workspace(failure) => failure
+                .error
+                .as_ref()
+                .is_some_and(|error| error.user_action_required),
             Self::InvalidConfiguration
             | Self::MalformedResponse(_)
             | Self::ProtocolIncompatible

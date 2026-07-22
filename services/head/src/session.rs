@@ -72,6 +72,27 @@ impl SessionCoordinator {
         title: String,
         committed_at_unix_ms: u64,
     ) -> Result<SessionCommit, SessionJournalError> {
+        self.create_session_with_id(
+            command_id,
+            SessionId::new(),
+            project_id,
+            title,
+            committed_at_unix_ms,
+        )
+        .await
+    }
+
+    /// Creates a session with an identity reserved by a durable parent
+    /// operation. Retrying the same command remains idempotent and cannot
+    /// replace an already committed session identity.
+    pub async fn create_session_with_id(
+        &self,
+        command_id: CommandId,
+        session_id: SessionId,
+        project_id: Option<ProjectId>,
+        title: String,
+        committed_at_unix_ms: u64,
+    ) -> Result<SessionCommit, SessionJournalError> {
         let _append_guard = self.append_gate.lock().await;
         if let Some(existing) = self.journal.event_for_command(command_id).await? {
             return self
@@ -81,7 +102,7 @@ impl SessionCoordinator {
         let expected_title = title.clone();
         let pending = PendingSessionEvent {
             event_id: SessionEventId::new(),
-            session_id: SessionId::new(),
+            session_id,
             command_id: Some(command_id),
             body: SessionEventBody::SessionCreated { project_id, title },
             committed_at_unix_ms,
@@ -854,5 +875,37 @@ mod tests {
                 .await,
             Err(SessionJournalError::IdempotencyConflict)
         );
+    }
+
+    #[tokio::test]
+    async fn reserved_session_identity_survives_parent_operation_retry() {
+        let coordinator = coordinator(8);
+        let project_id = ProjectId::new();
+        let command_id = CommandId::new();
+        let reserved = SessionId::new();
+        let first = coordinator
+            .create_session_with_id(
+                command_id,
+                reserved,
+                Some(project_id),
+                "Direct chat".to_owned(),
+                1,
+            )
+            .await
+            .expect("create reserved session");
+        let replay = coordinator
+            .create_session_with_id(
+                command_id,
+                SessionId::new(),
+                Some(project_id),
+                "Direct chat".to_owned(),
+                2,
+            )
+            .await
+            .expect("replay reserved session");
+
+        assert_eq!(first.snapshot.session.session_id, reserved);
+        assert_eq!(replay.snapshot.session.session_id, reserved);
+        assert_eq!(coordinator.restore_all().await.unwrap().len(), 1);
     }
 }
