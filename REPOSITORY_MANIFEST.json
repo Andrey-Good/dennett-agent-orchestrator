@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 479,
+  "file_count": 480,
   "files": [
     {
       "path": ".editorconfig",
@@ -610,8 +610,8 @@
     },
     {
       "path": "blog/notes/M02_capture.md",
-      "bytes": 8796,
-      "sha256": "34346e9902db682c1cd571e82f9cbadf49eb75de44876c51613506858f521600"
+      "bytes": 10763,
+      "sha256": "d293aab5e86ac1c884aee7c52d7114fd09f6e2a6d85412d73983c5a4076fe9f2"
     },
     {
       "path": "blog/notes/README.md",
@@ -775,28 +775,33 @@
     },
     {
       "path": "crates/dennett-observability/README.md",
-      "bytes": 3716,
-      "sha256": "8c1157583ec9ad4ba227c8e5c25851e68c8243427dcf16e67047df4ab3d9309f"
+      "bytes": 3970,
+      "sha256": "40602a2e6969387fe2d2e54a084c1fb016b45e4d897f3764b6d0966ab00fb80a"
     },
     {
       "path": "crates/dennett-observability/src/lib.rs",
-      "bytes": 40100,
-      "sha256": "3bbfaec8e1b571c05b0197ef738bc7553d94cc530155bf18b246b3dc73c22d4a"
+      "bytes": 43347,
+      "sha256": "55b7deacc6fc2bec40b78774ad6951f586ce9339cc91a95c730e1d9dec1da042"
     },
     {
       "path": "crates/dennett-observability/src/lifecycle.rs",
-      "bytes": 64438,
-      "sha256": "f4417ebb4b4f34ca6d766b830043035de3fd1ded0506f78f168bca3d65788690"
+      "bytes": 70528,
+      "sha256": "8d01881daa831ad03bcb69211436243d175809a56f4d2b66062a5b72a23b1ab8"
     },
     {
       "path": "crates/dennett-observability/src/secure_fs.rs",
-      "bytes": 23107,
-      "sha256": "d6db0310f9913bcfe04375ac59e9fd868459b8eb7f30737750e3786e6f2ad907"
+      "bytes": 23634,
+      "sha256": "efbc050e3b868eb6a5ee20a47f6b72637e524a13169c557a413e16c3c0488917"
     },
     {
       "path": "crates/dennett-observability/src/writer.rs",
       "bytes": 20472,
       "sha256": "cacbcbf92498ae080e311ac8484c64d22ac03e37e741b8dd86944e8deb846c13"
+    },
+    {
+      "path": "crates/dennett-observability/tests/console.rs",
+      "bytes": 1506,
+      "sha256": "d52d7b21876c569e9005314f06ef06005ed626d9d825f52c97b6f7086697ec8a"
     },
     {
       "path": "crates/dennett-observability/tests/drop_accounting.rs",
@@ -891,7 +896,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "8bd4a05dfe846063eaa739dca99d5715146838d3a99be88e7cb6680e0dc81a64"
+      "sha256": "5bf310de6b810fc655e0547549abf43bf908a46c7d39430ecac34ddcf82e288d"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1500,8 +1505,8 @@
     },
     {
       "path": "docs/testing/generated/COVERAGE_MATRIX.md",
-      "bytes": 25632,
-      "sha256": "df9b64674342e813bcafda7ae6b4f2fc80929e9bde0d0fd2d91b9196eb59b3bf"
+      "bytes": 25786,
+      "sha256": "2ad07af2614beaba0df401e91e019b76a0662a3a08dfd77db5e62310b62553df"
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
@@ -2150,8 +2155,8 @@
     },
     {
       "path": "services/node/src/lib.rs",
-      "bytes": 13869,
-      "sha256": "3cda48e87bd1622baba13ade201e0e89b991e822ae20736c3e39df77ccd6b2d5"
+      "bytes": 14883,
+      "sha256": "a163be6eb87660d5351dbb856d9ee137cec741fc617606cc9bd8e61678ae3e13"
     },
     {
       "path": "services/node/src/main.rs",
@@ -2160,8 +2165,8 @@
     },
     {
       "path": "services/node/src/runtime_host.rs",
-      "bytes": 66750,
-      "sha256": "f79da39d138528215f8289d298655ed7af4ba0f9ee12dfa355cc21895ae76dd9"
+      "bytes": 68561,
+      "sha256": "7d9772de72112d0f4a4e145d3904a6bb99955a30ff94f830fa880b6894363fb7"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",
@@ -2225,8 +2230,8 @@
     },
     {
       "path": "tests/catalog/m02.seed.json",
-      "bytes": 27166,
-      "sha256": "4b6ac81ca0e38c9248661c76caf4bc13036db1ba1161069aacf79eb474074aa8"
+      "bytes": 27391,
+      "sha256": "b2dd05500fe2262f06135fc1a0fe4c06f51d58267a2cf4948694d60bf0a8e6d6"
     },
     {
       "path": "tests/contracts/README.md",

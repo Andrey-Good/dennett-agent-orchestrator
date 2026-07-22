@@ -12,7 +12,8 @@ mod writer;
 use lifecycle::{LifecycleProgress, LifecycleSession};
 use secure_fs::SecureDir;
 use std::{
-    path::PathBuf,
+    io,
+    path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
@@ -21,7 +22,7 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::{Layer, filter::filter_fn, layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 use writer::{PreparedWriter, WriterHealth, prepare_writer};
@@ -39,11 +40,17 @@ const DEFAULT_MAX_LOG_AGE: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 const DEFAULT_MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const DIAGNOSTIC_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const CHECKPOINT_IDLE_POLL: Duration = Duration::from_millis(250);
+const CONSOLE_BUFFERED_LINES: usize = 256;
 static PROCESS_CONTEXT: OnceLock<ProcessContext> = OnceLock::new();
+static CONSOLE_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 struct ProcessContext {
     component: String,
     run_id: String,
+    persistence: Option<PersistentProcessContext>,
+}
+
+struct PersistentProcessContext {
     checkpoint_publisher: CheckpointPublisher,
     writer_health: WriterHealth,
 }
@@ -340,7 +347,7 @@ impl LocalDiagnostics {
     }
 }
 
-/// Initializes bounded JSONL diagnostics plus a metadata-only console layer.
+/// Initializes bounded JSONL diagnostics.
 ///
 /// Initialization is transactional with respect to the lifecycle marker: a
 /// failure after marker creation removes only the marker owned by this attempt.
@@ -381,9 +388,6 @@ pub fn init_local(config: LocalDiagnosticsConfig) -> Result<LocalDiagnostics, Di
             return Err(error);
         }
     };
-    let console_layer = tracing_subscriber::fmt::layer()
-        .with_target(true)
-        .with_filter(filter_fn(is_registered_diagnostic));
     let diagnostic_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_ansi(false)
@@ -393,7 +397,6 @@ pub fn init_local(config: LocalDiagnosticsConfig) -> Result<LocalDiagnostics, Di
         .with_writer(writer)
         .with_filter(filter_fn(is_registered_diagnostic));
     if tracing_subscriber::registry()
-        .with(console_layer)
         .with(diagnostic_layer)
         .try_init()
         .is_err()
@@ -406,8 +409,10 @@ pub fn init_local(config: LocalDiagnosticsConfig) -> Result<LocalDiagnostics, Di
     let context = ProcessContext {
         component: config.component.clone(),
         run_id: lifecycle.run_id().to_owned(),
-        checkpoint_publisher,
-        writer_health: health.clone(),
+        persistence: Some(PersistentProcessContext {
+            checkpoint_publisher,
+            writer_health: health.clone(),
+        }),
     };
     if PROCESS_CONTEXT.set(context).is_err() {
         checkpoint_worker.stop_and_join();
@@ -432,13 +437,64 @@ pub fn init_local(config: LocalDiagnosticsConfig) -> Result<LocalDiagnostics, Di
 
 /// Console-only bootstrap for components without a durable diagnostic profile.
 pub fn init(service_name: &str) {
-    let _ = service_name;
+    if !valid_component(service_name) {
+        return;
+    }
+    let (console_writer, console_guard) = prepare_nonblocking_writer(io::stderr());
     let console_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
+        .with_writer(console_writer)
         .with_filter(filter_fn(is_registered_diagnostic));
-    let _ = tracing_subscriber::registry()
+    if tracing_subscriber::registry()
         .with(console_layer)
-        .try_init();
+        .try_init()
+        .is_err()
+    {
+        drop(console_guard);
+        return;
+    }
+    if CONSOLE_GUARD.set(console_guard).is_err() {
+        return;
+    }
+    if PROCESS_CONTEXT
+        .set(ProcessContext {
+            component: service_name.to_owned(),
+            run_id: Uuid::now_v7().to_string(),
+            persistence: None,
+        })
+        .is_err()
+    {
+        return;
+    }
+    record(DiagnosticEvent::new(
+        DiagnosticEventKind::DiagnosticsConsoleInitialized,
+    ));
+}
+
+fn prepare_nonblocking_writer<W>(writer: W) -> (NonBlocking, WorkerGuard)
+where
+    W: io::Write + Send + 'static,
+{
+    NonBlockingBuilder::default()
+        .buffered_lines_limit(CONSOLE_BUFFERED_LINES)
+        .lossy(true)
+        .finish(writer)
+}
+
+/// Keeps an opened, no-follow capability for a local data root alive.
+///
+/// Node retains this guard while path-based consumers such as SQLite are
+/// active, so an invalid, relative or preplanted linked root fails before any
+/// canonical state is opened.
+#[must_use]
+pub struct LocalDataRootGuard {
+    _root: SecureDir,
+}
+
+pub fn guard_local_data_root(path: &Path) -> Result<LocalDataRootGuard, DiagnosticsError> {
+    Ok(LocalDataRootGuard {
+        _root: SecureDir::open_or_create_profile(path)?,
+    })
 }
 
 /// Returns the platform's per-user Dennett data root.
@@ -533,6 +589,7 @@ impl DiagnosticProvider {
 pub enum DiagnosticEventKind {
     DiagnosticsProcessExit,
     DiagnosticsInitialized,
+    DiagnosticsConsoleInitialized,
     DiagnosticsCapacityProbe,
     DiagnosticsTestCheckpoint,
     RuntimeProviderFailure,
@@ -587,6 +644,11 @@ impl DiagnosticEventKind {
                 "diagnostics.initialized",
                 "startup",
                 "privacy-safe local diagnostics initialized",
+            ),
+            Kind::DiagnosticsConsoleInitialized => DiagnosticEventSpec::info(
+                "diagnostics.console_initialized",
+                "startup",
+                "privacy-safe console diagnostics initialized",
             ),
             Kind::DiagnosticsCapacityProbe => DiagnosticEventSpec::info(
                 "diagnostics.capacity_probe",
@@ -977,9 +1039,11 @@ pub fn record(event: DiagnosticEvent) {
             message = spec.message,
         ),
     }
-    context
-        .checkpoint_publisher
-        .publish(spec.phase, context.writer_health.dropped_records());
+    if let Some(persistence) = &context.persistence {
+        persistence
+            .checkpoint_publisher
+            .publish(spec.phase, persistence.writer_health.dropped_records());
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1094,6 +1158,7 @@ const REGISTERED_ERROR_CODES: &[&str] = &[
     "node.config.installation_missing",
     "node.config.runtime_invalid",
     "node.config.version_invalid",
+    "node.data_root_unavailable",
     "node.conversation_failure",
     "node.instance_lock_unavailable",
     "node.session_failure",
@@ -1144,6 +1209,11 @@ fn is_registered_diagnostic(metadata: &tracing::Metadata<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::Write,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn provider_categories_never_persist_provider_supplied_text() {
@@ -1164,5 +1234,43 @@ mod tests {
         assert!(!valid_component("../dennett-node"));
         assert!(valid_code("node.runtime_failure"));
         assert!(!valid_code("token\nleak"));
+    }
+
+    struct StalledWriter {
+        entered: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Write for StalledWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            let _ = self.entered.try_send(());
+            let _ = self.release.recv();
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn nonblocking_writer_does_not_wait_for_a_stalled_console_sink() {
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        let (mut writer, guard) = prepare_nonblocking_writer(StalledWriter {
+            entered: entered_sender,
+            release: release_receiver,
+        });
+
+        let started = Instant::now();
+        writer
+            .write_all(b"registered diagnostic\n")
+            .expect("enqueue");
+        assert!(started.elapsed() < Duration::from_millis(100));
+        entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("background writer reached the stalled sink");
+        release_sender.send(()).expect("release stalled sink");
+        drop(guard);
     }
 }

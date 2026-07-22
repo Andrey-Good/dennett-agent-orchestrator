@@ -745,7 +745,11 @@ async fn dispatch_host_message(inner: &Arc<RuntimeHostInner>, line: &str) {
         return;
     }
     if let Some(id) = message.get("id").and_then(Value::as_str) {
-        let sender = match inner.coordination.lock().await.take_response(id) {
+        let disposition = {
+            let mut coordination = inner.coordination.lock().await;
+            coordination.take_response(id)
+        };
+        let sender = match disposition {
             PendingResponseDisposition::Deliver(sender) => sender,
             PendingResponseDisposition::Reject(sender) => {
                 let _ = sender.send(Err(provider_unavailable()));
@@ -1494,6 +1498,47 @@ input.on("line", line => {
         let coordination = runtime.inner.coordination.lock().await;
         assert!(coordination.fenced);
         assert_eq!(coordination.generation, 1);
+        assert!(coordination.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_response_fences_the_host_without_self_deadlock() {
+        let temp = tempfile::tempdir().expect("temporary runtime host");
+        let script = temp.path().join("unknown-response-runtime-host.mjs");
+        std::fs::write(
+            &script,
+            r#"
+import readline from "node:readline";
+const write = value => process.stdout.write(JSON.stringify(value) + "\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method === "health") {
+    write({ v: 1, id: request.id, result: { status: "healthy", protocolVersion: 1 } });
+    setTimeout(() => write({ v: 1, id: "unknown-response", result: {} }), 10);
+  }
+});
+"#,
+        )
+        .expect("write unknown-response fixture");
+        let script = configured_host_script(Some(script.into_os_string()))
+            .expect("canonical unknown-response fixture");
+        let runtime = HostedAgentRuntime::start_process(Path::new("node"), &script)
+            .await
+            .expect("start unknown-response fixture");
+
+        let error = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match runtime.describe().await {
+                    Ok(_) => tokio::task::yield_now().await,
+                    Err(error) => break error,
+                }
+            }
+        })
+        .await
+        .expect("unknown response handling must remain bounded");
+        assert_eq!(error.code, RuntimeErrorCode::ProviderUnavailable);
+        let coordination = runtime.inner.coordination.lock().await;
+        assert!(coordination.fenced);
         assert!(coordination.pending.is_empty());
     }
 

@@ -140,6 +140,7 @@ pub async fn run<F>(config: NodeConfig, shutdown: F) -> Result<(), NodeRunError>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    let _data_root_guard = dennett_observability::guard_local_data_root(&config.data_dir)?;
     dennett_observability::record(
         dennett_observability::DiagnosticEvent::new(
             dennett_observability::DiagnosticEventKind::NodeConfigurationValidated,
@@ -288,6 +289,8 @@ fn project_id_for(project_root: &std::path::Path) -> ProjectId {
 
 #[derive(Debug, thiserror::Error)]
 pub enum NodeRunError {
+    #[error("the local data root is unsafe or unavailable")]
+    DataRoot(#[from] dennett_observability::DiagnosticsError),
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
@@ -308,6 +311,7 @@ impl NodeRunError {
     #[must_use]
     pub fn diagnostic_code(&self) -> &'static str {
         match self {
+            Self::DataRoot(_) => "node.data_root_unavailable",
             Self::Transport(_) => "node.transport_failure",
             Self::Session(_) => "node.session_failure",
             Self::Conversation(_) => "node.conversation_failure",
@@ -364,6 +368,25 @@ mod tests {
             NodeConfig::new("install", 1, ""),
             Err(NodeConfigError::InvalidNodeVersion)
         ));
+    }
+
+    #[tokio::test]
+    async fn run_rejects_a_relative_data_root_before_opening_canonical_state() {
+        let relative = PathBuf::from(format!(
+            "relative-dennett-data-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let config = NodeConfig::new("unsafe-relative-root", 1, "0.1.0")
+            .expect("Node config")
+            .with_paths(relative.clone(), std::env::temp_dir());
+        let error = run(config, async {})
+            .await
+            .expect_err("relative data root must fail closed");
+        assert!(matches!(
+            error,
+            NodeRunError::DataRoot(dennett_observability::DiagnosticsError::InvalidProfileRoot)
+        ));
+        assert!(!relative.exists());
     }
 
     #[test]

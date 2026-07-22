@@ -98,3 +98,32 @@ privacy_risks:
   runtime-host tests pass. The package remains open until the full repository
   gate and another detached review pass; a green local suite is evidence, not
   permission to declare the reliability problem solved.
+
+## Third closure-review addendum
+
+- The next independent pass justified keeping the closure gate. It found four
+  failure sequences that a green happy-path suite had not exposed: a full
+  supervisor pipe could block a synchronous console writer; an unknown host
+  response could try to acquire its own coordination lock; a clock rollback of
+  more than one day could invalidate the very records needed to preserve
+  monotonic ordering; and an unsafe `DENNETT_DATA_DIR` could be treated as a
+  harmless diagnostics failure before Node opened canonical SQLite state.
+- The repaired event path is non-blocking for both disk and console sinks. The
+  host dispatcher releases coordination before fencing, and a real subprocess
+  fixture proves that an unknown response reaches a bounded failed state rather
+  than deadlocking. Lifecycle validity no longer depends on today's wall clock;
+  sequence ordering survives a 48-hour rollback fixture, and a corrupt newest
+  record can no longer borrow a reassuring drop-count claim from an older run.
+- Node now retains a no-follow capability for its data root and rejects relative
+  or linked roots before opening canonical state. A blocked diagnostics child
+  can still degrade safely to console-only evidence, preserving the intended
+  difference between "logging is unavailable" and "the storage root is unsafe."
+- The focused checkpoint now passes 36 observability tests, 11 runtime-host
+  tests and a dedicated fail-closed Node data-root test. The real subscription
+  canaries remain a separate closure gate because deterministic CI cannot own
+  the user's ChatGPT login or distinguish a code regression from an external
+  provider outage.
+- The separate live gate was then run explicitly against the owner's ChatGPT
+  subscription. Both scenarios passed in 84 seconds: one continued the same
+  Codex session after a real Node restart, and one steered the same active turn
+  without replacing it or issuing a hidden Stop.

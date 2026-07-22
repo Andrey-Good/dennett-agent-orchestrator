@@ -18,6 +18,8 @@ evidence, not canonical user memory, security audit or product analytics.
 - a lossy non-blocking writer, so a slow or full diagnostic disk cannot stall
   Node; queue, capacity and physical-write losses are retained in lifecycle
   evidence and `doctor`, including after an abnormal exit;
+- a bounded non-blocking console fallback, so a stalled supervisor pipe cannot
+  block an operational caller;
 - at most 64 terminal lifecycle records per component;
 - an independently locked active-run marker, readable by `doctor` while the
   process is alive;
@@ -43,9 +45,11 @@ merely spoofs the private diagnostic target, are excluded from the Personal
 Quiet writer. This prevents a mistaken prompt, response, token, path or
 arbitrary field from becoming durable diagnostic data.
 
-If the diagnostic directory cannot be initialized, the Device Node reports a
-generic safe code and continues with console-only tracing. Canonical project
-state does not depend on these files.
+If only the diagnostic child directory cannot be initialized, the Device Node
+reports a generic safe code and continues with console-only tracing. An
+invalid, relative or preplanted linked data root fails closed before SQLite or
+other canonical state is opened. Canonical project state never depends on the
+diagnostic files themselves.
 
 ## Inspection
 

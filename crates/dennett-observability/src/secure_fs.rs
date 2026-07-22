@@ -603,6 +603,20 @@ mod tests {
     }
 
     #[test]
+    fn profile_root_rejects_a_preplanted_directory_link() {
+        let temp = tempfile::tempdir().expect("temporary profile parent");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).expect("outside");
+        let link = temp.path().join("profile-link");
+        if !create_directory_link(&outside, &link) {
+            return;
+        }
+
+        assert!(SecureDir::open_or_create_profile(&link).is_err());
+        assert!(!outside.join("control.sqlite3").exists());
+    }
+
+    #[test]
     fn bounded_reader_rejects_links_and_large_files() {
         let temp = tempfile::tempdir().expect("temporary profile");
         let root = SecureDir::open_or_create_profile(temp.path()).expect("secure profile");

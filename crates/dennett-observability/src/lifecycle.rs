@@ -19,7 +19,6 @@ use uuid::Uuid;
 const SCHEMA_VERSION: u32 = 2;
 const MAX_LIFECYCLE_RECORD_BYTES: u64 = 64 * 1024;
 const MAX_LIFECYCLE_DIRECTORY_ENTRIES: usize = 512;
-const MAX_CLOCK_SKEW_MS: u64 = 24 * 60 * 60 * 1000;
 const UNCLEAN_EXIT_CODE: &str = "diagnostics.previous_process_unclean";
 const INVALID_MARKER_CODE: &str = "diagnostics.active_marker_invalid";
 const INVALID_EXIT_CODE: &str = "diagnostics.invalid_exit_code";
@@ -616,10 +615,12 @@ pub fn inspect_local(
         previous_error_code,
         previous_last_durable_phase,
         previous_flush_status,
-        previous_drop_count_complete: terminal
-            .as_ref()
-            .is_some_and(|record| record.drop_count_complete),
-        previous_clock_anomaly: terminal.as_ref().is_some_and(|record| record.clock_anomaly),
+        previous_drop_count_complete: !newest_terminal_is_unreadable
+            && terminal
+                .as_ref()
+                .is_some_and(|record| record.drop_count_complete),
+        previous_clock_anomaly: !newest_terminal_is_unreadable
+            && terminal.as_ref().is_some_and(|record| record.clock_anomaly),
         unreadable_log_entries,
         unreadable_lifecycle_records,
     })
@@ -661,16 +662,11 @@ impl LifecycleRecord {
     }
 
     fn validate(&self) -> Result<(), DiagnosticsError> {
-        let latest_plausible_time = now_unix_ms()?.saturating_add(MAX_CLOCK_SKEW_MS);
         if self.schema_version != SCHEMA_VERSION
             || !valid_component(&self.component)
             || !valid_run_id(&self.run_id)
             || !valid_code(&self.last_durable_phase)
             || self.run_sequence == 0
-            || self.started_unix_ms > latest_plausible_time
-            || self
-                .completed_unix_ms
-                .is_some_and(|value| value > latest_plausible_time)
         {
             return Err(DiagnosticsError::InvalidLifecycleData);
         }
@@ -821,11 +817,22 @@ fn terminal_record_exists(
     directory: &SecureDir,
     record: &LifecycleRecord,
 ) -> Result<bool, DiagnosticsError> {
-    let prefix = format!("{}.{}.", record.component, record.run_id);
-    Ok(terminal_paths(directory, &record.component)?
-        .into_iter()
-        .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
-        .any(|name| name.starts_with(&prefix) && !name.ends_with(".active.json")))
+    for path in terminal_paths(directory, &record.component)? {
+        match read_record(directory, &path) {
+            Ok(terminal)
+                if terminal.component == record.component
+                    && terminal.run_id == record.run_id
+                    && terminal.run_sequence == record.run_sequence
+                    && terminal.status != LifecycleStatus::Running =>
+            {
+                return Ok(true);
+            }
+            Ok(_) | Err(DiagnosticsError::InvalidLifecycleData | DiagnosticsError::Json(_)) => {}
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
 }
 
 fn write_terminal_record(
@@ -834,7 +841,18 @@ fn write_terminal_record(
 ) -> Result<(), DiagnosticsError> {
     record.validate()?;
     let path = terminal_path(record);
-    atomic_write_new(directory, &path, record, "write_terminal_record", true)
+    if directory.try_exists(path_name(&path)?)? {
+        match read_record(directory, &path) {
+            Ok(existing) if existing == *record => return Ok(()),
+            Ok(_) => return Err(DiagnosticsError::InvalidLifecycleData),
+            Err(DiagnosticsError::InvalidLifecycleData | DiagnosticsError::Json(_)) => {
+                directory.remove_file(path_name(&path)?, "remove_invalid_terminal_record")?;
+            }
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    atomic_write_new(directory, &path, record, "write_terminal_record", false)
 }
 
 fn atomic_write_new(
@@ -1433,6 +1451,82 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_terminal_file_cannot_suppress_unclean_recovery() {
+        let temp = tempfile::tempdir().expect("temporary diagnostics");
+        let (diagnostics, display) = diagnostics(&temp);
+        let first =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("first lifecycle");
+        let lifecycle = lifecycle_dir(&diagnostics);
+        let active_path = matching_paths(&lifecycle, "dennett-node", ".active.json")
+            .expect("active record")
+            .into_iter()
+            .next()
+            .expect("active path");
+        let mut expected_terminal =
+            read_record(&lifecycle, &active_path).expect("active lifecycle");
+        expected_terminal.status = LifecycleStatus::Unclean;
+        expected_terminal.completed_unix_ms = Some(expected_terminal.started_unix_ms);
+        expected_terminal.error_code = Some(UNCLEAN_EXIT_CODE.to_owned());
+        expected_terminal.flush_status = FlushStatus::Incomplete;
+        let terminal_path = terminal_path(&expected_terminal);
+        std::fs::write(
+            display.join("lifecycle").join(&terminal_path),
+            b"{truncated",
+        )
+        .expect("crafted terminal");
+        drop(first);
+
+        let second =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("recover lifecycle");
+        assert_eq!(second.previous_status(), ExitStatus::Unclean);
+        let recovered = read_record(&lifecycle, &terminal_path).expect("recovered terminal");
+        assert_eq!(recovered.status, LifecycleStatus::Unclean);
+        assert_eq!(recovered.error_code.as_deref(), Some(UNCLEAN_EXIT_CODE));
+        complete_clean(second, 0);
+    }
+
+    #[test]
+    fn terminal_for_another_sequence_cannot_suppress_unclean_recovery() {
+        let temp = tempfile::tempdir().expect("temporary diagnostics");
+        let (diagnostics, _) = diagnostics(&temp);
+        let first =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("first lifecycle");
+        let lifecycle = lifecycle_dir(&diagnostics);
+        let active_path = matching_paths(&lifecycle, "dennett-node", ".active.json")
+            .expect("active record")
+            .into_iter()
+            .next()
+            .expect("active path");
+        let active = read_record(&lifecycle, &active_path).expect("active lifecycle");
+        let mut unrelated_terminal = active.clone();
+        unrelated_terminal.run_sequence += 1;
+        unrelated_terminal.completed_unix_ms = Some(unrelated_terminal.started_unix_ms);
+        unrelated_terminal.status = LifecycleStatus::Clean;
+        unrelated_terminal.last_durable_phase = "shutdown".to_owned();
+        unrelated_terminal.flush_status = FlushStatus::Confirmed;
+        unrelated_terminal.drop_count_complete = true;
+        write_terminal_record(&lifecycle, &unrelated_terminal).expect("unrelated terminal");
+        drop(first);
+
+        let second =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("recover lifecycle");
+        let recovered = terminal_paths(&lifecycle, "dennett-node")
+            .expect("terminal records")
+            .into_iter()
+            .filter_map(|path| read_record(&lifecycle, &path).ok())
+            .find(|record| {
+                record.run_id == active.run_id
+                    && record.run_sequence == active.run_sequence
+                    && record.status == LifecycleStatus::Unclean
+            });
+        assert!(
+            recovered.is_some(),
+            "the abandoned sequence must be terminalized"
+        );
+        complete_clean(second, 0);
+    }
+
+    #[test]
     fn crash_reconciliation_preserves_the_last_durable_phase_and_drop_count() {
         let temp = tempfile::tempdir().expect("temporary diagnostics");
         let (diagnostics, _) = diagnostics(&temp);
@@ -1562,6 +1656,47 @@ mod tests {
             Some("diagnostics.lifecycle_invalid")
         );
         assert_eq!(summary.unreadable_lifecycle_records, 1);
+        assert!(!summary.previous_drop_count_complete);
+        assert!(!summary.previous_clock_anomaly);
+    }
+
+    #[test]
+    fn clock_rollback_does_not_reset_monotonic_run_ordering() {
+        let temp = tempfile::tempdir().expect("temporary diagnostics");
+        let (diagnostics, _) = diagnostics(&temp);
+        let lifecycle = lifecycle_dir(&diagnostics);
+        let future = now_unix_ms()
+            .expect("current time")
+            .saturating_add(48 * 60 * 60 * 1000);
+        let future_terminal = LifecycleRecord {
+            schema_version: SCHEMA_VERSION,
+            component: "dennett-node".to_owned(),
+            run_id: Uuid::now_v7().to_string(),
+            process_id: 1,
+            run_sequence: 50,
+            started_unix_ms: future,
+            completed_unix_ms: Some(future),
+            status: LifecycleStatus::Clean,
+            error_code: None,
+            dropped_log_records: 0,
+            last_durable_phase: "shutdown".to_owned(),
+            checkpoint_sequence: 0,
+            clock_anomaly: false,
+            flush_status: FlushStatus::Confirmed,
+            drop_count_complete: true,
+        };
+        write_terminal_record(&lifecycle, &future_terminal).expect("future terminal");
+
+        let current =
+            LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("current lifecycle");
+        let current_record = matching_paths(&lifecycle, "dennett-node", ".active.json")
+            .expect("active records")
+            .into_iter()
+            .find_map(|path| read_record(&lifecycle, &path).ok())
+            .expect("current active record");
+        assert_eq!(current.previous_status(), ExitStatus::Clean);
+        assert_eq!(current_record.run_sequence, 51);
+        complete_clean(current, 0);
     }
 
     #[test]
