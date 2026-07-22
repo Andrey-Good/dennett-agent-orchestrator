@@ -610,8 +610,8 @@
     },
     {
       "path": "blog/notes/M02_capture.md",
-      "bytes": 14513,
-      "sha256": "a40cbce2ac2163f87913264c00cbb65ed3ccc9b3f27c538a8f60e56c82d496d7"
+      "bytes": 15010,
+      "sha256": "2c1259fd937dc86563c37782f1056441d03efd100fc46ff9e83e473a73e6541c"
     },
     {
       "path": "blog/notes/README.md",
@@ -775,8 +775,8 @@
     },
     {
       "path": "crates/dennett-observability/README.md",
-      "bytes": 4794,
-      "sha256": "b0f1711cec96a72046951e7194058653ebe829d4e70a387cf5eafc8f27c7df03"
+      "bytes": 4912,
+      "sha256": "a64a7ba250084c74400bd2f6b9a1ee62e832cebb93ab045ff7b118d5ded0f38a"
     },
     {
       "path": "crates/dennett-observability/src/lib.rs",
@@ -785,8 +785,8 @@
     },
     {
       "path": "crates/dennett-observability/src/lifecycle.rs",
-      "bytes": 78499,
-      "sha256": "a39c531d8cec4ec358b014108d6aa409b7ec97db356eae872edf5adb19be4a64"
+      "bytes": 79197,
+      "sha256": "7083e7d0a0c0d773a96dc43fecc3a4c2c4a5f8f3691f41b057714c41811cc6b8"
     },
     {
       "path": "crates/dennett-observability/src/secure_fs.rs",

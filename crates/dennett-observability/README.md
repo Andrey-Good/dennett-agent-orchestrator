@@ -30,7 +30,8 @@ evidence, not canonical user memory, security audit or product analytics.
   cause its sequence to be reused; a durable high-water marker survives
   startup rollback even after the corrupt source record has been cleaned up;
 - bounded reads, directory enumeration and lock acquisition while inspecting
-  or maintaining diagnostics;
+  or maintaining diagnostics; lifecycle publication reuses one locked temp
+  name per component so repeated crashes cannot accumulate temp entries;
 - a five-second caller-side shutdown deadline. A stalled diagnostic disk can
   leave a recoverable active marker, but it cannot hold the application open
   indefinitely;

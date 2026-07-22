@@ -879,8 +879,17 @@ fn atomic_write_new(
     existing_is_success: bool,
 ) -> Result<(), DiagnosticsError> {
     let target_name = path_name(path)?;
-    let temp_name = format!(".{target_name}.{}.tmp", Uuid::now_v7());
+    let component = target_name
+        .split('.')
+        .next()
+        .filter(|candidate| valid_component(candidate))
+        .ok_or(DiagnosticsError::InvalidLifecycleData)?;
+    // Every caller holds this component's maintenance lock. Reusing one temp
+    // name means repeated process death can leave at most one orphan instead
+    // of eventually exhausting the bounded lifecycle directory scan.
+    let temp_name = format!(".{component}.lifecycle.tmp");
     let result = (|| {
+        directory.remove_file(&temp_name, "remove_orphan_lifecycle_temp")?;
         let mut file = directory.create_new_file(&temp_name, false, operation)?;
         let mut encoded = serde_json::to_vec(value)?;
         encoded.push(b'\n');
@@ -1819,6 +1828,8 @@ mod tests {
             b"not-json",
         )
         .expect("corrupt orphan checkpoint");
+        let interrupted_temp = display.join("lifecycle/.dennett-node.lifecycle.tmp");
+        std::fs::write(&interrupted_temp, b"partial").expect("interrupted floor publication");
 
         let current =
             LifecycleSession::start(&diagnostics, "dennett-node", 8).expect("current lifecycle");
@@ -1833,6 +1844,7 @@ mod tests {
                 .expect("checkpoint records")
                 .is_empty()
         );
+        assert!(!interrupted_temp.exists());
         current.cancel_startup().expect("rollback current startup");
 
         let restarted =

@@ -185,3 +185,12 @@ privacy_risks:
   cleanup or active-marker publication. A double-failure regression removes the
   corrupt source, rolls startup back, and proves the next run still advances;
   exhaustion at the integer boundary now remains permanently fail-closed too.
+
+## Seventh closure-review addendum
+
+- A crash during high-water publication could still leave a uniquely named
+  temp file before normal cleanup. Hundreds of identical failures would then
+  fill the intentionally bounded directory scan. Lifecycle writes are already
+  serialized by a per-component maintenance lock, so they now reuse one fixed
+  private temp name. An interrupted floor write is replaced on the next start;
+  repeated crashes can leave one orphan, not an ever-growing collection.
