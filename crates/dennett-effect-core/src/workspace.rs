@@ -26,6 +26,22 @@ pub struct ContentSha256(pub [u8; 32]);
 #[serde(transparent)]
 pub struct MetadataSha256(pub [u8; 32]);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PortableFilePermissions {
+    pub read_only: bool,
+    pub executable: bool,
+}
+
+impl PortableFilePermissions {
+    #[must_use]
+    pub fn metadata_sha256(self) -> MetadataSha256 {
+        let mut hasher = Sha256::new();
+        hasher.update(b"dennett.regular-file-metadata.v1\0");
+        hasher.update([u8::from(self.read_only), u8::from(self.executable)]);
+        MetadataSha256(hasher.finalize().into())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePathState {
@@ -114,6 +130,13 @@ impl WorkspaceManifest {
     }
 
     #[must_use]
+    pub fn has_same_observation(&self, other: &Self) -> bool {
+        self.scope_sha256 == other.scope_sha256
+            && self.complete == other.complete
+            && self.entries == other.entries
+    }
+
+    #[must_use]
     pub fn state(&self, path: &ProjectRelativePath) -> WorkspacePathState {
         self.entries
             .binary_search_by(|entry| entry.path.as_str().cmp(path.as_str()))
@@ -166,11 +189,10 @@ pub struct ResolvedFileChangeProposal {
     pub previous_path: Option<ProjectRelativePath>,
     pub content: Option<StagedContentRef>,
     pub expected_content_sha256: Option<ContentSha256>,
-    /// Trusted adapter prediction for the post-publication metadata. A modify
-    /// normally preserves the existing mode; an add uses the adapter's bounded
-    /// creation policy. This lets restart reconciliation distinguish the exact
-    /// after-image from a third state.
-    pub resulting_metadata_sha256: Option<MetadataSha256>,
+    /// Portable permissions the Node will apply to a materialized file. This
+    /// lets restart reconciliation predict the exact after-image without
+    /// persisting provider or OS-specific metadata types.
+    pub resulting_permissions: Option<PortableFilePermissions>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -180,6 +202,7 @@ pub struct WorkspacePathTransition {
     pub after: WorkspacePathState,
     /// Present only when reaching `after` requires materializing bytes.
     pub content: Option<StagedContentRef>,
+    pub resulting_permissions: Option<PortableFilePermissions>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -263,6 +286,7 @@ impl WorkspaceFileEffectPlan {
                         before: current,
                         after,
                         content: proposal.content.clone(),
+                        resulting_permissions: proposal.resulting_permissions,
                     });
                 }
                 FileMutationKind::Modify => {
@@ -275,6 +299,7 @@ impl WorkspaceFileEffectPlan {
                         before: current,
                         after,
                         content: proposal.content.clone(),
+                        resulting_permissions: proposal.resulting_permissions,
                     });
                 }
                 FileMutationKind::Delete => {
@@ -287,6 +312,7 @@ impl WorkspaceFileEffectPlan {
                         before: current,
                         after: WorkspacePathState::Absent,
                         content: None,
+                        resulting_permissions: None,
                     });
                 }
                 FileMutationKind::Rename => {
@@ -312,12 +338,14 @@ impl WorkspaceFileEffectPlan {
                         before: source.clone(),
                         after: WorkspacePathState::Absent,
                         content: None,
+                        resulting_permissions: None,
                     });
                     transitions.push(WorkspacePathTransition {
                         path: proposal.path.clone(),
                         before: WorkspacePathState::Absent,
                         after: source,
                         content: None,
+                        resulting_permissions: None,
                     });
                 }
             }
@@ -397,7 +425,7 @@ fn require_no_previous(proposal: &ResolvedFileChangeProposal) -> Result<(), Work
 fn require_no_content_or_metadata(
     proposal: &ResolvedFileChangeProposal,
 ) -> Result<(), WorkspacePlanError> {
-    if proposal.content.is_some() || proposal.resulting_metadata_sha256.is_some() {
+    if proposal.content.is_some() || proposal.resulting_permissions.is_some() {
         return Err(WorkspacePlanError::UnexpectedContent);
     }
     Ok(())
@@ -410,12 +438,12 @@ fn proposed_regular_file(
         .content
         .as_ref()
         .ok_or(WorkspacePlanError::MissingContent)?;
-    let metadata_sha256 = proposal
-        .resulting_metadata_sha256
+    let permissions = proposal
+        .resulting_permissions
         .ok_or(WorkspacePlanError::MissingResultingMetadata)?;
     Ok(WorkspacePathState::RegularFile {
         content_sha256: content.content_sha256,
-        metadata_sha256,
+        metadata_sha256: permissions.metadata_sha256(),
         byte_size: content.byte_size,
     })
 }
@@ -446,8 +474,14 @@ fn validate_expected_content(
 }
 
 fn validate_mutable_path(path: &ProjectRelativePath) -> Result<(), WorkspacePlanError> {
-    let value = path.as_str();
-    if value == ".git" || value.starts_with(".git/") || value == ".dennett/project.json" {
+    let mut segments = path.as_str().split('/');
+    let first = segments.next().unwrap_or_default();
+    let second = segments.next();
+    if first.eq_ignore_ascii_case(".git")
+        || (first.eq_ignore_ascii_case(".dennett")
+            && second.is_some_and(|value| value.eq_ignore_ascii_case("project.json")))
+            && segments.next().is_none()
+    {
         return Err(WorkspacePlanError::ProtectedPath);
     }
     Ok(())
@@ -906,6 +940,13 @@ mod tests {
         }
     }
 
+    fn permissions() -> PortableFilePermissions {
+        PortableFilePermissions {
+            read_only: false,
+            executable: false,
+        }
+    }
+
     fn request(
         binding_id: WorkspaceBindingId,
         base_revision: WorkspaceRevision,
@@ -961,7 +1002,7 @@ mod tests {
                         previous_path: None,
                         content: Some(content()),
                         expected_content_sha256: None,
-                        resulting_metadata_sha256: Some(METADATA),
+                        resulting_permissions: Some(permissions()),
                     },
                     ResolvedFileChangeProposal {
                         kind: FileMutationKind::Modify,
@@ -969,7 +1010,7 @@ mod tests {
                         previous_path: None,
                         content: Some(content()),
                         expected_content_sha256: Some(OLD_HASH),
-                        resulting_metadata_sha256: Some(METADATA),
+                        resulting_permissions: Some(permissions()),
                     },
                     ResolvedFileChangeProposal {
                         kind: FileMutationKind::Delete,
@@ -977,7 +1018,7 @@ mod tests {
                         previous_path: None,
                         content: None,
                         expected_content_sha256: Some(OLD_HASH),
-                        resulting_metadata_sha256: None,
+                        resulting_permissions: None,
                     },
                     ResolvedFileChangeProposal {
                         kind: FileMutationKind::Rename,
@@ -985,7 +1026,7 @@ mod tests {
                         previous_path: Some(path("rename.txt")),
                         content: None,
                         expected_content_sha256: Some(OLD_HASH),
-                        resulting_metadata_sha256: None,
+                        resulting_permissions: None,
                     },
                 ],
             ),
@@ -1010,7 +1051,7 @@ mod tests {
             previous_path: None,
             content: Some(content()),
             expected_content_sha256: None,
-            resulting_metadata_sha256: Some(METADATA),
+            resulting_permissions: Some(permissions()),
         };
         assert_eq!(
             WorkspaceFileEffectPlan::build(
@@ -1042,7 +1083,7 @@ mod tests {
             previous_path: None,
             content: Some(content()),
             expected_content_sha256: None,
-            resulting_metadata_sha256: Some(METADATA),
+            resulting_permissions: Some(permissions()),
         };
         assert_eq!(
             WorkspaceFileEffectPlan::build(
@@ -1051,6 +1092,24 @@ mod tests {
             ),
             Err(WorkspacePlanError::ProtectedPath)
         );
+
+        for protected_path in [".GIT/config", ".DENNETT/PROJECT.JSON"] {
+            let protected = ResolvedFileChangeProposal {
+                kind: FileMutationKind::Add,
+                path: path(protected_path),
+                previous_path: None,
+                content: Some(content()),
+                expected_content_sha256: None,
+                resulting_permissions: Some(permissions()),
+            };
+            assert_eq!(
+                WorkspaceFileEffectPlan::build(
+                    &manifest,
+                    request(binding_id, base_revision, vec![protected])
+                ),
+                Err(WorkspacePlanError::ProtectedPath)
+            );
+        }
     }
 
     #[test]
@@ -1060,6 +1119,7 @@ mod tests {
             before: file(OLD_HASH),
             after: file(NEW_HASH),
             content: Some(content()),
+            resulting_permissions: Some(permissions()),
         };
 
         assert_eq!(
@@ -1167,7 +1227,7 @@ mod tests {
             previous_path: None,
             content: Some(content()),
             expected_content_sha256: None,
-            resulting_metadata_sha256: Some(METADATA),
+            resulting_permissions: Some(permissions()),
         };
         let plan = WorkspaceFileEffectPlan::build(
             &manifest,

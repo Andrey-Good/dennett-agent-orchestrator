@@ -9,6 +9,7 @@ pub mod draft;
 pub mod project;
 pub mod session;
 pub mod system;
+pub mod workspace;
 
 pub struct HeadApplication<A: AgentRuntimePort, M: MemoryPort> {
     agent: Arc<A>,

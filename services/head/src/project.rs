@@ -144,6 +144,7 @@ pub struct AgentProjectWorkspace {
     pub access_mode: dennett_trust_core::project_registry::WorkspaceAccessMode,
     pub policy_revision: u64,
     pub binding_revision: u64,
+    pub source_identity: dennett_trust_core::project_registry::WorkspaceSourceIdentity,
     authority: ProjectAuthorityPermit,
 }
 
@@ -194,7 +195,7 @@ pub struct ProjectApplication {
 }
 
 #[derive(Clone)]
-struct KeyedLocks<K> {
+pub(crate) struct KeyedLocks<K> {
     locks: Arc<Mutex<HashMap<K, Weak<Mutex<()>>>>>,
 }
 
@@ -210,7 +211,7 @@ impl<K> KeyedLocks<K>
 where
     K: Copy + Eq + Hash,
 {
-    async fn acquire(&self, key: K) -> OwnedMutexGuard<()> {
+    pub(crate) async fn acquire(&self, key: K) -> OwnedMutexGuard<()> {
         let lock = {
             let mut locks = self.locks.lock().await;
             locks.retain(|_, lock| lock.strong_count() > 0);
@@ -316,6 +317,9 @@ impl ProjectApplication {
                         access_mode: current_binding.access_mode,
                         policy_revision: current.access_policy.revision,
                         binding_revision: current_binding.record_revision,
+                        source_identity: current_binding
+                            .source_identity
+                            .ok_or(ProjectApplicationError::ProjectMissing)?,
                         authority: ProjectAuthorityPermit {
                             _guard: authority_guard,
                         },
@@ -328,6 +332,41 @@ impl ProjectApplication {
             }
         }
         Err(ProjectApplicationError::ConcurrentChange)
+    }
+
+    /// Acquires the same authority gate as normal workspace admission without
+    /// expanding provider authority. This is used only to observe an already
+    /// durable, unfinished local effect after restart.
+    pub(crate) async fn prepare_workspace_recovery(
+        &self,
+        project_id: ProjectId,
+        binding_id: WorkspaceBindingId,
+    ) -> Result<AgentProjectWorkspace, ProjectApplicationError> {
+        let authority_guard = self.authority_locks.acquire(project_id).await;
+        let project = self.get_project(project_id).await?;
+        let binding = project
+            .bindings
+            .iter()
+            .find(|candidate| candidate.binding_id == binding_id)
+            .ok_or(ProjectApplicationError::BindingNotFound)?;
+        if binding.availability != WorkspaceAvailability::Available {
+            return Err(ProjectApplicationError::ProjectMissing);
+        }
+        let source_identity = binding
+            .source_identity
+            .ok_or(ProjectApplicationError::ProjectMissing)?;
+        Ok(AgentProjectWorkspace {
+            project_id,
+            binding_id,
+            absolute_path: binding.location.path.expose_local().to_owned(),
+            access_mode: binding.access_mode,
+            policy_revision: project.access_policy.revision,
+            binding_revision: binding.record_revision,
+            source_identity,
+            authority: ProjectAuthorityPermit {
+                _guard: authority_guard,
+            },
+        })
     }
 
     /// Refreshes all persisted bindings after restart without granting trust

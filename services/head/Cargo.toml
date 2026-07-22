@@ -15,6 +15,7 @@ thiserror.workspace = true
 uuid.workspace = true
 dennett-agent-core = { path = "../../crates/dennett-agent-core" }
 dennett-contracts = { path = "../../crates/dennett-contracts" }
+dennett-effect-core = { path = "../../crates/dennett-effect-core" }
 dennett-kernel = { path = "../../crates/dennett-kernel" }
 dennett-memory-core = { path = "../../crates/dennett-memory-core" }
 dennett-observability = { path = "../../crates/dennett-observability" }

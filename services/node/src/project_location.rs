@@ -438,7 +438,7 @@ fn encode_source_identity(source: SourceIdentity) -> WorkspaceSourceIdentity {
     WorkspaceSourceIdentity::new(bytes)
 }
 
-fn decode_source_identity(
+pub(crate) fn decode_source_identity(
     source: WorkspaceSourceIdentity,
 ) -> Result<SourceIdentity, ProjectLocationError> {
     let bytes = source.as_bytes();

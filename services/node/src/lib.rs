@@ -1,6 +1,7 @@
 mod project_fs;
 mod project_location;
 mod runtime_host;
+mod workspace_fs;
 
 use dennett_agent_core::{AgentRuntimePort, FakeAgentRuntime, RuntimeError};
 use dennett_contracts::{CommandId, ProjectId, WorkspaceBindingId};

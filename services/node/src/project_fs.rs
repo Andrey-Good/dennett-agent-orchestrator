@@ -354,8 +354,8 @@ impl ProjectFolderError {
     }
 }
 
-struct OpenProjectRoot {
-    dir: Dir,
+pub(crate) struct OpenProjectRoot {
+    pub(crate) dir: Dir,
     normalized_location: PathBuf,
     canonical_location: String,
     identity: SourceIdentity,
@@ -368,7 +368,7 @@ struct ProspectiveLocation {
 }
 
 impl OpenProjectRoot {
-    fn open(root: &Path) -> Result<Self, ProjectFolderError> {
+    pub(crate) fn open(root: &Path) -> Result<Self, ProjectFolderError> {
         let normalized_location = normalize_absolute(root)?;
         let dir = open_absolute_directory_nofollow(&normalized_location)?;
         let identity = directory_identity(&dir)?;
@@ -392,7 +392,10 @@ impl OpenProjectRoot {
         })
     }
 
-    fn open_verified(root: &Path, expected: SourceIdentity) -> Result<Self, ProjectFolderError> {
+    pub(crate) fn open_verified(
+        root: &Path,
+        expected: SourceIdentity,
+    ) -> Result<Self, ProjectFolderError> {
         let opened = Self::open(root)?;
         if opened.identity != expected {
             return Err(ProjectFolderError::SourceIdentityChanged);
@@ -400,7 +403,7 @@ impl OpenProjectRoot {
         Ok(opened)
     }
 
-    fn revalidate_location(&self) -> Result<(), ProjectFolderError> {
+    pub(crate) fn revalidate_location(&self) -> Result<(), ProjectFolderError> {
         let current = open_absolute_directory_nofollow(&self.normalized_location)?;
         if directory_identity(&current)? != self.identity {
             return Err(ProjectFolderError::SourceIdentityChanged);
@@ -597,7 +600,7 @@ fn map_nofollow_error(source: io::Error) -> ProjectFolderError {
     }
 }
 
-fn directory_identity(dir: &Dir) -> Result<SourceIdentity, ProjectFolderError> {
+pub(crate) fn directory_identity(dir: &Dir) -> Result<SourceIdentity, ProjectFolderError> {
     let metadata = dir
         .dir_metadata()
         .map_err(|source| ProjectFolderError::io("read_project_root_identity", source))?;
@@ -885,7 +888,7 @@ fn open_required_directory(parent: &Dir, name: &OsStr) -> Result<Dir, ProjectFol
     parent.open_dir_nofollow(name).map_err(map_nofollow_error)
 }
 
-fn optional_symlink_metadata(
+pub(crate) fn optional_symlink_metadata(
     dir: &Dir,
     name: &OsStr,
 ) -> Result<Option<Metadata>, ProjectFolderError> {
@@ -1311,7 +1314,7 @@ fn sync_published_regular_file(_dir: &Dir, _target: &OsStr) -> Result<(), Projec
 }
 
 #[cfg(unix)]
-fn sync_directory(dir: &Dir, operation: &'static str) -> Result<(), ProjectFolderError> {
+pub(crate) fn sync_directory(dir: &Dir, operation: &'static str) -> Result<(), ProjectFolderError> {
     // `cap_std::fs::Dir` may intentionally hold an `O_PATH` descriptor on
     // Linux. That handle is safe for capability-relative traversal but cannot
     // itself be fsynced (`EBADF`). Reopen `.` relative to the already verified
@@ -1325,7 +1328,10 @@ fn sync_directory(dir: &Dir, operation: &'static str) -> Result<(), ProjectFolde
 }
 
 #[cfg(windows)]
-fn sync_directory(_dir: &Dir, _operation: &'static str) -> Result<(), ProjectFolderError> {
+pub(crate) fn sync_directory(
+    _dir: &Dir,
+    _operation: &'static str,
+) -> Result<(), ProjectFolderError> {
     // Windows does not expose a portable directory-fsync equivalent. Files
     // participating in publication are opened write-through and flushed
     // after link/rename instead; NTFS then journals the namespace change.
@@ -1333,7 +1339,7 @@ fn sync_directory(_dir: &Dir, _operation: &'static str) -> Result<(), ProjectFol
 }
 
 #[cfg(not(any(unix, windows)))]
-fn sync_directory(dir: &Dir, operation: &'static str) -> Result<(), ProjectFolderError> {
+pub(crate) fn sync_directory(dir: &Dir, operation: &'static str) -> Result<(), ProjectFolderError> {
     dir.try_clone()
         .and_then(|clone| clone.into_std_file().sync_all())
         .map_err(|source| ProjectFolderError::io(operation, source))
