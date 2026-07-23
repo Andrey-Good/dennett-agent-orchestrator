@@ -1440,13 +1440,22 @@ fn validate_checkpoint_capture(
 
 fn validate_blob_set(blobs: &[WorkspaceBlob]) -> Result<(), WorkspaceApplicationError> {
     let mut by_id = BTreeMap::new();
+    let mut staged_bytes = 0_u64;
     for blob in blobs {
         blob.validate()?;
         match by_id.insert(blob.reference.content_id.as_str(), &blob.reference) {
             Some(existing) if existing != &blob.reference => {
                 return Err(WorkspacePlanError::ContentReferenceCollision.into());
             }
-            _ => {}
+            Some(_) => return Err(WorkspacePlanError::ContentReferenceCollision.into()),
+            None => {
+                staged_bytes = staged_bytes
+                    .checked_add(blob.reference.byte_size)
+                    .filter(|value| {
+                        *value <= dennett_effect_core::workspace::MAX_STAGED_OPERATION_BYTES
+                    })
+                    .ok_or(WorkspacePlanError::OperationContentTooLarge)?;
+            }
         }
     }
     Ok(())

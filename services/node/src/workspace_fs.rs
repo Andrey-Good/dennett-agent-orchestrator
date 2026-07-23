@@ -14,9 +14,9 @@ use cap_std::fs::PermissionsExt as _;
 use cap_std::fs::{Dir, Metadata, OpenOptions};
 use dennett_contracts::{ProjectRelativePath, WorkspaceOperationId};
 use dennett_effect_core::workspace::{
-    ContentSha256, FileMutationKind, MAX_STAGED_FILE_BYTES, MetadataSha256,
-    PortableFilePermissions, ResolvedFileChangeProposal, WorkspaceBlob, WorkspaceCheckpointEntry,
-    WorkspaceFileEffectPlan, WorkspaceManifestEntry, WorkspacePathState,
+    ContentSha256, FileMutationKind, MAX_STAGED_FILE_BYTES, MAX_STAGED_OPERATION_BYTES,
+    MetadataSha256, PortableFilePermissions, ResolvedFileChangeProposal, WorkspaceBlob,
+    WorkspaceCheckpointEntry, WorkspaceFileEffectPlan, WorkspaceManifestEntry, WorkspacePathState,
 };
 use dennett_head::workspace::{
     CapturedWorkspaceCheckpoint, PreparedWorkspaceFileEffect, WorkspaceFileChangeInput,
@@ -313,6 +313,7 @@ fn prepare_file_effect_sync(
     let mut proposed_blobs = Vec::new();
     let mut checkpoint_entries = BTreeMap::<String, WorkspaceCheckpointEntry>::new();
     let mut checkpoint_blobs = BTreeMap::<String, WorkspaceBlob>::new();
+    let mut staged_bytes = 0_u64;
 
     for (index, change) in changes.into_iter().enumerate() {
         let current = manifest
@@ -322,6 +323,11 @@ fn prepare_file_effect_sync(
             .unwrap_or(WorkspacePathState::Absent);
         let content = match change.content {
             Some(bytes) => {
+                reserve_staged_bytes(
+                    &mut staged_bytes,
+                    u64::try_from(bytes.len())
+                        .map_err(|_| WorkspaceFilesystemError::BoundExceeded)?,
+                )?;
                 let blob = WorkspaceBlob::from_bytes(
                     format!("proposed-{index}-{}", hex_hash(&Sha256::digest(&bytes))),
                     bytes,
@@ -353,6 +359,7 @@ fn prepare_file_effect_sync(
             current,
             &mut checkpoint_entries,
             &mut checkpoint_blobs,
+            &mut staged_bytes,
         )?;
         if let Some(previous_path) = &change.previous_path {
             let previous = manifest
@@ -366,6 +373,7 @@ fn prepare_file_effect_sync(
                 previous,
                 &mut checkpoint_entries,
                 &mut checkpoint_blobs,
+                &mut staged_bytes,
             )?;
         }
         proposals.push(ResolvedFileChangeProposal {
@@ -400,6 +408,7 @@ fn capture_checkpoint_sync(
         .collect::<BTreeMap<_, _>>();
     let mut entries = BTreeMap::<String, WorkspaceCheckpointEntry>::new();
     let mut blobs = BTreeMap::<String, WorkspaceBlob>::new();
+    let mut staged_bytes = 0_u64;
     for path in paths {
         let expected = manifest
             .get(path.as_str())
@@ -414,7 +423,14 @@ fn capture_checkpoint_sync(
         ) {
             return Err(WorkspaceFilesystemError::UnsupportedObject);
         }
-        capture_checkpoint_entry(&opened, &path, expected, &mut entries, &mut blobs)?;
+        capture_checkpoint_entry(
+            &opened,
+            &path,
+            expected,
+            &mut entries,
+            &mut blobs,
+            &mut staged_bytes,
+        )?;
     }
     opened.revalidate_location().map_err(map_project_error)?;
     Ok(CapturedWorkspaceCheckpoint {
@@ -430,6 +446,7 @@ fn capture_checkpoint_entry(
     expected: WorkspacePathState,
     entries: &mut BTreeMap<String, WorkspaceCheckpointEntry>,
     blobs: &mut BTreeMap<String, WorkspaceBlob>,
+    staged_bytes: &mut u64,
 ) -> Result<(), WorkspaceFilesystemError> {
     if entries.contains_key(path.as_str()) {
         return Ok(());
@@ -450,6 +467,7 @@ fn capture_checkpoint_entry(
                 }
                 Some(_) => {}
                 None => {
+                    reserve_staged_bytes(staged_bytes, reference.byte_size)?;
                     blobs.insert(id, blob);
                 }
             }
@@ -465,6 +483,14 @@ fn capture_checkpoint_entry(
             content,
         },
     );
+    Ok(())
+}
+
+fn reserve_staged_bytes(total: &mut u64, additional: u64) -> Result<(), WorkspaceFilesystemError> {
+    *total = total
+        .checked_add(additional)
+        .filter(|value| *value <= MAX_STAGED_OPERATION_BYTES)
+        .ok_or(WorkspaceFilesystemError::BoundExceeded)?;
     Ok(())
 }
 
@@ -586,15 +612,17 @@ fn validated_blob_map(
     blobs: &[WorkspaceBlob],
 ) -> Result<BTreeMap<&str, &[u8]>, WorkspaceFilesystemError> {
     let mut result = BTreeMap::new();
+    let mut staged_bytes = 0_u64;
     for blob in blobs {
         blob.validate()
             .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
-        if let Some(existing) =
-            result.insert(blob.reference.content_id.as_str(), blob.bytes.as_slice())
-            && existing != blob.bytes.as_slice()
+        if result
+            .insert(blob.reference.content_id.as_str(), blob.bytes.as_slice())
+            .is_some()
         {
             return Err(WorkspaceFilesystemError::RecoveryRequired);
         }
+        reserve_staged_bytes(&mut staged_bytes, blob.reference.byte_size)?;
     }
     Ok(result)
 }
@@ -1965,6 +1993,68 @@ mod tests {
         assert_eq!(
             fs::read(real.root.join("tracked.txt")).unwrap(),
             b"human change"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_external_change_is_preserved_in_the_resulting_revision() {
+        let real = RealWorkspaceApplication::open().await;
+        let base = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.unrelated.base".to_owned(),
+            )
+            .await
+            .expect("observe base workspace");
+
+        fs::write(real.root.join("unrelated.txt"), b"human change")
+            .expect("create unrelated human edit");
+        let applied = real
+            .application
+            .apply_file_changes(ApplyWorkspaceFileChangesCommand {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.unrelated.apply".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                base_revision: base.manifest.revision,
+                changes: vec![change(
+                    FileMutationKind::Modify,
+                    "tracked.txt",
+                    None,
+                    Some(b"agent change"),
+                )],
+                request_intent_sha256: None,
+                prepared_at_unix_ms: 5,
+            })
+            .await
+            .expect("apply against unchanged touched path");
+        assert_eq!(applied.state, DurableWorkspaceOperationState::Succeeded);
+        assert_eq!(
+            fs::read(real.root.join("tracked.txt")).unwrap(),
+            b"agent change"
+        );
+        assert_eq!(
+            fs::read(real.root.join("unrelated.txt")).unwrap(),
+            b"human change"
+        );
+
+        let resulting_revision = applied.resulting_revision.expect("resulting revision");
+        let observed = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.unrelated.result".to_owned(),
+            )
+            .await
+            .expect("observe resulting workspace");
+        assert_eq!(observed.manifest.revision, resulting_revision);
+        assert_eq!(
+            resulting_revision.sequence(),
+            base.manifest.revision.sequence() + 2
         );
     }
 

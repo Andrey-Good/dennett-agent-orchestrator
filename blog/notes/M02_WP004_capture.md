@@ -79,6 +79,19 @@ This is capture material, not a published claim. A standalone field note is just
   above 16 MiB instead of accepting an operation it cannot restore. A complete
   manifest may hash files up to 2 GiB each and 8 GiB total without retaining
   their bytes.
+- A final self-audit turned the phrase "unrelated edits are preserved" into a
+  missing executable example. The filesystem path was already safe, but the
+  SQLite journal incorrectly required the automatic checkpoint to have the
+  same revision as the caller's older base. That rejected a valid operation
+  whenever a human had changed only an unrelated file. The invariant now binds
+  the operation to its original base while allowing the safety checkpoint to
+  capture a newer exact workspace revision; the resulting revision contains
+  both the human edit and the agent edit.
+- The same audit found that a 16 MiB per-file bound was not enough: many
+  reversible before-images could still accumulate into a multi-gigabyte
+  operation. Before-images and after-images now share one 64 MiB operation
+  budget, enforced in the filesystem adapter, application boundary, durable
+  checkpoint validator and SQLite journal.
 - The owner accepted this as an internal checkpoint because the existing M01
   desktop has no truthful control for inspecting snapshot identity or crash
   reconstruction. The visual owner gate remains WP-M02-007/WP-M02-008.

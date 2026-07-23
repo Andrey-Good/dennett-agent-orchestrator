@@ -210,8 +210,8 @@
     },
     {
       "path": "adapters/storage/sqlite/src/workspace_journal.rs",
-      "bytes": 73433,
-      "sha256": "a173ad4596c19a47fa5bae0ac27b01a526a7258c839a95c65408792c9a626c53"
+      "bytes": 73703,
+      "sha256": "42a66189c84f78ef184c4e3ded41f3b315c60324476dc447cd36931e775e53a4"
     },
     {
       "path": "adapters/transport/README.md",
@@ -635,8 +635,8 @@
     },
     {
       "path": "blog/notes/M02_WP004_capture.md",
-      "bytes": 6267,
-      "sha256": "fcf776a2353f72c58d1c1074c3703e58f30940416c378cfab67255bbbca41539"
+      "bytes": 7185,
+      "sha256": "f6b524e73464c8017ef924a035474743fdfc97f94a49f22bfabe3859434a8e62"
     },
     {
       "path": "blog/notes/M02_capture.md",
@@ -750,8 +750,8 @@
     },
     {
       "path": "crates/dennett-effect-core/src/workspace.rs",
-      "bytes": 45924,
-      "sha256": "803febf89278bba046c812fcdcfc7986e9cfd22cef59bb4599eded6c3363c15f"
+      "bytes": 47747,
+      "sha256": "ff29ae2e3c63c4cfcbfb5ffa32df2fa555e18de8b7effdcf29bbe65bcb141130"
     },
     {
       "path": "crates/dennett-kernel/AGENTS.md",
@@ -2180,8 +2180,8 @@
     },
     {
       "path": "services/head/src/workspace.rs",
-      "bytes": 59507,
-      "sha256": "c5456985577584ca857b070fb3b70aa9794b1bf95be61c0359dfe6cef4c6fae1"
+      "bytes": 59978,
+      "sha256": "c977ab5e383ec284128dcaa0b9b6615fa10ade612255b8c0024310ce398c93be"
     },
     {
       "path": "services/head/tests/conversation_application.rs",
@@ -2260,8 +2260,8 @@
     },
     {
       "path": "services/node/src/workspace_fs.rs",
-      "bytes": 80979,
-      "sha256": "5be460b0a05f69f594030bffa0e3029d710ddc053c82ba87a28a514360b84502"
+      "bytes": 84215,
+      "sha256": "500e375c912476f963d1eb498e0e38a64ae2099d037722c263f29cdaf02425d8"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",

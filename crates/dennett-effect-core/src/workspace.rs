@@ -647,6 +647,7 @@ impl WorkspaceCheckpointRecord {
             reference.validate()?;
         }
         let mut paths = BTreeSet::new();
+        let mut content_refs = BTreeMap::<String, StagedContentRef>::new();
         for entry in &self.entries {
             validate_mutable_path(&entry.path)?;
             if !paths.insert(entry.path.as_str()) {
@@ -664,6 +665,12 @@ impl WorkspaceCheckpointRecord {
                     && content.byte_size == *byte_size =>
                 {
                     content.validate()?;
+                    match content_refs.insert(content.content_id.clone(), content.clone()) {
+                        Some(existing) if existing != *content => {
+                            return Err(WorkspacePlanError::ContentReferenceCollision);
+                        }
+                        _ => {}
+                    }
                 }
                 (WorkspacePathState::RegularFile { .. }, _) => {
                     return Err(WorkspacePlanError::ContentEvidenceMismatch);
@@ -677,6 +684,14 @@ impl WorkspaceCheckpointRecord {
                 ) => {}
                 (_, Some(_)) => return Err(WorkspacePlanError::UnexpectedContent),
             }
+        }
+        let total_bytes = content_refs.values().try_fold(0_u64, |total, item| {
+            total
+                .checked_add(item.byte_size)
+                .ok_or(WorkspacePlanError::OperationContentTooLarge)
+        })?;
+        if total_bytes > MAX_STAGED_OPERATION_BYTES {
+            return Err(WorkspacePlanError::OperationContentTooLarge);
         }
         Ok(())
     }
@@ -1248,6 +1263,33 @@ mod tests {
             created_at_unix_ms: 1,
         };
         assert!(checkpoint.validate().is_ok());
+
+        let oversized_entries = (0_u8..5)
+            .map(|index| {
+                let reference = StagedContentRef {
+                    content_id: format!("large-{index}"),
+                    content_sha256: ContentSha256([index; 32]),
+                    byte_size: MAX_STAGED_FILE_BYTES,
+                };
+                WorkspaceCheckpointEntry {
+                    path: path(&format!("large-{index}.bin")),
+                    state: WorkspacePathState::RegularFile {
+                        content_sha256: reference.content_sha256,
+                        metadata_sha256: permissions().metadata_sha256(),
+                        byte_size: reference.byte_size,
+                    },
+                    content: Some(reference),
+                }
+            })
+            .collect();
+        let oversized = WorkspaceCheckpointRecord {
+            entries: oversized_entries,
+            ..checkpoint
+        };
+        assert_eq!(
+            oversized.validate(),
+            Err(WorkspacePlanError::OperationContentTooLarge)
+        );
     }
 
     #[test]

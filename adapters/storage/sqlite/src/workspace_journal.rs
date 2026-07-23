@@ -6,9 +6,10 @@ use dennett_contracts::{
 };
 use dennett_effect_core::workspace::{
     ContentSha256, DurableCheckpointState, DurableWorkspaceFailureKind,
-    DurableWorkspaceOperationState, SnapshotCommitOutcome, StagedContentRef, WorkspaceBlob,
-    WorkspaceCheckpointRecord, WorkspaceJournalError, WorkspaceJournalPort, WorkspaceManifest,
-    WorkspaceOperationRecord, WorkspaceSnapshotPublication, WorkspaceSnapshotRecord,
+    DurableWorkspaceOperationState, MAX_STAGED_OPERATION_BYTES, SnapshotCommitOutcome,
+    StagedContentRef, WorkspaceBlob, WorkspaceCheckpointRecord, WorkspaceJournalError,
+    WorkspaceJournalPort, WorkspaceManifest, WorkspaceOperationRecord,
+    WorkspaceSnapshotPublication, WorkspaceSnapshotRecord,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{Executor, Row, Sqlite, Transaction, sqlite::SqliteRow};
@@ -309,9 +310,14 @@ fn supplied_blobs(
     blobs: Vec<WorkspaceBlob>,
 ) -> Result<BTreeMap<String, WorkspaceBlob>, WorkspaceJournalError> {
     let mut supplied = BTreeMap::new();
+    let mut staged_bytes = 0_u64;
     for blob in blobs {
         blob.validate()
             .map_err(|_| WorkspaceJournalError::Integrity)?;
+        staged_bytes = staged_bytes
+            .checked_add(blob.reference.byte_size)
+            .filter(|value| *value <= MAX_STAGED_OPERATION_BYTES)
+            .ok_or(WorkspaceJournalError::Integrity)?;
         if supplied
             .insert(blob.reference.content_id.clone(), blob)
             .is_some()
@@ -513,7 +519,7 @@ fn validate_safety_checkpoint(
         || operation.plan.safety_checkpoint_id != checkpoint.checkpoint_id
         || operation.plan.project_id != checkpoint.project_id
         || operation.plan.binding_id != checkpoint.binding_id
-        || operation.plan.base_revision != checkpoint.captured_revision
+        || operation.plan.base_revision != checkpoint.base_revision
         || operation.plan.transitions.len() != checkpoint.entries.len()
     {
         return Err(WorkspaceJournalError::Integrity);
