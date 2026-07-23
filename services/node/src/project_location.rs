@@ -429,7 +429,7 @@ fn canonical_location(value: &str) -> Result<CanonicalWorkspaceLocation, Project
     })
 }
 
-fn encode_source_identity(source: SourceIdentity) -> WorkspaceSourceIdentity {
+pub(crate) fn encode_source_identity(source: SourceIdentity) -> WorkspaceSourceIdentity {
     let mut bytes = [0_u8; 32];
     bytes[..8].copy_from_slice(&source.volume.to_le_bytes());
     bytes[8..16].copy_from_slice(&source.file.to_le_bytes());

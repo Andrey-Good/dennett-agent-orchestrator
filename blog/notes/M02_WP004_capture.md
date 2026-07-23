@@ -46,3 +46,50 @@ blog_capture:
 ## Publication state
 
 This is capture material, not a published claim. A standalone field note is justified only if implementation or review yields a concrete failure mode or reusable lesson; otherwise the evidence rolls into the M02 milestone chronicle.
+
+## Implementation turns — 2026-07-22 to 2026-07-23
+
+- The first complete model used five durable ideas rather than a generic
+  filesystem abstraction: a bounded manifest, path transitions, one operation
+  journal, immutable checkpoints and a monotonic resulting revision.
+- A detached pre-implementation critic rejected three tempting shortcuts. An
+  “exact snapshot” now means the entire explicitly bounded project namespace;
+  exceeding the entry, depth, per-file or total-byte bound rejects the
+  observation. Terminal receipts are never reinterpreted after a later human
+  edit. Multi-file publication stages every after-image and retains displaced
+  before-images until reconciliation proves the result.
+- A real SQLite-backed restore test exposed an atomicity bug after the files
+  were already correct: the operation tried to reference a resulting revision
+  before that snapshot was durably visible. Snapshot publication and terminal
+  success now share one SQLite transaction.
+- The recovery test was then made less polite. It durably prepares a two-file
+  operation, publishes exactly one file, simulates process loss before
+  classification, recreates the application over the same SQLite database and
+  asks startup reconciliation what happened. The answer is
+  `RecoveryRequired`, not success or a blind retry. Restoring the automatic
+  checkpoint returns only the touched file while preserving an unrelated human
+  edit.
+- Filesystem authority is handle-relative and no-follow. The adversarial set
+  now covers lexical escapes, protected `.git` and project-identity paths,
+  linked parents, a root whose durable identity belongs to another directory,
+  Windows ASCII and Unicode case aliases, alternate streams and ambiguous
+  suffixes. Linux mount identity uses `statx` mount IDs so a bind or nested
+  mount cannot hide behind the same device number.
+- The generic mutation path deliberately rejects a reversible before-image
+  above 16 MiB instead of accepting an operation it cannot restore. A complete
+  manifest may hash files up to 2 GiB each and 8 GiB total without retaining
+  their bytes.
+- The owner accepted this as an internal checkpoint because the existing M01
+  desktop has no truthful control for inspecting snapshot identity or crash
+  reconstruction. The visual owner gate remains WP-M02-007/WP-M02-008.
+
+## Current evidence snapshot
+
+- Focused Rust qualification passes the effect-core, Head, Node and SQLite
+  suites, including real temporary files and the real SQLite journal.
+- Node startup runs workspace reconciliation after project-location recovery
+  and before accepting local commands.
+- Clippy passes with warnings denied for all four touched Rust packages.
+- The catalogue cases remain milestone-spanning rather than being marked
+  prematurely automated: command/test receipts continue in WP-M02-005 and the
+  owner-facing review flow continues in WP-M02-007/WP-M02-008.

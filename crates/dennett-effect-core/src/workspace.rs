@@ -40,6 +40,19 @@ impl PortableFilePermissions {
         hasher.update([u8::from(self.read_only), u8::from(self.executable)]);
         MetadataSha256(hasher.finalize().into())
     }
+
+    #[must_use]
+    pub fn from_metadata_sha256(value: MetadataSha256) -> Option<Self> {
+        [false, true].into_iter().find_map(|read_only| {
+            [false, true].into_iter().find_map(|executable| {
+                let candidate = Self {
+                    read_only,
+                    executable,
+                };
+                (candidate.metadata_sha256() == value).then_some(candidate)
+            })
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -474,13 +487,13 @@ fn validate_expected_content(
 }
 
 fn validate_mutable_path(path: &ProjectRelativePath) -> Result<(), WorkspacePlanError> {
-    let mut segments = path.as_str().split('/');
-    let first = segments.next().unwrap_or_default();
-    let second = segments.next();
-    if first.eq_ignore_ascii_case(".git")
-        || (first.eq_ignore_ascii_case(".dennett")
-            && second.is_some_and(|value| value.eq_ignore_ascii_case("project.json")))
-            && segments.next().is_none()
+    let segments = path.as_str().split('/').collect::<Vec<_>>();
+    if segments
+        .iter()
+        .any(|segment| segment.eq_ignore_ascii_case(".git"))
+        || (segments.len() == 2
+            && segments[0].eq_ignore_ascii_case(".dennett")
+            && segments[1].eq_ignore_ascii_case("project.json"))
     {
         return Err(WorkspacePlanError::ProtectedPath);
     }
@@ -514,6 +527,12 @@ pub struct WorkspaceSnapshotRecord {
     pub project_id: ProjectId,
     pub manifest: WorkspaceManifest,
     pub observed_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceSnapshotPublication {
+    pub expected_head: WorkspaceRevision,
+    pub snapshot: WorkspaceSnapshotRecord,
 }
 
 /// Bytes staged in the Node-owned journal before a filesystem effect starts.
@@ -816,6 +835,11 @@ pub trait WorkspaceJournalPort: Send + Sync {
         command_id: CommandId,
     ) -> Result<Option<WorkspaceOperationRecord>, WorkspaceJournalError>;
 
+    async fn load_operation_by_checkpoint(
+        &self,
+        checkpoint_id: CheckpointId,
+    ) -> Result<Option<WorkspaceOperationRecord>, WorkspaceJournalError>;
+
     async fn load_unfinished_operations(
         &self,
     ) -> Result<Vec<WorkspaceOperationRecord>, WorkspaceJournalError>;
@@ -829,7 +853,7 @@ pub trait WorkspaceJournalPort: Send + Sync {
         &self,
         expected_state: DurableWorkspaceOperationState,
         operation: WorkspaceOperationRecord,
-        resulting_snapshot: Option<WorkspaceSnapshotRecord>,
+        resulting_snapshot: Option<WorkspaceSnapshotPublication>,
     ) -> Result<WorkspaceOperationRecord, WorkspaceJournalError>;
 
     async fn save_checkpoint(
@@ -1093,7 +1117,11 @@ mod tests {
             Err(WorkspacePlanError::ProtectedPath)
         );
 
-        for protected_path in [".GIT/config", ".DENNETT/PROJECT.JSON"] {
+        for protected_path in [
+            ".GIT/config",
+            "vendor/module/.Git/index",
+            ".DENNETT/PROJECT.JSON",
+        ] {
             let protected = ResolvedFileChangeProposal {
                 kind: FileMutationKind::Add,
                 path: path(protected_path),
@@ -1110,6 +1138,26 @@ mod tests {
                 Err(WorkspacePlanError::ProtectedPath)
             );
         }
+    }
+
+    #[test]
+    fn portable_permission_evidence_is_reversible_without_os_metadata() {
+        for read_only in [false, true] {
+            for executable in [false, true] {
+                let permissions = PortableFilePermissions {
+                    read_only,
+                    executable,
+                };
+                assert_eq!(
+                    PortableFilePermissions::from_metadata_sha256(permissions.metadata_sha256()),
+                    Some(permissions)
+                );
+            }
+        }
+        assert_eq!(
+            PortableFilePermissions::from_metadata_sha256(MetadataSha256([255; 32])),
+            None
+        );
     }
 
     #[test]

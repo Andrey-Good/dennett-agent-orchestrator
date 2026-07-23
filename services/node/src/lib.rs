@@ -10,6 +10,7 @@ use dennett_head::draft::{ComposerDraftApplication, SessionOperationLocks};
 use dennett_head::project::{ProjectApplication, ProjectApplicationError, ProjectLocationError};
 use dennett_head::session::SessionCoordinator;
 use dennett_head::system::{SystemProjection, SystemSnapshot};
+use dennett_head::workspace::{WorkspaceApplication, WorkspaceApplicationError};
 use dennett_local_ipc::{
     HandshakePolicy, LocalEndpoint, ProjectServiceAdapter, SessionRegistry, SessionServiceAdapter,
     SystemServiceAdapter, TransportError, run_local_server,
@@ -262,6 +263,18 @@ where
             );
         }
     }
+    let workspace_application = Arc::new(WorkspaceApplication::new(
+        project_application.clone(),
+        store.clone(),
+        Arc::new(workspace_fs::NodeWorkspaceFilesystemAdapter),
+    ));
+    let reconciled_workspace_effects = workspace_application.reconcile_unfinished().await?;
+    if !reconciled_workspace_effects.is_empty() {
+        tracing::info!(
+            count = reconciled_workspace_effects.len(),
+            "reconciled durable workspace effects before accepting local commands"
+        );
+    }
     let application = Arc::new(
         ConversationApplication::new(
             coordinator,
@@ -413,6 +426,8 @@ pub enum NodeRunError {
     ProjectRegistry(#[from] ProjectRegistryError),
     #[error(transparent)]
     ProjectApplication(#[from] ProjectApplicationError),
+    #[error(transparent)]
+    WorkspaceApplication(#[from] WorkspaceApplicationError),
 }
 
 impl NodeRunError {
@@ -430,6 +445,7 @@ impl NodeRunError {
             Self::ProjectLocation(error) => error.safe_code(),
             Self::ProjectRegistry(_) => "node.project_registry_failure",
             Self::ProjectApplication(error) => project_application_error_code(error),
+            Self::WorkspaceApplication(_) => "node.workspace_recovery_failure",
         }
     }
 }

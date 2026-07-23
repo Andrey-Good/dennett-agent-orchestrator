@@ -8,7 +8,7 @@ use dennett_effect_core::workspace::{
     ContentSha256, DurableCheckpointState, DurableWorkspaceFailureKind,
     DurableWorkspaceOperationState, SnapshotCommitOutcome, StagedContentRef, WorkspaceBlob,
     WorkspaceCheckpointRecord, WorkspaceJournalError, WorkspaceJournalPort, WorkspaceManifest,
-    WorkspaceOperationRecord, WorkspaceSnapshotRecord,
+    WorkspaceOperationRecord, WorkspaceSnapshotPublication, WorkspaceSnapshotRecord,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{Executor, Row, Sqlite, Transaction, sqlite::SqliteRow};
@@ -399,6 +399,10 @@ where
             "SELECT * FROM workspace_operations WHERE command_id = ?",
             id.0.to_string(),
         ),
+        OperationSelector::Checkpoint(id) => (
+            "SELECT * FROM workspace_operations WHERE safety_checkpoint_id = ?",
+            id.0.to_string(),
+        ),
     };
     sqlx::query(query)
         .bind(value)
@@ -413,6 +417,7 @@ where
 enum OperationSelector {
     Operation(WorkspaceOperationId),
     Command(CommandId),
+    Checkpoint(CheckpointId),
 }
 
 async fn load_checkpoint_from<'e, E>(
@@ -1013,6 +1018,13 @@ impl WorkspaceJournalPort for SqliteControlStore {
         load_operation_from(&self.pool, OperationSelector::Command(command_id)).await
     }
 
+    async fn load_operation_by_checkpoint(
+        &self,
+        checkpoint_id: CheckpointId,
+    ) -> Result<Option<WorkspaceOperationRecord>, WorkspaceJournalError> {
+        load_operation_from(&self.pool, OperationSelector::Checkpoint(checkpoint_id)).await
+    }
+
     async fn load_unfinished_operations(
         &self,
     ) -> Result<Vec<WorkspaceOperationRecord>, WorkspaceJournalError> {
@@ -1046,7 +1058,7 @@ impl WorkspaceJournalPort for SqliteControlStore {
         &self,
         expected_state: DurableWorkspaceOperationState,
         operation: WorkspaceOperationRecord,
-        resulting_snapshot: Option<WorkspaceSnapshotRecord>,
+        resulting_snapshot: Option<WorkspaceSnapshotPublication>,
     ) -> Result<WorkspaceOperationRecord, WorkspaceJournalError> {
         validate_operation(&operation)?;
         let mut transaction = self.pool.begin().await.map_err(storage_error)?;
@@ -1062,15 +1074,25 @@ impl WorkspaceJournalPort for SqliteControlStore {
 
         if current == operation {
             match (operation.resulting_revision, resulting_snapshot.as_ref()) {
-                (Some(revision), Some(snapshot))
-                    if snapshot.manifest.revision == revision
-                        && snapshot.project_id == operation.plan.project_id =>
+                (Some(revision), Some(publication))
+                    if publication.snapshot.manifest.revision == revision
+                        && publication.snapshot.project_id == operation.plan.project_id =>
                 {
                     let stored = load_snapshot_from(&mut *transaction, revision)
                         .await?
                         .ok_or(WorkspaceJournalError::Integrity)?;
-                    if stored != *snapshot {
+                    if stored != publication.snapshot {
                         return Err(WorkspaceJournalError::IdempotencyConflict);
+                    }
+                }
+                (Some(revision), None)
+                    if operation.state == DurableWorkspaceOperationState::Succeeded =>
+                {
+                    let stored = load_snapshot_from(&mut *transaction, revision)
+                        .await?
+                        .ok_or(WorkspaceJournalError::Integrity)?;
+                    if stored.project_id != operation.plan.project_id {
+                        return Err(WorkspaceJournalError::Integrity);
                     }
                 }
                 (None, None) => {}
@@ -1090,18 +1112,29 @@ impl WorkspaceJournalPort for SqliteControlStore {
         }
 
         match (operation.resulting_revision, resulting_snapshot.as_ref()) {
-            (Some(revision), Some(snapshot))
+            (Some(revision), Some(publication))
                 if operation.state == DurableWorkspaceOperationState::Succeeded
-                    && snapshot.manifest.revision == revision
-                    && snapshot.project_id == operation.plan.project_id
+                    && publication.snapshot.manifest.revision == revision
+                    && publication.snapshot.project_id == operation.plan.project_id
                     && revision.binding_id() == operation.plan.binding_id =>
             {
                 commit_snapshot_tx(
                     &mut transaction,
-                    Some(operation.plan.base_revision),
-                    snapshot,
+                    Some(publication.expected_head),
+                    &publication.snapshot,
                 )
                 .await?;
+            }
+            (Some(revision), None)
+                if operation.state == DurableWorkspaceOperationState::Succeeded
+                    && revision.binding_id() == operation.plan.binding_id =>
+            {
+                let stored = load_snapshot_from(&mut *transaction, revision)
+                    .await?
+                    .ok_or(WorkspaceJournalError::Integrity)?;
+                if stored.project_id != operation.plan.project_id {
+                    return Err(WorkspaceJournalError::Integrity);
+                }
             }
             (None, None) if operation.state != DurableWorkspaceOperationState::Succeeded => {}
             _ => return Err(WorkspaceJournalError::InvalidTransition),
@@ -1671,6 +1704,10 @@ mod tests {
             }],
             40,
         );
+        let publication = WorkspaceSnapshotPublication {
+            expected_head: base_revision,
+            snapshot: resulting_snapshot,
+        };
         let mut succeeded = applied.clone();
         succeeded.state = DurableWorkspaceOperationState::Succeeded;
         succeeded.resulting_revision = Some(resulting_revision);
@@ -1680,7 +1717,7 @@ mod tests {
                 .transition_operation(
                     DurableWorkspaceOperationState::FilesystemApplied,
                     succeeded.clone(),
-                    Some(resulting_snapshot.clone()),
+                    Some(publication.clone()),
                 )
                 .await
                 .unwrap(),
@@ -1691,7 +1728,7 @@ mod tests {
                 .transition_operation(
                     DurableWorkspaceOperationState::FilesystemApplied,
                     succeeded.clone(),
-                    Some(resulting_snapshot),
+                    Some(publication),
                 )
                 .await
                 .unwrap(),

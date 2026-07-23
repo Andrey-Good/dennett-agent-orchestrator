@@ -11,13 +11,13 @@ use dennett_contracts::{
     WorkspaceOperationId, WorkspaceRevision, WorkspaceSnapshotId,
 };
 use dennett_effect_core::workspace::{
-    ContentSha256, DurableCheckpointState, DurableWorkspaceFailure, DurableWorkspaceFailureKind,
-    DurableWorkspaceOperationState, FileMutationKind, ResolvedFileChangeProposal,
-    SnapshotCommitOutcome, WorkspaceBlob, WorkspaceCheckpointEntry, WorkspaceCheckpointRecord,
-    WorkspaceFileEffectPlan, WorkspaceFileEffectRequest, WorkspaceJournalError,
-    WorkspaceJournalPort, WorkspaceManifest, WorkspaceManifestEntry, WorkspaceManifestError,
-    WorkspaceOperationRecord, WorkspacePathState, WorkspacePlanError, WorkspaceSnapshotRecord,
-    classify_transition,
+    CanonicalObjectRef, ContentSha256, DurableCheckpointState, DurableWorkspaceFailure,
+    DurableWorkspaceFailureKind, DurableWorkspaceOperationState, FileMutationKind,
+    PortableFilePermissions, ResolvedFileChangeProposal, SnapshotCommitOutcome, WorkspaceBlob,
+    WorkspaceCheckpointEntry, WorkspaceCheckpointRecord, WorkspaceFileEffectPlan,
+    WorkspaceFileEffectRequest, WorkspaceJournalError, WorkspaceJournalPort, WorkspaceManifest,
+    WorkspaceManifestEntry, WorkspaceManifestError, WorkspaceOperationRecord, WorkspacePathState,
+    WorkspacePlanError, WorkspaceSnapshotPublication, WorkspaceSnapshotRecord, classify_transition,
 };
 use dennett_trust_core::project_registry::{WorkspaceAccessMode, WorkspaceSourceIdentity};
 use sha2::{Digest, Sha256};
@@ -57,6 +57,7 @@ pub struct WorkspaceFileChangeInput {
     pub previous_path: Option<ProjectRelativePath>,
     pub content: Option<Vec<u8>>,
     pub expected_content_sha256: Option<ContentSha256>,
+    pub resulting_permissions: Option<PortableFilePermissions>,
 }
 
 impl std::fmt::Debug for WorkspaceFileChangeInput {
@@ -68,6 +69,7 @@ impl std::fmt::Debug for WorkspaceFileChangeInput {
             .field("previous_path", &self.previous_path)
             .field("content", &self.content.as_ref().map(|bytes| bytes.len()))
             .field("expected_content_sha256", &self.expected_content_sha256)
+            .field("resulting_permissions", &self.resulting_permissions)
             .finish()
     }
 }
@@ -79,6 +81,13 @@ pub struct PreparedWorkspaceFileEffect {
     pub proposed_blobs: Vec<WorkspaceBlob>,
     pub checkpoint_entries: Vec<WorkspaceCheckpointEntry>,
     pub checkpoint_blobs: Vec<WorkspaceBlob>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapturedWorkspaceCheckpoint {
+    pub observation: WorkspaceObservation,
+    pub entries: Vec<WorkspaceCheckpointEntry>,
+    pub blobs: Vec<WorkspaceBlob>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,6 +167,29 @@ pub trait WorkspaceFilesystemPort: Send + Sync {
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
     ) -> Result<(), WorkspaceFilesystemError>;
+
+    /// Removes operation-owned staging files only after every touched path is
+    /// proven to still match the durable before-image.
+    async fn cleanup_unapplied_file_effect(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        plan: &WorkspaceFileEffectPlan,
+    ) -> Result<(), WorkspaceFilesystemError>;
+
+    /// Removes operation-owned recovery sidecars only while every touched path
+    /// still matches either its durable before-image or after-image. The
+    /// checkpoint journal remains the recovery source after cleanup.
+    async fn cleanup_recovery_file_effect(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        plan: &WorkspaceFileEffectPlan,
+    ) -> Result<(), WorkspaceFilesystemError>;
+
+    async fn capture_checkpoint(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        paths: Vec<ProjectRelativePath>,
+    ) -> Result<CapturedWorkspaceCheckpoint, WorkspaceFilesystemError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -169,7 +201,52 @@ pub struct ApplyWorkspaceFileChangesCommand {
     pub binding_id: WorkspaceBindingId,
     pub base_revision: WorkspaceRevision,
     pub changes: Vec<WorkspaceFileChangeInput>,
+    /// Optional outer-command identity (for example checkpoint restore) that
+    /// remains stable even when its compiled file deltas become a no-op.
+    pub request_intent_sha256: Option<ContentSha256>,
     pub prepared_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateWorkspaceCheckpointCommand {
+    pub checkpoint_id: CheckpointId,
+    pub project_id: ProjectId,
+    pub binding_id: WorkspaceBindingId,
+    pub base_revision: WorkspaceRevision,
+    pub correlation_id: String,
+    pub label: String,
+    pub request_summary: String,
+    pub touched_paths: Vec<ProjectRelativePath>,
+    pub artifacts: Vec<dennett_contracts::ArtifactId>,
+    pub external_effects: Vec<dennett_contracts::EffectId>,
+    pub provider_continuation: Option<CanonicalObjectRef>,
+    pub created_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RestoreWorkspaceCheckpointCommand {
+    pub operation_id: WorkspaceOperationId,
+    pub command_id: CommandId,
+    pub correlation_id: String,
+    pub project_id: ProjectId,
+    pub binding_id: WorkspaceBindingId,
+    pub checkpoint_id: CheckpointId,
+    pub expected_current_revision: WorkspaceRevision,
+    pub prepared_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CheckpointRestoreOutcome {
+    Applied(Box<WorkspaceOperationRecord>),
+    AlreadyMatches(WorkspaceSnapshotRecord),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointComparison {
+    pub checkpoint: WorkspaceCheckpointRecord,
+    pub current: WorkspaceSnapshotRecord,
+    pub matching_paths: Vec<ProjectRelativePath>,
+    pub changed_paths: Vec<ProjectRelativePath>,
 }
 
 #[derive(Clone)]
@@ -212,12 +289,240 @@ impl WorkspaceApplication {
             .await
     }
 
+    pub async fn create_checkpoint(
+        &self,
+        command: CreateWorkspaceCheckpointCommand,
+    ) -> Result<WorkspaceCheckpointRecord, WorkspaceApplicationError> {
+        validate_create_checkpoint_command(&command)?;
+        if let Some(existing) = self.journal.load_checkpoint(command.checkpoint_id).await? {
+            return if checkpoint_matches_create_command(&existing, &command) {
+                Ok(existing)
+            } else {
+                Err(WorkspaceJournalError::IdempotencyConflict.into())
+            };
+        }
+
+        let _writer = self.writers.acquire(command.binding_id).await;
+        if let Some(existing) = self.journal.load_checkpoint(command.checkpoint_id).await? {
+            return if checkpoint_matches_create_command(&existing, &command) {
+                Ok(existing)
+            } else {
+                Err(WorkspaceJournalError::IdempotencyConflict.into())
+            };
+        }
+        let authority = self
+            .projects
+            .prepare_agent_workspace(command.project_id, command.correlation_id.clone())
+            .await?;
+        let scope = scope_from_authority(&authority, command.binding_id, false)?;
+        let base = self
+            .journal
+            .load_snapshot(command.base_revision)
+            .await?
+            .ok_or(WorkspaceApplicationError::SnapshotNotFound)?;
+        validate_snapshot_owner(&base, command.project_id, command.binding_id)?;
+
+        let captured = self
+            .filesystem
+            .capture_checkpoint(&scope, command.touched_paths.clone())
+            .await?;
+        let observed_manifest = captured
+            .observation
+            .clone()
+            .into_manifest(command.base_revision)?;
+        require_checkpoint_paths_match(&base.manifest, &captured.entries)?;
+        require_checkpoint_paths_match(&observed_manifest, &captured.entries)?;
+        let current = self
+            .commit_observation(command.project_id, command.binding_id, captured.observation)
+            .await?;
+        require_checkpoint_paths_match(&current.manifest, &captured.entries)?;
+
+        let checkpoint = WorkspaceCheckpointRecord {
+            checkpoint_id: command.checkpoint_id,
+            project_id: command.project_id,
+            binding_id: command.binding_id,
+            base_revision: command.base_revision,
+            captured_revision: current.manifest.revision,
+            state: DurableCheckpointState::Available,
+            label: command.label,
+            request_summary: command.request_summary,
+            entries: captured.entries,
+            artifacts: command.artifacts,
+            external_effects: command.external_effects,
+            provider_continuation: command.provider_continuation,
+            created_at_unix_ms: command.created_at_unix_ms,
+        };
+        checkpoint.validate()?;
+        self.journal
+            .save_checkpoint(checkpoint, captured.blobs)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn compare_checkpoint(
+        &self,
+        project_id: ProjectId,
+        binding_id: WorkspaceBindingId,
+        checkpoint_id: CheckpointId,
+        correlation_id: String,
+    ) -> Result<CheckpointComparison, WorkspaceApplicationError> {
+        validate_correlation(&correlation_id)?;
+        let _writer = self.writers.acquire(binding_id).await;
+        let authority = self
+            .projects
+            .prepare_agent_workspace(project_id, correlation_id)
+            .await?;
+        let scope = scope_from_authority(&authority, binding_id, false)?;
+        let checkpoint = self
+            .journal
+            .load_checkpoint(checkpoint_id)
+            .await?
+            .ok_or(WorkspaceApplicationError::CheckpointNotFound)?;
+        validate_checkpoint_owner(&checkpoint, project_id, binding_id)?;
+        let observation = self.filesystem.observe_workspace(&scope).await?;
+        let current = self
+            .commit_observation(project_id, binding_id, observation)
+            .await?;
+        let mut matching_paths = Vec::new();
+        let mut changed_paths = Vec::new();
+        for entry in &checkpoint.entries {
+            if current.manifest.state(&entry.path) == entry.state {
+                matching_paths.push(entry.path.clone());
+            } else {
+                changed_paths.push(entry.path.clone());
+            }
+        }
+        Ok(CheckpointComparison {
+            checkpoint,
+            current,
+            matching_paths,
+            changed_paths,
+        })
+    }
+
+    pub async fn restore_checkpoint(
+        &self,
+        command: RestoreWorkspaceCheckpointCommand,
+    ) -> Result<CheckpointRestoreOutcome, WorkspaceApplicationError> {
+        validate_restore_checkpoint_command(&command)?;
+        let restore_intent = hash_restore_intent(&command);
+        if let Some(existing) = self
+            .journal
+            .load_operation_by_command(command.command_id)
+            .await?
+        {
+            return if existing.plan.operation_id == command.operation_id
+                && existing.plan.project_id == command.project_id
+                && existing.plan.binding_id == command.binding_id
+                && existing.plan.intent_sha256 == restore_intent
+            {
+                Ok(CheckpointRestoreOutcome::Applied(Box::new(existing)))
+            } else {
+                Err(WorkspaceJournalError::IdempotencyConflict.into())
+            };
+        }
+
+        let writer = self.writers.acquire(command.binding_id).await;
+        let authority = self
+            .projects
+            .prepare_agent_workspace(command.project_id, command.correlation_id.clone())
+            .await?;
+        let scope = scope_from_authority(&authority, command.binding_id, true)?;
+        let checkpoint = self
+            .journal
+            .load_checkpoint(command.checkpoint_id)
+            .await?
+            .ok_or(WorkspaceApplicationError::CheckpointNotFound)?;
+        validate_checkpoint_owner(&checkpoint, command.project_id, command.binding_id)?;
+        if checkpoint.state == DurableCheckpointState::RecoveryRequired {
+            return Err(WorkspaceApplicationError::CheckpointUnavailable);
+        }
+        let expected = self
+            .journal
+            .load_snapshot(command.expected_current_revision)
+            .await?
+            .ok_or(WorkspaceApplicationError::SnapshotNotFound)?;
+        validate_snapshot_owner(&expected, command.project_id, command.binding_id)?;
+        let mut observation = self.filesystem.observe_workspace(&scope).await?;
+        let mut observed_manifest = observation
+            .clone()
+            .into_manifest(command.expected_current_revision)?;
+        let conflicts = manifest_path_conflicts(
+            &expected.manifest,
+            &observed_manifest,
+            checkpoint.entries.iter().map(|entry| &entry.path),
+        )?;
+        if !conflicts.is_empty() {
+            let recovery_operation = self
+                .journal
+                .load_operation_by_checkpoint(command.checkpoint_id)
+                .await?;
+            let Some(recovery_operation) = recovery_operation else {
+                return Err(WorkspaceApplicationError::Conflict(conflicts));
+            };
+            if !recovery_operation_recognizes_checkpoint(
+                &recovery_operation,
+                &checkpoint,
+                &observed_manifest,
+            ) {
+                return Err(WorkspaceApplicationError::Conflict(conflicts));
+            }
+            self.filesystem
+                .cleanup_recovery_file_effect(&scope, &recovery_operation.plan)
+                .await?;
+            observation = self.filesystem.observe_workspace(&scope).await?;
+            observed_manifest = observation
+                .clone()
+                .into_manifest(command.expected_current_revision)?;
+            if !recovery_operation_recognizes_checkpoint(
+                &recovery_operation,
+                &checkpoint,
+                &observed_manifest,
+            ) {
+                return Err(WorkspaceApplicationError::Conflict(
+                    recovery_divergent_paths(&recovery_operation.plan, &observed_manifest),
+                ));
+            }
+        }
+        let current = self
+            .commit_observation(command.project_id, command.binding_id, observation)
+            .await?;
+        let blobs = self
+            .journal
+            .load_checkpoint_blobs(command.checkpoint_id)
+            .await?;
+        let changes = restore_changes(&checkpoint, &current.manifest, &blobs)?;
+        drop(scope);
+        drop(authority);
+        drop(writer);
+
+        if changes.is_empty() {
+            return Ok(CheckpointRestoreOutcome::AlreadyMatches(current));
+        }
+        let operation = self
+            .apply_file_changes(ApplyWorkspaceFileChangesCommand {
+                operation_id: command.operation_id,
+                command_id: command.command_id,
+                correlation_id: command.correlation_id,
+                project_id: command.project_id,
+                binding_id: command.binding_id,
+                base_revision: current.manifest.revision,
+                changes,
+                request_intent_sha256: Some(restore_intent),
+                prepared_at_unix_ms: command.prepared_at_unix_ms,
+            })
+            .await?;
+        Ok(CheckpointRestoreOutcome::Applied(Box::new(operation)))
+    }
+
     pub async fn apply_file_changes(
         &self,
         command: ApplyWorkspaceFileChangesCommand,
     ) -> Result<WorkspaceOperationRecord, WorkspaceApplicationError> {
         validate_apply_command(&command)?;
-        let intent_sha256 = hash_file_change_intent(&command.changes)?;
+        let intent_sha256 = command
+            .request_intent_sha256
+            .map_or_else(|| hash_file_change_intent(&command.changes), Ok)?;
         if let Some(existing) = self
             .journal
             .load_operation_by_command(command.command_id)
@@ -389,12 +694,27 @@ impl WorkspaceApplication {
                 OperationObservation::Before
                     if operation.state == DurableWorkspaceOperationState::Prepared =>
                 {
-                    self.mark_failed(
-                        operation,
-                        "workspace.effect.unapplied_after_restart",
-                        vec![],
-                    )
-                    .await?
+                    if self
+                        .filesystem
+                        .cleanup_unapplied_file_effect(&scope, &operation.plan)
+                        .await
+                        .is_err()
+                    {
+                        self.mark_recovery_required(
+                            operation,
+                            "workspace.recovery.cleanup_failed",
+                            vec![],
+                        )
+                        .await?
+                    } else {
+                        self.mark_failed(
+                            operation,
+                            DurableWorkspaceFailureKind::AdapterFailure,
+                            "workspace.effect.unapplied_after_restart",
+                            vec![],
+                        )
+                        .await?
+                    }
                 }
                 OperationObservation::After => {
                     if self
@@ -494,8 +814,8 @@ impl WorkspaceApplication {
                 .transition_operation(operation.state, applied, None)
                 .await?;
         }
-        let resulting = self
-            .commit_observation_with_expected(
+        let (resulting, publication) = self
+            .prepare_observation_publication(
                 operation.plan.project_id,
                 operation.plan.binding_id,
                 expected_head,
@@ -508,18 +828,24 @@ impl WorkspaceApplication {
         succeeded.completed_at_unix_ms = Some(unix_time_ms());
         succeeded.validate()?;
         self.journal
-            .transition_operation(operation.state, succeeded, None)
+            .transition_operation(operation.state, succeeded, publication)
             .await
             .map_err(Into::into)
     }
 
-    async fn commit_observation_with_expected(
+    async fn prepare_observation_publication(
         &self,
         project_id: ProjectId,
         binding_id: WorkspaceBindingId,
         expected_head: WorkspaceRevision,
         observation: WorkspaceObservation,
-    ) -> Result<WorkspaceSnapshotRecord, WorkspaceApplicationError> {
+    ) -> Result<
+        (
+            WorkspaceSnapshotRecord,
+            Option<WorkspaceSnapshotPublication>,
+        ),
+        WorkspaceApplicationError,
+    > {
         let head = self
             .journal
             .load_head(binding_id)
@@ -534,7 +860,7 @@ impl WorkspaceApplication {
             .manifest
             .has_same_observation(&observation.clone().into_manifest(head.manifest.revision)?)
         {
-            return Ok(head);
+            return Ok((head, None));
         }
         let sequence = expected_head
             .sequence()
@@ -547,10 +873,13 @@ impl WorkspaceApplication {
             manifest: observation.into_manifest(revision)?,
             observed_at_unix_ms: unix_time_ms(),
         };
-        self.journal
-            .commit_snapshot(Some(expected_head), snapshot.clone())
-            .await?;
-        Ok(snapshot)
+        Ok((
+            snapshot.clone(),
+            Some(WorkspaceSnapshotPublication {
+                expected_head,
+                snapshot,
+            }),
+        ))
     }
 
     async fn classify_failed_application(
@@ -577,7 +906,27 @@ impl WorkspaceApplication {
         };
         match classify_operation(&operation.plan, &observations)? {
             OperationObservation::Before => {
-                self.mark_failed(operation, error.safe_code(), vec![]).await
+                if self
+                    .filesystem
+                    .cleanup_unapplied_file_effect(scope, &operation.plan)
+                    .await
+                    .is_err()
+                {
+                    self.mark_recovery_required(
+                        operation,
+                        "workspace.effect.cleanup_failed",
+                        vec![],
+                    )
+                    .await
+                } else {
+                    self.mark_failed(
+                        operation,
+                        failure_kind_for_filesystem_error(&error),
+                        error.safe_code(),
+                        vec![],
+                    )
+                    .await
+                }
             }
             OperationObservation::After => {
                 if self
@@ -614,13 +963,14 @@ impl WorkspaceApplication {
     async fn mark_failed(
         &self,
         operation: WorkspaceOperationRecord,
+        kind: DurableWorkspaceFailureKind,
         safe_code: &str,
         conflicting_paths: Vec<ProjectRelativePath>,
     ) -> Result<WorkspaceOperationRecord, WorkspaceApplicationError> {
         self.mark_terminal_failure(
             operation,
             DurableWorkspaceOperationState::Failed,
-            DurableWorkspaceFailureKind::AdapterFailure,
+            kind,
             safe_code,
             conflicting_paths,
         )
@@ -691,13 +1041,259 @@ fn scope_from_authority(
 fn validate_apply_command(
     command: &ApplyWorkspaceFileChangesCommand,
 ) -> Result<(), WorkspaceApplicationError> {
-    if command.correlation_id.is_empty()
-        || command.correlation_id.len() > 256
-        || command.base_revision.binding_id() != command.binding_id
-    {
+    validate_correlation(&command.correlation_id)?;
+    if command.base_revision.binding_id() != command.binding_id {
         return Err(WorkspaceApplicationError::InvalidRequest);
     }
     Ok(())
+}
+
+fn validate_correlation(value: &str) -> Result<(), WorkspaceApplicationError> {
+    if value.is_empty() || value.len() > 256 {
+        Err(WorkspaceApplicationError::InvalidRequest)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_create_checkpoint_command(
+    command: &CreateWorkspaceCheckpointCommand,
+) -> Result<(), WorkspaceApplicationError> {
+    validate_correlation(&command.correlation_id)?;
+    if command.base_revision.binding_id() != command.binding_id
+        || command.label.len() > 256
+        || command.request_summary.len() > 8 * 1024
+        || command.touched_paths.is_empty()
+        || command.touched_paths.len() > 256
+    {
+        return Err(WorkspaceApplicationError::InvalidRequest);
+    }
+    if let Some(reference) = &command.provider_continuation {
+        reference.validate()?;
+    }
+    let unique = command
+        .touched_paths
+        .iter()
+        .map(ProjectRelativePath::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    if unique.len() != command.touched_paths.len() {
+        return Err(WorkspaceApplicationError::InvalidRequest);
+    }
+    Ok(())
+}
+
+fn validate_restore_checkpoint_command(
+    command: &RestoreWorkspaceCheckpointCommand,
+) -> Result<(), WorkspaceApplicationError> {
+    validate_correlation(&command.correlation_id)?;
+    if command.expected_current_revision.binding_id() != command.binding_id {
+        return Err(WorkspaceApplicationError::InvalidRequest);
+    }
+    Ok(())
+}
+
+fn validate_snapshot_owner(
+    snapshot: &WorkspaceSnapshotRecord,
+    project_id: ProjectId,
+    binding_id: WorkspaceBindingId,
+) -> Result<(), WorkspaceApplicationError> {
+    if snapshot.project_id != project_id || snapshot.manifest.revision.binding_id() != binding_id {
+        Err(WorkspaceApplicationError::BindingMismatch)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_checkpoint_owner(
+    checkpoint: &WorkspaceCheckpointRecord,
+    project_id: ProjectId,
+    binding_id: WorkspaceBindingId,
+) -> Result<(), WorkspaceApplicationError> {
+    if checkpoint.project_id != project_id || checkpoint.binding_id != binding_id {
+        Err(WorkspaceApplicationError::BindingMismatch)
+    } else {
+        Ok(())
+    }
+}
+
+fn checkpoint_matches_create_command(
+    checkpoint: &WorkspaceCheckpointRecord,
+    command: &CreateWorkspaceCheckpointCommand,
+) -> bool {
+    checkpoint.project_id == command.project_id
+        && checkpoint.binding_id == command.binding_id
+        && checkpoint.base_revision == command.base_revision
+        && checkpoint.label == command.label
+        && checkpoint.request_summary == command.request_summary
+        && checkpoint
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            == command
+                .touched_paths
+                .iter()
+                .map(ProjectRelativePath::as_str)
+                .collect::<std::collections::BTreeSet<_>>()
+        && checkpoint.artifacts == command.artifacts
+        && checkpoint.external_effects == command.external_effects
+        && checkpoint.provider_continuation == command.provider_continuation
+        && checkpoint.created_at_unix_ms == command.created_at_unix_ms
+}
+
+fn require_checkpoint_paths_match(
+    manifest: &WorkspaceManifest,
+    entries: &[WorkspaceCheckpointEntry],
+) -> Result<(), WorkspaceApplicationError> {
+    let conflicts = entries
+        .iter()
+        .filter(|entry| manifest.state(&entry.path) != entry.state)
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(WorkspaceApplicationError::Conflict(conflicts))
+    }
+}
+
+fn manifest_path_conflicts<'a>(
+    expected: &WorkspaceManifest,
+    observed: &WorkspaceManifest,
+    paths: impl IntoIterator<Item = &'a ProjectRelativePath>,
+) -> Result<Vec<ProjectRelativePath>, WorkspaceApplicationError> {
+    if !expected.complete || !observed.complete || expected.scope_sha256 != observed.scope_sha256 {
+        return Err(WorkspaceFilesystemError::BoundExceeded.into());
+    }
+    Ok(paths
+        .into_iter()
+        .filter(|path| expected.state(path) != observed.state(path))
+        .cloned()
+        .collect())
+}
+
+fn recovery_operation_recognizes_checkpoint(
+    operation: &WorkspaceOperationRecord,
+    checkpoint: &WorkspaceCheckpointRecord,
+    observed: &WorkspaceManifest,
+) -> bool {
+    if operation.state != DurableWorkspaceOperationState::RecoveryRequired
+        || operation.plan.safety_checkpoint_id != checkpoint.checkpoint_id
+        || operation.plan.project_id != checkpoint.project_id
+        || operation.plan.binding_id != checkpoint.binding_id
+        || !observed.complete
+        || observed.scope_sha256 != operation.plan.scope_sha256
+        || operation.plan.transitions.len() != checkpoint.entries.len()
+    {
+        return false;
+    }
+    let checkpoint_by_path = checkpoint
+        .entries
+        .iter()
+        .map(|entry| (entry.path.as_str(), &entry.state))
+        .collect::<BTreeMap<_, _>>();
+    operation.plan.transitions.iter().all(|transition| {
+        checkpoint_by_path.get(transition.path.as_str()).copied() == Some(&transition.before)
+            && matches!(
+                classify_transition(transition, &observed.state(&transition.path)),
+                dennett_effect_core::workspace::TransitionObservation::Before
+                    | dennett_effect_core::workspace::TransitionObservation::After
+            )
+    })
+}
+
+fn recovery_divergent_paths(
+    plan: &WorkspaceFileEffectPlan,
+    observed: &WorkspaceManifest,
+) -> Vec<ProjectRelativePath> {
+    plan.transitions
+        .iter()
+        .filter(|transition| {
+            matches!(
+                classify_transition(transition, &observed.state(&transition.path)),
+                dennett_effect_core::workspace::TransitionObservation::Diverged
+            )
+        })
+        .map(|transition| transition.path.clone())
+        .collect()
+}
+
+fn restore_changes(
+    checkpoint: &WorkspaceCheckpointRecord,
+    current: &WorkspaceManifest,
+    blobs: &[WorkspaceBlob],
+) -> Result<Vec<WorkspaceFileChangeInput>, WorkspaceApplicationError> {
+    let blob_by_id = blobs
+        .iter()
+        .map(|blob| (blob.reference.content_id.as_str(), blob))
+        .collect::<BTreeMap<_, _>>();
+    let mut changes = Vec::new();
+    for entry in &checkpoint.entries {
+        let observed = current.state(&entry.path);
+        if observed == entry.state {
+            continue;
+        }
+        let (kind, content, expected_content_sha256, resulting_permissions) = match &entry.state {
+            WorkspacePathState::Absent => {
+                let expected = observed
+                    .content_sha256()
+                    .ok_or_else(|| WorkspaceApplicationError::Conflict(vec![entry.path.clone()]))?;
+                (FileMutationKind::Delete, None, Some(expected), None)
+            }
+            WorkspacePathState::RegularFile {
+                metadata_sha256, ..
+            } => {
+                let reference = entry
+                    .content
+                    .as_ref()
+                    .ok_or(WorkspaceApplicationError::InvalidCheckpointCapture)?;
+                let blob = blob_by_id
+                    .get(reference.content_id.as_str())
+                    .ok_or(WorkspaceJournalError::Integrity)?;
+                blob.validate()?;
+                if &blob.reference != reference {
+                    return Err(WorkspaceJournalError::Integrity.into());
+                }
+                let permissions = PortableFilePermissions::from_metadata_sha256(*metadata_sha256)
+                    .ok_or(WorkspaceApplicationError::CheckpointUnavailable)?;
+                match observed {
+                    WorkspacePathState::Absent => (
+                        FileMutationKind::Add,
+                        Some(blob.bytes.clone()),
+                        None,
+                        Some(permissions),
+                    ),
+                    WorkspacePathState::RegularFile { content_sha256, .. } => (
+                        FileMutationKind::Modify,
+                        Some(blob.bytes.clone()),
+                        Some(content_sha256),
+                        Some(permissions),
+                    ),
+                    WorkspacePathState::Directory { .. }
+                    | WorkspacePathState::Link { .. }
+                    | WorkspacePathState::Other { .. } => {
+                        return Err(WorkspaceApplicationError::Conflict(vec![
+                            entry.path.clone(),
+                        ]));
+                    }
+                }
+            }
+            WorkspacePathState::Directory { .. }
+            | WorkspacePathState::Link { .. }
+            | WorkspacePathState::Other { .. } => {
+                return Err(WorkspaceApplicationError::CheckpointUnavailable);
+            }
+        };
+        changes.push(WorkspaceFileChangeInput {
+            kind,
+            path: entry.path.clone(),
+            previous_path: None,
+            content,
+            expected_content_sha256,
+            resulting_permissions,
+        });
+    }
+    Ok(changes)
 }
 
 fn hash_file_change_intent(
@@ -729,8 +1325,28 @@ fn hash_file_change_intent(
             }
             None => hasher.update([0]),
         }
+        match change.resulting_permissions {
+            Some(permissions) => hasher.update([
+                1,
+                u8::from(permissions.read_only),
+                u8::from(permissions.executable),
+            ]),
+            None => hasher.update([0]),
+        }
     }
     Ok(ContentSha256(hasher.finalize().into()))
+}
+
+fn hash_restore_intent(command: &RestoreWorkspaceCheckpointCommand) -> ContentSha256 {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dennett.workspace-checkpoint-restore.v1\0");
+    hasher.update(command.project_id.0.as_bytes());
+    hasher.update(command.binding_id.0.as_bytes());
+    hasher.update(command.checkpoint_id.0.as_bytes());
+    hasher.update(command.expected_current_revision.binding_id().0.as_bytes());
+    hasher.update(command.expected_current_revision.snapshot_id().0.as_bytes());
+    hasher.update(command.expected_current_revision.sequence().to_be_bytes());
+    ContentSha256(hasher.finalize().into())
 }
 
 fn hash_length(hasher: &mut Sha256, length: usize) -> Result<(), WorkspaceApplicationError> {
@@ -900,6 +1516,22 @@ fn divergent_paths(
         .collect()
 }
 
+fn failure_kind_for_filesystem_error(
+    error: &WorkspaceFilesystemError,
+) -> DurableWorkspaceFailureKind {
+    match error {
+        WorkspaceFilesystemError::Conflict => DurableWorkspaceFailureKind::Conflict,
+        WorkspaceFilesystemError::ScopeDenied
+        | WorkspaceFilesystemError::UnsupportedObject
+        | WorkspaceFilesystemError::BoundExceeded => DurableWorkspaceFailureKind::ScopeDenied,
+        WorkspaceFilesystemError::RecoveryRequired => DurableWorkspaceFailureKind::RecoveryRequired,
+        WorkspaceFilesystemError::LocationMissing
+        | WorkspaceFilesystemError::AdapterUnavailable => {
+            DurableWorkspaceFailureKind::AdapterFailure
+        }
+    }
+}
+
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -927,6 +1559,10 @@ pub enum WorkspaceApplicationError {
     Conflict(Vec<ProjectRelativePath>),
     #[error("workspace checkpoint capture is inconsistent")]
     InvalidCheckpointCapture,
+    #[error("workspace checkpoint was not found")]
+    CheckpointNotFound,
+    #[error("workspace checkpoint cannot be restored safely")]
+    CheckpointUnavailable,
     #[error("workspace transition observation is inconsistent")]
     InvalidTransitionObservation,
     #[error(transparent)]

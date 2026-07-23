@@ -19,9 +19,9 @@ use dennett_effect_core::workspace::{
     WorkspaceFileEffectPlan, WorkspaceManifestEntry, WorkspacePathState,
 };
 use dennett_head::workspace::{
-    PreparedWorkspaceFileEffect, WorkspaceFileChangeInput, WorkspaceFilesystemError,
-    WorkspaceFilesystemPort, WorkspaceFilesystemScope, WorkspaceObservation,
-    WorkspaceTransitionObservation,
+    CapturedWorkspaceCheckpoint, PreparedWorkspaceFileEffect, WorkspaceFileChangeInput,
+    WorkspaceFilesystemError, WorkspaceFilesystemPort, WorkspaceFilesystemScope,
+    WorkspaceObservation, WorkspaceTransitionObservation,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -108,6 +108,57 @@ impl WorkspaceFilesystemPort for NodeWorkspaceFilesystemAdapter {
         .await
         .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
     }
+
+    async fn cleanup_unapplied_file_effect(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        plan: &WorkspaceFileEffectPlan,
+    ) -> Result<(), WorkspaceFilesystemError> {
+        let scope = scope.clone();
+        let plan = plan.clone();
+        tokio::task::spawn_blocking(move || {
+            let opened = open_scope(&scope)?;
+            let observations = observe_transitions_opened(&opened, &plan)?;
+            if !all_transitions_before(&plan, &observations) {
+                return Err(WorkspaceFilesystemError::RecoveryRequired);
+            }
+            cleanup_sidecars(&opened, &plan)?;
+            opened.revalidate_location().map_err(map_project_error)
+        })
+        .await
+        .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+    }
+
+    async fn cleanup_recovery_file_effect(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        plan: &WorkspaceFileEffectPlan,
+    ) -> Result<(), WorkspaceFilesystemError> {
+        let scope = scope.clone();
+        let plan = plan.clone();
+        tokio::task::spawn_blocking(move || {
+            let opened = open_scope(&scope)?;
+            let observations = observe_transitions_opened(&opened, &plan)?;
+            if !all_transitions_recognized(&plan, &observations) {
+                return Err(WorkspaceFilesystemError::Conflict);
+            }
+            cleanup_sidecars(&opened, &plan)?;
+            opened.revalidate_location().map_err(map_project_error)
+        })
+        .await
+        .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+    }
+
+    async fn capture_checkpoint(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        paths: Vec<ProjectRelativePath>,
+    ) -> Result<CapturedWorkspaceCheckpoint, WorkspaceFilesystemError> {
+        let scope = scope.clone();
+        tokio::task::spawn_blocking(move || capture_checkpoint_sync(&scope, paths))
+            .await
+            .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+    }
 }
 
 fn open_scope(
@@ -137,8 +188,16 @@ fn scan_workspace(
     opened: &OpenProjectRoot,
 ) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
     let root_identity = directory_identity(&opened.dir).map_err(map_project_error)?;
+    let root_mount = directory_mount_identity(&opened.dir)?;
     let mut state = SnapshotScanState::default();
-    scan_directory(&opened.dir, "", 0, root_identity.volume, &mut state)?;
+    scan_directory(
+        &opened.dir,
+        "",
+        0,
+        root_identity.volume,
+        root_mount,
+        &mut state,
+    )?;
     Ok(WorkspaceObservation {
         scope_sha256: ContentSha256(Sha256::digest(SNAPSHOT_SCOPE_POLICY).into()),
         complete: true,
@@ -157,6 +216,7 @@ fn scan_directory(
     parent: &str,
     depth: usize,
     root_volume: u64,
+    root_mount: MountIdentity,
     state: &mut SnapshotScanState,
 ) -> Result<(), WorkspaceFilesystemError> {
     if depth > MAX_SNAPSHOT_DEPTH {
@@ -182,7 +242,7 @@ fn scan_directory(
     names.sort();
 
     for name in names {
-        if parent.is_empty() && os_eq_ignore_ascii_case(&name, ".git") {
+        if os_eq_ignore_ascii_case(&name, ".git") {
             continue;
         }
         let name_text = name
@@ -210,6 +270,7 @@ fn scan_directory(
             if identity.volume != root_volume {
                 return Err(WorkspaceFilesystemError::ScopeDenied);
             }
+            require_same_mount(root_mount, &child)?;
             let directory_state = WorkspacePathState::Directory {
                 metadata_sha256: metadata_hash("directory", &metadata, &[]),
             };
@@ -217,7 +278,7 @@ fn scan_directory(
                 path,
                 state: directory_state,
             });
-            scan_directory(&child, &relative, depth + 1, root_volume, state)?;
+            scan_directory(&child, &relative, depth + 1, root_volume, root_mount, state)?;
             continue;
         } else if metadata.is_file() {
             read_regular_state(dir, &name, &mut state.hashed_bytes, false)?.0
@@ -273,16 +334,18 @@ fn prepare_file_effect_sync(
             None => None,
         };
         let resulting_permissions = match change.kind {
-            FileMutationKind::Add => Some(PortableFilePermissions {
-                read_only: false,
-                executable: false,
-            }),
-            FileMutationKind::Modify => Some(permissions_from_state_and_path(
-                &opened,
-                &change.path,
-                &current,
-            )?),
-            FileMutationKind::Delete | FileMutationKind::Rename => None,
+            FileMutationKind::Add => {
+                change
+                    .resulting_permissions
+                    .or(Some(PortableFilePermissions {
+                        read_only: false,
+                        executable: false,
+                    }))
+            }
+            FileMutationKind::Modify => Some(change.resulting_permissions.unwrap_or(
+                permissions_from_state_and_path(&opened, &change.path, &current)?,
+            )),
+            FileMutationKind::Delete | FileMutationKind::Rename => change.resulting_permissions,
         };
         capture_checkpoint_entry(
             &opened,
@@ -321,6 +384,43 @@ fn prepare_file_effect_sync(
         proposed_blobs,
         checkpoint_entries: checkpoint_entries.into_values().collect(),
         checkpoint_blobs: checkpoint_blobs.into_values().collect(),
+    })
+}
+
+fn capture_checkpoint_sync(
+    scope: &WorkspaceFilesystemScope,
+    paths: Vec<ProjectRelativePath>,
+) -> Result<CapturedWorkspaceCheckpoint, WorkspaceFilesystemError> {
+    let observation = observe_workspace_sync(scope)?;
+    let opened = open_scope(scope)?;
+    let manifest = observation
+        .entries
+        .iter()
+        .map(|entry| (entry.path.as_str(), &entry.state))
+        .collect::<BTreeMap<_, _>>();
+    let mut entries = BTreeMap::<String, WorkspaceCheckpointEntry>::new();
+    let mut blobs = BTreeMap::<String, WorkspaceBlob>::new();
+    for path in paths {
+        let expected = manifest
+            .get(path.as_str())
+            .cloned()
+            .cloned()
+            .unwrap_or(WorkspacePathState::Absent);
+        if matches!(
+            expected,
+            WorkspacePathState::Directory { .. }
+                | WorkspacePathState::Link { .. }
+                | WorkspacePathState::Other { .. }
+        ) {
+            return Err(WorkspaceFilesystemError::UnsupportedObject);
+        }
+        capture_checkpoint_entry(&opened, &path, expected, &mut entries, &mut blobs)?;
+    }
+    opened.revalidate_location().map_err(map_project_error)?;
+    Ok(CapturedWorkspaceCheckpoint {
+        observation,
+        entries: entries.into_values().collect(),
+        blobs: blobs.into_values().collect(),
     })
 }
 
@@ -373,6 +473,15 @@ fn apply_file_effect_sync(
     plan: &WorkspaceFileEffectPlan,
     blobs: &[WorkspaceBlob],
 ) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
+    apply_file_effect_sync_with_failure(scope, plan, blobs, None)
+}
+
+fn apply_file_effect_sync_with_failure(
+    scope: &WorkspaceFilesystemScope,
+    plan: &WorkspaceFileEffectPlan,
+    blobs: &[WorkspaceBlob],
+    fail_after_publications: Option<usize>,
+) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
     if !scope.writable || scope.project_id != plan.project_id || scope.binding_id != plan.binding_id
     {
         return Err(WorkspaceFilesystemError::ScopeDenied);
@@ -382,7 +491,10 @@ fn apply_file_effect_sync(
     preflight_transitions(&opened, plan)?;
     stage_after_images(&opened, plan, &blob_map)?;
 
-    for change in &plan.changes {
+    for (published, change) in plan.changes.iter().enumerate() {
+        if fail_after_publications == Some(published) {
+            return Err(WorkspaceFilesystemError::RecoveryRequired);
+        }
         let result = match change.kind {
             FileMutationKind::Add => publish_staged_add(&opened, plan, &change.path),
             FileMutationKind::Modify => publish_staged_modify(&opened, plan, &change.path),
@@ -454,9 +566,25 @@ fn all_transitions_after(
         .all(|transition| by_path.get(transition.path.as_str()).copied() == Some(&transition.after))
 }
 
-fn validated_blob_map<'a>(
-    blobs: &'a [WorkspaceBlob],
-) -> Result<BTreeMap<&'a str, &'a [u8]>, WorkspaceFilesystemError> {
+fn all_transitions_recognized(
+    plan: &WorkspaceFileEffectPlan,
+    observations: &[WorkspaceTransitionObservation],
+) -> bool {
+    let by_path = observations
+        .iter()
+        .map(|observation| (observation.path.as_str(), &observation.state))
+        .collect::<BTreeMap<_, _>>();
+    observations.len() == plan.transitions.len()
+        && plan.transitions.iter().all(|transition| {
+            by_path
+                .get(transition.path.as_str())
+                .is_some_and(|state| *state == &transition.before || *state == &transition.after)
+        })
+}
+
+fn validated_blob_map(
+    blobs: &[WorkspaceBlob],
+) -> Result<BTreeMap<&str, &[u8]>, WorkspaceFilesystemError> {
     let mut result = BTreeMap::new();
     for blob in blobs {
         blob.validate()
@@ -824,6 +952,7 @@ fn open_parent(
 ) -> Result<(Dir, OsString), WorkspaceFilesystemError> {
     let mut segments = path.as_str().split('/').peekable();
     let root_identity = directory_identity(root).map_err(map_project_error)?;
+    let root_mount = directory_mount_identity(root)?;
     let mut current = root
         .try_clone()
         .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?;
@@ -847,9 +976,51 @@ fn open_parent(
         if identity.volume != root_identity.volume {
             return Err(WorkspaceFilesystemError::ScopeDenied);
         }
+        require_same_mount(root_mount, &child)?;
         current = child;
     }
     Err(WorkspaceFilesystemError::ScopeDenied)
+}
+
+type MountIdentity = u64;
+
+#[cfg(target_os = "linux")]
+fn directory_mount_identity(dir: &Dir) -> Result<MountIdentity, WorkspaceFilesystemError> {
+    use rustix::fs::{AtFlags, StatxFlags, statx};
+
+    let stat = statx(
+        dir,
+        "",
+        AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT,
+        StatxFlags::MNT_ID,
+    )
+    .map_err(|_| WorkspaceFilesystemError::ScopeDenied)?;
+    if stat.stx_mask & StatxFlags::MNT_ID.bits() == 0 {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    Ok(stat.stx_mnt_id)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn directory_mount_identity(_dir: &Dir) -> Result<MountIdentity, WorkspaceFilesystemError> {
+    Ok(0)
+}
+
+#[cfg(target_os = "linux")]
+fn require_same_mount(expected: MountIdentity, dir: &Dir) -> Result<(), WorkspaceFilesystemError> {
+    if directory_mount_identity(dir)? == expected {
+        Ok(())
+    } else {
+        Err(WorkspaceFilesystemError::ScopeDenied)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn require_same_mount(
+    _expected: MountIdentity,
+    _dir: &Dir,
+) -> Result<(), WorkspaceFilesystemError> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -857,9 +1028,6 @@ fn ensure_exact_case_if_present(
     dir: &Dir,
     requested: &OsStr,
 ) -> Result<(), WorkspaceFilesystemError> {
-    let requested_text = requested
-        .to_str()
-        .ok_or(WorkspaceFilesystemError::ScopeDenied)?;
     for entry in dir
         .entries()
         .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
@@ -867,14 +1035,43 @@ fn ensure_exact_case_if_present(
         let name = entry
             .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
             .file_name();
-        let Some(name_text) = name.to_str() else {
-            continue;
-        };
-        if name_text.eq_ignore_ascii_case(requested_text) && name_text != requested_text {
+        if windows_names_equal_ignore_case(&name, requested)? && name != requested {
             return Err(WorkspaceFilesystemError::ScopeDenied);
         }
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_names_equal_ignore_case(
+    first: &OsStr,
+    second: &OsStr,
+) -> Result<bool, WorkspaceFilesystemError> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+
+    let first = first.encode_wide().collect::<Vec<_>>();
+    let second = second.encode_wide().collect::<Vec<_>>();
+    let first_len =
+        i32::try_from(first.len()).map_err(|_| WorkspaceFilesystemError::ScopeDenied)?;
+    let second_len =
+        i32::try_from(second.len()).map_err(|_| WorkspaceFilesystemError::ScopeDenied)?;
+    // SAFETY: both UTF-16 buffers remain alive for the duration of the call,
+    // and the explicit lengths keep the API from reading beyond them.
+    let comparison = unsafe {
+        CompareStringOrdinal(
+            first.as_ptr(),
+            first_len,
+            second.as_ptr(),
+            second_len,
+            true.into(),
+        )
+    };
+    if comparison == 0 {
+        Err(WorkspaceFilesystemError::AdapterUnavailable)
+    } else {
+        Ok(comparison == CSTR_EQUAL)
+    }
 }
 
 #[cfg(not(windows))]
@@ -1024,6 +1221,19 @@ fn move_noreplace(
     })
 }
 
+fn all_transitions_before(
+    plan: &WorkspaceFileEffectPlan,
+    observations: &[WorkspaceTransitionObservation],
+) -> bool {
+    observations.len() == plan.transitions.len()
+        && plan.transitions.iter().all(|transition| {
+            observations
+                .iter()
+                .find(|item| item.path == transition.path)
+                .is_some_and(|item| item.state == transition.before)
+        })
+}
+
 #[cfg(windows)]
 fn move_noreplace(
     dir: &Dir,
@@ -1167,4 +1377,823 @@ fn hex_hash(bytes: &[u8]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        project_fs::{OpenProjectRoot, directory_identity},
+        project_location::encode_source_identity,
+    };
+    use dennett_contracts::{
+        CheckpointId, CommandId, PortableMetadataAction, ProjectId, ProjectTrustState,
+        WorkspaceBindingId, WorkspaceOperationId, WorkspaceSnapshotId,
+    };
+    use dennett_effect_core::workspace::{
+        DurableCheckpointState, DurableWorkspaceOperationState, WorkspaceCheckpointRecord,
+        WorkspaceFileEffectRequest, WorkspaceJournalPort, WorkspaceManifest,
+        WorkspaceOperationRecord,
+    };
+    use dennett_head::{
+        project::{
+            InspectProjectLocationCommand, ProjectApplication, RegisterProjectCommand,
+            SetProjectTrustCommand,
+        },
+        session::SessionCoordinator,
+        system::{SystemProjection, SystemSnapshot},
+        workspace::{
+            ApplyWorkspaceFileChangesCommand, CheckpointRestoreOutcome,
+            CreateWorkspaceCheckpointCommand, RestoreWorkspaceCheckpointCommand,
+            WorkspaceApplication, WorkspaceApplicationError,
+        },
+    };
+    use dennett_memory_core::session::SessionJournal;
+    use dennett_storage_sqlite::SqliteControlStore;
+    use dennett_trust_core::project_registry::{
+        BRIDGE_ATTESTED_PROJECT_TRUST_DECISION_KIND, ProjectRegistrationKind, TrustDecisionRef,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn path(value: &str) -> ProjectRelativePath {
+        ProjectRelativePath::try_from(value).expect("valid project path")
+    }
+
+    fn scope(root: &Path) -> WorkspaceFilesystemScope {
+        let opened = OpenProjectRoot::open(root).expect("open project root");
+        let identity = directory_identity(&opened.dir).expect("project identity");
+        WorkspaceFilesystemScope {
+            project_id: ProjectId::new(),
+            binding_id: WorkspaceBindingId::new(),
+            absolute_path: root.to_string_lossy().into_owned(),
+            source_identity: encode_source_identity(identity),
+            writable: true,
+        }
+    }
+
+    fn plan(
+        scope: &WorkspaceFilesystemScope,
+        observation: WorkspaceObservation,
+        prepared: &PreparedWorkspaceFileEffect,
+    ) -> WorkspaceFileEffectPlan {
+        let revision = dennett_contracts::WorkspaceRevision::new(
+            scope.binding_id,
+            WorkspaceSnapshotId::new(),
+            1,
+        )
+        .expect("workspace revision");
+        let manifest = WorkspaceManifest::new(
+            revision,
+            observation.scope_sha256,
+            observation.complete,
+            observation.entries,
+        )
+        .expect("workspace manifest");
+        WorkspaceFileEffectPlan::build(
+            &manifest,
+            WorkspaceFileEffectRequest {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace_effect".to_owned(),
+                project_id: scope.project_id,
+                binding_id: scope.binding_id,
+                base_revision: revision,
+                intent_sha256: ContentSha256([9; 32]),
+                safety_checkpoint_id: CheckpointId::new(),
+                prepared_at_unix_ms: 1,
+                changes: prepared.proposals.clone(),
+            },
+        )
+        .expect("valid workspace effect plan")
+    }
+
+    fn change(
+        kind: FileMutationKind,
+        target: &str,
+        previous: Option<&str>,
+        content: Option<&[u8]>,
+    ) -> WorkspaceFileChangeInput {
+        WorkspaceFileChangeInput {
+            kind,
+            path: path(target),
+            previous_path: previous.map(path),
+            content: content.map(ToOwned::to_owned),
+            expected_content_sha256: None,
+            resulting_permissions: None,
+        }
+    }
+
+    struct RealWorkspaceApplication {
+        _temp: TempDir,
+        root: PathBuf,
+        application: WorkspaceApplication,
+        projects: Arc<ProjectApplication>,
+        store: Arc<SqliteControlStore>,
+        project_id: ProjectId,
+        binding_id: WorkspaceBindingId,
+    }
+
+    impl RealWorkspaceApplication {
+        async fn open() -> Self {
+            let temp = TempDir::new().expect("temporary workspace application");
+            let root = temp.path().join("project");
+            fs::create_dir(&root).expect("create project root");
+            fs::write(root.join("tracked.txt"), b"original").expect("seed tracked file");
+            fs::write(root.join("tracked-too.txt"), b"second original")
+                .expect("seed second tracked file");
+            fs::write(root.join("unrelated.txt"), b"before").expect("seed unrelated file");
+            let store = Arc::new(
+                SqliteControlStore::open(temp.path().join("control.sqlite"))
+                    .await
+                    .expect("open control store"),
+            );
+            let sessions = SessionCoordinator::new(SessionJournal::new(store.clone()), 1, 16);
+            let system = Arc::new(SystemProjection::new(SystemSnapshot::empty(1), 16));
+            let projects = Arc::new(ProjectApplication::new(
+                store.clone(),
+                Arc::new(crate::project_location::NodeProjectLocationAdapter::default()),
+                sessions,
+                system,
+            ));
+            let inspection = projects
+                .inspect_location(InspectProjectLocationCommand {
+                    registration_kind: ProjectRegistrationKind::AttachExisting,
+                    root_uri: root.to_string_lossy().into_owned(),
+                    observed_at_unix_ms: 1,
+                    expires_at_unix_ms: 60_001,
+                })
+                .await
+                .expect("inspect project");
+            let registered = projects
+                .register_project(RegisterProjectCommand {
+                    command_id: CommandId::new(),
+                    correlation_id: "test.workspace.register".to_owned(),
+                    intent_sha256: [3; 32],
+                    inspection_id: inspection.inspection_id,
+                    display_name: "Workspace test".to_owned(),
+                    portable_metadata_action: PortableMetadataAction::LeaveAbsent,
+                    initial_trust_state: None,
+                    trust_decision: None,
+                    committed_at_unix_ms: 2,
+                })
+                .await
+                .expect("register project");
+            let project_id = registered.project.project.project_id;
+            let binding_id = registered.project.project.primary_binding_id;
+            let trust_command_id = CommandId::new();
+            projects
+                .set_project_trust(SetProjectTrustCommand {
+                    command_id: trust_command_id,
+                    correlation_id: "test.workspace.trust".to_owned(),
+                    project_id,
+                    target_state: ProjectTrustState::TrustedBounded,
+                    expected_policy_revision: registered.project.access_policy.revision,
+                    trust_decision: TrustDecisionRef::new(
+                        BRIDGE_ATTESTED_PROJECT_TRUST_DECISION_KIND,
+                        trust_command_id.0.to_string(),
+                    )
+                    .expect("trust decision"),
+                    committed_at_unix_ms: 3,
+                })
+                .await
+                .expect("trust project");
+            let application = WorkspaceApplication::new(
+                projects.clone(),
+                store.clone(),
+                Arc::new(NodeWorkspaceFilesystemAdapter),
+            );
+            Self {
+                _temp: temp,
+                root,
+                application,
+                projects,
+                store,
+                project_id,
+                binding_id,
+            }
+        }
+    }
+
+    #[test]
+    fn applies_exact_multi_file_changes_and_removes_private_sidecars() {
+        let temp = TempDir::new().expect("temporary project");
+        fs::write(temp.path().join("modify.txt"), b"old modify").expect("seed modify");
+        fs::write(temp.path().join("delete.txt"), b"old delete").expect("seed delete");
+        fs::write(temp.path().join("rename.txt"), b"old rename").expect("seed rename");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![
+                change(FileMutationKind::Add, "added.txt", None, Some(b"added")),
+                change(
+                    FileMutationKind::Modify,
+                    "modify.txt",
+                    None,
+                    Some(b"modified"),
+                ),
+                change(FileMutationKind::Delete, "delete.txt", None, None),
+                change(
+                    FileMutationKind::Rename,
+                    "renamed.txt",
+                    Some("rename.txt"),
+                    None,
+                ),
+            ],
+        )
+        .expect("prepare file effect");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+
+        let after = apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs)
+            .expect("apply file effect");
+
+        assert!(after.complete);
+        assert_eq!(fs::read(temp.path().join("added.txt")).unwrap(), b"added");
+        assert_eq!(
+            fs::read(temp.path().join("modify.txt")).unwrap(),
+            b"modified"
+        );
+        assert!(!temp.path().join("delete.txt").exists());
+        assert!(!temp.path().join("rename.txt").exists());
+        assert_eq!(
+            fs::read(temp.path().join("renamed.txt")).unwrap(),
+            b"old rename"
+        );
+        assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".dennett-ws-")
+        }));
+    }
+
+    #[test]
+    fn touched_path_race_fails_before_any_publication() {
+        let temp = TempDir::new().expect("temporary project");
+        fs::write(temp.path().join("owned.txt"), b"base").expect("seed file");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![
+                change(FileMutationKind::Modify, "owned.txt", None, Some(b"agent")),
+                change(FileMutationKind::Add, "new.txt", None, Some(b"new")),
+            ],
+        )
+        .expect("prepare file effect");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        fs::write(temp.path().join("owned.txt"), b"human").expect("external edit");
+
+        assert_eq!(
+            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
+            Err(WorkspaceFilesystemError::Conflict)
+        );
+        assert_eq!(fs::read(temp.path().join("owned.txt")).unwrap(), b"human");
+        assert!(!temp.path().join("new.txt").exists());
+    }
+
+    #[test]
+    fn test_m02_filesystem_scope_001_rejects_linked_parent_without_external_write() {
+        let temp = TempDir::new().expect("temporary scope test");
+        let project = temp.path().join("project");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&project).expect("create project");
+        fs::create_dir(&outside).expect("create outside root");
+        fs::write(outside.join("secret.txt"), b"outside").expect("seed outside file");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, project.join("escape"))
+            .expect("create directory symlink");
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&outside, project.join("escape")).is_err() {
+            return;
+        }
+        let scope = scope(&project);
+
+        assert!(matches!(
+            prepare_file_effect_sync(
+                &scope,
+                vec![change(
+                    FileMutationKind::Modify,
+                    "escape/secret.txt",
+                    None,
+                    Some(b"agent"),
+                )],
+            ),
+            Err(WorkspaceFilesystemError::ScopeDenied | WorkspaceFilesystemError::Conflict)
+        ));
+        assert_eq!(fs::read(outside.join("secret.txt")).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn test_m02_filesystem_scope_001_rejects_a_different_root_for_the_granted_identity() {
+        let first = TempDir::new().expect("first project");
+        let second = TempDir::new().expect("second project");
+        let mut mismatched_scope = scope(first.path());
+        mismatched_scope.absolute_path = second.path().to_string_lossy().into_owned();
+
+        assert_eq!(
+            prepare_file_effect_sync(
+                &mismatched_scope,
+                vec![change(
+                    FileMutationKind::Add,
+                    "ungranted.txt",
+                    None,
+                    Some(b"agent"),
+                )],
+            ),
+            Err(WorkspaceFilesystemError::Conflict)
+        );
+        assert!(!first.path().join("ungranted.txt").exists());
+        assert!(!second.path().join("ungranted.txt").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_m02_filesystem_scope_001_distinguishes_linux_mounts() {
+        let root =
+            Dir::open_ambient_dir("/", cap_std::ambient_authority()).expect("open filesystem root");
+        let proc =
+            Dir::open_ambient_dir("/proc", cap_std::ambient_authority()).expect("open proc mount");
+        let root_mount = directory_mount_identity(&root).expect("root mount identity");
+        let proc_mount = directory_mount_identity(&proc).expect("proc mount identity");
+
+        assert_ne!(root_mount, proc_mount);
+        assert_eq!(
+            require_same_mount(root_mount, &proc),
+            Err(WorkspaceFilesystemError::ScopeDenied)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_m02_filesystem_scope_001_rejects_windows_case_aliases() {
+        let temp = TempDir::new().expect("temporary project");
+        fs::write(temp.path().join("Owned.txt"), b"human").expect("seed case-sensitive name");
+        let scope = scope(temp.path());
+        let opened = OpenProjectRoot::open(temp.path()).expect("open project root");
+        assert_eq!(
+            ensure_exact_case_if_present(&opened.dir, OsStr::new("owned.txt")),
+            Err(WorkspaceFilesystemError::ScopeDenied)
+        );
+        fs::write(temp.path().join("Тест.txt"), b"unicode")
+            .expect("seed Unicode case-sensitive name");
+        assert_eq!(
+            ensure_exact_case_if_present(&opened.dir, OsStr::new("тест.txt")),
+            Err(WorkspaceFilesystemError::ScopeDenied)
+        );
+
+        assert!(matches!(
+            prepare_file_effect_sync(
+                &scope,
+                vec![change(
+                    FileMutationKind::Modify,
+                    "owned.txt",
+                    None,
+                    Some(b"agent"),
+                )],
+            ),
+            Err(WorkspaceFilesystemError::ScopeDenied | WorkspaceFilesystemError::Conflict)
+        ));
+        assert_eq!(fs::read(temp.path().join("Owned.txt")).unwrap(), b"human");
+    }
+
+    #[test]
+    fn complete_snapshot_excludes_git_control_state() {
+        let temp = TempDir::new().expect("temporary project");
+        fs::create_dir(temp.path().join(".git")).expect("create git directory");
+        fs::write(temp.path().join(".git").join("index"), b"private git state")
+            .expect("seed git state");
+        fs::create_dir_all(temp.path().join("vendor").join(".git"))
+            .expect("create nested git directory");
+        fs::write(
+            temp.path().join("vendor").join(".git").join("config"),
+            b"nested private git state",
+        )
+        .expect("seed nested git state");
+        fs::write(temp.path().join("visible.txt"), b"visible").expect("seed project file");
+        let observation = observe_workspace_sync(&scope(temp.path())).expect("observe workspace");
+
+        assert!(observation.complete);
+        assert!(
+            observation
+                .entries
+                .iter()
+                .any(|entry| entry.path == path("visible.txt"))
+        );
+        assert!(
+            observation
+                .entries
+                .iter()
+                .all(|entry| !entry.path.as_str().contains(".git"))
+        );
+    }
+
+    #[test]
+    fn checkpoint_rejects_a_before_image_larger_than_the_recovery_bound() {
+        let temp = TempDir::new().expect("temporary project");
+        fs::write(
+            temp.path().join("large.bin"),
+            vec![7_u8; usize::try_from(MAX_STAGED_FILE_BYTES + 1).unwrap()],
+        )
+        .expect("seed large file");
+        let scope = scope(temp.path());
+
+        assert_eq!(
+            capture_checkpoint_sync(&scope, vec![path("large.bin")]),
+            Err(WorkspaceFilesystemError::BoundExceeded)
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_restore_is_forward_only_and_preserves_unrelated_human_edits() {
+        let real = RealWorkspaceApplication::open().await;
+        let base = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.observe".to_owned(),
+            )
+            .await
+            .expect("observe base workspace");
+        let checkpoint_id = CheckpointId::new();
+        let checkpoint = real
+            .application
+            .create_checkpoint(CreateWorkspaceCheckpointCommand {
+                checkpoint_id,
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                base_revision: base.manifest.revision,
+                correlation_id: "test.workspace.checkpoint".to_owned(),
+                label: "Before edit".to_owned(),
+                request_summary: "Restore tracked file only".to_owned(),
+                touched_paths: vec![path("tracked.txt")],
+                artifacts: vec![],
+                external_effects: vec![],
+                provider_continuation: None,
+                created_at_unix_ms: 4,
+            })
+            .await
+            .expect("create checkpoint");
+        assert_eq!(checkpoint.captured_revision, base.manifest.revision);
+
+        let applied = real
+            .application
+            .apply_file_changes(ApplyWorkspaceFileChangesCommand {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.apply".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                base_revision: base.manifest.revision,
+                changes: vec![change(
+                    FileMutationKind::Modify,
+                    "tracked.txt",
+                    None,
+                    Some(b"agent change"),
+                )],
+                request_intent_sha256: None,
+                prepared_at_unix_ms: 5,
+            })
+            .await
+            .expect("apply tracked edit");
+        let applied_revision = applied.resulting_revision.expect("resulting revision");
+        fs::write(real.root.join("unrelated.txt"), b"human change")
+            .expect("external unrelated edit");
+
+        let restored = real
+            .application
+            .restore_checkpoint(RestoreWorkspaceCheckpointCommand {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.restore".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                checkpoint_id,
+                expected_current_revision: applied_revision,
+                prepared_at_unix_ms: 6,
+            })
+            .await
+            .expect("restore checkpoint");
+        assert!(matches!(restored, CheckpointRestoreOutcome::Applied(_)));
+        assert_eq!(
+            fs::read(real.root.join("tracked.txt")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(real.root.join("unrelated.txt")).unwrap(),
+            b"human change"
+        );
+        let comparison = real
+            .application
+            .compare_checkpoint(
+                real.project_id,
+                real.binding_id,
+                checkpoint_id,
+                "test.workspace.compare".to_owned(),
+            )
+            .await
+            .expect("compare checkpoint");
+        assert_eq!(comparison.matching_paths, vec![path("tracked.txt")]);
+        assert!(comparison.changed_paths.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_m02_workspace_snapshot_001_reuses_exact_facts_and_rejects_stale_touched_state() {
+        let real = RealWorkspaceApplication::open().await;
+        let base = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.snapshot.base".to_owned(),
+            )
+            .await
+            .expect("observe base workspace");
+        let unchanged = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.snapshot.unchanged".to_owned(),
+            )
+            .await
+            .expect("observe unchanged workspace");
+        assert_eq!(unchanged.manifest.revision, base.manifest.revision);
+
+        fs::write(real.root.join("tracked.txt"), b"human change")
+            .expect("external touched-path change");
+        let changed = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.snapshot.changed".to_owned(),
+            )
+            .await
+            .expect("observe changed workspace");
+        assert_eq!(
+            changed.manifest.revision.sequence(),
+            base.manifest.revision.sequence() + 1
+        );
+
+        let result = real
+            .application
+            .apply_file_changes(ApplyWorkspaceFileChangesCommand {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.snapshot.stale".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                base_revision: base.manifest.revision,
+                changes: vec![change(
+                    FileMutationKind::Modify,
+                    "tracked.txt",
+                    None,
+                    Some(b"agent change"),
+                )],
+                request_intent_sha256: None,
+                prepared_at_unix_ms: 5,
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(WorkspaceApplicationError::Conflict(_))
+        ));
+        assert_eq!(
+            fs::read(real.root.join("tracked.txt")).unwrap(),
+            b"human change"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_m02_checkpoint_recovery_001_stops_on_touched_path_divergence() {
+        let real = RealWorkspaceApplication::open().await;
+        let base = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.divergence.observe".to_owned(),
+            )
+            .await
+            .expect("observe base workspace");
+        let checkpoint_id = CheckpointId::new();
+        real.application
+            .create_checkpoint(CreateWorkspaceCheckpointCommand {
+                checkpoint_id,
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                base_revision: base.manifest.revision,
+                correlation_id: "test.workspace.divergence.checkpoint".to_owned(),
+                label: "Before agent edit".to_owned(),
+                request_summary: "Protect human divergence".to_owned(),
+                touched_paths: vec![path("tracked.txt")],
+                artifacts: vec![],
+                external_effects: vec![],
+                provider_continuation: None,
+                created_at_unix_ms: 4,
+            })
+            .await
+            .expect("create checkpoint");
+        let applied = real
+            .application
+            .apply_file_changes(ApplyWorkspaceFileChangesCommand {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.divergence.apply".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                base_revision: base.manifest.revision,
+                changes: vec![change(
+                    FileMutationKind::Modify,
+                    "tracked.txt",
+                    None,
+                    Some(b"agent change"),
+                )],
+                request_intent_sha256: None,
+                prepared_at_unix_ms: 5,
+            })
+            .await
+            .expect("apply agent edit");
+        fs::write(real.root.join("tracked.txt"), b"new human change")
+            .expect("create touched-path divergence");
+
+        let result = real
+            .application
+            .restore_checkpoint(RestoreWorkspaceCheckpointCommand {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.divergence.restore".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                checkpoint_id,
+                expected_current_revision: applied.resulting_revision.unwrap(),
+                prepared_at_unix_ms: 6,
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(WorkspaceApplicationError::Conflict(_))
+        ));
+        assert_eq!(
+            fs::read(real.root.join("tracked.txt")).unwrap(),
+            b"new human change"
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_partial_publication_is_reconciled_after_restart_and_restorable() {
+        let real = RealWorkspaceApplication::open().await;
+        let base = real
+            .application
+            .observe(
+                real.project_id,
+                real.binding_id,
+                "test.workspace.partial.observe".to_owned(),
+            )
+            .await
+            .expect("observe base workspace");
+
+        let opened = OpenProjectRoot::open(&real.root).expect("open registered workspace");
+        let scope = WorkspaceFilesystemScope {
+            project_id: real.project_id,
+            binding_id: real.binding_id,
+            absolute_path: real.root.to_string_lossy().into_owned(),
+            source_identity: encode_source_identity(
+                directory_identity(&opened.dir).expect("registered workspace identity"),
+            ),
+            writable: true,
+        };
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![
+                change(
+                    FileMutationKind::Modify,
+                    "tracked.txt",
+                    None,
+                    Some(b"first agent change"),
+                ),
+                change(
+                    FileMutationKind::Modify,
+                    "tracked-too.txt",
+                    None,
+                    Some(b"second agent change"),
+                ),
+            ],
+        )
+        .expect("prepare interrupted operation");
+        let checkpoint_id = CheckpointId::new();
+        let plan = WorkspaceFileEffectPlan::build(
+            &base.manifest,
+            WorkspaceFileEffectRequest {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.partial.apply".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                base_revision: base.manifest.revision,
+                intent_sha256: ContentSha256([9; 32]),
+                safety_checkpoint_id: checkpoint_id,
+                prepared_at_unix_ms: 5,
+                changes: prepared.proposals,
+            },
+        )
+        .expect("build interrupted operation");
+        let checkpoint = WorkspaceCheckpointRecord {
+            checkpoint_id,
+            project_id: real.project_id,
+            binding_id: real.binding_id,
+            base_revision: base.manifest.revision,
+            captured_revision: base.manifest.revision,
+            state: DurableCheckpointState::Available,
+            label: "Automatic safety checkpoint".to_owned(),
+            request_summary: "Before interrupted test mutation".to_owned(),
+            entries: prepared.checkpoint_entries,
+            artifacts: vec![],
+            external_effects: vec![],
+            provider_continuation: None,
+            created_at_unix_ms: 5,
+        };
+        let operation = WorkspaceOperationRecord {
+            plan,
+            state: DurableWorkspaceOperationState::Prepared,
+            resulting_revision: None,
+            failure: None,
+            completed_at_unix_ms: None,
+        };
+        let mut blobs = prepared.proposed_blobs;
+        blobs.extend(prepared.checkpoint_blobs);
+        real.store
+            .prepare_file_effect(operation.clone(), checkpoint, blobs.clone())
+            .await
+            .expect("persist prepared operation");
+        assert_eq!(
+            apply_file_effect_sync_with_failure(&scope, &operation.plan, &blobs, Some(1)),
+            Err(WorkspaceFilesystemError::RecoveryRequired)
+        );
+
+        assert_eq!(
+            fs::read(real.root.join("tracked.txt")).unwrap(),
+            b"first agent change"
+        );
+        assert_eq!(
+            fs::read(real.root.join("tracked-too.txt")).unwrap(),
+            b"second original"
+        );
+        fs::write(real.root.join("unrelated.txt"), b"human change")
+            .expect("external unrelated edit");
+
+        let restarted = WorkspaceApplication::new(
+            real.projects.clone(),
+            real.store.clone(),
+            Arc::new(NodeWorkspaceFilesystemAdapter),
+        );
+        let reconciled = restarted
+            .reconcile_unfinished()
+            .await
+            .expect("reconcile after simulated restart");
+        assert_eq!(reconciled.len(), 1);
+        assert_eq!(
+            reconciled[0].state,
+            DurableWorkspaceOperationState::RecoveryRequired
+        );
+
+        let restored = restarted
+            .restore_checkpoint(RestoreWorkspaceCheckpointCommand {
+                operation_id: WorkspaceOperationId::new(),
+                command_id: CommandId::new(),
+                correlation_id: "test.workspace.partial.restore".to_owned(),
+                project_id: real.project_id,
+                binding_id: real.binding_id,
+                checkpoint_id,
+                expected_current_revision: base.manifest.revision,
+                prepared_at_unix_ms: 6,
+            })
+            .await
+            .expect("restore partial operation");
+
+        assert!(matches!(restored, CheckpointRestoreOutcome::Applied(_)));
+        assert_eq!(
+            fs::read(real.root.join("tracked.txt")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(real.root.join("tracked-too.txt")).unwrap(),
+            b"second original"
+        );
+        assert_eq!(
+            fs::read(real.root.join("unrelated.txt")).unwrap(),
+            b"human change"
+        );
+        assert!(fs::read_dir(&real.root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".dennett-ws-")
+        }));
+    }
 }
