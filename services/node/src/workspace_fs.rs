@@ -282,7 +282,7 @@ fn scan_directory(
             scan_directory(&child, &relative, depth + 1, root_volume, root_mount, state)?;
             continue;
         } else if metadata.is_file() {
-            read_regular_state(dir, &name, &mut state.hashed_bytes, false)?.0
+            read_regular_state(dir, &name, &mut state.hashed_bytes, false, false)?.0
         } else {
             WorkspacePathState::Other {
                 metadata_sha256: metadata_hash("other", &metadata, &[]),
@@ -642,7 +642,7 @@ fn preflight_transitions(
     plan: &WorkspaceFileEffectPlan,
 ) -> Result<(), WorkspaceFilesystemError> {
     for transition in &plan.transitions {
-        let (observed, _) = state_at(&opened.dir, &transition.path, false)?;
+        let (observed, _) = supported_state_at(&opened.dir, &transition.path)?;
         if observed != transition.before {
             return Err(WorkspaceFilesystemError::Conflict);
         }
@@ -711,11 +711,7 @@ fn publish_staged_modify(
     let backup = sidecar_name(plan.operation_id, path, SidecarKind::Before);
     move_noreplace(&parent, &target, &backup)?;
     let transition = transition_for(plan, path)?;
-    let (backed_up, _) = state_at_parent(&parent, &backup, false)?;
-    if backed_up != transition.before {
-        let _ = move_noreplace(&parent, &backup, &target);
-        return Err(WorkspaceFilesystemError::Conflict);
-    }
+    verify_moved_backup(&parent, &backup, &target, &transition.before)?;
     if fail_after_backup {
         return Err(WorkspaceFilesystemError::RecoveryRequired);
     }
@@ -736,11 +732,7 @@ fn publish_delete(
     let backup = sidecar_name(plan.operation_id, path, SidecarKind::Before);
     move_noreplace(&parent, &target, &backup)?;
     let transition = transition_for(plan, path)?;
-    let (backed_up, _) = state_at_parent(&parent, &backup, false)?;
-    if backed_up != transition.before {
-        let _ = move_noreplace(&parent, &backup, &target);
-        return Err(WorkspaceFilesystemError::Conflict);
-    }
+    verify_moved_backup(&parent, &backup, &target, &transition.before)?;
     sync_directory(&parent, "sync_workspace_delete").map_err(map_project_error)
 }
 
@@ -760,11 +752,12 @@ fn publish_rename(
     let backup = sidecar_name(plan.operation_id, source, SidecarKind::Before);
     move_noreplace(&source_parent, &source_name, &backup)?;
     let source_transition = transition_for(plan, source)?;
-    let (backed_up, _) = state_at_parent(&source_parent, &backup, false)?;
-    if backed_up != source_transition.before {
-        let _ = move_noreplace(&source_parent, &backup, &source_name);
-        return Err(WorkspaceFilesystemError::Conflict);
-    }
+    verify_moved_backup(
+        &source_parent,
+        &backup,
+        &source_name,
+        &source_transition.before,
+    )?;
     if let Err(error) = source_parent.hard_link(&backup, &target_parent, &target_name) {
         let _ = move_noreplace(&source_parent, &backup, &source_name);
         return Err(map_publication_error(error, false));
@@ -800,6 +793,36 @@ fn repair_interrupted_publications(
             .map_err(map_project_error)?;
     }
     Ok(())
+}
+
+fn verify_moved_backup(
+    parent: &Dir,
+    backup: &OsStr,
+    target: &OsStr,
+    expected: &WorkspacePathState,
+) -> Result<(), WorkspaceFilesystemError> {
+    let observation = supported_state_at_parent(parent, backup);
+    match observation {
+        Ok((state, _)) if state == *expected => Ok(()),
+        Ok(_) => {
+            restore_moved_backup(parent, backup, target)?;
+            Err(WorkspaceFilesystemError::Conflict)
+        }
+        Err(error) => {
+            restore_moved_backup(parent, backup, target)?;
+            Err(error)
+        }
+    }
+}
+
+fn restore_moved_backup(
+    parent: &Dir,
+    backup: &OsStr,
+    target: &OsStr,
+) -> Result<(), WorkspaceFilesystemError> {
+    move_noreplace(parent, backup, target)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    sync_directory(parent, "sync_workspace_backup_restore").map_err(map_project_error)
 }
 
 fn cleanup_sidecars(
@@ -873,10 +896,34 @@ fn state_at(
     state_at_parent(&parent, &name, capture_bytes)
 }
 
+fn supported_state_at(
+    root: &Dir,
+    path: &ProjectRelativePath,
+) -> Result<(WorkspacePathState, Option<Vec<u8>>), WorkspaceFilesystemError> {
+    let (parent, name) = open_parent(root, path)?;
+    supported_state_at_parent(&parent, &name)
+}
+
 fn state_at_parent(
     parent: &Dir,
     name: &OsStr,
     capture_bytes: bool,
+) -> Result<(WorkspacePathState, Option<Vec<u8>>), WorkspaceFilesystemError> {
+    state_at_parent_with_policy(parent, name, capture_bytes, capture_bytes)
+}
+
+fn supported_state_at_parent(
+    parent: &Dir,
+    name: &OsStr,
+) -> Result<(WorkspacePathState, Option<Vec<u8>>), WorkspaceFilesystemError> {
+    state_at_parent_with_policy(parent, name, false, true)
+}
+
+fn state_at_parent_with_policy(
+    parent: &Dir,
+    name: &OsStr,
+    capture_bytes: bool,
+    require_supported_metadata: bool,
 ) -> Result<(WorkspacePathState, Option<Vec<u8>>), WorkspaceFilesystemError> {
     let Some(metadata) = optional_symlink_metadata(parent, name).map_err(map_project_error)? else {
         return Ok((WorkspacePathState::Absent, None));
@@ -910,7 +957,13 @@ fn state_at_parent(
         ));
     }
     let mut ignored_total = 0;
-    read_regular_state(parent, name, &mut ignored_total, capture_bytes)
+    read_regular_state(
+        parent,
+        name,
+        &mut ignored_total,
+        capture_bytes,
+        require_supported_metadata,
+    )
 }
 
 fn read_regular_state(
@@ -918,12 +971,14 @@ fn read_regular_state(
     name: &OsStr,
     total_bytes: &mut u64,
     capture_bytes: bool,
+    require_supported_metadata: bool,
 ) -> Result<(WorkspacePathState, Option<Vec<u8>>), WorkspaceFilesystemError> {
     let mut options = OpenOptions::new();
     options.read(true).follow(FollowSymlinks::No);
     let mut file = parent
         .open_with(name, &options)
         .map_err(|_| WorkspaceFilesystemError::Conflict)?;
+    ensure_opened_file_name(&file, name)?;
     let before = file
         .metadata()
         .map_err(|_| WorkspaceFilesystemError::Conflict)?;
@@ -934,7 +989,7 @@ fn read_regular_state(
     if capture_bytes && before.len() > MAX_STAGED_FILE_BYTES {
         return Err(WorkspaceFilesystemError::BoundExceeded);
     }
-    if capture_bytes {
+    if require_supported_metadata {
         ensure_checkpoint_metadata_supported(&file)?;
     }
     let next_total = total_bytes
@@ -1216,6 +1271,7 @@ fn open_parent(
         let child = current
             .open_dir_nofollow(&name)
             .map_err(|_| WorkspaceFilesystemError::ScopeDenied)?;
+        ensure_opened_directory_name(&child, &name)?;
         let identity = directory_identity(&child).map_err(map_project_error)?;
         if identity.volume != root_identity.volume {
             return Err(WorkspaceFilesystemError::ScopeDenied);
@@ -1365,8 +1421,84 @@ fn windows_names_equal_ignore_case(
     }
 }
 
+#[cfg(windows)]
+fn ensure_opened_file_name(
+    file: &cap_std::fs::File,
+    requested: &OsStr,
+) -> Result<(), WorkspaceFilesystemError> {
+    use std::os::windows::io::AsRawHandle as _;
+    ensure_opened_name(file.as_raw_handle().cast(), requested)
+}
+
+#[cfg(windows)]
+fn ensure_opened_directory_name(
+    dir: &Dir,
+    requested: &OsStr,
+) -> Result<(), WorkspaceFilesystemError> {
+    use std::os::windows::io::AsRawHandle as _;
+    ensure_opened_name(dir.as_raw_handle().cast(), requested)
+}
+
+#[cfg(windows)]
+fn ensure_opened_name(
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    requested: &OsStr,
+) -> Result<(), WorkspaceFilesystemError> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+
+    // SAFETY: the borrowed handle remains valid for both calls and a null
+    // output buffer with length zero requests the required UTF-16 length.
+    let required = unsafe { GetFinalPathNameByHandleW(handle, std::ptr::null_mut(), 0, 0) };
+    if required == 0 {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    let mut path = vec![
+        0_u16;
+        usize::try_from(required)
+            .map_err(|_| WorkspaceFilesystemError::ScopeDenied)?
+            .saturating_add(1)
+    ];
+    // SAFETY: `path` is writable for its declared length and the API does not
+    // retain the pointer.
+    let written = unsafe {
+        GetFinalPathNameByHandleW(
+            handle,
+            path.as_mut_ptr(),
+            u32::try_from(path.len()).map_err(|_| WorkspaceFilesystemError::ScopeDenied)?,
+            0,
+        )
+    };
+    let written = usize::try_from(written).map_err(|_| WorkspaceFilesystemError::ScopeDenied)?;
+    if written == 0 || written >= path.len() {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    let canonical = OsString::from_wide(&path[..written]);
+    if Path::new(&canonical).file_name() == Some(requested) {
+        Ok(())
+    } else {
+        Err(WorkspaceFilesystemError::ScopeDenied)
+    }
+}
+
 #[cfg(not(windows))]
 fn ensure_exact_case_if_present(
+    _dir: &Dir,
+    _requested: &OsStr,
+) -> Result<(), WorkspaceFilesystemError> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn ensure_opened_file_name(
+    _file: &cap_std::fs::File,
+    _requested: &OsStr,
+) -> Result<(), WorkspaceFilesystemError> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn ensure_opened_directory_name(
     _dir: &Dir,
     _requested: &OsStr,
 ) -> Result<(), WorkspaceFilesystemError> {
@@ -2119,6 +2251,18 @@ mod tests {
         let temp = TempDir::new().expect("temporary project");
         let target = temp.path().join("attributed.txt");
         fs::write(&target, b"human").expect("seed attributed file");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Modify,
+                "attributed.txt",
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare before external metadata race");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
         rustix::fs::setxattr(
             &target,
             "user.dennett-test",
@@ -2126,21 +2270,53 @@ mod tests {
             rustix::fs::XattrFlags::empty(),
         )
         .expect("set test extended attribute");
-        let scope = scope(temp.path());
 
         assert_eq!(
-            prepare_file_effect_sync(
-                &scope,
-                vec![change(
-                    FileMutationKind::Modify,
-                    "attributed.txt",
-                    None,
-                    Some(b"agent"),
-                )],
-            ),
+            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert_eq!(fs::read(target).unwrap(), b"human");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn publication_restores_a_file_when_metadata_changes_after_preflight() {
+        let temp = TempDir::new().expect("temporary project");
+        let target = temp.path().join("raced.txt");
+        fs::write(&target, b"human").expect("seed raced file");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Modify,
+                "raced.txt",
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare before publication race");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let opened = open_scope(&scope).expect("open project scope");
+        let blobs = validated_blob_map(&prepared.proposed_blobs).expect("validate after image");
+        preflight_transitions(&opened, &plan).expect("preflight clean file");
+        stage_after_images(&opened, &plan, &blobs).expect("stage after image");
+        rustix::fs::setxattr(
+            &target,
+            "user.dennett-race",
+            b"keep",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .expect("add metadata after preflight");
+
+        assert_eq!(
+            publish_staged_modify(&opened, &plan, &path("raced.txt"), false),
+            Err(WorkspaceFilesystemError::UnsupportedObject)
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"human");
+        assert!(
+            target.exists(),
+            "the original file must be restored in place"
+        );
     }
 
     #[cfg(windows)]
@@ -2178,24 +2354,114 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn checkpoint_capture_fails_closed_for_alternate_data_streams() {
+    fn workspace_mutation_rejects_a_caller_assigned_short_name_for_git() {
+        use std::os::windows::{
+            ffi::{OsStrExt as _, OsStringExt as _},
+            fs::OpenOptionsExt as _,
+            io::AsRawHandle as _,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, GetShortPathNameW, SetFileShortNameW,
+        };
+
         let temp = TempDir::new().expect("temporary project");
-        let target = temp.path().join("streamed.txt");
-        let stream = PathBuf::from(format!("{}:dennett-test", target.to_string_lossy()));
-        fs::write(&target, b"human").expect("seed primary stream");
-        fs::write(&stream, b"preserve me").expect("seed alternate stream");
+        let git = temp.path().join(".git");
+        fs::create_dir_all(git.join("hooks")).expect("create protected Git directory");
+        let directory = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&git)
+            .expect("open Git directory for short-name test");
+        // SAFETY: the directory handle remains valid. A null short-name pointer
+        // removes an automatically assigned alias before the custom alias is
+        // attempted.
+        let _ = unsafe { SetFileShortNameW(directory.as_raw_handle().cast(), std::ptr::null()) };
+        let custom = ["GIT", "GITBOX", "DGIT0001"].into_iter().find(|candidate| {
+            let short_name = format!("{candidate}\0").encode_utf16().collect::<Vec<_>>();
+            // SAFETY: the directory handle remains valid and short_name is
+            // NUL-terminated UTF-16 for the duration of the call.
+            unsafe { SetFileShortNameW(directory.as_raw_handle().cast(), short_name.as_ptr()) != 0 }
+        });
+        let assigned = if let Some(custom) = custom {
+            custom.to_owned()
+        } else {
+            let long_name = git
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            // SAFETY: long_name is a valid NUL-terminated UTF-16 path and the
+            // null output buffer requests the required size.
+            let required =
+                unsafe { GetShortPathNameW(long_name.as_ptr(), std::ptr::null_mut(), 0) };
+            if required == 0 {
+                eprintln!("volume exposes no usable 8.3 alias; live test skipped");
+                return;
+            }
+            let mut short_path = vec![0_u16; required as usize + 1];
+            // SAFETY: short_path is writable for its declared capacity and the
+            // API does not retain either pointer.
+            let written = unsafe {
+                GetShortPathNameW(
+                    long_name.as_ptr(),
+                    short_path.as_mut_ptr(),
+                    short_path.len() as u32,
+                )
+            };
+            let Some(alias) = PathBuf::from(OsString::from_wide(&short_path[..written as usize]))
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .filter(|name| !name.eq_ignore_ascii_case(".git"))
+            else {
+                eprintln!("volume exposes no distinct 8.3 alias; live test skipped");
+                return;
+            };
+            alias
+        };
+        assert!(temp.path().join(&assigned).exists());
         let scope = scope(temp.path());
+        let aliased_target = format!("{assigned}/hooks/agent.txt");
 
         assert_eq!(
             prepare_file_effect_sync(
                 &scope,
                 vec![change(
-                    FileMutationKind::Modify,
-                    "streamed.txt",
+                    FileMutationKind::Add,
+                    &aliased_target,
                     None,
                     Some(b"agent"),
                 )],
             ),
+            Err(WorkspaceFilesystemError::ScopeDenied)
+        );
+        assert!(!git.join("hooks").join("agent.txt").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn checkpoint_capture_fails_closed_for_alternate_data_streams() {
+        let temp = TempDir::new().expect("temporary project");
+        let target = temp.path().join("streamed.txt");
+        let stream = PathBuf::from(format!("{}:dennett-test", target.to_string_lossy()));
+        fs::write(&target, b"human").expect("seed primary stream");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Modify,
+                "streamed.txt",
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare before alternate stream race");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        fs::write(&stream, b"preserve me").expect("seed alternate stream");
+
+        assert_eq!(
+            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert_eq!(fs::read(target).unwrap(), b"human");
@@ -2251,6 +2517,18 @@ mod tests {
         let temp = TempDir::new().expect("temporary project");
         let target = temp.path().join("acl.txt");
         fs::write(&target, b"human").expect("seed ACL file");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Modify,
+                "acl.txt",
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare before ACL race");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
         let output = Command::new("icacls")
             .arg(&target)
             .arg("/inheritance:d")
@@ -2261,18 +2539,9 @@ mod tests {
             "icacls failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let scope = scope(temp.path());
 
         assert_eq!(
-            prepare_file_effect_sync(
-                &scope,
-                vec![change(
-                    FileMutationKind::Modify,
-                    "acl.txt",
-                    None,
-                    Some(b"agent"),
-                )],
-            ),
+            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert_eq!(fs::read(target).unwrap(), b"human");

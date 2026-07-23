@@ -527,6 +527,7 @@ dependencies = [
  "dennett-memory-core",
  "dennett-sync-core",
  "dennett-trust-core",
+ "futures-util",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",

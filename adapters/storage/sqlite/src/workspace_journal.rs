@@ -6,11 +6,12 @@ use dennett_contracts::{
 };
 use dennett_effect_core::workspace::{
     ContentSha256, DurableCheckpointState, DurableWorkspaceFailureKind,
-    DurableWorkspaceOperationState, MAX_STAGED_OPERATION_BYTES, SnapshotCommitOutcome,
-    StagedContentRef, WorkspaceBlob, WorkspaceCheckpointRecord, WorkspaceJournalError,
-    WorkspaceJournalPort, WorkspaceManifest, WorkspaceOperationRecord,
+    DurableWorkspaceOperationState, MAX_FILE_CHANGES_PER_OPERATION, MAX_STAGED_OPERATION_BYTES,
+    SnapshotCommitOutcome, StagedContentRef, WorkspaceBlob, WorkspaceCheckpointRecord,
+    WorkspaceJournalError, WorkspaceJournalPort, WorkspaceManifest, WorkspaceOperationRecord,
     WorkspaceSnapshotPublication, WorkspaceSnapshotRecord,
 };
+use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
 use sqlx::{Executor, Row, Sqlite, Transaction, sqlite::SqliteRow};
 use std::collections::BTreeMap;
@@ -450,7 +451,7 @@ async fn load_blobs_from<'e, E>(
 where
     E: Executor<'e, Database = Sqlite>,
 {
-    let (query, owner_id) = match owner {
+    let (query, owner_id, max_blob_count) = match owner {
         BlobOwner::Operation(id) => (
             "SELECT r.content_id, r.content_sha256, r.byte_size, d.bytes \
              FROM workspace_operation_blobs r \
@@ -458,6 +459,7 @@ where
                 AND d.byte_size = r.byte_size \
              WHERE r.operation_id = ? ORDER BY r.content_id",
             id.0.to_string(),
+            MAX_FILE_CHANGES_PER_OPERATION,
         ),
         BlobOwner::Checkpoint(id) => (
             "SELECT r.content_id, r.content_sha256, r.byte_size, d.bytes \
@@ -466,16 +468,24 @@ where
                 AND d.byte_size = r.byte_size \
              WHERE r.checkpoint_id = ? ORDER BY r.content_id",
             id.0.to_string(),
+            MAX_FILE_CHANGES_PER_OPERATION * 2,
         ),
     };
-    sqlx::query(query)
-        .bind(owner_id)
-        .fetch_all(executor)
-        .await
-        .map_err(storage_error)?
-        .iter()
-        .map(parse_blob_row)
-        .collect()
+    let mut rows = sqlx::query(query).bind(owner_id).fetch(executor);
+    let mut blobs = Vec::new();
+    let mut staged_bytes = 0_u64;
+    while let Some(row) = rows.try_next().await.map_err(storage_error)? {
+        if blobs.len() >= max_blob_count {
+            return Err(WorkspaceJournalError::Integrity);
+        }
+        let blob = parse_blob_row(&row)?;
+        staged_bytes = staged_bytes
+            .checked_add(blob.reference.byte_size)
+            .filter(|value| *value <= MAX_STAGED_OPERATION_BYTES)
+            .ok_or(WorkspaceJournalError::Integrity)?;
+        blobs.push(blob);
+    }
+    Ok(blobs)
 }
 
 enum BlobOwner {
@@ -509,6 +519,17 @@ fn blob_map(
     blobs: Vec<WorkspaceBlob>,
 ) -> Result<BTreeMap<String, WorkspaceBlob>, WorkspaceJournalError> {
     supplied_blobs(blobs)
+}
+
+fn exact_blobs(
+    expected: &BTreeMap<String, StagedContentRef>,
+    blobs: Vec<WorkspaceBlob>,
+) -> Result<Vec<WorkspaceBlob>, WorkspaceJournalError> {
+    let stored = blob_map(blobs)?;
+    if expected.len() != stored.len() || selected_blobs(expected, &stored)? != stored {
+        return Err(WorkspaceJournalError::Integrity);
+    }
+    Ok(stored.into_values().collect())
 }
 
 fn validate_safety_checkpoint(
@@ -1051,13 +1072,14 @@ impl WorkspaceJournalPort for SqliteControlStore {
         &self,
         operation_id: WorkspaceOperationId,
     ) -> Result<Vec<WorkspaceBlob>, WorkspaceJournalError> {
-        if load_operation_from(&self.pool, OperationSelector::Operation(operation_id))
+        let operation = load_operation_from(&self.pool, OperationSelector::Operation(operation_id))
             .await?
-            .is_none()
-        {
-            return Err(WorkspaceJournalError::NotFound);
-        }
-        load_blobs_from(&self.pool, BlobOwner::Operation(operation_id)).await
+            .ok_or(WorkspaceJournalError::NotFound)?;
+        let expected = expected_operation_refs(&operation)?;
+        exact_blobs(
+            &expected,
+            load_blobs_from(&self.pool, BlobOwner::Operation(operation_id)).await?,
+        )
     }
 
     async fn transition_operation(
@@ -1173,14 +1195,49 @@ impl WorkspaceJournalPort for SqliteControlStore {
         &self,
         checkpoint_id: CheckpointId,
     ) -> Result<Vec<WorkspaceBlob>, WorkspaceJournalError> {
-        if load_checkpoint_from(&self.pool, checkpoint_id)
+        let checkpoint = load_checkpoint_from(&self.pool, checkpoint_id)
             .await?
-            .is_none()
-        {
-            return Err(WorkspaceJournalError::NotFound);
-        }
-        load_blobs_from(&self.pool, BlobOwner::Checkpoint(checkpoint_id)).await
+            .ok_or(WorkspaceJournalError::NotFound)?;
+        let expected = expected_checkpoint_refs(&checkpoint)?;
+        exact_blobs(
+            &expected,
+            load_blobs_from(&self.pool, BlobOwner::Checkpoint(checkpoint_id)).await?,
+        )
     }
+}
+
+async fn fetch_next_text_row(
+    pool: &sqlx::SqlitePool,
+    initial_query: &'static str,
+    paged_query: &'static str,
+    cursor: Option<&str>,
+) -> Result<Option<SqliteRow>, WorkspaceJournalError> {
+    let mut query = sqlx::query(if cursor.is_some() {
+        paged_query
+    } else {
+        initial_query
+    });
+    if let Some(cursor) = cursor {
+        query = query.bind(cursor);
+    }
+    query.fetch_optional(pool).await.map_err(storage_error)
+}
+
+async fn fetch_next_blob_row(
+    pool: &sqlx::SqlitePool,
+    initial_query: &'static str,
+    paged_query: &'static str,
+    cursor: Option<&[u8]>,
+) -> Result<Option<SqliteRow>, WorkspaceJournalError> {
+    let mut query = sqlx::query(if cursor.is_some() {
+        paged_query
+    } else {
+        initial_query
+    });
+    if let Some(cursor) = cursor {
+        query = query.bind(cursor);
+    }
+    query.fetch_optional(pool).await.map_err(storage_error)
 }
 
 impl SqliteControlStore {
@@ -1189,15 +1246,14 @@ impl SqliteControlStore {
     ) -> Result<(), WorkspaceJournalError> {
         let mut snapshot_cursor: Option<String> = None;
         loop {
-            let Some(row) = sqlx::query(
+            let Some(row) = fetch_next_text_row(
+                &self.pool,
+                "SELECT * FROM workspace_snapshots ORDER BY snapshot_id LIMIT 1",
                 "SELECT * FROM workspace_snapshots \
-                 WHERE (? IS NULL OR snapshot_id > ?) ORDER BY snapshot_id LIMIT 1",
+                 WHERE snapshot_id > ? ORDER BY snapshot_id LIMIT 1",
+                snapshot_cursor.as_deref(),
             )
-            .bind(snapshot_cursor.as_deref())
-            .bind(snapshot_cursor.as_deref())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?
+            .await?
             else {
                 break;
             };
@@ -1207,15 +1263,15 @@ impl SqliteControlStore {
 
         let mut head_cursor: Option<String> = None;
         loop {
-            let Some(head) = sqlx::query(
+            let Some(head) = fetch_next_text_row(
+                &self.pool,
                 "SELECT binding_id, snapshot_id, sequence FROM workspace_snapshot_heads \
-                 WHERE (? IS NULL OR binding_id > ?) ORDER BY binding_id LIMIT 1",
+                 ORDER BY binding_id LIMIT 1",
+                "SELECT binding_id, snapshot_id, sequence FROM workspace_snapshot_heads \
+                 WHERE binding_id > ? ORDER BY binding_id LIMIT 1",
+                head_cursor.as_deref(),
             )
-            .bind(head_cursor.as_deref())
-            .bind(head_cursor.as_deref())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?
+            .await?
             else {
                 break;
             };
@@ -1259,41 +1315,37 @@ impl SqliteControlStore {
 
         let mut checkpoint_cursor: Option<String> = None;
         loop {
-            let Some(row) = sqlx::query(
+            let Some(row) = fetch_next_text_row(
+                &self.pool,
+                "SELECT * FROM workspace_checkpoints ORDER BY checkpoint_id LIMIT 1",
                 "SELECT * FROM workspace_checkpoints \
-                 WHERE (? IS NULL OR checkpoint_id > ?) ORDER BY checkpoint_id LIMIT 1",
+                 WHERE checkpoint_id > ? ORDER BY checkpoint_id LIMIT 1",
+                checkpoint_cursor.as_deref(),
             )
-            .bind(checkpoint_cursor.as_deref())
-            .bind(checkpoint_cursor.as_deref())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?
+            .await?
             else {
                 break;
             };
             checkpoint_cursor = Some(row.try_get("checkpoint_id").map_err(integrity_error)?);
             let checkpoint = parse_checkpoint_row(&row)?;
             let expected = expected_checkpoint_refs(&checkpoint)?;
-            let stored = blob_map(
+            exact_blobs(
+                &expected,
                 load_blobs_from(&self.pool, BlobOwner::Checkpoint(checkpoint.checkpoint_id))
                     .await?,
             )?;
-            if selected_blobs(&expected, &stored)? != stored || expected.len() != stored.len() {
-                return Err(WorkspaceJournalError::Integrity);
-            }
         }
 
         let mut operation_cursor: Option<String> = None;
         loop {
-            let Some(row) = sqlx::query(
+            let Some(row) = fetch_next_text_row(
+                &self.pool,
+                "SELECT * FROM workspace_operations ORDER BY operation_id LIMIT 1",
                 "SELECT * FROM workspace_operations \
-                 WHERE (? IS NULL OR operation_id > ?) ORDER BY operation_id LIMIT 1",
+                 WHERE operation_id > ? ORDER BY operation_id LIMIT 1",
+                operation_cursor.as_deref(),
             )
-            .bind(operation_cursor.as_deref())
-            .bind(operation_cursor.as_deref())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?
+            .await?
             else {
                 break;
             };
@@ -1304,16 +1356,14 @@ impl SqliteControlStore {
                 .ok_or(WorkspaceJournalError::Integrity)?;
             validate_safety_checkpoint(&operation, &checkpoint)?;
             let expected = expected_operation_refs(&operation)?;
-            let stored = blob_map(
+            exact_blobs(
+                &expected,
                 load_blobs_from(
                     &self.pool,
                     BlobOwner::Operation(operation.plan.operation_id),
                 )
                 .await?,
             )?;
-            if selected_blobs(&expected, &stored)? != stored || expected.len() != stored.len() {
-                return Err(WorkspaceJournalError::Integrity);
-            }
             if let Some(revision) = operation.resulting_revision {
                 load_snapshot_from(&self.pool, revision)
                     .await?
@@ -1323,15 +1373,15 @@ impl SqliteControlStore {
 
         let mut blob_cursor: Option<Vec<u8>> = None;
         loop {
-            let Some(row) = sqlx::query(
+            let Some(row) = fetch_next_blob_row(
+                &self.pool,
                 "SELECT content_sha256, byte_size, bytes FROM workspace_blob_data \
-                 WHERE (? IS NULL OR content_sha256 > ?) ORDER BY content_sha256 LIMIT 1",
+                 ORDER BY content_sha256 LIMIT 1",
+                "SELECT content_sha256, byte_size, bytes FROM workspace_blob_data \
+                 WHERE content_sha256 > ? ORDER BY content_sha256 LIMIT 1",
+                blob_cursor.as_deref(),
             )
-            .bind(blob_cursor.as_deref())
-            .bind(blob_cursor.as_deref())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?
+            .await?
             else {
                 break;
             };
@@ -1619,6 +1669,55 @@ mod tests {
                 .await
                 .unwrap(),
             operation
+        );
+    }
+
+    #[tokio::test]
+    async fn blob_loading_rejects_an_unbounded_owner_relation_set() {
+        let (_temp, _database, store, project_id, binding_id) = store_fixture().await;
+        let base_revision = revision(binding_id, 1);
+        store
+            .commit_snapshot(None, snapshot(project_id, base_revision, vec![], 10))
+            .await
+            .unwrap();
+        let (operation, checkpoint, blobs) = add_effect(
+            project_id,
+            binding_id,
+            base_revision,
+            CommandId::new(),
+            "bounded.txt",
+            20,
+        );
+        let reference = blobs[0].reference.clone();
+        store
+            .prepare_file_effect(operation.clone(), checkpoint, blobs)
+            .await
+            .unwrap();
+        let mut transaction = store.pool.begin().await.expect("begin corruption fixture");
+        for index in 0..MAX_FILE_CHANGES_PER_OPERATION {
+            sqlx::query(
+                "INSERT INTO workspace_operation_blobs(\
+                    operation_id, content_id, content_sha256, byte_size\
+                 ) VALUES (?, ?, ?, ?)",
+            )
+            .bind(operation.plan.operation_id.0.to_string())
+            .bind(format!("overflow-{index:03}"))
+            .bind(reference.content_sha256.0.as_slice())
+            .bind(to_i64(reference.byte_size).unwrap())
+            .execute(&mut *transaction)
+            .await
+            .expect("inject excess owner relation");
+        }
+        transaction
+            .commit()
+            .await
+            .expect("commit corruption fixture");
+
+        assert_eq!(
+            store
+                .load_operation_blobs(operation.plan.operation_id)
+                .await,
+            Err(WorkspaceJournalError::Integrity)
         );
     }
 

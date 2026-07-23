@@ -70,13 +70,13 @@
     },
     {
       "path": "Cargo.lock",
-      "bytes": 65163,
-      "sha256": "a1eb451172165f9d5425dbc86faf73578e3a96cc95515520bf49fab17bc4e960"
+      "bytes": 65180,
+      "sha256": "07c30be54219a21bebf822e3af9444f93731053941b2b2b2b9352a1b1d036a88"
     },
     {
       "path": "Cargo.toml",
-      "bytes": 1778,
-      "sha256": "d721e483ba1eb1268544871ab3a0705390eb620d1a3f2c51b6e45535e7770aaa"
+      "bytes": 1859,
+      "sha256": "54952abe310d608fa840932f4b42cd8149ee0f4611b2c7b4fe6fdfc141efc549"
     },
     {
       "path": "GOVERNANCE.md",
@@ -170,8 +170,8 @@
     },
     {
       "path": "adapters/storage/sqlite/Cargo.toml",
-      "bytes": 769,
-      "sha256": "46d3192c1be1739271b423f9eac283b8620af3b16c481dfe9ab747ba3762084e"
+      "bytes": 799,
+      "sha256": "43d95a1e4ce2837e5fcb95c94ecdae82788b47b3f9e78e0403df9d17c012b8e3"
     },
     {
       "path": "adapters/storage/sqlite/README.md",
@@ -210,8 +210,8 @@
     },
     {
       "path": "adapters/storage/sqlite/src/workspace_journal.rs",
-      "bytes": 75830,
-      "sha256": "3f03ae134d519ed981d6b278e486af88250445ec028d9e2e2be6ea2d4d1d1e41"
+      "bytes": 79394,
+      "sha256": "0074cb972acaf7b7075b14d4ab203733601b4be9b2234c6c206d5098c2558d03"
     },
     {
       "path": "adapters/transport/README.md",
@@ -635,8 +635,8 @@
     },
     {
       "path": "blog/notes/M02_WP004_capture.md",
-      "bytes": 7194,
-      "sha256": "3635f2c93b0113c8879afe471dcfecba029b12d3403b4cf5da2c1e10f20a0be5"
+      "bytes": 7643,
+      "sha256": "46c571ad862c2dbfc553127fb3295f55f87b0c9e9b6c7389c90fbd1c107bcfeb"
     },
     {
       "path": "blog/notes/M02_capture.md",
@@ -725,8 +725,8 @@
     },
     {
       "path": "crates/dennett-contracts/src/lib.rs",
-      "bytes": 29970,
-      "sha256": "256c7afdfd680cdbb856fa19acfc3daaafba17212ccadbe16059c57a6608e652"
+      "bytes": 29383,
+      "sha256": "03ef63a8a4b58b4d49e6199b676a492265f219d10b1704252abd58698da1a04f"
     },
     {
       "path": "crates/dennett-effect-core/AGENTS.md",
@@ -2260,8 +2260,8 @@
     },
     {
       "path": "services/node/src/workspace_fs.rs",
-      "bytes": 101865,
-      "sha256": "660729d56e7d535769449ffa81e05bdf41b959debbbe79b243c78ff40a64decf"
+      "bytes": 111722,
+      "sha256": "d515c310dabd3fad699fe9dee015d9a9c59c367cd7f3c2b12a61aa48f30d9620"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",

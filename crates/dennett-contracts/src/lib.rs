@@ -94,7 +94,6 @@ pub enum ProjectRelativePathError {
     DotSegment,
     WindowsDrivePrefix,
     WindowsAlternateDataStream,
-    WindowsShortNameAlias,
     WindowsReservedName,
     WindowsAmbiguousSuffix,
     ControlCharacter,
@@ -115,9 +114,6 @@ impl fmt::Display for ProjectRelativePathError {
             Self::WindowsDrivePrefix => "project-relative path contains a Windows drive prefix",
             Self::WindowsAlternateDataStream => {
                 "project-relative path contains a Windows alternate data stream separator"
-            }
-            Self::WindowsShortNameAlias => {
-                "project-relative path may resolve through a Windows short-name alias"
             }
             Self::WindowsReservedName => {
                 "project-relative path contains a Windows reserved device name"
@@ -170,9 +166,6 @@ fn validate_project_relative_path(value: &str) -> Result<(), ProjectRelativePath
         if segment.contains(':') {
             return Err(ProjectRelativePathError::WindowsAlternateDataStream);
         }
-        if contains_windows_short_name_alias(segment) {
-            return Err(ProjectRelativePathError::WindowsShortNameAlias);
-        }
         if segment.ends_with(['.', ' ']) {
             return Err(ProjectRelativePathError::WindowsAmbiguousSuffix);
         }
@@ -181,13 +174,6 @@ fn validate_project_relative_path(value: &str) -> Result<(), ProjectRelativePath
         }
     }
     Ok(())
-}
-
-fn contains_windows_short_name_alias(segment: &str) -> bool {
-    segment
-        .as_bytes()
-        .windows(2)
-        .any(|pair| pair[0] == b'~' && matches!(pair[1], b'1'..=b'9'))
 }
 
 fn is_windows_drive_prefix(segment: &str) -> bool {
@@ -647,8 +633,6 @@ mod tests {
             "folder/AUX.log",
             "COM1",
             "folder/lpt9.output",
-            "GIT~1/hooks/pre-commit",
-            "folder/DENNET~2/project.json",
             "trailing.",
             "folder/trailing ",
         ];
@@ -665,8 +649,8 @@ mod tests {
             "COM10",
             "lpt0",
             "ordinary.name",
-            "draft~backup.txt",
-            "version~0.txt",
+            "draft~1.txt",
+            "version~9.txt",
         ] {
             assert!(
                 ProjectRelativePath::try_from(value).is_ok(),

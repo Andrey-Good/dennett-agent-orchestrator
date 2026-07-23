@@ -91,6 +91,12 @@ This is capture material, not a published claim. A standalone field note is just
   now round-trip; unsupported xattr/ACL/stream metadata fails closed; paths and
   mounts are fenced; both image sets share one 64 MiB budget; verification is
   paged; and the micro-crash restores after a real SQLite close and reopen.
+- Re-review caught four places where the first repair was still only nearly
+  safe. Metadata is now checked again immediately before publication and after
+  the original file is moved, with restoration on mismatch. Windows compares
+  every opened component with its canonical long name instead of outlawing
+  legitimate `~1` filenames. SQLite keyset scans are sargable, and blob
+  relations stream through exact-membership, count and 64 MiB bounds.
 - The owner accepted this as an internal checkpoint because the existing M01
   desktop has no truthful control for inspecting snapshot identity or crash
   reconstruction. The visual owner gate remains WP-M02-007/WP-M02-008.
