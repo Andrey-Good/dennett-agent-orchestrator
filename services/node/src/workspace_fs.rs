@@ -837,7 +837,7 @@ fn cleanup_sidecars(
             else {
                 continue;
             };
-            let (state, _) = state_at_parent(&parent, &name, false)?;
+            let (state, _) = supported_state_at_parent(&parent, &name)?;
             let expected = match kind {
                 SidecarKind::After => &transition.after,
                 SidecarKind::Before => &transition.before,
@@ -2317,6 +2317,59 @@ mod tests {
             target.exists(),
             "the original file must be restored in place"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cleanup_preserves_a_backup_changed_after_publication_validation() {
+        let temp = TempDir::new().expect("temporary project");
+        let target_path = path("late-race.txt");
+        let target = temp.path().join(target_path.as_str());
+        fs::write(&target, b"human").expect("seed late-race file");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Modify,
+                target_path.as_str(),
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare late metadata race");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let opened = open_scope(&scope).expect("open project scope");
+        let blobs = validated_blob_map(&prepared.proposed_blobs).expect("validate after image");
+        preflight_transitions(&opened, &plan).expect("preflight clean file");
+        stage_after_images(&opened, &plan, &blobs).expect("stage after image");
+        let (parent, target_name) =
+            open_parent(&opened.dir, &target_path).expect("open target parent");
+        let backup = sidecar_name(plan.operation_id, &target_path, SidecarKind::Before);
+        let after = sidecar_name(plan.operation_id, &target_path, SidecarKind::After);
+        move_noreplace(&parent, &target_name, &backup).expect("move original to backup");
+        verify_moved_backup(
+            &parent,
+            &backup,
+            &target_name,
+            &transition_for(&plan, &target_path).unwrap().before,
+        )
+        .expect("validate moved backup");
+        move_noreplace(&parent, &after, &target_name).expect("publish staged replacement");
+        let backup_path = temp.path().join(&backup);
+        rustix::fs::setxattr(
+            &backup_path,
+            "user.dennett-late-race",
+            b"keep",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .expect("change original after publication validation");
+
+        assert_eq!(
+            cleanup_sidecars(&opened, &plan),
+            Err(WorkspaceFilesystemError::UnsupportedObject)
+        );
+        assert!(backup_path.exists(), "changed backup must not be deleted");
+        assert_eq!(fs::read(target).unwrap(), b"agent");
     }
 
     #[cfg(windows)]

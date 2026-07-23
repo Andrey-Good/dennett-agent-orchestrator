@@ -93,7 +93,8 @@ This is capture material, not a published claim. A standalone field note is just
   paged; and the micro-crash restores after a real SQLite close and reopen.
 - Re-review caught four places where the first repair was still only nearly
   safe. Metadata is now checked again immediately before publication and after
-  the original file is moved, with restoration on mismatch. Windows compares
+  the original file is moved, with restoration on mismatch; final cleanup also
+  refuses to delete a backup that changed after validation. Windows compares
   every opened component with its canonical long name instead of outlawing
   legitimate `~1` filenames. SQLite keyset scans are sargable, and blob
   relations stream through exact-membership, count and 64 MiB bounds.
