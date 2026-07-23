@@ -210,8 +210,8 @@
     },
     {
       "path": "adapters/storage/sqlite/src/workspace_journal.rs",
-      "bytes": 73703,
-      "sha256": "42a66189c84f78ef184c4e3ded41f3b315c60324476dc447cd36931e775e53a4"
+      "bytes": 75830,
+      "sha256": "3f03ae134d519ed981d6b278e486af88250445ec028d9e2e2be6ea2d4d1d1e41"
     },
     {
       "path": "adapters/transport/README.md",
@@ -635,8 +635,8 @@
     },
     {
       "path": "blog/notes/M02_WP004_capture.md",
-      "bytes": 7185,
-      "sha256": "f6b524e73464c8017ef924a035474743fdfc97f94a49f22bfabe3859434a8e62"
+      "bytes": 7194,
+      "sha256": "3635f2c93b0113c8879afe471dcfecba029b12d3403b4cf5da2c1e10f20a0be5"
     },
     {
       "path": "blog/notes/M02_capture.md",
@@ -725,8 +725,8 @@
     },
     {
       "path": "crates/dennett-contracts/src/lib.rs",
-      "bytes": 29268,
-      "sha256": "302d8d9de1a588e626d79f40b039d45941a3bfba789d16d4307210eb439830be"
+      "bytes": 29970,
+      "sha256": "256c7afdfd680cdbb856fa19acfc3daaafba17212ccadbe16059c57a6608e652"
     },
     {
       "path": "crates/dennett-effect-core/AGENTS.md",
@@ -750,8 +750,8 @@
     },
     {
       "path": "crates/dennett-effect-core/src/workspace.rs",
-      "bytes": 47747,
-      "sha256": "ff29ae2e3c63c4cfcbfb5ffa32df2fa555e18de8b7effdcf29bbe65bcb141130"
+      "bytes": 48935,
+      "sha256": "7823c61a16e2a221acd61e8f9b89e945f9a250050b7f2d563959df329250174a"
     },
     {
       "path": "crates/dennett-kernel/AGENTS.md",
@@ -2180,8 +2180,8 @@
     },
     {
       "path": "services/head/src/workspace.rs",
-      "bytes": 59978,
-      "sha256": "c977ab5e383ec284128dcaa0b9b6615fa10ade612255b8c0024310ce398c93be"
+      "bytes": 60770,
+      "sha256": "caaf7014cfcc57a016fb6ffc9d4692a1b4169c14011f227b5788bb55c51d6bc2"
     },
     {
       "path": "services/head/tests/conversation_application.rs",
@@ -2260,8 +2260,8 @@
     },
     {
       "path": "services/node/src/workspace_fs.rs",
-      "bytes": 84215,
-      "sha256": "500e375c912476f963d1eb498e0e38a64ae2099d037722c263f29cdaf02425d8"
+      "bytes": 101865,
+      "sha256": "660729d56e7d535769449ffa81e05bdf41b959debbbe79b243c78ff40a64decf"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",

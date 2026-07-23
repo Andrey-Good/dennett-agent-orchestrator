@@ -21,17 +21,30 @@ use dennett_effect_core::workspace::{
 };
 use dennett_trust_core::project_registry::{WorkspaceAccessMode, WorkspaceSourceIdentity};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::SystemTime};
 
 const MAX_SNAPSHOT_COMMIT_ATTEMPTS: usize = 3;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct WorkspaceFilesystemScope {
     pub project_id: ProjectId,
     pub binding_id: WorkspaceBindingId,
     pub absolute_path: String,
     pub source_identity: WorkspaceSourceIdentity,
     pub writable: bool,
+}
+
+impl fmt::Debug for WorkspaceFilesystemScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkspaceFilesystemScope")
+            .field("project_id", &self.project_id)
+            .field("binding_id", &self.binding_id)
+            .field("absolute_path", &"<redacted>")
+            .field("source_identity", &"<redacted>")
+            .field("writable", &self.writable)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -460,13 +473,6 @@ impl WorkspaceApplication {
             let Some(recovery_operation) = recovery_operation else {
                 return Err(WorkspaceApplicationError::Conflict(conflicts));
             };
-            if !recovery_operation_recognizes_checkpoint(
-                &recovery_operation,
-                &checkpoint,
-                &observed_manifest,
-            ) {
-                return Err(WorkspaceApplicationError::Conflict(conflicts));
-            }
             self.filesystem
                 .cleanup_recovery_file_effect(&scope, &recovery_operation.plan)
                 .await?;
@@ -1240,9 +1246,7 @@ fn restore_changes(
                     .ok_or_else(|| WorkspaceApplicationError::Conflict(vec![entry.path.clone()]))?;
                 (FileMutationKind::Delete, None, Some(expected), None)
             }
-            WorkspacePathState::RegularFile {
-                metadata_sha256, ..
-            } => {
+            WorkspacePathState::RegularFile { .. } => {
                 let reference = entry
                     .content
                     .as_ref()
@@ -1254,8 +1258,9 @@ fn restore_changes(
                 if &blob.reference != reference {
                     return Err(WorkspaceJournalError::Integrity.into());
                 }
-                let permissions = PortableFilePermissions::from_metadata_sha256(*metadata_sha256)
-                    .ok_or(WorkspaceApplicationError::CheckpointUnavailable)?;
+                let permissions = entry
+                    .permissions
+                    .ok_or(WorkspaceApplicationError::InvalidCheckpointCapture)?;
                 match observed {
                     WorkspacePathState::Absent => (
                         FileMutationKind::Add,
@@ -1584,4 +1589,25 @@ pub enum WorkspaceApplicationError {
     Plan(#[from] WorkspacePlanError),
     #[error(transparent)]
     Manifest(#[from] WorkspaceManifestError),
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+
+    #[test]
+    fn filesystem_scope_debug_output_redacts_machine_specific_authority() {
+        let scope = WorkspaceFilesystemScope {
+            project_id: ProjectId::new(),
+            binding_id: WorkspaceBindingId::new(),
+            absolute_path: r"C:\Users\owner\secret-project".to_owned(),
+            source_identity: WorkspaceSourceIdentity::new([0x5a; 32]),
+            writable: true,
+        };
+
+        let debug = format!("{scope:?}");
+        assert!(!debug.contains("secret-project"));
+        assert!(!debug.contains("5a"));
+        assert!(debug.contains("<redacted>"));
+    }
 }

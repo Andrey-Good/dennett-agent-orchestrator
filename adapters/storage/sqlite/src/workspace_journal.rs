@@ -1187,21 +1187,40 @@ impl SqliteControlStore {
     pub(crate) async fn verify_workspace_journal_integrity(
         &self,
     ) -> Result<(), WorkspaceJournalError> {
-        for row in sqlx::query("SELECT * FROM workspace_snapshots ORDER BY binding_id, sequence")
-            .fetch_all(&self.pool)
+        let mut snapshot_cursor: Option<String> = None;
+        loop {
+            let Some(row) = sqlx::query(
+                "SELECT * FROM workspace_snapshots \
+                 WHERE (? IS NULL OR snapshot_id > ?) ORDER BY snapshot_id LIMIT 1",
+            )
+            .bind(snapshot_cursor.as_deref())
+            .bind(snapshot_cursor.as_deref())
+            .fetch_optional(&self.pool)
             .await
             .map_err(storage_error)?
-        {
+            else {
+                break;
+            };
+            snapshot_cursor = Some(row.try_get("snapshot_id").map_err(integrity_error)?);
             parse_snapshot_row(&row)?;
         }
 
-        for head in
-            sqlx::query("SELECT binding_id, snapshot_id, sequence FROM workspace_snapshot_heads")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(storage_error)?
-        {
+        let mut head_cursor: Option<String> = None;
+        loop {
+            let Some(head) = sqlx::query(
+                "SELECT binding_id, snapshot_id, sequence FROM workspace_snapshot_heads \
+                 WHERE (? IS NULL OR binding_id > ?) ORDER BY binding_id LIMIT 1",
+            )
+            .bind(head_cursor.as_deref())
+            .bind(head_cursor.as_deref())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(storage_error)?
+            else {
+                break;
+            };
             let binding_id: String = head.try_get("binding_id").map_err(integrity_error)?;
+            head_cursor = Some(binding_id.clone());
             let snapshot_id: String = head.try_get("snapshot_id").map_err(integrity_error)?;
             let sequence: i64 = head.try_get("sequence").map_err(integrity_error)?;
             let revision = WorkspaceRevision::new(
@@ -1238,11 +1257,21 @@ impl SqliteControlStore {
             return Err(WorkspaceJournalError::Integrity);
         }
 
-        for row in sqlx::query("SELECT * FROM workspace_checkpoints ORDER BY checkpoint_id")
-            .fetch_all(&self.pool)
+        let mut checkpoint_cursor: Option<String> = None;
+        loop {
+            let Some(row) = sqlx::query(
+                "SELECT * FROM workspace_checkpoints \
+                 WHERE (? IS NULL OR checkpoint_id > ?) ORDER BY checkpoint_id LIMIT 1",
+            )
+            .bind(checkpoint_cursor.as_deref())
+            .bind(checkpoint_cursor.as_deref())
+            .fetch_optional(&self.pool)
             .await
             .map_err(storage_error)?
-        {
+            else {
+                break;
+            };
+            checkpoint_cursor = Some(row.try_get("checkpoint_id").map_err(integrity_error)?);
             let checkpoint = parse_checkpoint_row(&row)?;
             let expected = expected_checkpoint_refs(&checkpoint)?;
             let stored = blob_map(
@@ -1254,11 +1283,21 @@ impl SqliteControlStore {
             }
         }
 
-        for row in sqlx::query("SELECT * FROM workspace_operations ORDER BY operation_id")
-            .fetch_all(&self.pool)
+        let mut operation_cursor: Option<String> = None;
+        loop {
+            let Some(row) = sqlx::query(
+                "SELECT * FROM workspace_operations \
+                 WHERE (? IS NULL OR operation_id > ?) ORDER BY operation_id LIMIT 1",
+            )
+            .bind(operation_cursor.as_deref())
+            .bind(operation_cursor.as_deref())
+            .fetch_optional(&self.pool)
             .await
             .map_err(storage_error)?
-        {
+            else {
+                break;
+            };
+            operation_cursor = Some(row.try_get("operation_id").map_err(integrity_error)?);
             let operation = parse_operation_row(&row)?;
             let checkpoint = load_checkpoint_from(&self.pool, operation.plan.safety_checkpoint_id)
                 .await?
@@ -1282,12 +1321,22 @@ impl SqliteControlStore {
             }
         }
 
-        for row in sqlx::query("SELECT content_sha256, byte_size, bytes FROM workspace_blob_data")
-            .fetch_all(&self.pool)
+        let mut blob_cursor: Option<Vec<u8>> = None;
+        loop {
+            let Some(row) = sqlx::query(
+                "SELECT content_sha256, byte_size, bytes FROM workspace_blob_data \
+                 WHERE (? IS NULL OR content_sha256 > ?) ORDER BY content_sha256 LIMIT 1",
+            )
+            .bind(blob_cursor.as_deref())
+            .bind(blob_cursor.as_deref())
+            .fetch_optional(&self.pool)
             .await
             .map_err(storage_error)?
-        {
+            else {
+                break;
+            };
             let hash: Vec<u8> = row.try_get("content_sha256").map_err(integrity_error)?;
+            blob_cursor = Some(hash.clone());
             let byte_size: i64 = row.try_get("byte_size").map_err(integrity_error)?;
             let bytes: Vec<u8> = row.try_get("bytes").map_err(integrity_error)?;
             let actual_hash: [u8; 32] = Sha256::digest(&bytes).into();
@@ -1318,6 +1367,7 @@ mod tests {
     const PERMISSIONS: PortableFilePermissions = PortableFilePermissions {
         read_only: false,
         executable: false,
+        unix_mode: None,
     };
 
     fn path(value: &str) -> ProjectRelativePath {
@@ -1479,6 +1529,7 @@ mod tests {
                 path: target,
                 state: WorkspacePathState::Absent,
                 content: None,
+                permissions: None,
             }],
             artifacts: vec![],
             external_effects: vec![],
@@ -1853,6 +1904,7 @@ mod tests {
                 path: entry.path,
                 state: entry.state,
                 content: Some(content.reference.clone()),
+                permissions: Some(PERMISSIONS),
             }],
             artifacts: vec![ArtifactId::new()],
             external_effects: vec![EffectId::new()],
@@ -1947,6 +1999,7 @@ mod tests {
                 path: path("secret.txt"),
                 state,
                 content: Some(content.reference.clone()),
+                permissions: Some(PERMISSIONS),
             }],
             artifacts: vec![],
             external_effects: vec![],

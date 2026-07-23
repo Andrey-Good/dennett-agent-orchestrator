@@ -30,28 +30,37 @@ pub struct MetadataSha256(pub [u8; 32]);
 pub struct PortableFilePermissions {
     pub read_only: bool,
     pub executable: bool,
+    /// Exact Unix permission and special-mode bits when the source platform
+    /// exposes them. `None` keeps the representation portable on Windows.
+    #[serde(default)]
+    pub unix_mode: Option<u32>,
 }
 
 impl PortableFilePermissions {
+    pub fn validate(self) -> Result<(), WorkspacePlanError> {
+        if let Some(mode) = self.unix_mode
+            && (mode > 0o7777
+                || self.read_only != (mode & 0o222 == 0)
+                || self.executable != (mode & 0o111 != 0))
+        {
+            return Err(WorkspacePlanError::InvalidFilePermissions);
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn metadata_sha256(self) -> MetadataSha256 {
         let mut hasher = Sha256::new();
         hasher.update(b"dennett.regular-file-metadata.v1\0");
         hasher.update([u8::from(self.read_only), u8::from(self.executable)]);
+        match self.unix_mode {
+            Some(mode) => {
+                hasher.update([1]);
+                hasher.update(mode.to_be_bytes());
+            }
+            None => hasher.update([0]),
+        }
         MetadataSha256(hasher.finalize().into())
-    }
-
-    #[must_use]
-    pub fn from_metadata_sha256(value: MetadataSha256) -> Option<Self> {
-        [false, true].into_iter().find_map(|read_only| {
-            [false, true].into_iter().find_map(|executable| {
-                let candidate = Self {
-                    read_only,
-                    executable,
-                };
-                (candidate.metadata_sha256() == value).then_some(candidate)
-            })
-        })
     }
 }
 
@@ -454,6 +463,7 @@ fn proposed_regular_file(
     let permissions = proposal
         .resulting_permissions
         .ok_or(WorkspacePlanError::MissingResultingMetadata)?;
+    permissions.validate()?;
     Ok(WorkspacePathState::RegularFile {
         content_sha256: content.content_sha256,
         metadata_sha256: permissions.metadata_sha256(),
@@ -606,6 +616,8 @@ pub struct WorkspaceCheckpointEntry {
     pub path: ProjectRelativePath,
     pub state: WorkspacePathState,
     pub content: Option<StagedContentRef>,
+    #[serde(default)]
+    pub permissions: Option<PortableFilePermissions>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -653,18 +665,21 @@ impl WorkspaceCheckpointRecord {
             if !paths.insert(entry.path.as_str()) {
                 return Err(WorkspacePlanError::DuplicateTouchedPath);
             }
-            match (&entry.state, &entry.content) {
+            match (&entry.state, &entry.content, entry.permissions) {
                 (
                     WorkspacePathState::RegularFile {
                         content_sha256,
+                        metadata_sha256,
                         byte_size,
-                        ..
                     },
                     Some(content),
+                    Some(permissions),
                 ) if content.content_sha256 == *content_sha256
-                    && content.byte_size == *byte_size =>
+                    && content.byte_size == *byte_size
+                    && permissions.metadata_sha256() == *metadata_sha256 =>
                 {
                     content.validate()?;
+                    permissions.validate()?;
                     match content_refs.insert(content.content_id.clone(), content.clone()) {
                         Some(existing) if existing != *content => {
                             return Err(WorkspacePlanError::ContentReferenceCollision);
@@ -672,17 +687,20 @@ impl WorkspaceCheckpointRecord {
                         _ => {}
                     }
                 }
-                (WorkspacePathState::RegularFile { .. }, _) => {
+                (WorkspacePathState::RegularFile { .. }, _, _) => {
                     return Err(WorkspacePlanError::ContentEvidenceMismatch);
                 }
-                (WorkspacePathState::Absent, None) => {}
+                (WorkspacePathState::Absent, None, None) => {}
                 (
                     WorkspacePathState::Directory { .. }
                     | WorkspacePathState::Link { .. }
                     | WorkspacePathState::Other { .. },
                     None,
+                    None,
                 ) => {}
-                (_, Some(_)) => return Err(WorkspacePlanError::UnexpectedContent),
+                (_, Some(_), _) | (_, _, Some(_)) => {
+                    return Err(WorkspacePlanError::UnexpectedContent);
+                }
             }
         }
         let total_bytes = content_refs.values().try_fold(0_u64, |total, item| {
@@ -914,6 +932,8 @@ pub enum WorkspacePlanError {
     MissingContent,
     #[error("workspace change resulting metadata is missing")]
     MissingResultingMetadata,
+    #[error("workspace file permissions are inconsistent")]
+    InvalidFilePermissions,
     #[error("workspace change unexpectedly includes content")]
     UnexpectedContent,
     #[error("workspace change unexpectedly includes a previous path")]
@@ -983,6 +1003,7 @@ mod tests {
         PortableFilePermissions {
             read_only: false,
             executable: false,
+            unix_mode: None,
         }
     }
 
@@ -1156,22 +1177,32 @@ mod tests {
     }
 
     #[test]
-    fn portable_permission_evidence_is_reversible_without_os_metadata() {
-        for read_only in [false, true] {
-            for executable in [false, true] {
-                let permissions = PortableFilePermissions {
-                    read_only,
-                    executable,
-                };
-                assert_eq!(
-                    PortableFilePermissions::from_metadata_sha256(permissions.metadata_sha256()),
-                    Some(permissions)
-                );
-            }
-        }
+    fn portable_permission_evidence_validates_exact_unix_modes() {
+        let inconsistent = PortableFilePermissions {
+            read_only: true,
+            executable: false,
+            unix_mode: Some(0o600),
+        };
         assert_eq!(
-            PortableFilePermissions::from_metadata_sha256(MetadataSha256([255; 32])),
-            None
+            inconsistent.validate(),
+            Err(WorkspacePlanError::InvalidFilePermissions)
+        );
+
+        let executable = PortableFilePermissions {
+            read_only: false,
+            executable: true,
+            unix_mode: Some(0o750),
+        };
+        assert_eq!(executable.validate(), Ok(()));
+
+        let out_of_range = PortableFilePermissions {
+            read_only: false,
+            executable: false,
+            unix_mode: Some(0o10_000),
+        };
+        assert_eq!(
+            out_of_range.validate(),
+            Err(WorkspacePlanError::InvalidFilePermissions)
         );
     }
 
@@ -1252,10 +1283,11 @@ mod tests {
                 path: path("file.txt"),
                 state: WorkspacePathState::RegularFile {
                     content_sha256: blob.reference.content_sha256,
-                    metadata_sha256: METADATA,
+                    metadata_sha256: permissions().metadata_sha256(),
                     byte_size: blob.reference.byte_size,
                 },
                 content: Some(blob.reference),
+                permissions: Some(permissions()),
             }],
             artifacts: vec![],
             external_effects: vec![],
@@ -1279,6 +1311,7 @@ mod tests {
                         byte_size: reference.byte_size,
                     },
                     content: Some(reference),
+                    permissions: Some(permissions()),
                 }
             })
             .collect();

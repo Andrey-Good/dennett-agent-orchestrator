@@ -138,6 +138,7 @@ impl WorkspaceFilesystemPort for NodeWorkspaceFilesystemAdapter {
         let plan = plan.clone();
         tokio::task::spawn_blocking(move || {
             let opened = open_scope(&scope)?;
+            repair_interrupted_publications(&opened, &plan)?;
             let observations = observe_transitions_opened(&opened, &plan)?;
             if !all_transitions_recognized(&plan, &observations) {
                 return Err(WorkspaceFilesystemError::Conflict);
@@ -340,14 +341,9 @@ fn prepare_file_effect_sync(
             None => None,
         };
         let resulting_permissions = match change.kind {
-            FileMutationKind::Add => {
-                change
-                    .resulting_permissions
-                    .or(Some(PortableFilePermissions {
-                        read_only: false,
-                        executable: false,
-                    }))
-            }
+            FileMutationKind::Add => change
+                .resulting_permissions
+                .or(Some(default_file_permissions())),
             FileMutationKind::Modify => Some(change.resulting_permissions.unwrap_or(
                 permissions_from_state_and_path(&opened, &change.path, &current)?,
             )),
@@ -475,12 +471,19 @@ fn capture_checkpoint_entry(
         }
         None => None,
     };
+    let permissions = match &observed {
+        WorkspacePathState::RegularFile { .. } => {
+            Some(permissions_from_state_and_path(opened, path, &observed)?)
+        }
+        _ => None,
+    };
     entries.insert(
         path.as_str().to_owned(),
         WorkspaceCheckpointEntry {
             path: path.clone(),
             state: observed,
             content,
+            permissions,
         },
     );
     Ok(())
@@ -502,11 +505,16 @@ fn apply_file_effect_sync(
     apply_file_effect_sync_with_failure(scope, plan, blobs, None)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicationFailure {
+    AfterModifyBackup(usize),
+}
+
 fn apply_file_effect_sync_with_failure(
     scope: &WorkspaceFilesystemScope,
     plan: &WorkspaceFileEffectPlan,
     blobs: &[WorkspaceBlob],
-    fail_after_publications: Option<usize>,
+    failure: Option<PublicationFailure>,
 ) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
     if !scope.writable || scope.project_id != plan.project_id || scope.binding_id != plan.binding_id
     {
@@ -518,12 +526,14 @@ fn apply_file_effect_sync_with_failure(
     stage_after_images(&opened, plan, &blob_map)?;
 
     for (published, change) in plan.changes.iter().enumerate() {
-        if fail_after_publications == Some(published) {
-            return Err(WorkspaceFilesystemError::RecoveryRequired);
-        }
         let result = match change.kind {
             FileMutationKind::Add => publish_staged_add(&opened, plan, &change.path),
-            FileMutationKind::Modify => publish_staged_modify(&opened, plan, &change.path),
+            FileMutationKind::Modify => publish_staged_modify(
+                &opened,
+                plan,
+                &change.path,
+                failure == Some(PublicationFailure::AfterModifyBackup(published)),
+            ),
             FileMutationKind::Delete => publish_delete(&opened, plan, &change.path),
             FileMutationKind::Rename => publish_rename(
                 &opened,
@@ -695,6 +705,7 @@ fn publish_staged_modify(
     opened: &OpenProjectRoot,
     plan: &WorkspaceFileEffectPlan,
     path: &ProjectRelativePath,
+    fail_after_backup: bool,
 ) -> Result<(), WorkspaceFilesystemError> {
     let (parent, target) = open_parent(&opened.dir, path)?;
     let backup = sidecar_name(plan.operation_id, path, SidecarKind::Before);
@@ -704,6 +715,9 @@ fn publish_staged_modify(
     if backed_up != transition.before {
         let _ = move_noreplace(&parent, &backup, &target);
         return Err(WorkspaceFilesystemError::Conflict);
+    }
+    if fail_after_backup {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
     }
     let temporary = sidecar_name(plan.operation_id, path, SidecarKind::After);
     if let Err(error) = move_noreplace(&parent, &temporary, &target) {
@@ -757,6 +771,35 @@ fn publish_rename(
     }
     sync_directory(&source_parent, "sync_workspace_rename_source").map_err(map_project_error)?;
     sync_directory(&target_parent, "sync_workspace_rename_target").map_err(map_project_error)
+}
+
+fn repair_interrupted_publications(
+    opened: &OpenProjectRoot,
+    plan: &WorkspaceFileEffectPlan,
+) -> Result<(), WorkspaceFilesystemError> {
+    for transition in &plan.transitions {
+        if !matches!(transition.before, WorkspacePathState::RegularFile { .. })
+            || !matches!(transition.after, WorkspacePathState::RegularFile { .. })
+        {
+            continue;
+        }
+        let (parent, target) = open_parent(&opened.dir, &transition.path)?;
+        let (target_state, _) = state_at_parent(&parent, &target, false)?;
+        if target_state != WorkspacePathState::Absent {
+            continue;
+        }
+        let before = sidecar_name(plan.operation_id, &transition.path, SidecarKind::Before);
+        let after = sidecar_name(plan.operation_id, &transition.path, SidecarKind::After);
+        let (before_state, _) = state_at_parent(&parent, &before, false)?;
+        let (after_state, _) = state_at_parent(&parent, &after, false)?;
+        if before_state != transition.before || after_state != transition.after {
+            return Err(WorkspaceFilesystemError::RecoveryRequired);
+        }
+        move_noreplace(&parent, &before, &target)?;
+        sync_directory(&parent, "sync_workspace_interrupted_modify_repair")
+            .map_err(map_project_error)?;
+    }
+    Ok(())
 }
 
 fn cleanup_sidecars(
@@ -887,8 +930,12 @@ fn read_regular_state(
     if !before.is_file() || before.len() > MAX_SNAPSHOT_FILE_BYTES {
         return Err(WorkspaceFilesystemError::BoundExceeded);
     }
+    require_regular_file_scope(parent, &file, &before)?;
     if capture_bytes && before.len() > MAX_STAGED_FILE_BYTES {
         return Err(WorkspaceFilesystemError::BoundExceeded);
+    }
+    if capture_bytes {
+        ensure_checkpoint_metadata_supported(&file)?;
     }
     let next_total = total_bytes
         .checked_add(before.len())
@@ -944,6 +991,175 @@ fn same_open_file_observation(left: &Metadata, right: &Metadata) -> bool {
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
         && portable_permissions(left) == portable_permissions(right)
+}
+
+#[cfg(unix)]
+fn ensure_checkpoint_metadata_supported(
+    file: &cap_std::fs::File,
+) -> Result<(), WorkspaceFilesystemError> {
+    let mut names = [0_u8; 64 * 1024];
+    let count = rustix::fs::flistxattr(file, &mut names)
+        .map_err(|_| WorkspaceFilesystemError::UnsupportedObject)?;
+    if count == 0 {
+        Ok(())
+    } else {
+        Err(WorkspaceFilesystemError::UnsupportedObject)
+    }
+}
+
+#[cfg(windows)]
+fn ensure_checkpoint_metadata_supported(
+    file: &cap_std::fs::File,
+) -> Result<(), WorkspaceFilesystemError> {
+    ensure_windows_file_has_only_default_stream(file)?;
+    ensure_windows_file_has_inherited_acl(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ensure_checkpoint_metadata_supported(
+    _file: &cap_std::fs::File,
+) -> Result<(), WorkspaceFilesystemError> {
+    Err(WorkspaceFilesystemError::UnsupportedObject)
+}
+
+#[cfg(windows)]
+fn ensure_windows_file_has_only_default_stream(
+    file: &cap_std::fs::File,
+) -> Result<(), WorkspaceFilesystemError> {
+    use std::{mem::size_of, os::windows::io::AsRawHandle as _, slice};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_STREAM_INFO, FileStreamInfo, GetFileInformationByHandleEx,
+    };
+
+    const STREAM_BUFFER_BYTES: usize = 64 * 1024;
+    let mut buffer = vec![0_usize; STREAM_BUFFER_BYTES / size_of::<usize>()];
+    // SAFETY: `file` owns a valid handle for the call, the aligned buffer is
+    // writable for its full declared byte length, and the API does not retain it.
+    let success = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle().cast(),
+            FileStreamInfo,
+            buffer.as_mut_ptr().cast(),
+            u32::try_from(STREAM_BUFFER_BYTES).expect("stream buffer fits u32"),
+        )
+    };
+    if success == 0 {
+        return Err(WorkspaceFilesystemError::UnsupportedObject);
+    }
+
+    // SAFETY: a successful call initialized at least one FILE_STREAM_INFO
+    // record in the suitably aligned output buffer.
+    let info = unsafe { &*buffer.as_ptr().cast::<FILE_STREAM_INFO>() };
+    if info.NextEntryOffset != 0 {
+        return Err(WorkspaceFilesystemError::UnsupportedObject);
+    }
+    let name_bytes = usize::try_from(info.StreamNameLength)
+        .map_err(|_| WorkspaceFilesystemError::UnsupportedObject)?;
+    if name_bytes % size_of::<u16>() != 0
+        || name_bytes > STREAM_BUFFER_BYTES - size_of::<FILE_STREAM_INFO>()
+    {
+        return Err(WorkspaceFilesystemError::UnsupportedObject);
+    }
+    let name_len = name_bytes / size_of::<u16>();
+    // SAFETY: StreamNameLength was validated against the initialized output
+    // buffer and Windows stores stream names as UTF-16 code units.
+    let name = unsafe { slice::from_raw_parts(info.StreamName.as_ptr(), name_len) };
+    let default_stream = "::$DATA".encode_utf16().collect::<Vec<_>>();
+    if name == default_stream {
+        Ok(())
+    } else {
+        Err(WorkspaceFilesystemError::UnsupportedObject)
+    }
+}
+
+#[cfg(windows)]
+fn ensure_windows_file_has_inherited_acl(
+    file: &cap_std::fs::File,
+) -> Result<(), WorkspaceFilesystemError> {
+    use std::{
+        ffi::c_void,
+        mem::{size_of, zeroed},
+        os::windows::io::AsRawHandle as _,
+        ptr,
+    };
+    use windows_sys::Win32::{
+        Foundation::{ERROR_SUCCESS, LocalFree},
+        Security::{
+            ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+            Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+            DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, GetSecurityDescriptorControl,
+            INHERITED_ACE, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+        },
+    };
+
+    struct SecurityDescriptorGuard(PSECURITY_DESCRIPTOR);
+    impl Drop for SecurityDescriptorGuard {
+        fn drop(&mut self) {
+            // SAFETY: GetSecurityInfo allocates this descriptor with LocalAlloc.
+            unsafe {
+                LocalFree(self.0);
+            }
+        }
+    }
+
+    let mut dacl: *mut ACL = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: the file handle remains valid and the output pointers live for
+    // the duration of the call.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle().cast(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut dacl,
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS || descriptor.is_null() || dacl.is_null() {
+        return Err(WorkspaceFilesystemError::UnsupportedObject);
+    }
+    let _descriptor = SecurityDescriptorGuard(descriptor);
+
+    let mut control = 0_u16;
+    let mut revision = 0_u32;
+    // SAFETY: descriptor is owned by the guard and valid until function exit.
+    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+        || control & SE_DACL_PROTECTED != 0
+    {
+        return Err(WorkspaceFilesystemError::UnsupportedObject);
+    }
+
+    // SAFETY: ACL_SIZE_INFORMATION is a plain output structure and dacl points
+    // into the guarded security descriptor.
+    let mut information: ACL_SIZE_INFORMATION = unsafe { zeroed() };
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&mut information as *mut ACL_SIZE_INFORMATION).cast::<c_void>(),
+            u32::try_from(size_of::<ACL_SIZE_INFORMATION>()).expect("ACL info size fits u32"),
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(WorkspaceFilesystemError::UnsupportedObject);
+    }
+
+    for index in 0..information.AceCount {
+        let mut ace: *mut c_void = ptr::null_mut();
+        // SAFETY: index is bounded by the ACE count returned for this DACL.
+        if unsafe { GetAce(dacl, index, &mut ace) } == 0 || ace.is_null() {
+            return Err(WorkspaceFilesystemError::UnsupportedObject);
+        }
+        // SAFETY: every ACE begins with ACE_HEADER.
+        let header = unsafe { &*ace.cast::<ACE_HEADER>() };
+        if u32::from(header.AceFlags) & INHERITED_ACE == 0 {
+            return Err(WorkspaceFilesystemError::UnsupportedObject);
+        }
+    }
+    Ok(())
 }
 
 fn permissions_from_state_and_path(
@@ -1051,6 +1267,53 @@ fn require_same_mount(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn require_regular_file_scope(
+    parent: &Dir,
+    file: &cap_std::fs::File,
+    metadata: &Metadata,
+) -> Result<(), WorkspaceFilesystemError> {
+    if MetadataExt::dev(metadata)
+        != directory_identity(parent)
+            .map_err(map_project_error)?
+            .volume
+    {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    if file_mount_identity(file)? != directory_mount_identity(parent)? {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn file_mount_identity(
+    file: &cap_std::fs::File,
+) -> Result<MountIdentity, WorkspaceFilesystemError> {
+    use rustix::fs::{AtFlags, StatxFlags, statx};
+
+    let stat = statx(
+        file,
+        "",
+        AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT,
+        StatxFlags::MNT_ID,
+    )
+    .map_err(|_| WorkspaceFilesystemError::ScopeDenied)?;
+    if stat.stx_mask & StatxFlags::MNT_ID.bits() == 0 {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    Ok(stat.stx_mnt_id)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn require_regular_file_scope(
+    _parent: &Dir,
+    _file: &cap_std::fs::File,
+    _metadata: &Metadata,
+) -> Result<(), WorkspaceFilesystemError> {
+    Ok(())
+}
+
 #[cfg(windows)]
 fn ensure_exact_case_if_present(
     dir: &Dir,
@@ -1111,21 +1374,44 @@ fn ensure_exact_case_if_present(
 }
 
 fn portable_permissions(metadata: &Metadata) -> PortableFilePermissions {
+    let unix_mode = portable_unix_mode(metadata);
     PortableFilePermissions {
-        read_only: metadata.permissions().readonly(),
-        executable: metadata_is_executable(metadata),
+        read_only: unix_mode.map_or_else(
+            || metadata.permissions().readonly(),
+            |mode| mode & 0o222 == 0,
+        ),
+        executable: unix_mode.is_some_and(|mode| mode & 0o111 != 0),
+        unix_mode,
     }
 }
 
 #[cfg(unix)]
-fn metadata_is_executable(metadata: &Metadata) -> bool {
+fn portable_unix_mode(metadata: &Metadata) -> Option<u32> {
     use cap_std::fs::MetadataExt as _;
-    metadata.mode() & 0o111 != 0
+    Some(metadata.mode() & 0o7777)
 }
 
 #[cfg(not(unix))]
-fn metadata_is_executable(_metadata: &Metadata) -> bool {
-    false
+fn portable_unix_mode(_metadata: &Metadata) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn default_file_permissions() -> PortableFilePermissions {
+    PortableFilePermissions {
+        read_only: false,
+        executable: false,
+        unix_mode: Some(0o644),
+    }
+}
+
+#[cfg(not(unix))]
+fn default_file_permissions() -> PortableFilePermissions {
+    PortableFilePermissions {
+        read_only: false,
+        executable: false,
+        unix_mode: None,
+    }
 }
 
 fn metadata_hash(kind: &str, metadata: &Metadata, extra: &[u8]) -> MetadataSha256 {
@@ -1218,23 +1504,39 @@ fn set_portable_permissions(
         .metadata()
         .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
         .permissions();
-    set_permission_bits(&mut mode, permissions);
+    set_permission_bits(&mut mode, permissions)?;
     file.set_permissions(mode)
         .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)
 }
 
 #[cfg(unix)]
-fn set_permission_bits(mode: &mut cap_std::fs::Permissions, permissions: PortableFilePermissions) {
-    let mut bits = if permissions.executable { 0o755 } else { 0o644 };
-    if permissions.read_only {
-        bits &= !0o222;
-    }
+fn set_permission_bits(
+    mode: &mut cap_std::fs::Permissions,
+    permissions: PortableFilePermissions,
+) -> Result<(), WorkspaceFilesystemError> {
+    permissions
+        .validate()
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    let bits = permissions
+        .unix_mode
+        .ok_or(WorkspaceFilesystemError::RecoveryRequired)?;
     mode.set_mode(bits);
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_permission_bits(mode: &mut cap_std::fs::Permissions, permissions: PortableFilePermissions) {
+fn set_permission_bits(
+    mode: &mut cap_std::fs::Permissions,
+    permissions: PortableFilePermissions,
+) -> Result<(), WorkspaceFilesystemError> {
+    permissions
+        .validate()
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    if permissions.unix_mode.is_some() {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
     mode.set_readonly(permissions.read_only);
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -1524,6 +1826,17 @@ mod tests {
         binding_id: WorkspaceBindingId,
     }
 
+    fn project_application(store: Arc<SqliteControlStore>) -> Arc<ProjectApplication> {
+        let sessions = SessionCoordinator::new(SessionJournal::new(store.clone()), 1, 16);
+        let system = Arc::new(SystemProjection::new(SystemSnapshot::empty(1), 16));
+        Arc::new(ProjectApplication::new(
+            store,
+            Arc::new(crate::project_location::NodeProjectLocationAdapter::default()),
+            sessions,
+            system,
+        ))
+    }
+
     impl RealWorkspaceApplication {
         async fn open() -> Self {
             let temp = TempDir::new().expect("temporary workspace application");
@@ -1538,14 +1851,7 @@ mod tests {
                     .await
                     .expect("open control store"),
             );
-            let sessions = SessionCoordinator::new(SessionJournal::new(store.clone()), 1, 16);
-            let system = Arc::new(SystemProjection::new(SystemSnapshot::empty(1), 16));
-            let projects = Arc::new(ProjectApplication::new(
-                store.clone(),
-                Arc::new(crate::project_location::NodeProjectLocationAdapter::default()),
-                sessions,
-                system,
-            ));
+            let projects = project_application(store.clone());
             let inspection = projects
                 .inspect_location(InspectProjectLocationCommand {
                     registration_kind: ProjectRegistrationKind::AttachExisting,
@@ -1752,6 +2058,89 @@ mod tests {
             require_same_mount(root_mount, &proc),
             Err(WorkspaceFilesystemError::ScopeDenied)
         );
+
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let proc_file = proc
+            .open_with("version", &options)
+            .expect("open regular file on proc mount");
+        let metadata = proc_file.metadata().expect("proc file metadata");
+        assert_eq!(
+            require_regular_file_scope(&root, &proc_file, &metadata),
+            Err(WorkspaceFilesystemError::ScopeDenied)
+        );
+        assert_eq!(
+            require_regular_file_scope(&proc, &proc_file, &metadata),
+            Ok(())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn modifying_a_private_file_preserves_its_exact_unix_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = TempDir::new().expect("temporary project");
+        let target = temp.path().join("private.txt");
+        fs::write(&target, b"private before").expect("seed private file");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("set private mode");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Modify,
+                "private.txt",
+                None,
+                Some(b"private after"),
+            )],
+        )
+        .expect("prepare private file modification");
+        assert_eq!(
+            prepared.checkpoint_entries[0]
+                .permissions
+                .expect("checkpoint permissions")
+                .unix_mode,
+            Some(0o600)
+        );
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs)
+            .expect("apply private file modification");
+
+        assert_eq!(fs::read(&target).unwrap(), b"private after");
+        assert_eq!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn checkpoint_capture_fails_closed_for_extended_file_metadata() {
+        let temp = TempDir::new().expect("temporary project");
+        let target = temp.path().join("attributed.txt");
+        fs::write(&target, b"human").expect("seed attributed file");
+        rustix::fs::setxattr(
+            &target,
+            "user.dennett-test",
+            b"keep",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .expect("set test extended attribute");
+        let scope = scope(temp.path());
+
+        assert_eq!(
+            prepare_file_effect_sync(
+                &scope,
+                vec![change(
+                    FileMutationKind::Modify,
+                    "attributed.txt",
+                    None,
+                    Some(b"agent"),
+                )],
+            ),
+            Err(WorkspaceFilesystemError::UnsupportedObject)
+        );
+        assert_eq!(fs::read(target).unwrap(), b"human");
     }
 
     #[cfg(windows)]
@@ -1785,6 +2174,108 @@ mod tests {
             Err(WorkspaceFilesystemError::ScopeDenied | WorkspaceFilesystemError::Conflict)
         ));
         assert_eq!(fs::read(temp.path().join("Owned.txt")).unwrap(), b"human");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn checkpoint_capture_fails_closed_for_alternate_data_streams() {
+        let temp = TempDir::new().expect("temporary project");
+        let target = temp.path().join("streamed.txt");
+        let stream = PathBuf::from(format!("{}:dennett-test", target.to_string_lossy()));
+        fs::write(&target, b"human").expect("seed primary stream");
+        fs::write(&stream, b"preserve me").expect("seed alternate stream");
+        let scope = scope(temp.path());
+
+        assert_eq!(
+            prepare_file_effect_sync(
+                &scope,
+                vec![change(
+                    FileMutationKind::Modify,
+                    "streamed.txt",
+                    None,
+                    Some(b"agent"),
+                )],
+            ),
+            Err(WorkspaceFilesystemError::UnsupportedObject)
+        );
+        assert_eq!(fs::read(target).unwrap(), b"human");
+        assert_eq!(fs::read(stream).unwrap(), b"preserve me");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_mutation_rejects_a_directory_junction() {
+        use std::process::Command;
+
+        let temp = TempDir::new().expect("temporary project");
+        let project = temp.path().join("project");
+        let outside = temp.path().join("outside");
+        let junction = project.join("junction");
+        fs::create_dir(&project).expect("create project");
+        fs::create_dir(&outside).expect("create outside");
+        fs::write(outside.join("secret.txt"), b"human").expect("seed outside file");
+        let output = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .output()
+            .expect("create directory junction");
+        assert!(
+            output.status.success(),
+            "mklink failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let scope = scope(&project);
+
+        assert!(matches!(
+            prepare_file_effect_sync(
+                &scope,
+                vec![change(
+                    FileMutationKind::Modify,
+                    "junction/secret.txt",
+                    None,
+                    Some(b"agent"),
+                )],
+            ),
+            Err(WorkspaceFilesystemError::ScopeDenied | WorkspaceFilesystemError::Conflict)
+        ));
+        assert_eq!(fs::read(outside.join("secret.txt")).unwrap(), b"human");
+        fs::remove_dir(junction).expect("remove junction without traversing it");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn checkpoint_capture_fails_closed_for_explicit_windows_acl() {
+        use std::process::Command;
+
+        let temp = TempDir::new().expect("temporary project");
+        let target = temp.path().join("acl.txt");
+        fs::write(&target, b"human").expect("seed ACL file");
+        let output = Command::new("icacls")
+            .arg(&target)
+            .arg("/inheritance:d")
+            .output()
+            .expect("run built-in ACL editor");
+        assert!(
+            output.status.success(),
+            "icacls failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let scope = scope(temp.path());
+
+        assert_eq!(
+            prepare_file_effect_sync(
+                &scope,
+                vec![change(
+                    FileMutationKind::Modify,
+                    "acl.txt",
+                    None,
+                    Some(b"agent"),
+                )],
+            ),
+            Err(WorkspaceFilesystemError::UnsupportedObject)
+        );
+        assert_eq!(fs::read(target).unwrap(), b"human");
     }
 
     #[test]
@@ -2221,7 +2712,12 @@ mod tests {
             .await
             .expect("persist prepared operation");
         assert_eq!(
-            apply_file_effect_sync_with_failure(&scope, &operation.plan, &blobs, Some(1)),
+            apply_file_effect_sync_with_failure(
+                &scope,
+                &operation.plan,
+                &blobs,
+                Some(PublicationFailure::AfterModifyBackup(1)),
+            ),
             Err(WorkspaceFilesystemError::RecoveryRequired)
         );
 
@@ -2229,18 +2725,36 @@ mod tests {
             fs::read(real.root.join("tracked.txt")).unwrap(),
             b"first agent change"
         );
-        assert_eq!(
-            fs::read(real.root.join("tracked-too.txt")).unwrap(),
-            b"second original"
+        assert!(
+            optional_symlink_metadata(
+                &OpenProjectRoot::open(&real.root)
+                    .expect("open interrupted workspace")
+                    .dir,
+                OsStr::new("tracked-too.txt"),
+            )
+            .expect("inspect interrupted target")
+            .is_none()
         );
         fs::write(real.root.join("unrelated.txt"), b"human change")
             .expect("external unrelated edit");
 
-        let restarted = WorkspaceApplication::new(
-            real.projects.clone(),
-            real.store.clone(),
-            Arc::new(NodeWorkspaceFilesystemAdapter),
+        let database = real._temp.path().join("control.sqlite");
+        let root = real.root.clone();
+        let project_id = real.project_id;
+        let binding_id = real.binding_id;
+        drop(real.application);
+        drop(real.projects);
+        real.store.close().await;
+        drop(real.store);
+
+        let store = Arc::new(
+            SqliteControlStore::open(&database)
+                .await
+                .expect("reopen control store after simulated process exit"),
         );
+        let projects = project_application(store.clone());
+        let restarted =
+            WorkspaceApplication::new(projects, store, Arc::new(NodeWorkspaceFilesystemAdapter));
         let reconciled = restarted
             .reconcile_unfinished()
             .await
@@ -2256,8 +2770,8 @@ mod tests {
                 operation_id: WorkspaceOperationId::new(),
                 command_id: CommandId::new(),
                 correlation_id: "test.workspace.partial.restore".to_owned(),
-                project_id: real.project_id,
-                binding_id: real.binding_id,
+                project_id,
+                binding_id,
                 checkpoint_id,
                 expected_current_revision: base.manifest.revision,
                 prepared_at_unix_ms: 6,
@@ -2266,19 +2780,16 @@ mod tests {
             .expect("restore partial operation");
 
         assert!(matches!(restored, CheckpointRestoreOutcome::Applied(_)));
+        assert_eq!(fs::read(root.join("tracked.txt")).unwrap(), b"original");
         assert_eq!(
-            fs::read(real.root.join("tracked.txt")).unwrap(),
-            b"original"
-        );
-        assert_eq!(
-            fs::read(real.root.join("tracked-too.txt")).unwrap(),
+            fs::read(root.join("tracked-too.txt")).unwrap(),
             b"second original"
         );
         assert_eq!(
-            fs::read(real.root.join("unrelated.txt")).unwrap(),
+            fs::read(root.join("unrelated.txt")).unwrap(),
             b"human change"
         );
-        assert!(fs::read_dir(&real.root).unwrap().all(|entry| {
+        assert!(fs::read_dir(&root).unwrap().all(|entry| {
             !entry
                 .unwrap()
                 .file_name()
