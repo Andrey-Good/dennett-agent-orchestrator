@@ -118,6 +118,8 @@ This is capture material, not a published claim. A standalone field note is just
   now has a private hard-link witness. That witness pins the original inode
   across process restarts until cleanup, so deletion plus recreation cannot
   impersonate the staged object even when bytes and permissions are identical.
+  The staging directory is durably synchronized before its receipt is returned,
+  keeping the proof ordered ahead of any user-path publication after a crash.
 - The owner accepted this as an internal checkpoint because the existing M01
   desktop has no truthful control for inspecting snapshot identity or crash
   reconstruction. The visual owner gate remains WP-M02-007/WP-M02-008.

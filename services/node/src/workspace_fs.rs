@@ -562,6 +562,7 @@ fn stage_file_effect_sync(
         marker_identity = Some(observed_marker_identity);
         stage_after_images(&staging_dir, plan, &blob_map, &mut created)?;
         stage_before_witnesses(&opened, &staging_dir, plan, &mut created)?;
+        sync_directory(&staging_dir, "sync_workspace_staged_objects").map_err(map_project_error)?;
         let mut objects = created.clone();
         objects.sort_by(|left, right| {
             left.path

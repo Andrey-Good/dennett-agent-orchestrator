@@ -635,8 +635,8 @@
     },
     {
       "path": "blog/notes/M02_WP004_capture.md",
-      "bytes": 9207,
-      "sha256": "20e42aba113a95ddd208df8cb13d88350bd392358fd4187eb02b3c0f52bff15b"
+      "bytes": 9365,
+      "sha256": "9b98f3e633135eabcc6a0cba67b5608490e2a3a7eb38e16b8b32ffa849261db7"
     },
     {
       "path": "blog/notes/M02_capture.md",
@@ -2260,8 +2260,8 @@
     },
     {
       "path": "services/node/src/workspace_fs.rs",
-      "bytes": 144389,
-      "sha256": "ca8d61072d947c88365e8f5a065dce7b5360ff4b481a104e2233c375f2242ca2"
+      "bytes": 144488,
+      "sha256": "faebd0f08c64230b4fe39194fa32f074ffc0ae7a9b0dc46b7132a5d53362d601"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",
