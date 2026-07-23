@@ -1,7 +1,7 @@
 {
   "name": "dennett",
   "edition": "2026-07-16.m00",
-  "file_count": 493,
+  "file_count": 499,
   "files": [
     {
       "path": ".editorconfig",
@@ -70,13 +70,13 @@
     },
     {
       "path": "Cargo.lock",
-      "bytes": 65034,
-      "sha256": "9d4ae66c4767b102be72ac40c529229e2ca75663247e2cf20f2588f2a55620fb"
+      "bytes": 65200,
+      "sha256": "36f21699670234c0c4e6608a751bf03b728e69492b24dabb8372cfecf4581e03"
     },
     {
       "path": "Cargo.toml",
-      "bytes": 1707,
-      "sha256": "bdad58ae571fe96320aecfbf38d8bed287fe2722dfb63abd8dae202d4d5ca314"
+      "bytes": 1859,
+      "sha256": "54952abe310d608fa840932f4b42cd8149ee0f4611b2c7b4fe6fdfc141efc549"
     },
     {
       "path": "GOVERNANCE.md",
@@ -170,8 +170,8 @@
     },
     {
       "path": "adapters/storage/sqlite/Cargo.toml",
-      "bytes": 698,
-      "sha256": "31a949da3114343f2b414df877684e52d7020e210b7bcdde82ff712033356056"
+      "bytes": 799,
+      "sha256": "43d95a1e4ce2837e5fcb95c94ecdae82788b47b3f9e78e0403df9d17c012b8e3"
     },
     {
       "path": "adapters/storage/sqlite/README.md",
@@ -194,14 +194,24 @@
       "sha256": "b4001c683636adf6ea15c537374e4863e1b06b99f0597a4c1fb28058cfa5eca3"
     },
     {
+      "path": "adapters/storage/sqlite/migrations/0004_m02_workspace_journal.sql",
+      "bytes": 6057,
+      "sha256": "63b416d09d727b618a237d3d78ae0b57cbca2f5a0d18555dc76e97b2fe410efe"
+    },
+    {
       "path": "adapters/storage/sqlite/src/lib.rs",
-      "bytes": 57753,
-      "sha256": "783084abb4a0ae9bf57a39d3a97757fde68b1ff792097227d06d48b4ee3f9001"
+      "bytes": 58169,
+      "sha256": "6a6868cb7e5b2ec8876218cc1d952f9716c2e2187085105eef4f36e6d5ff5725"
     },
     {
       "path": "adapters/storage/sqlite/src/project_registry.rs",
       "bytes": 125127,
       "sha256": "ac929792fd725e48996b6084a6c32c0a3a7f0b58173f98394bd61d637d087662"
+    },
+    {
+      "path": "adapters/storage/sqlite/src/workspace_journal.rs",
+      "bytes": 81085,
+      "sha256": "9c235dcdf83a3a33901daa7f710610bae1e4f7d5458b520cc03ede668bb76ea1"
     },
     {
       "path": "adapters/transport/README.md",
@@ -624,6 +634,11 @@
       "sha256": "6d7e0097f8b4743582a5ef48e0673bcef1aa12fd050f4b4096b482682f0ac9b6"
     },
     {
+      "path": "blog/notes/M02_WP004_capture.md",
+      "bytes": 9711,
+      "sha256": "a49e6e8ee2ce1ddbd4fca47e59331fe19901f9e44eaa5fde114bb4db4b842e0b"
+    },
+    {
       "path": "blog/notes/M02_capture.md",
       "bytes": 24194,
       "sha256": "d4179d1be5060bc56134aa656002c22e606761e3f0cfe85bf9521e515cc4061e"
@@ -710,8 +725,8 @@
     },
     {
       "path": "crates/dennett-contracts/src/lib.rs",
-      "bytes": 25974,
-      "sha256": "f52261b5ce6a1a9b0fc8c9c187574aededd93ff66f3b97dd9b051a18484544f3"
+      "bytes": 29383,
+      "sha256": "03ef63a8a4b58b4d49e6199b676a492265f219d10b1704252abd58698da1a04f"
     },
     {
       "path": "crates/dennett-effect-core/AGENTS.md",
@@ -720,8 +735,8 @@
     },
     {
       "path": "crates/dennett-effect-core/Cargo.toml",
-      "bytes": 237,
-      "sha256": "20fd0111ba40bdccdf230dad30d7923645a8e48df1ce31476bc6d9dfa0be0ae8"
+      "bytes": 315,
+      "sha256": "02da6278acd52089c042e640752aa58950759b3fc3e95583c8f43f036bbff5e0"
     },
     {
       "path": "crates/dennett-effect-core/README.md",
@@ -730,8 +745,13 @@
     },
     {
       "path": "crates/dennett-effect-core/src/lib.rs",
-      "bytes": 836,
-      "sha256": "229f18d802467ef6d4f04d9c5d997d9b44c3d4fd1ca50714d97c83f44d0097c5"
+      "bytes": 856,
+      "sha256": "603fb07ad925244e3937602343de3aca9bb4ce1410a9a4b9ad40111cd19af78a"
+    },
+    {
+      "path": "crates/dennett-effect-core/src/workspace.rs",
+      "bytes": 53683,
+      "sha256": "12960557cb77a2b4753af2201e206d0ac892c43f5acf0db4d75b035c200f3b52"
     },
     {
       "path": "crates/dennett-kernel/AGENTS.md",
@@ -916,7 +936,7 @@
     {
       "path": "docs/CHECKSUMS.sha256",
       "bytes": 15550,
-      "sha256": "bf0b412a674b24a01eb554aace8fe4dee9777e1456c812af4119c495b67bddaf"
+      "sha256": "8c45c2cbf6e62407880b98bde9e1e70fc4505a5846e02c3640be1539635bbfb6"
     },
     {
       "path": "docs/FEATURE_AUDIT.md",
@@ -1530,8 +1550,8 @@
     },
     {
       "path": "docs/testing/generated/MILESTONE_TEST_PLAN.md",
-      "bytes": 3526,
-      "sha256": "1b8372702dc5ca928c36c441995aafa0607b697442af8fcf83d96dbdf23634fe"
+      "bytes": 3522,
+      "sha256": "1a1ac898d2c476b69443751c82dc250e04447afca6b836cc40051495f64fc37c"
     },
     {
       "path": "docs/testing/generated/RELEASE_GATES.md",
@@ -1720,8 +1740,8 @@
     },
     {
       "path": "planning/milestones/M02_project_workspace_and_review.json",
-      "bytes": 45050,
-      "sha256": "9432ab750c82a47528cd599ee41ec67a45a275796c1b8e77210b5002559864cb"
+      "bytes": 46155,
+      "sha256": "6dd77e7fc82a78d54e7171f86e8a3b90a878e14b6bf514faaf0e09ffa9eae55d"
     },
     {
       "path": "planning/results/WP-M00-001.json",
@@ -1820,8 +1840,8 @@
     },
     {
       "path": "planning/results/WP-M02-003.json",
-      "bytes": 6605,
-      "sha256": "bc81161e44a368758c82b524c5cceb2b00bf4d275df24bc9e1cb2e3a9a8c6105"
+      "bytes": 6636,
+      "sha256": "f5b2d7121557e8e383043d5a0109fd6624a34fda2268965db093f242a0ebbfcb"
     },
     {
       "path": "planning/templates/autonomous-batch.template.yaml",
@@ -2115,8 +2135,8 @@
     },
     {
       "path": "services/head/Cargo.toml",
-      "bytes": 910,
-      "sha256": "ee83fed79d5aad5fe020cdb24960af247d04aabff1c63eebf07f66ac0a1a5c9c"
+      "bytes": 1005,
+      "sha256": "199098cf49ae8af5af04915623e5679f42a547dc188d3bcca60856c62adb9c79"
     },
     {
       "path": "services/head/README.md",
@@ -2135,8 +2155,8 @@
     },
     {
       "path": "services/head/src/lib.rs",
-      "bytes": 1635,
-      "sha256": "f402e833b158c55635dc1376c6184679371197879a4c2a60cb3c5ef46dd6834e"
+      "bytes": 1654,
+      "sha256": "a8159b8b1640f106c6f968b655e7a7b6485c1e184eedb2e0cf1d4b2f30b7dac2"
     },
     {
       "path": "services/head/src/main.rs",
@@ -2145,8 +2165,8 @@
     },
     {
       "path": "services/head/src/project.rs",
-      "bytes": 42439,
-      "sha256": "75d63fab1637af7a345e13977c4928c8c9c4c945dcc3f9b7db8884bfb87c4aaf"
+      "bytes": 44230,
+      "sha256": "5150879260e193880e98527c8f135433e996c774f3499f5435518977118626c6"
     },
     {
       "path": "services/head/src/session.rs",
@@ -2157,6 +2177,11 @@
       "path": "services/head/src/system.rs",
       "bytes": 16672,
       "sha256": "5706ce08c703a9316373cb2ab88f9e75a9f161b8704860c2d91a41676b8e6029"
+    },
+    {
+      "path": "services/head/src/workspace.rs",
+      "bytes": 64832,
+      "sha256": "db177eeb1f4da08a1a9335168dcbcd9cd9cdbd9cc37116ea4450bc736021c4c2"
     },
     {
       "path": "services/head/tests/conversation_application.rs",
@@ -2200,8 +2225,8 @@
     },
     {
       "path": "services/node/Cargo.toml",
-      "bytes": 1284,
-      "sha256": "85423a7d1e426337af4bb2b03f78c1efb7e3c577be9967a321011b63d59c2f10"
+      "bytes": 1376,
+      "sha256": "834dddfcddf3d9222fa2cdef3b5a2e804181d076fb5a5c61e735fdd97fe0d703"
     },
     {
       "path": "services/node/README.md",
@@ -2210,8 +2235,8 @@
     },
     {
       "path": "services/node/src/lib.rs",
-      "bytes": 21778,
-      "sha256": "df17375bedab09775a0fd9a590c48b169ac54b38e9d4f2ade72aea788cce0385"
+      "bytes": 22565,
+      "sha256": "e5d49c92a285154eed6fa5c16915fcc4fe39e163ad5327432b17cfefbca9eec0"
     },
     {
       "path": "services/node/src/main.rs",
@@ -2220,18 +2245,23 @@
     },
     {
       "path": "services/node/src/project_fs.rs",
-      "bytes": 63028,
-      "sha256": "e9a9ef3a7fe45400aa19df79be718169f460020ddfb1a3400282c8388ade7fd7"
+      "bytes": 63172,
+      "sha256": "3497c43cd55e1e5735d8bfafb11e6da87ee50b6a9fe43c74942b10285213f6f3"
     },
     {
       "path": "services/node/src/project_location.rs",
-      "bytes": 49016,
-      "sha256": "b0110436d045a88ac77e2c297afa375d13f6f516835704e43abf990f55e57a93"
+      "bytes": 49038,
+      "sha256": "973f6e53a8d8dfc3297d21e54c4443fd23c7133845f07792a5d7032c1b27373b"
     },
     {
       "path": "services/node/src/runtime_host.rs",
       "bytes": 68561,
       "sha256": "7d9772de72112d0f4a4e145d3904a6bb99955a30ff94f830fa880b6894363fb7"
+    },
+    {
+      "path": "services/node/src/workspace_fs.rs",
+      "bytes": 144488,
+      "sha256": "faebd0f08c64230b4fe39194fa32f074ffc0ae7a9b0dc46b7132a5d53362d601"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",

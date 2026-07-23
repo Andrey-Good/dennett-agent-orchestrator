@@ -10,6 +10,7 @@
       "2569686cbe664aeac1c38fb1e3f8551cd73b3e2f"
     ],
     "merge_ready_at": "2026-07-22",
+    "merged_at": "2026-07-22",
     "changed_files": [
       "crates/dennett-trust-core/**",
       "services/node/**",

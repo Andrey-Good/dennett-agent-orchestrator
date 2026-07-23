@@ -367,8 +367,11 @@ dependencies = [
 name = "dennett-effect-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "dennett-contracts",
  "serde",
+ "sha2 0.10.9",
+ "thiserror",
 ]
 
 [[package]]
@@ -378,12 +381,14 @@ dependencies = [
  "async-trait",
  "dennett-agent-core",
  "dennett-contracts",
+ "dennett-effect-core",
  "dennett-kernel",
  "dennett-memory-core",
  "dennett-observability",
  "dennett-storage-sqlite",
  "dennett-sync-core",
  "dennett-trust-core",
+ "getrandom 0.3.4",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
@@ -464,6 +469,7 @@ dependencies = [
  "cap-std",
  "dennett-agent-core",
  "dennett-contracts",
+ "dennett-effect-core",
  "dennett-head",
  "dennett-kernel",
  "dennett-local-ipc",
@@ -473,6 +479,7 @@ dependencies = [
  "dennett-trust-core",
  "fs2",
  "prost-types",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -517,9 +524,11 @@ dependencies = [
  "async-trait",
  "dennett-agent-core",
  "dennett-contracts",
+ "dennett-effect-core",
  "dennett-memory-core",
  "dennett-sync-core",
  "dennett-trust-core",
+ "futures-util",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",

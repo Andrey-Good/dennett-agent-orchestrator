@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+getrandom.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 sha2.workspace = true
@@ -15,6 +16,7 @@ thiserror.workspace = true
 uuid.workspace = true
 dennett-agent-core = { path = "../../crates/dennett-agent-core" }
 dennett-contracts = { path = "../../crates/dennett-contracts" }
+dennett-effect-core = { path = "../../crates/dennett-effect-core" }
 dennett-kernel = { path = "../../crates/dennett-kernel" }
 dennett-memory-core = { path = "../../crates/dennett-memory-core" }
 dennett-observability = { path = "../../crates/dennett-observability" }

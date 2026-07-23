@@ -88,9 +88,14 @@ pub enum ProjectRelativePathError {
     Empty,
     Absolute,
     NonCanonicalSeparator,
+    TooLong,
     EmptySegment,
+    SegmentTooLong,
     DotSegment,
     WindowsDrivePrefix,
+    WindowsAlternateDataStream,
+    WindowsReservedName,
+    WindowsAmbiguousSuffix,
     ControlCharacter,
 }
 
@@ -100,9 +105,22 @@ impl fmt::Display for ProjectRelativePathError {
             Self::Empty => "project-relative path is empty",
             Self::Absolute => "project-relative path is absolute",
             Self::NonCanonicalSeparator => "project-relative path must use forward slashes",
+            Self::TooLong => "project-relative path exceeds the portable length bound",
             Self::EmptySegment => "project-relative path contains an empty segment",
+            Self::SegmentTooLong => {
+                "project-relative path contains a segment above the portable length bound"
+            }
             Self::DotSegment => "project-relative path contains a dot segment",
             Self::WindowsDrivePrefix => "project-relative path contains a Windows drive prefix",
+            Self::WindowsAlternateDataStream => {
+                "project-relative path contains a Windows alternate data stream separator"
+            }
+            Self::WindowsReservedName => {
+                "project-relative path contains a Windows reserved device name"
+            }
+            Self::WindowsAmbiguousSuffix => {
+                "project-relative path contains a Windows-ambiguous trailing dot or space"
+            }
             Self::ControlCharacter => "project-relative path contains a control character",
         };
         formatter.write_str(message)
@@ -114,6 +132,9 @@ impl std::error::Error for ProjectRelativePathError {}
 fn validate_project_relative_path(value: &str) -> Result<(), ProjectRelativePathError> {
     if value.is_empty() {
         return Err(ProjectRelativePathError::Empty);
+    }
+    if value.len() > 4096 {
+        return Err(ProjectRelativePathError::TooLong);
     }
     if value.starts_with('/') {
         return Err(ProjectRelativePathError::Absolute);
@@ -136,8 +157,20 @@ fn validate_project_relative_path(value: &str) -> Result<(), ProjectRelativePath
         if segment.is_empty() {
             return Err(ProjectRelativePathError::EmptySegment);
         }
+        if segment.len() > 255 {
+            return Err(ProjectRelativePathError::SegmentTooLong);
+        }
         if matches!(segment, "." | "..") {
             return Err(ProjectRelativePathError::DotSegment);
+        }
+        if segment.contains(':') {
+            return Err(ProjectRelativePathError::WindowsAlternateDataStream);
+        }
+        if segment.ends_with(['.', ' ']) {
+            return Err(ProjectRelativePathError::WindowsAmbiguousSuffix);
+        }
+        if is_windows_reserved_name(segment) {
+            return Err(ProjectRelativePathError::WindowsReservedName);
         }
     }
     Ok(())
@@ -146,6 +179,20 @@ fn validate_project_relative_path(value: &str) -> Result<(), ProjectRelativePath
 fn is_windows_drive_prefix(segment: &str) -> bool {
     let bytes = segment.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn is_windows_reserved_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment);
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || matches!(
+            upper.strip_prefix("COM"),
+            Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        )
+        || matches!(
+            upper.strip_prefix("LPT"),
+            Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        )
 }
 
 /// Exact, monotonic identity of one observed workspace state.
@@ -575,6 +622,60 @@ mod tests {
                 "accepted unsafe path {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn project_relative_path_rejects_windows_aliases_on_every_host() {
+        let cases = [
+            "file.txt:secret",
+            "CON",
+            "con.txt",
+            "folder/AUX.log",
+            "COM1",
+            "folder/lpt9.output",
+            "trailing.",
+            "folder/trailing ",
+        ];
+
+        for value in cases {
+            assert!(
+                ProjectRelativePath::try_from(value).is_err(),
+                "accepted Windows-ambiguous path {value:?}"
+            );
+        }
+
+        for value in [
+            "console.txt",
+            "COM10",
+            "lpt0",
+            "ordinary.name",
+            "draft~1.txt",
+            "version~9.txt",
+        ] {
+            assert!(
+                ProjectRelativePath::try_from(value).is_ok(),
+                "rejected ordinary path {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_relative_path_enforces_portable_length_bounds() {
+        let oversized_segment = "a".repeat(256);
+        assert_eq!(
+            ProjectRelativePath::try_from(oversized_segment.as_str()),
+            Err(ProjectRelativePathError::SegmentTooLong)
+        );
+
+        let segment = "a".repeat(255);
+        let oversized_path = std::iter::repeat_n(segment.as_str(), 17)
+            .collect::<Vec<_>>()
+            .join("/");
+        assert!(oversized_path.len() > 4096);
+        assert_eq!(
+            ProjectRelativePath::try_from(oversized_path.as_str()),
+            Err(ProjectRelativePathError::TooLong)
+        );
     }
 
     #[test]
