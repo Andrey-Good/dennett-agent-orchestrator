@@ -561,8 +561,8 @@ fn stage_file_effect_sync(
         let observed_marker_identity = regular_file_identity(&staging_dir, marker_name)?;
         marker_identity = Some(observed_marker_identity);
         stage_after_images(&staging_dir, plan, &blob_map, &mut created)?;
+        stage_before_witnesses(&opened, &staging_dir, plan, &mut created)?;
         let mut objects = created.clone();
-        objects.extend(capture_before_identities(&opened, plan)?);
         objects.sort_by(|left, right| {
             left.path
                 .as_str()
@@ -926,11 +926,15 @@ fn validate_staging_entries(
     plan: &WorkspaceFileEffectPlan,
     receipt: &WorkspaceStagingReceipt,
 ) -> Result<(), WorkspaceFilesystemError> {
-    let mut allowed = receipt
-        .objects
-        .iter()
-        .map(|object| staged_object_name(&object.path, object.kind))
-        .collect::<std::collections::BTreeSet<_>>();
+    let mut allowed =
+        receipt
+            .objects
+            .iter()
+            .fold(std::collections::BTreeSet::new(), |mut names, object| {
+                names.insert(staged_object_name(&object.path, object.kind));
+                names.insert(staged_witness_name(&object.path, object.kind));
+                names
+            });
     if !allowed.insert(OsString::from(STAGING_MARKER_NAME)) {
         return Err(WorkspaceFilesystemError::RecoveryRequired);
     }
@@ -947,6 +951,7 @@ fn validate_staging_entries(
     }
     verify_staging_marker(staging_dir, plan, receipt)?;
     for object in &receipt.objects {
+        verify_staged_witness(staging_dir, plan, object)?;
         let name = staged_object_name(&object.path, object.kind);
         if optional_symlink_metadata(staging_dir, &name)
             .map_err(map_project_error)?
@@ -1006,6 +1011,7 @@ fn remove_staged_object(
     plan: &WorkspaceFileEffectPlan,
     receipt: &WorkspaceStagedObjectReceipt,
 ) -> Result<(), WorkspaceFilesystemError> {
+    verify_staged_witness(staging_dir, plan, receipt)?;
     let name = staged_object_name(&receipt.path, receipt.kind);
     verify_regular_file_evidence(
         staging_dir,
@@ -1015,6 +1021,34 @@ fn remove_staged_object(
     )?;
     staging_dir
         .remove_file(&name)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)
+}
+
+fn verify_staged_witness(
+    staging_dir: &Dir,
+    plan: &WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagedObjectReceipt,
+) -> Result<(), WorkspaceFilesystemError> {
+    let witness = staged_witness_name(&receipt.path, receipt.kind);
+    verify_regular_file_evidence(
+        staging_dir,
+        &witness,
+        expected_state_for_staged_object(plan, receipt)?,
+        Some(receipt.identity),
+    )?;
+    Ok(())
+}
+
+fn remove_staged_witness(
+    staging_dir: &Dir,
+    receipt: &WorkspaceStagedObjectReceipt,
+) -> Result<(), WorkspaceFilesystemError> {
+    let witness = staged_witness_name(&receipt.path, receipt.kind);
+    if regular_file_identity(staging_dir, &witness)? != receipt.identity {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    staging_dir
+        .remove_file(&witness)
         .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)
 }
 
@@ -1063,10 +1097,14 @@ fn cleanup_created_staging(
     if workspace_directory_identity(&staging_dir)? != expected_directory_identity {
         return Err(WorkspaceFilesystemError::RecoveryRequired);
     }
-    let mut allowed = created
-        .iter()
-        .map(|object| staged_object_name(&object.path, object.kind))
-        .collect::<std::collections::BTreeSet<_>>();
+    let mut allowed =
+        created
+            .iter()
+            .fold(std::collections::BTreeSet::new(), |mut names, object| {
+                names.insert(staged_object_name(&object.path, object.kind));
+                names.insert(staged_witness_name(&object.path, object.kind));
+                names
+            });
     allowed.insert(OsString::from(STAGING_MARKER_NAME));
     for entry in staging_dir
         .entries()
@@ -1085,6 +1123,9 @@ fn cleanup_created_staging(
         {
             remove_staged_object(&staging_dir, plan, object)?;
         }
+    }
+    for object in created {
+        remove_staged_witness(&staging_dir, object)?;
     }
     if let Some(expected_marker_identity) = expected_marker_identity {
         if regular_file_identity(&staging_dir, OsStr::new(STAGING_MARKER_NAME))?
@@ -1134,33 +1175,46 @@ fn stage_after_images(
         write_staged_file(staging_dir, &temporary, bytes, permissions)?;
         let identity =
             verify_regular_file_evidence(staging_dir, &temporary, &transition.after, None)?;
-        created.push(WorkspaceStagedObjectReceipt {
+        let receipt = WorkspaceStagedObjectReceipt {
             path: transition.path.clone(),
             kind: WorkspaceStagedObjectKind::After,
             identity,
-        });
+        };
+        created.push(receipt.clone());
+        let witness = staged_witness_name(&receipt.path, receipt.kind);
+        staging_dir
+            .hard_link(&temporary, staging_dir, &witness)
+            .map_err(|source| map_publication_error(source, true))?;
+        verify_staged_witness(staging_dir, plan, &receipt)?;
     }
     Ok(())
 }
 
-fn capture_before_identities(
+fn stage_before_witnesses(
     opened: &OpenProjectRoot,
+    staging_dir: &Dir,
     plan: &WorkspaceFileEffectPlan,
-) -> Result<Vec<WorkspaceStagedObjectReceipt>, WorkspaceFilesystemError> {
-    let mut receipts = Vec::new();
+    created: &mut Vec<WorkspaceStagedObjectReceipt>,
+) -> Result<(), WorkspaceFilesystemError> {
     for transition in &plan.transitions {
         if !transition.before.is_regular_file() {
             continue;
         }
         let (parent, target) = open_parent(&opened.dir, &transition.path)?;
         let identity = verify_regular_file_evidence(&parent, &target, &transition.before, None)?;
-        receipts.push(WorkspaceStagedObjectReceipt {
+        let receipt = WorkspaceStagedObjectReceipt {
             path: transition.path.clone(),
             kind: WorkspaceStagedObjectKind::Before,
             identity,
-        });
+        };
+        created.push(receipt.clone());
+        let witness = staged_witness_name(&receipt.path, receipt.kind);
+        parent
+            .hard_link(&target, staging_dir, &witness)
+            .map_err(|source| map_publication_error(source, true))?;
+        verify_staged_witness(staging_dir, plan, &receipt)?;
     }
-    Ok(receipts)
+    Ok(())
 }
 
 fn publish_staged_add(
@@ -1415,7 +1469,11 @@ fn cleanup_staging(
         sync_directory(&staging_dir, "sync_workspace_staging_object_cleanup")
             .map_err(map_project_error)?;
     }
-    validate_staging_entries(&staging_dir, plan, staging)?;
+    for object in &staging.objects {
+        remove_staged_witness(&staging_dir, object)?;
+    }
+    sync_directory(&staging_dir, "sync_workspace_staging_witness_cleanup")
+        .map_err(map_project_error)?;
     ensure_only_marker_entry(&staging_dir)?;
     verify_staging_marker(&staging_dir, plan, staging)?;
     staging_dir
@@ -1473,6 +1531,22 @@ fn staged_object_name(path: &ProjectRelativePath, kind: WorkspaceStagedObjectKin
         WorkspaceStagedObjectKind::After => "after",
     };
     OsString::from(format!("{}-{suffix}.tmp", hex_hash(&digest)))
+}
+
+fn staged_witness_name(path: &ProjectRelativePath, kind: WorkspaceStagedObjectKind) -> OsString {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dennett.workspace-staged-witness.v1\0");
+    hasher.update([match kind {
+        WorkspaceStagedObjectKind::Before => 1,
+        WorkspaceStagedObjectKind::After => 2,
+    }]);
+    hasher.update(path.as_str().as_bytes());
+    let digest = hasher.finalize();
+    let suffix = match kind {
+        WorkspaceStagedObjectKind::Before => "before",
+        WorkspaceStagedObjectKind::After => "after",
+    };
+    OsString::from(format!("{}-{suffix}.witness", hex_hash(&digest)))
 }
 
 fn staging_directory_name(plan: &WorkspaceFileEffectPlan) -> OsString {

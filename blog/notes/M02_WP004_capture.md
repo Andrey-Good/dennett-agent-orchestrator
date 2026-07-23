@@ -111,6 +111,13 @@ This is capture material, not a published claim. A standalone field note is just
   recurses. Tests preserve both a legacy name collision and a same-byte staged
   replacement, demonstrating why content equality is evidence of state but
   never evidence of ownership.
+- The same-byte replacement test then failed only on Linux CI. Removing and
+  immediately recreating the staged file allowed the filesystem to recycle the
+  just-freed inode, defeating a receipt made only from device and inode
+  numbers. The fix did not weaken the assertion: every before- and after-image
+  now has a private hard-link witness. That witness pins the original inode
+  across process restarts until cleanup, so deletion plus recreation cannot
+  impersonate the staged object even when bytes and permissions are identical.
 - The owner accepted this as an internal checkpoint because the existing M01
   desktop has no truthful control for inspecting snapshot identity or crash
   reconstruction. The visual owner gate remains WP-M02-007/WP-M02-008.
