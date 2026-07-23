@@ -70,8 +70,8 @@
     },
     {
       "path": "Cargo.lock",
-      "bytes": 65180,
-      "sha256": "07c30be54219a21bebf822e3af9444f93731053941b2b2b2b9352a1b1d036a88"
+      "bytes": 65200,
+      "sha256": "36f21699670234c0c4e6608a751bf03b728e69492b24dabb8372cfecf4581e03"
     },
     {
       "path": "Cargo.toml",
@@ -210,8 +210,8 @@
     },
     {
       "path": "adapters/storage/sqlite/src/workspace_journal.rs",
-      "bytes": 79394,
-      "sha256": "0074cb972acaf7b7075b14d4ab203733601b4be9b2234c6c206d5098c2558d03"
+      "bytes": 81085,
+      "sha256": "9c235dcdf83a3a33901daa7f710610bae1e4f7d5458b520cc03ede668bb76ea1"
     },
     {
       "path": "adapters/transport/README.md",
@@ -635,8 +635,8 @@
     },
     {
       "path": "blog/notes/M02_WP004_capture.md",
-      "bytes": 7722,
-      "sha256": "784288c7726f828552abfee9024e951e03d857d982c54a7de38bd04472522408"
+      "bytes": 8670,
+      "sha256": "ad85e8dc31945d40ff8d8bb1b1916d03a2ed627394e1e2b97f7c879cc6ad6c86"
     },
     {
       "path": "blog/notes/M02_capture.md",
@@ -750,8 +750,8 @@
     },
     {
       "path": "crates/dennett-effect-core/src/workspace.rs",
-      "bytes": 48935,
-      "sha256": "7823c61a16e2a221acd61e8f9b89e945f9a250050b7f2d563959df329250174a"
+      "bytes": 53683,
+      "sha256": "12960557cb77a2b4753af2201e206d0ac892c43f5acf0db4d75b035c200f3b52"
     },
     {
       "path": "crates/dennett-kernel/AGENTS.md",
@@ -2135,8 +2135,8 @@
     },
     {
       "path": "services/head/Cargo.toml",
-      "bytes": 978,
-      "sha256": "4ae72246be906b86d4d165140552c86b117a6f4db7a16454d403f56a00d14551"
+      "bytes": 1005,
+      "sha256": "199098cf49ae8af5af04915623e5679f42a547dc188d3bcca60856c62adb9c79"
     },
     {
       "path": "services/head/README.md",
@@ -2180,8 +2180,8 @@
     },
     {
       "path": "services/head/src/workspace.rs",
-      "bytes": 60770,
-      "sha256": "caaf7014cfcc57a016fb6ffc9d4692a1b4169c14011f227b5788bb55c51d6bc2"
+      "bytes": 64728,
+      "sha256": "e9becf6ec98f2534236ed81ab29326c88959da30f89d8ce54cfc14fbe6a4329b"
     },
     {
       "path": "services/head/tests/conversation_application.rs",
@@ -2260,8 +2260,8 @@
     },
     {
       "path": "services/node/src/workspace_fs.rs",
-      "bytes": 114083,
-      "sha256": "39d6f796493fcd41b968f36b39d85f2f863b6448ba2a2e0484a1fddba36989f6"
+      "bytes": 141556,
+      "sha256": "4e7a2819d5eb138252013630ca8ce22ae55c3842059aaefb183630409ae205f6"
     },
     {
       "path": "services/node/tests/codex_live_e2e.rs",

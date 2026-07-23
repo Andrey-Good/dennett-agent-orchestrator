@@ -17,7 +17,8 @@ use dennett_effect_core::workspace::{
     WorkspaceCheckpointEntry, WorkspaceCheckpointRecord, WorkspaceFileEffectPlan,
     WorkspaceFileEffectRequest, WorkspaceJournalError, WorkspaceJournalPort, WorkspaceManifest,
     WorkspaceManifestEntry, WorkspaceManifestError, WorkspaceOperationRecord, WorkspacePathState,
-    WorkspacePlanError, WorkspaceSnapshotPublication, WorkspaceSnapshotRecord, classify_transition,
+    WorkspacePlanError, WorkspaceSnapshotPublication, WorkspaceSnapshotRecord,
+    WorkspaceStagingNonce, WorkspaceStagingReceipt, classify_transition,
 };
 use dennett_trust_core::project_registry::{WorkspaceAccessMode, WorkspaceSourceIdentity};
 use sha2::{Digest, Sha256};
@@ -157,14 +158,23 @@ pub trait WorkspaceFilesystemPort: Send + Sync {
         changes: Vec<WorkspaceFileChangeInput>,
     ) -> Result<PreparedWorkspaceFileEffect, WorkspaceFilesystemError>;
 
-    /// Preflights every transition again and applies only recognized before
-    /// states. Per-path publication is atomic; a late multi-file race is
-    /// reported for reconciliation rather than called success.
-    async fn apply_file_effect(
+    /// Creates only operation-private staging objects and returns durable
+    /// identity receipts before any user path can be changed.
+    async fn stage_file_effect(
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
         blobs: &[WorkspaceBlob],
+    ) -> Result<WorkspaceStagingReceipt, WorkspaceFilesystemError>;
+
+    /// Preflights every transition and every durable staging receipt again,
+    /// then applies only recognized before states. Per-path publication is
+    /// atomic; a late multi-file race is reported for reconciliation.
+    async fn apply_file_effect(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        plan: &WorkspaceFileEffectPlan,
+        staging: &WorkspaceStagingReceipt,
     ) -> Result<WorkspaceObservation, WorkspaceFilesystemError>;
 
     async fn observe_transitions(
@@ -173,29 +183,32 @@ pub trait WorkspaceFilesystemPort: Send + Sync {
         plan: &WorkspaceFileEffectPlan,
     ) -> Result<Vec<WorkspaceTransitionObservation>, WorkspaceFilesystemError>;
 
-    /// Removes only operation-owned publication sidecars after every touched
-    /// path has been proven to match its durable after-image.
+    /// Removes only receipt-owned staging objects after every touched path has
+    /// been proven to match its durable after-image.
     async fn cleanup_file_effect(
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
+        staging: Option<&WorkspaceStagingReceipt>,
     ) -> Result<(), WorkspaceFilesystemError>;
 
-    /// Removes operation-owned staging files only after every touched path is
-    /// proven to still match the durable before-image.
+    /// Removes only staging objects whose durable identities still match,
+    /// after every touched path is proven to match the durable before-image.
     async fn cleanup_unapplied_file_effect(
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
+        staging: Option<&WorkspaceStagingReceipt>,
     ) -> Result<(), WorkspaceFilesystemError>;
 
-    /// Removes operation-owned recovery sidecars only while every touched path
+    /// Removes receipt-owned recovery objects only while every touched path
     /// still matches either its durable before-image or after-image. The
     /// checkpoint journal remains the recovery source after cleanup.
     async fn cleanup_recovery_file_effect(
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
+        staging: Option<&WorkspaceStagingReceipt>,
     ) -> Result<(), WorkspaceFilesystemError>;
 
     async fn capture_checkpoint(
@@ -474,7 +487,11 @@ impl WorkspaceApplication {
                 return Err(WorkspaceApplicationError::Conflict(conflicts));
             };
             self.filesystem
-                .cleanup_recovery_file_effect(&scope, &recovery_operation.plan)
+                .cleanup_recovery_file_effect(
+                    &scope,
+                    &recovery_operation.plan,
+                    recovery_operation.staging.as_ref(),
+                )
                 .await?;
             observation = self.filesystem.observe_workspace(&scope).await?;
             observed_manifest = observation
@@ -575,6 +592,7 @@ impl WorkspaceApplication {
             .prepare_file_effect(&scope, command.changes)
             .await?;
         let safety_checkpoint_id = CheckpointId::new();
+        let staging_nonce = generate_staging_nonce()?;
         let plan = WorkspaceFileEffectPlan::build(
             &base.manifest,
             WorkspaceFileEffectRequest {
@@ -585,6 +603,7 @@ impl WorkspaceApplication {
                 binding_id: command.binding_id,
                 base_revision: command.base_revision,
                 intent_sha256,
+                staging_nonce,
                 safety_checkpoint_id,
                 prepared_at_unix_ms: command.prepared_at_unix_ms,
                 changes: prepared.proposals,
@@ -622,6 +641,7 @@ impl WorkspaceApplication {
         validate_blob_set(&blobs)?;
         let operation = WorkspaceOperationRecord {
             plan,
+            staging: None,
             state: DurableWorkspaceOperationState::Prepared,
             resulting_revision: None,
             failure: None,
@@ -633,9 +653,50 @@ impl WorkspaceApplication {
             .prepare_file_effect(operation, checkpoint, blobs.clone())
             .await?;
 
+        let staging = match self
+            .filesystem
+            .stage_file_effect(&scope, &operation.plan, &blobs)
+            .await
+        {
+            Ok(staging) => staging,
+            Err(error) => {
+                return self
+                    .classify_failed_application(operation, &scope, error)
+                    .await;
+            }
+        };
+        let mut staged_operation = operation.clone();
+        staged_operation.staging = Some(staging.clone());
+        staged_operation.validate()?;
+        let operation = match self
+            .journal
+            .transition_operation(
+                DurableWorkspaceOperationState::Prepared,
+                staged_operation,
+                None,
+            )
+            .await
+        {
+            Ok(operation) => operation,
+            Err(error) => {
+                let _ = self
+                    .filesystem
+                    .cleanup_unapplied_file_effect(&scope, &operation.plan, Some(&staging))
+                    .await;
+                return Err(error.into());
+            }
+        };
+
         match self
             .filesystem
-            .apply_file_effect(&scope, &operation.plan, &blobs)
+            .apply_file_effect(
+                &scope,
+                &operation.plan,
+                operation
+                    .staging
+                    .as_ref()
+                    .ok_or(WorkspacePlanError::InvalidOperationRecord)?,
+            )
             .await
         {
             Ok(after) => {
@@ -702,7 +763,11 @@ impl WorkspaceApplication {
                 {
                     if self
                         .filesystem
-                        .cleanup_unapplied_file_effect(&scope, &operation.plan)
+                        .cleanup_unapplied_file_effect(
+                            &scope,
+                            &operation.plan,
+                            operation.staging.as_ref(),
+                        )
                         .await
                         .is_err()
                     {
@@ -725,7 +790,7 @@ impl WorkspaceApplication {
                 OperationObservation::After => {
                     if self
                         .filesystem
-                        .cleanup_file_effect(&scope, &operation.plan)
+                        .cleanup_file_effect(&scope, &operation.plan, operation.staging.as_ref())
                         .await
                         .is_err()
                     {
@@ -914,7 +979,11 @@ impl WorkspaceApplication {
             OperationObservation::Before => {
                 if self
                     .filesystem
-                    .cleanup_unapplied_file_effect(scope, &operation.plan)
+                    .cleanup_unapplied_file_effect(
+                        scope,
+                        &operation.plan,
+                        operation.staging.as_ref(),
+                    )
                     .await
                     .is_err()
                 {
@@ -937,7 +1006,7 @@ impl WorkspaceApplication {
             OperationObservation::After => {
                 if self
                     .filesystem
-                    .cleanup_file_effect(scope, &operation.plan)
+                    .cleanup_file_effect(scope, &operation.plan, operation.staging.as_ref())
                     .await
                     .is_err()
                 {
@@ -1331,15 +1400,32 @@ fn hash_file_change_intent(
             None => hasher.update([0]),
         }
         match change.resulting_permissions {
-            Some(permissions) => hasher.update([
-                1,
-                u8::from(permissions.read_only),
-                u8::from(permissions.executable),
-            ]),
+            Some(permissions) => {
+                hasher.update([
+                    1,
+                    u8::from(permissions.read_only),
+                    u8::from(permissions.executable),
+                ]);
+                match permissions.unix_mode {
+                    Some(mode) => {
+                        hasher.update([1]);
+                        hasher.update(mode.to_be_bytes());
+                    }
+                    None => hasher.update([0]),
+                }
+            }
             None => hasher.update([0]),
         }
     }
     Ok(ContentSha256(hasher.finalize().into()))
+}
+
+fn generate_staging_nonce() -> Result<WorkspaceStagingNonce, WorkspaceApplicationError> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?;
+    let nonce = WorkspaceStagingNonce(bytes);
+    nonce.validate()?;
+    Ok(nonce)
 }
 
 fn hash_restore_intent(command: &RestoreWorkspaceCheckpointCommand) -> ContentSha256 {
@@ -1609,5 +1695,28 @@ mod privacy_tests {
         assert!(!debug.contains("secret-project"));
         assert!(!debug.contains("5a"));
         assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn workspace_file_intent_hash_includes_exact_unix_mode() {
+        let change = |unix_mode| WorkspaceFileChangeInput {
+            kind: FileMutationKind::Modify,
+            path: ProjectRelativePath::try_from("src/main.rs").expect("valid project path"),
+            previous_path: None,
+            content: Some(b"fn main() {}\n".to_vec()),
+            expected_content_sha256: None,
+            resulting_permissions: Some(PortableFilePermissions {
+                read_only: false,
+                executable: false,
+                unix_mode: Some(unix_mode),
+            }),
+        };
+
+        let owner_only =
+            hash_file_change_intent(&[change(0o600)]).expect("owner-only intent hashes");
+        let owner_and_group =
+            hash_file_change_intent(&[change(0o640)]).expect("owner-and-group intent hashes");
+
+        assert_ne!(owner_only, owner_and_group);
     }
 }

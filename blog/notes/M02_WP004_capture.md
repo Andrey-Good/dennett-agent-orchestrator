@@ -98,6 +98,19 @@ This is capture material, not a published claim. A standalone field note is just
   every opened component with its canonical long name instead of outlawing
   legitimate `~1` filenames. SQLite keyset scans are sargable, and blob
   relations stream through exact-membership, count and 64 MiB bounds.
+- A later detached review found two final identity mistakes. Exact Unix mode
+  was preserved on disk but omitted from command-intent hashing, so requests
+  for `0600` and `0640` could be mistaken for one idempotent command. More
+  seriously, cleanup inferred ownership of adjacent temporary files from a
+  deterministic name plus matching bytes. A coincidental user file could
+  therefore be deleted. The publication protocol now has one private staging
+  directory per operation, a 256-bit durable nonce, and durable OS identity
+  receipts for the directory, marker, every after-image and every before-image.
+  Head persists those receipts before Node may change a user path. Cleanup
+  removes only receipt-matching identities, refuses unknown entries and never
+  recurses. Tests preserve both a legacy name collision and a same-byte staged
+  replacement, demonstrating why content equality is evidence of state but
+  never evidence of ownership.
 - The owner accepted this as an internal checkpoint because the existing M01
   desktop has no truthful control for inspecting snapshot identity or crash
   reconstruction. The visual owner gate remains WP-M02-007/WP-M02-008.

@@ -388,6 +388,7 @@ dependencies = [
  "dennett-storage-sqlite",
  "dennett-sync-core",
  "dennett-trust-core",
+ "getrandom 0.3.4",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",

@@ -26,6 +26,53 @@ pub struct ContentSha256(pub [u8; 32]);
 #[serde(transparent)]
 pub struct MetadataSha256(pub [u8; 32]);
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+/// Unpredictable namespace component for one operation's private staging
+/// directory. The nonce prevents accidental collision; durable object
+/// identities, not this value or a filename, prove cleanup ownership.
+pub struct WorkspaceStagingNonce(pub [u8; 32]);
+
+impl WorkspaceStagingNonce {
+    pub fn validate(self) -> Result<(), WorkspacePlanError> {
+        if self.0 == [0; 32] {
+            Err(WorkspacePlanError::InvalidStagingNonce)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+/// Stable platform identity captured from an already opened filesystem object.
+pub struct WorkspaceObjectIdentity {
+    pub volume: u64,
+    pub file: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceStagedObjectKind {
+    Before,
+    After,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceStagedObjectReceipt {
+    pub path: ProjectRelativePath,
+    pub kind: WorkspaceStagedObjectKind,
+    pub identity: WorkspaceObjectIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Durable proof of the exact staging namespace and files created or reserved
+/// for one operation. Head persists this before Node may change a user path.
+pub struct WorkspaceStagingReceipt {
+    pub directory_identity: WorkspaceObjectIdentity,
+    pub marker_identity: WorkspaceObjectIdentity,
+    pub objects: Vec<WorkspaceStagedObjectReceipt>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PortableFilePermissions {
     pub read_only: bool,
@@ -244,6 +291,7 @@ pub struct WorkspaceFileEffectPlan {
     pub base_revision: WorkspaceRevision,
     pub scope_sha256: ContentSha256,
     pub intent_sha256: ContentSha256,
+    pub staging_nonce: WorkspaceStagingNonce,
     pub safety_checkpoint_id: CheckpointId,
     pub prepared_at_unix_ms: u64,
     pub changes: Vec<PlannedFileChange>,
@@ -259,6 +307,7 @@ pub struct WorkspaceFileEffectRequest {
     pub binding_id: WorkspaceBindingId,
     pub base_revision: WorkspaceRevision,
     pub intent_sha256: ContentSha256,
+    pub staging_nonce: WorkspaceStagingNonce,
     pub safety_checkpoint_id: CheckpointId,
     pub prepared_at_unix_ms: u64,
     pub changes: Vec<ResolvedFileChangeProposal>,
@@ -397,6 +446,7 @@ impl WorkspaceFileEffectPlan {
             base_revision: request.base_revision,
             scope_sha256: manifest.scope_sha256,
             intent_sha256: request.intent_sha256,
+            staging_nonce: request.staging_nonce,
             safety_checkpoint_id: request.safety_checkpoint_id,
             prepared_at_unix_ms: request.prepared_at_unix_ms,
             changes,
@@ -424,6 +474,7 @@ fn validate_request_header(
     if request.base_revision.binding_id() != request.binding_id {
         return Err(WorkspacePlanError::WrongBinding);
     }
+    request.staging_nonce.validate()?;
     Ok(())
 }
 
@@ -769,6 +820,8 @@ pub struct DurableWorkspaceFailure {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceOperationRecord {
     pub plan: WorkspaceFileEffectPlan,
+    #[serde(default)]
+    pub staging: Option<WorkspaceStagingReceipt>,
     pub state: DurableWorkspaceOperationState,
     pub resulting_revision: Option<WorkspaceRevision>,
     pub failure: Option<DurableWorkspaceFailure>,
@@ -777,15 +830,24 @@ pub struct WorkspaceOperationRecord {
 
 impl WorkspaceOperationRecord {
     pub fn validate(&self) -> Result<(), WorkspacePlanError> {
+        if let Some(staging) = &self.staging {
+            validate_staging_receipt(&self.plan, staging)?;
+        }
         let valid_terminal = match self.state {
-            DurableWorkspaceOperationState::Prepared
-            | DurableWorkspaceOperationState::FilesystemApplied => {
+            DurableWorkspaceOperationState::Prepared => {
                 self.resulting_revision.is_none()
+                    && self.failure.is_none()
+                    && self.completed_at_unix_ms.is_none()
+            }
+            DurableWorkspaceOperationState::FilesystemApplied => {
+                self.staging.is_some()
+                    && self.resulting_revision.is_none()
                     && self.failure.is_none()
                     && self.completed_at_unix_ms.is_none()
             }
             DurableWorkspaceOperationState::Succeeded => {
                 self.resulting_revision.is_some()
+                    && self.staging.is_some()
                     && self.failure.is_none()
                     && self.completed_at_unix_ms.is_some()
             }
@@ -806,6 +868,36 @@ impl WorkspaceOperationRecord {
         }
         Ok(())
     }
+}
+
+fn validate_staging_receipt(
+    plan: &WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagingReceipt,
+) -> Result<(), WorkspacePlanError> {
+    let expected = plan
+        .transitions
+        .iter()
+        .flat_map(|transition| {
+            let before = transition
+                .before
+                .is_regular_file()
+                .then_some((transition.path.as_str(), WorkspaceStagedObjectKind::Before));
+            let after = transition
+                .content
+                .as_ref()
+                .map(|_| (transition.path.as_str(), WorkspaceStagedObjectKind::After));
+            before.into_iter().chain(after)
+        })
+        .collect::<BTreeSet<_>>();
+    let observed = receipt
+        .objects
+        .iter()
+        .map(|object| (object.path.as_str(), object.kind))
+        .collect::<BTreeSet<_>>();
+    if observed.len() != receipt.objects.len() || observed != expected {
+        return Err(WorkspacePlanError::InvalidStagingReceipt);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -934,6 +1026,10 @@ pub enum WorkspacePlanError {
     MissingResultingMetadata,
     #[error("workspace file permissions are inconsistent")]
     InvalidFilePermissions,
+    #[error("workspace staging nonce is invalid")]
+    InvalidStagingNonce,
+    #[error("workspace staging receipt is invalid")]
+    InvalidStagingReceipt,
     #[error("workspace change unexpectedly includes content")]
     UnexpectedContent,
     #[error("workspace change unexpectedly includes a previous path")]
@@ -1020,6 +1116,7 @@ mod tests {
             binding_id,
             base_revision,
             intent_sha256: ContentSha256([9; 32]),
+            staging_nonce: WorkspaceStagingNonce([8; 32]),
             safety_checkpoint_id: CheckpointId::new(),
             prepared_at_unix_ms: 1,
             changes,
@@ -1357,8 +1454,38 @@ mod tests {
             request(binding_id, base_revision, vec![proposal]),
         )
         .unwrap();
+        let valid_staging = WorkspaceStagingReceipt {
+            directory_identity: WorkspaceObjectIdentity { volume: 1, file: 1 },
+            marker_identity: WorkspaceObjectIdentity { volume: 1, file: 2 },
+            objects: vec![WorkspaceStagedObjectReceipt {
+                path: path("new.txt"),
+                kind: WorkspaceStagedObjectKind::After,
+                identity: WorkspaceObjectIdentity { volume: 1, file: 3 },
+            }],
+        };
+        let filesystem_applied = WorkspaceOperationRecord {
+            plan: plan.clone(),
+            staging: Some(valid_staging.clone()),
+            state: DurableWorkspaceOperationState::FilesystemApplied,
+            resulting_revision: None,
+            failure: None,
+            completed_at_unix_ms: None,
+        };
+        assert_eq!(filesystem_applied.validate(), Ok(()));
+        let mut duplicate_receipt = filesystem_applied.clone();
+        duplicate_receipt
+            .staging
+            .as_mut()
+            .unwrap()
+            .objects
+            .push(valid_staging.objects[0].clone());
+        assert_eq!(
+            duplicate_receipt.validate(),
+            Err(WorkspacePlanError::InvalidStagingReceipt)
+        );
         let malformed = WorkspaceOperationRecord {
             plan,
+            staging: None,
             state: DurableWorkspaceOperationState::Succeeded,
             resulting_revision: None,
             failure: None,

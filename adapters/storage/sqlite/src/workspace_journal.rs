@@ -1408,7 +1408,9 @@ mod tests {
     use dennett_effect_core::workspace::{
         CanonicalObjectRef, DurableWorkspaceFailure, FileMutationKind, PortableFilePermissions,
         ResolvedFileChangeProposal, WorkspaceCheckpointEntry, WorkspaceFileEffectPlan,
-        WorkspaceFileEffectRequest, WorkspaceManifestEntry, WorkspacePathState,
+        WorkspaceFileEffectRequest, WorkspaceManifestEntry, WorkspaceObjectIdentity,
+        WorkspacePathState, WorkspaceStagedObjectKind, WorkspaceStagedObjectReceipt,
+        WorkspaceStagingNonce, WorkspaceStagingReceipt,
     };
     use dennett_memory_core::session::SessionJournalError;
     use tempfile::TempDir;
@@ -1448,6 +1450,40 @@ mod tests {
             content_sha256: blob.reference.content_sha256,
             metadata_sha256: PERMISSIONS.metadata_sha256(),
             byte_size: blob.reference.byte_size,
+        }
+    }
+
+    fn staging_receipt(plan: &WorkspaceFileEffectPlan) -> WorkspaceStagingReceipt {
+        let mut next_file = 10_u64;
+        let mut objects = Vec::new();
+        for transition in &plan.transitions {
+            if transition.before.is_regular_file() {
+                objects.push(WorkspaceStagedObjectReceipt {
+                    path: transition.path.clone(),
+                    kind: WorkspaceStagedObjectKind::Before,
+                    identity: WorkspaceObjectIdentity {
+                        volume: 1,
+                        file: next_file,
+                    },
+                });
+                next_file += 1;
+            }
+            if transition.content.is_some() {
+                objects.push(WorkspaceStagedObjectReceipt {
+                    path: transition.path.clone(),
+                    kind: WorkspaceStagedObjectKind::After,
+                    identity: WorkspaceObjectIdentity {
+                        volume: 1,
+                        file: next_file,
+                    },
+                });
+                next_file += 1;
+            }
+        }
+        WorkspaceStagingReceipt {
+            directory_identity: WorkspaceObjectIdentity { volume: 1, file: 1 },
+            marker_identity: WorkspaceObjectIdentity { volume: 1, file: 2 },
+            objects,
         }
     }
 
@@ -1546,6 +1582,7 @@ mod tests {
                 binding_id,
                 base_revision,
                 intent_sha256: ContentSha256([9; 32]),
+                staging_nonce: WorkspaceStagingNonce([8; 32]),
                 safety_checkpoint_id: checkpoint_id,
                 prepared_at_unix_ms,
                 changes: vec![ResolvedFileChangeProposal {
@@ -1561,6 +1598,7 @@ mod tests {
         .expect("valid file effect plan");
         let operation = WorkspaceOperationRecord {
             plan,
+            staging: None,
             state: DurableWorkspaceOperationState::Prepared,
             resulting_revision: None,
             failure: None,
@@ -1820,6 +1858,7 @@ mod tests {
             .await
             .unwrap();
         let mut applied = prepared.clone();
+        applied.staging = Some(staging_receipt(&applied.plan));
         applied.state = DurableWorkspaceOperationState::FilesystemApplied;
         store
             .transition_operation(
@@ -1947,6 +1986,7 @@ mod tests {
                 .await
                 .unwrap();
         }
+        applied.staging = Some(staging_receipt(&applied.plan));
         applied.state = DurableWorkspaceOperationState::FilesystemApplied;
         store
             .transition_operation(

@@ -12,11 +12,13 @@ use cap_fs_ext::{DirExt, FollowSymlinks, MetadataExt, OpenOptionsFollowExt, Open
 #[cfg(unix)]
 use cap_std::fs::PermissionsExt as _;
 use cap_std::fs::{Dir, Metadata, OpenOptions};
-use dennett_contracts::{ProjectRelativePath, WorkspaceOperationId};
+use dennett_contracts::ProjectRelativePath;
 use dennett_effect_core::workspace::{
     ContentSha256, FileMutationKind, MAX_STAGED_FILE_BYTES, MAX_STAGED_OPERATION_BYTES,
     MetadataSha256, PortableFilePermissions, ResolvedFileChangeProposal, WorkspaceBlob,
-    WorkspaceCheckpointEntry, WorkspaceFileEffectPlan, WorkspaceManifestEntry, WorkspacePathState,
+    WorkspaceCheckpointEntry, WorkspaceFileEffectPlan, WorkspaceManifestEntry,
+    WorkspaceObjectIdentity, WorkspacePathState, WorkspaceStagedObjectKind,
+    WorkspaceStagedObjectReceipt, WorkspaceStagingReceipt,
 };
 use dennett_head::workspace::{
     CapturedWorkspaceCheckpoint, PreparedWorkspaceFileEffect, WorkspaceFileChangeInput,
@@ -36,6 +38,7 @@ const MAX_SNAPSHOT_ENTRIES: usize = 200_000;
 const MAX_SNAPSHOT_DEPTH: usize = 96;
 const MAX_SNAPSHOT_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const STAGING_MARKER_NAME: &str = "owner.marker";
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NodeWorkspaceFilesystemAdapter;
@@ -67,12 +70,26 @@ impl WorkspaceFilesystemPort for NodeWorkspaceFilesystemAdapter {
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
-        blobs: &[WorkspaceBlob],
+        staging: &WorkspaceStagingReceipt,
     ) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
         let scope = scope.clone();
         let plan = plan.clone();
+        let staging = staging.clone();
+        tokio::task::spawn_blocking(move || apply_file_effect_sync(&scope, &plan, &staging))
+            .await
+            .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+    }
+
+    async fn stage_file_effect(
+        &self,
+        scope: &WorkspaceFilesystemScope,
+        plan: &WorkspaceFileEffectPlan,
+        blobs: &[WorkspaceBlob],
+    ) -> Result<WorkspaceStagingReceipt, WorkspaceFilesystemError> {
+        let scope = scope.clone();
+        let plan = plan.clone();
         let blobs = blobs.to_vec();
-        tokio::task::spawn_blocking(move || apply_file_effect_sync(&scope, &plan, &blobs))
+        tokio::task::spawn_blocking(move || stage_file_effect_sync(&scope, &plan, &blobs))
             .await
             .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
     }
@@ -93,16 +110,18 @@ impl WorkspaceFilesystemPort for NodeWorkspaceFilesystemAdapter {
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
+        staging: Option<&WorkspaceStagingReceipt>,
     ) -> Result<(), WorkspaceFilesystemError> {
         let scope = scope.clone();
         let plan = plan.clone();
+        let staging = staging.cloned();
         tokio::task::spawn_blocking(move || {
             let opened = open_scope(&scope)?;
             let observations = observe_transitions_opened(&opened, &plan)?;
             if !all_transitions_after(&plan, &observations) {
                 return Err(WorkspaceFilesystemError::RecoveryRequired);
             }
-            cleanup_sidecars(&opened, &plan)?;
+            cleanup_staging(&opened, &plan, staging.as_ref())?;
             opened.revalidate_location().map_err(map_project_error)
         })
         .await
@@ -113,16 +132,18 @@ impl WorkspaceFilesystemPort for NodeWorkspaceFilesystemAdapter {
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
+        staging: Option<&WorkspaceStagingReceipt>,
     ) -> Result<(), WorkspaceFilesystemError> {
         let scope = scope.clone();
         let plan = plan.clone();
+        let staging = staging.cloned();
         tokio::task::spawn_blocking(move || {
             let opened = open_scope(&scope)?;
             let observations = observe_transitions_opened(&opened, &plan)?;
             if !all_transitions_before(&plan, &observations) {
                 return Err(WorkspaceFilesystemError::RecoveryRequired);
             }
-            cleanup_sidecars(&opened, &plan)?;
+            cleanup_staging(&opened, &plan, staging.as_ref())?;
             opened.revalidate_location().map_err(map_project_error)
         })
         .await
@@ -133,17 +154,19 @@ impl WorkspaceFilesystemPort for NodeWorkspaceFilesystemAdapter {
         &self,
         scope: &WorkspaceFilesystemScope,
         plan: &WorkspaceFileEffectPlan,
+        staging: Option<&WorkspaceStagingReceipt>,
     ) -> Result<(), WorkspaceFilesystemError> {
         let scope = scope.clone();
         let plan = plan.clone();
+        let staging = staging.cloned();
         tokio::task::spawn_blocking(move || {
             let opened = open_scope(&scope)?;
-            repair_interrupted_publications(&opened, &plan)?;
+            repair_interrupted_publications(&opened, &plan, staging.as_ref())?;
             let observations = observe_transitions_opened(&opened, &plan)?;
             if !all_transitions_recognized(&plan, &observations) {
                 return Err(WorkspaceFilesystemError::Conflict);
             }
-            cleanup_sidecars(&opened, &plan)?;
+            cleanup_staging(&opened, &plan, staging.as_ref())?;
             opened.revalidate_location().map_err(map_project_error)
         })
         .await
@@ -500,9 +523,9 @@ fn reserve_staged_bytes(total: &mut u64, additional: u64) -> Result<(), Workspac
 fn apply_file_effect_sync(
     scope: &WorkspaceFilesystemScope,
     plan: &WorkspaceFileEffectPlan,
-    blobs: &[WorkspaceBlob],
+    staging: &WorkspaceStagingReceipt,
 ) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
-    apply_file_effect_sync_with_failure(scope, plan, blobs, None)
+    apply_file_effect_sync_with_failure(scope, plan, staging, None)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -510,12 +533,11 @@ enum PublicationFailure {
     AfterModifyBackup(usize),
 }
 
-fn apply_file_effect_sync_with_failure(
+fn stage_file_effect_sync(
     scope: &WorkspaceFilesystemScope,
     plan: &WorkspaceFileEffectPlan,
     blobs: &[WorkspaceBlob],
-    failure: Option<PublicationFailure>,
-) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
+) -> Result<WorkspaceStagingReceipt, WorkspaceFilesystemError> {
     if !scope.writable || scope.project_id != plan.project_id || scope.binding_id != plan.binding_id
     {
         return Err(WorkspaceFilesystemError::ScopeDenied);
@@ -523,21 +545,92 @@ fn apply_file_effect_sync_with_failure(
     let opened = open_scope(scope)?;
     let blob_map = validated_blob_map(blobs)?;
     preflight_transitions(&opened, plan)?;
-    stage_after_images(&opened, plan, &blob_map)?;
+    let (staging_dir, directory_identity) = create_staging_directory(&opened, plan)?;
+    let marker_bytes = staging_marker_bytes(plan);
+    let marker_name = OsStr::new(STAGING_MARKER_NAME);
+    let mut created = Vec::new();
+    let mut marker_identity = None;
+
+    let result = (|| {
+        write_staged_file(
+            &staging_dir,
+            marker_name,
+            &marker_bytes,
+            default_file_permissions(),
+        )?;
+        let observed_marker_identity = regular_file_identity(&staging_dir, marker_name)?;
+        marker_identity = Some(observed_marker_identity);
+        stage_after_images(&staging_dir, plan, &blob_map, &mut created)?;
+        let mut objects = created.clone();
+        objects.extend(capture_before_identities(&opened, plan)?);
+        objects.sort_by(|left, right| {
+            left.path
+                .as_str()
+                .cmp(right.path.as_str())
+                .then_with(|| left.kind.cmp(&right.kind))
+        });
+        let receipt = WorkspaceStagingReceipt {
+            directory_identity,
+            marker_identity: observed_marker_identity,
+            objects,
+        };
+        validate_staging_entries(&staging_dir, plan, &receipt)?;
+        preflight_transitions(&opened, plan)?;
+        opened.revalidate_location().map_err(map_project_error)?;
+        Ok(receipt)
+    })();
+
+    match result {
+        Ok(receipt) => Ok(receipt),
+        Err(error) => {
+            if cleanup_created_staging(&opened, plan, directory_identity, &created, marker_identity)
+                .is_err()
+            {
+                Err(WorkspaceFilesystemError::RecoveryRequired)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+fn apply_file_effect_sync_with_failure(
+    scope: &WorkspaceFilesystemScope,
+    plan: &WorkspaceFileEffectPlan,
+    staging: &WorkspaceStagingReceipt,
+    failure: Option<PublicationFailure>,
+) -> Result<WorkspaceObservation, WorkspaceFilesystemError> {
+    if !scope.writable || scope.project_id != plan.project_id || scope.binding_id != plan.binding_id
+    {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    let opened = open_scope(scope)?;
+    preflight_transitions(&opened, plan)?;
+    let staging_dir = open_staging_directory(&opened, plan, staging)?
+        .ok_or(WorkspaceFilesystemError::RecoveryRequired)?;
+    validate_staging_for_publication(&opened, &staging_dir, plan, staging)?;
 
     for (published, change) in plan.changes.iter().enumerate() {
         let result = match change.kind {
-            FileMutationKind::Add => publish_staged_add(&opened, plan, &change.path),
+            FileMutationKind::Add => {
+                publish_staged_add(&opened, &staging_dir, plan, staging, &change.path)
+            }
             FileMutationKind::Modify => publish_staged_modify(
                 &opened,
+                &staging_dir,
                 plan,
+                staging,
                 &change.path,
                 failure == Some(PublicationFailure::AfterModifyBackup(published)),
             ),
-            FileMutationKind::Delete => publish_delete(&opened, plan, &change.path),
+            FileMutationKind::Delete => {
+                publish_delete(&opened, &staging_dir, plan, staging, &change.path)
+            }
             FileMutationKind::Rename => publish_rename(
                 &opened,
+                &staging_dir,
                 plan,
+                staging,
                 change
                     .previous_path
                     .as_ref()
@@ -546,7 +639,7 @@ fn apply_file_effect_sync_with_failure(
             ),
         };
         if result.is_err() {
-            // Sidecars intentionally remain for deterministic reconciliation.
+            // Receipt-owned staging remains for deterministic reconciliation.
             return Err(WorkspaceFilesystemError::RecoveryRequired);
         }
     }
@@ -555,7 +648,8 @@ fn apply_file_effect_sync_with_failure(
     if !all_transitions_after(plan, &observations) {
         return Err(WorkspaceFilesystemError::RecoveryRequired);
     }
-    cleanup_sidecars(&opened, plan)?;
+    drop(staging_dir);
+    cleanup_staging(&opened, plan, Some(staging))?;
     opened.revalidate_location().map_err(map_project_error)?;
     observe_workspace_sync(scope)
 }
@@ -650,12 +744,382 @@ fn preflight_transitions(
     opened.revalidate_location().map_err(map_project_error)
 }
 
-fn stage_after_images(
+fn create_staging_directory(
     opened: &OpenProjectRoot,
     plan: &WorkspaceFileEffectPlan,
-    blobs: &BTreeMap<&str, &[u8]>,
+) -> Result<(Dir, WorkspaceObjectIdentity), WorkspaceFilesystemError> {
+    let name = staging_directory_name(plan);
+    if optional_symlink_metadata(&opened.dir, &name)
+        .map_err(map_project_error)?
+        .is_some()
+    {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    opened
+        .dir
+        .create_dir(&name)
+        .map_err(|source| map_publication_error(source, true))?;
+    sync_directory(&opened.dir, "sync_workspace_staging_directory_create")
+        .map_err(map_project_error)?;
+    let staging_dir = opened
+        .dir
+        .open_dir_nofollow(&name)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    ensure_opened_directory_name(&staging_dir, &name)?;
+    let root_identity = directory_identity(&opened.dir).map_err(map_project_error)?;
+    let staging_identity = directory_identity(&staging_dir).map_err(map_project_error)?;
+    if root_identity.volume != staging_identity.volume {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    require_same_mount(directory_mount_identity(&opened.dir)?, &staging_dir)?;
+    secure_staging_directory(&staging_dir)?;
+    sync_directory(&staging_dir, "sync_workspace_staging_directory_permissions")
+        .map_err(map_project_error)?;
+    Ok((
+        staging_dir,
+        WorkspaceObjectIdentity {
+            volume: staging_identity.volume,
+            file: staging_identity.file,
+        },
+    ))
+}
+
+fn open_staging_directory(
+    opened: &OpenProjectRoot,
+    plan: &WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagingReceipt,
+) -> Result<Option<Dir>, WorkspaceFilesystemError> {
+    let name = staging_directory_name(plan);
+    let Some(metadata) =
+        optional_symlink_metadata(&opened.dir, &name).map_err(map_project_error)?
+    else {
+        return Ok(None);
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    let staging_dir = opened
+        .dir
+        .open_dir_nofollow(&name)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    ensure_opened_directory_name(&staging_dir, &name)?;
+    if workspace_directory_identity(&staging_dir)? != receipt.directory_identity {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    let root_identity = directory_identity(&opened.dir).map_err(map_project_error)?;
+    if receipt.directory_identity.volume != root_identity.volume {
+        return Err(WorkspaceFilesystemError::ScopeDenied);
+    }
+    require_same_mount(directory_mount_identity(&opened.dir)?, &staging_dir)?;
+    verify_staging_marker(&staging_dir, plan, receipt)?;
+    Ok(Some(staging_dir))
+}
+
+#[cfg(unix)]
+fn secure_staging_directory(dir: &Dir) -> Result<(), WorkspaceFilesystemError> {
+    use cap_std::fs::{Permissions, PermissionsExt as _};
+    dir.set_permissions(".", Permissions::from_mode(0o700))
+        .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)
+}
+
+#[cfg(not(unix))]
+fn secure_staging_directory(_dir: &Dir) -> Result<(), WorkspaceFilesystemError> {
+    Ok(())
+}
+
+fn staging_marker_bytes(plan: &WorkspaceFileEffectPlan) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dennett.workspace-staging-marker.v1\0");
+    hasher.update(plan.operation_id.0.as_bytes());
+    hasher.update(plan.command_id.0.as_bytes());
+    hasher.update(plan.staging_nonce.0);
+    hasher.update(plan.intent_sha256.0);
+    hasher.update(plan.scope_sha256.0);
+    hasher.update(plan.safety_checkpoint_id.0.as_bytes());
+    hasher.finalize().to_vec()
+}
+
+fn workspace_directory_identity(
+    dir: &Dir,
+) -> Result<WorkspaceObjectIdentity, WorkspaceFilesystemError> {
+    let identity = directory_identity(dir).map_err(map_project_error)?;
+    Ok(WorkspaceObjectIdentity {
+        volume: identity.volume,
+        file: identity.file,
+    })
+}
+
+fn regular_file_identity(
+    parent: &Dir,
+    name: &OsStr,
+) -> Result<WorkspaceObjectIdentity, WorkspaceFilesystemError> {
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let file = parent
+        .open_with(name, &options)
+        .map_err(|_| WorkspaceFilesystemError::Conflict)?;
+    ensure_opened_file_name(&file, name)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| WorkspaceFilesystemError::Conflict)?;
+    if !metadata.is_file() {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    require_regular_file_scope(parent, &file, &metadata)?;
+    Ok(WorkspaceObjectIdentity {
+        volume: MetadataExt::dev(&metadata),
+        file: MetadataExt::ino(&metadata),
+    })
+}
+
+fn verify_regular_file_evidence(
+    parent: &Dir,
+    name: &OsStr,
+    expected_state: &WorkspacePathState,
+    expected_identity: Option<WorkspaceObjectIdentity>,
+) -> Result<WorkspaceObjectIdentity, WorkspaceFilesystemError> {
+    let (first, _) = supported_state_at_parent(parent, name)?;
+    if first != *expected_state {
+        return Err(WorkspaceFilesystemError::Conflict);
+    }
+    let identity = regular_file_identity(parent, name)?;
+    if expected_identity.is_some_and(|expected| expected != identity) {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    let (second, _) = supported_state_at_parent(parent, name)?;
+    if second != first {
+        return Err(WorkspaceFilesystemError::Conflict);
+    }
+    Ok(identity)
+}
+
+fn verify_staging_marker(
+    staging_dir: &Dir,
+    plan: &WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagingReceipt,
 ) -> Result<(), WorkspaceFilesystemError> {
-    let mut staged: Vec<(Dir, OsString)> = Vec::new();
+    let marker = OsStr::new(STAGING_MARKER_NAME);
+    let identity = regular_file_identity(staging_dir, marker)?;
+    if identity != receipt.marker_identity {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    let (_, bytes) = state_at_parent(staging_dir, marker, true)?;
+    if bytes.as_deref() != Some(staging_marker_bytes(plan).as_slice()) {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    Ok(())
+}
+
+fn expected_state_for_staged_object<'a>(
+    plan: &'a WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagedObjectReceipt,
+) -> Result<&'a WorkspacePathState, WorkspaceFilesystemError> {
+    let transition = transition_for(plan, &receipt.path)?;
+    Ok(match receipt.kind {
+        WorkspaceStagedObjectKind::Before => &transition.before,
+        WorkspaceStagedObjectKind::After => &transition.after,
+    })
+}
+
+fn validate_staging_entries(
+    staging_dir: &Dir,
+    plan: &WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagingReceipt,
+) -> Result<(), WorkspaceFilesystemError> {
+    let mut allowed = receipt
+        .objects
+        .iter()
+        .map(|object| staged_object_name(&object.path, object.kind))
+        .collect::<std::collections::BTreeSet<_>>();
+    if !allowed.insert(OsString::from(STAGING_MARKER_NAME)) {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    for entry in staging_dir
+        .entries()
+        .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+    {
+        let name = entry
+            .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+            .file_name();
+        if !allowed.contains(&name) {
+            return Err(WorkspaceFilesystemError::RecoveryRequired);
+        }
+    }
+    verify_staging_marker(staging_dir, plan, receipt)?;
+    for object in &receipt.objects {
+        let name = staged_object_name(&object.path, object.kind);
+        if optional_symlink_metadata(staging_dir, &name)
+            .map_err(map_project_error)?
+            .is_some()
+        {
+            verify_regular_file_evidence(
+                staging_dir,
+                &name,
+                expected_state_for_staged_object(plan, object)?,
+                Some(object.identity),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_staging_for_publication(
+    opened: &OpenProjectRoot,
+    staging_dir: &Dir,
+    plan: &WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagingReceipt,
+) -> Result<(), WorkspaceFilesystemError> {
+    validate_staging_entries(staging_dir, plan, receipt)?;
+    for object in &receipt.objects {
+        let staged_name = staged_object_name(&object.path, object.kind);
+        match object.kind {
+            WorkspaceStagedObjectKind::After => {
+                verify_regular_file_evidence(
+                    staging_dir,
+                    &staged_name,
+                    expected_state_for_staged_object(plan, object)?,
+                    Some(object.identity),
+                )?;
+            }
+            WorkspaceStagedObjectKind::Before => {
+                if optional_symlink_metadata(staging_dir, &staged_name)
+                    .map_err(map_project_error)?
+                    .is_some()
+                {
+                    return Err(WorkspaceFilesystemError::RecoveryRequired);
+                }
+                let (parent, target) = open_parent(&opened.dir, &object.path)?;
+                verify_regular_file_evidence(
+                    &parent,
+                    &target,
+                    expected_state_for_staged_object(plan, object)?,
+                    Some(object.identity),
+                )?;
+            }
+        }
+    }
+    preflight_transitions(opened, plan)
+}
+
+fn remove_staged_object(
+    staging_dir: &Dir,
+    plan: &WorkspaceFileEffectPlan,
+    receipt: &WorkspaceStagedObjectReceipt,
+) -> Result<(), WorkspaceFilesystemError> {
+    let name = staged_object_name(&receipt.path, receipt.kind);
+    verify_regular_file_evidence(
+        staging_dir,
+        &name,
+        expected_state_for_staged_object(plan, receipt)?,
+        Some(receipt.identity),
+    )?;
+    staging_dir
+        .remove_file(&name)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)
+}
+
+fn ensure_only_marker_entry(staging_dir: &Dir) -> Result<(), WorkspaceFilesystemError> {
+    let entries = staging_dir
+        .entries()
+        .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if entries == [OsString::from(STAGING_MARKER_NAME)] {
+        Ok(())
+    } else {
+        Err(WorkspaceFilesystemError::RecoveryRequired)
+    }
+}
+
+fn ensure_staging_empty(staging_dir: &Dir) -> Result<(), WorkspaceFilesystemError> {
+    if staging_dir
+        .entries()
+        .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+        .next()
+        .is_none()
+    {
+        Ok(())
+    } else {
+        Err(WorkspaceFilesystemError::RecoveryRequired)
+    }
+}
+
+fn cleanup_created_staging(
+    opened: &OpenProjectRoot,
+    plan: &WorkspaceFileEffectPlan,
+    expected_directory_identity: WorkspaceObjectIdentity,
+    created: &[WorkspaceStagedObjectReceipt],
+    expected_marker_identity: Option<WorkspaceObjectIdentity>,
+) -> Result<(), WorkspaceFilesystemError> {
+    let name = staging_directory_name(plan);
+    let staging_dir = opened
+        .dir
+        .open_dir_nofollow(&name)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    if workspace_directory_identity(&staging_dir)? != expected_directory_identity {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    let mut allowed = created
+        .iter()
+        .map(|object| staged_object_name(&object.path, object.kind))
+        .collect::<std::collections::BTreeSet<_>>();
+    allowed.insert(OsString::from(STAGING_MARKER_NAME));
+    for entry in staging_dir
+        .entries()
+        .map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?
+    {
+        let entry = entry.map_err(|_| WorkspaceFilesystemError::AdapterUnavailable)?;
+        if !allowed.contains(&entry.file_name()) {
+            return Err(WorkspaceFilesystemError::RecoveryRequired);
+        }
+    }
+    for object in created {
+        let object_name = staged_object_name(&object.path, object.kind);
+        if optional_symlink_metadata(&staging_dir, &object_name)
+            .map_err(map_project_error)?
+            .is_some()
+        {
+            remove_staged_object(&staging_dir, plan, object)?;
+        }
+    }
+    if let Some(expected_marker_identity) = expected_marker_identity {
+        if regular_file_identity(&staging_dir, OsStr::new(STAGING_MARKER_NAME))?
+            != expected_marker_identity
+        {
+            return Err(WorkspaceFilesystemError::RecoveryRequired);
+        }
+        let (_, marker) = state_at_parent(&staging_dir, OsStr::new(STAGING_MARKER_NAME), true)?;
+        if marker.as_deref() != Some(staging_marker_bytes(plan).as_slice()) {
+            return Err(WorkspaceFilesystemError::RecoveryRequired);
+        }
+        staging_dir
+            .remove_file(STAGING_MARKER_NAME)
+            .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    } else if optional_symlink_metadata(&staging_dir, OsStr::new(STAGING_MARKER_NAME))
+        .map_err(map_project_error)?
+        .is_some()
+    {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    ensure_staging_empty(&staging_dir)?;
+    drop(staging_dir);
+    opened
+        .dir
+        .remove_dir(&name)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    sync_directory(&opened.dir, "sync_workspace_failed_staging_cleanup").map_err(map_project_error)
+}
+
+fn stage_after_images(
+    staging_dir: &Dir,
+    plan: &WorkspaceFileEffectPlan,
+    blobs: &BTreeMap<&str, &[u8]>,
+    created: &mut Vec<WorkspaceStagedObjectReceipt>,
+) -> Result<(), WorkspaceFilesystemError> {
     for transition in &plan.transitions {
         let Some(content) = &transition.content else {
             continue;
@@ -666,79 +1130,140 @@ fn stage_after_images(
         let permissions = transition
             .resulting_permissions
             .ok_or(WorkspaceFilesystemError::RecoveryRequired)?;
-        let (parent, _) = open_parent(&opened.dir, &transition.path)?;
-        let temporary = sidecar_name(plan.operation_id, &transition.path, SidecarKind::After);
-        if optional_symlink_metadata(&parent, &temporary)
-            .map_err(map_project_error)?
-            .is_some()
-        {
-            return Err(WorkspaceFilesystemError::RecoveryRequired);
-        }
-        if let Err(error) = write_staged_file(&parent, &temporary, bytes, permissions) {
-            for (parent, temporary) in staged {
-                let _ = parent.remove_file(&temporary);
-            }
-            return Err(error);
-        }
-        staged.push((parent, temporary));
+        let temporary = staged_object_name(&transition.path, WorkspaceStagedObjectKind::After);
+        write_staged_file(staging_dir, &temporary, bytes, permissions)?;
+        let identity =
+            verify_regular_file_evidence(staging_dir, &temporary, &transition.after, None)?;
+        created.push(WorkspaceStagedObjectReceipt {
+            path: transition.path.clone(),
+            kind: WorkspaceStagedObjectKind::After,
+            identity,
+        });
     }
     Ok(())
 }
 
-fn publish_staged_add(
+fn capture_before_identities(
     opened: &OpenProjectRoot,
     plan: &WorkspaceFileEffectPlan,
+) -> Result<Vec<WorkspaceStagedObjectReceipt>, WorkspaceFilesystemError> {
+    let mut receipts = Vec::new();
+    for transition in &plan.transitions {
+        if !transition.before.is_regular_file() {
+            continue;
+        }
+        let (parent, target) = open_parent(&opened.dir, &transition.path)?;
+        let identity = verify_regular_file_evidence(&parent, &target, &transition.before, None)?;
+        receipts.push(WorkspaceStagedObjectReceipt {
+            path: transition.path.clone(),
+            kind: WorkspaceStagedObjectKind::Before,
+            identity,
+        });
+    }
+    Ok(receipts)
+}
+
+fn publish_staged_add(
+    opened: &OpenProjectRoot,
+    staging_dir: &Dir,
+    plan: &WorkspaceFileEffectPlan,
+    staging: &WorkspaceStagingReceipt,
     path: &ProjectRelativePath,
 ) -> Result<(), WorkspaceFilesystemError> {
     let (parent, target) = open_parent(&opened.dir, path)?;
-    let temporary = sidecar_name(plan.operation_id, path, SidecarKind::After);
-    parent
+    let receipt = staged_receipt(staging, path, WorkspaceStagedObjectKind::After)?;
+    let transition = transition_for(plan, path)?;
+    let temporary = staged_object_name(path, WorkspaceStagedObjectKind::After);
+    verify_regular_file_evidence(
+        staging_dir,
+        &temporary,
+        &transition.after,
+        Some(receipt.identity),
+    )?;
+    staging_dir
         .hard_link(&temporary, &parent, &target)
         .map_err(|source| map_publication_error(source, false))?;
-    parent
-        .remove_file(&temporary)
-        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    remove_staged_object(staging_dir, plan, receipt)?;
+    sync_directory(staging_dir, "sync_workspace_add_staging").map_err(map_project_error)?;
     sync_directory(&parent, "sync_workspace_add").map_err(map_project_error)
 }
 
 fn publish_staged_modify(
     opened: &OpenProjectRoot,
+    staging_dir: &Dir,
     plan: &WorkspaceFileEffectPlan,
+    staging: &WorkspaceStagingReceipt,
     path: &ProjectRelativePath,
     fail_after_backup: bool,
 ) -> Result<(), WorkspaceFilesystemError> {
     let (parent, target) = open_parent(&opened.dir, path)?;
-    let backup = sidecar_name(plan.operation_id, path, SidecarKind::Before);
-    move_noreplace(&parent, &target, &backup)?;
     let transition = transition_for(plan, path)?;
-    verify_moved_backup(&parent, &backup, &target, &transition.before)?;
+    let before_receipt = staged_receipt(staging, path, WorkspaceStagedObjectKind::Before)?;
+    verify_regular_file_evidence(
+        &parent,
+        &target,
+        &transition.before,
+        Some(before_receipt.identity),
+    )?;
+    let backup = staged_object_name(path, WorkspaceStagedObjectKind::Before);
+    move_noreplace(&parent, &target, staging_dir, &backup)?;
+    verify_moved_backup(
+        staging_dir,
+        &backup,
+        &parent,
+        &target,
+        &transition.before,
+        before_receipt.identity,
+    )?;
     if fail_after_backup {
         return Err(WorkspaceFilesystemError::RecoveryRequired);
     }
-    let temporary = sidecar_name(plan.operation_id, path, SidecarKind::After);
-    if let Err(error) = move_noreplace(&parent, &temporary, &target) {
-        let _ = move_noreplace(&parent, &backup, &target);
+    let after_receipt = staged_receipt(staging, path, WorkspaceStagedObjectKind::After)?;
+    let temporary = staged_object_name(path, WorkspaceStagedObjectKind::After);
+    verify_regular_file_evidence(
+        staging_dir,
+        &temporary,
+        &transition.after,
+        Some(after_receipt.identity),
+    )?;
+    if let Err(error) = move_noreplace(staging_dir, &temporary, &parent, &target) {
+        let _ = move_noreplace(staging_dir, &backup, &parent, &target);
         return Err(error);
     }
+    sync_directory(staging_dir, "sync_workspace_modify_staging").map_err(map_project_error)?;
     sync_directory(&parent, "sync_workspace_modify").map_err(map_project_error)
 }
 
 fn publish_delete(
     opened: &OpenProjectRoot,
+    staging_dir: &Dir,
     plan: &WorkspaceFileEffectPlan,
+    staging: &WorkspaceStagingReceipt,
     path: &ProjectRelativePath,
 ) -> Result<(), WorkspaceFilesystemError> {
     let (parent, target) = open_parent(&opened.dir, path)?;
-    let backup = sidecar_name(plan.operation_id, path, SidecarKind::Before);
-    move_noreplace(&parent, &target, &backup)?;
     let transition = transition_for(plan, path)?;
-    verify_moved_backup(&parent, &backup, &target, &transition.before)?;
+    let receipt = staged_receipt(staging, path, WorkspaceStagedObjectKind::Before)?;
+    verify_regular_file_evidence(&parent, &target, &transition.before, Some(receipt.identity))?;
+    let backup = staged_object_name(path, WorkspaceStagedObjectKind::Before);
+    move_noreplace(&parent, &target, staging_dir, &backup)?;
+    verify_moved_backup(
+        staging_dir,
+        &backup,
+        &parent,
+        &target,
+        &transition.before,
+        receipt.identity,
+    )?;
+    sync_directory(staging_dir, "sync_workspace_delete_staging").map_err(map_project_error)?;
     sync_directory(&parent, "sync_workspace_delete").map_err(map_project_error)
 }
 
 fn publish_rename(
     opened: &OpenProjectRoot,
+    staging_dir: &Dir,
     plan: &WorkspaceFileEffectPlan,
+    staging: &WorkspaceStagingReceipt,
     source: &ProjectRelativePath,
     target: &ProjectRelativePath,
 ) -> Result<(), WorkspaceFilesystemError> {
@@ -749,19 +1274,29 @@ fn publish_rename(
     if source_identity.volume != target_identity.volume {
         return Err(WorkspaceFilesystemError::ScopeDenied);
     }
-    let backup = sidecar_name(plan.operation_id, source, SidecarKind::Before);
-    move_noreplace(&source_parent, &source_name, &backup)?;
     let source_transition = transition_for(plan, source)?;
-    verify_moved_backup(
+    let receipt = staged_receipt(staging, source, WorkspaceStagedObjectKind::Before)?;
+    verify_regular_file_evidence(
         &source_parent,
-        &backup,
         &source_name,
         &source_transition.before,
+        Some(receipt.identity),
     )?;
-    if let Err(error) = source_parent.hard_link(&backup, &target_parent, &target_name) {
-        let _ = move_noreplace(&source_parent, &backup, &source_name);
+    let backup = staged_object_name(source, WorkspaceStagedObjectKind::Before);
+    move_noreplace(&source_parent, &source_name, staging_dir, &backup)?;
+    verify_moved_backup(
+        staging_dir,
+        &backup,
+        &source_parent,
+        &source_name,
+        &source_transition.before,
+        receipt.identity,
+    )?;
+    if let Err(error) = staging_dir.hard_link(&backup, &target_parent, &target_name) {
+        let _ = move_noreplace(staging_dir, &backup, &source_parent, &source_name);
         return Err(map_publication_error(error, false));
     }
+    sync_directory(staging_dir, "sync_workspace_rename_staging").map_err(map_project_error)?;
     sync_directory(&source_parent, "sync_workspace_rename_source").map_err(map_project_error)?;
     sync_directory(&target_parent, "sync_workspace_rename_target").map_err(map_project_error)
 }
@@ -769,26 +1304,43 @@ fn publish_rename(
 fn repair_interrupted_publications(
     opened: &OpenProjectRoot,
     plan: &WorkspaceFileEffectPlan,
+    staging: Option<&WorkspaceStagingReceipt>,
 ) -> Result<(), WorkspaceFilesystemError> {
-    for transition in &plan.transitions {
-        if !matches!(transition.before, WorkspacePathState::RegularFile { .. })
-            || !matches!(transition.after, WorkspacePathState::RegularFile { .. })
-        {
+    let staging = staging.ok_or(WorkspaceFilesystemError::RecoveryRequired)?;
+    let staging_dir = open_staging_directory(opened, plan, staging)?
+        .ok_or(WorkspaceFilesystemError::RecoveryRequired)?;
+    validate_staging_entries(&staging_dir, plan, staging)?;
+    for change in &plan.changes {
+        if change.kind != FileMutationKind::Modify {
             continue;
         }
-        let (parent, target) = open_parent(&opened.dir, &transition.path)?;
+        let transition = transition_for(plan, &change.path)?;
+        let (parent, target) = open_parent(&opened.dir, &change.path)?;
         let (target_state, _) = state_at_parent(&parent, &target, false)?;
         if target_state != WorkspacePathState::Absent {
             continue;
         }
-        let before = sidecar_name(plan.operation_id, &transition.path, SidecarKind::Before);
-        let after = sidecar_name(plan.operation_id, &transition.path, SidecarKind::After);
-        let (before_state, _) = state_at_parent(&parent, &before, false)?;
-        let (after_state, _) = state_at_parent(&parent, &after, false)?;
-        if before_state != transition.before || after_state != transition.after {
-            return Err(WorkspaceFilesystemError::RecoveryRequired);
-        }
-        move_noreplace(&parent, &before, &target)?;
+        let before_receipt =
+            staged_receipt(staging, &change.path, WorkspaceStagedObjectKind::Before)?;
+        let after_receipt =
+            staged_receipt(staging, &change.path, WorkspaceStagedObjectKind::After)?;
+        let before = staged_object_name(&change.path, WorkspaceStagedObjectKind::Before);
+        let after = staged_object_name(&change.path, WorkspaceStagedObjectKind::After);
+        verify_regular_file_evidence(
+            &staging_dir,
+            &before,
+            &transition.before,
+            Some(before_receipt.identity),
+        )?;
+        verify_regular_file_evidence(
+            &staging_dir,
+            &after,
+            &transition.after,
+            Some(after_receipt.identity),
+        )?;
+        move_noreplace(&staging_dir, &before, &parent, &target)?;
+        sync_directory(&staging_dir, "sync_workspace_interrupted_modify_staging")
+            .map_err(map_project_error)?;
         sync_directory(&parent, "sync_workspace_interrupted_modify_repair")
             .map_err(map_project_error)?;
     }
@@ -796,61 +1348,92 @@ fn repair_interrupted_publications(
 }
 
 fn verify_moved_backup(
-    parent: &Dir,
+    staging_dir: &Dir,
     backup: &OsStr,
+    target_parent: &Dir,
     target: &OsStr,
     expected: &WorkspacePathState,
+    expected_identity: WorkspaceObjectIdentity,
 ) -> Result<(), WorkspaceFilesystemError> {
-    let observation = supported_state_at_parent(parent, backup);
+    let observation =
+        verify_regular_file_evidence(staging_dir, backup, expected, Some(expected_identity));
     match observation {
-        Ok((state, _)) if state == *expected => Ok(()),
-        Ok(_) => {
-            restore_moved_backup(parent, backup, target)?;
+        Ok(_) => Ok(()),
+        Err(WorkspaceFilesystemError::Conflict) => {
+            restore_moved_backup(staging_dir, backup, target_parent, target)?;
             Err(WorkspaceFilesystemError::Conflict)
         }
         Err(error) => {
-            restore_moved_backup(parent, backup, target)?;
+            restore_moved_backup(staging_dir, backup, target_parent, target)?;
             Err(error)
         }
     }
 }
 
 fn restore_moved_backup(
-    parent: &Dir,
+    staging_dir: &Dir,
     backup: &OsStr,
+    target_parent: &Dir,
     target: &OsStr,
 ) -> Result<(), WorkspaceFilesystemError> {
-    move_noreplace(parent, backup, target)
+    move_noreplace(staging_dir, backup, target_parent, target)
         .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
-    sync_directory(parent, "sync_workspace_backup_restore").map_err(map_project_error)
+    sync_directory(staging_dir, "sync_workspace_backup_restore_staging")
+        .map_err(map_project_error)?;
+    sync_directory(target_parent, "sync_workspace_backup_restore").map_err(map_project_error)
 }
 
-fn cleanup_sidecars(
+fn cleanup_staging(
     opened: &OpenProjectRoot,
     plan: &WorkspaceFileEffectPlan,
+    staging: Option<&WorkspaceStagingReceipt>,
 ) -> Result<(), WorkspaceFilesystemError> {
-    for transition in &plan.transitions {
-        let (parent, _) = open_parent(&opened.dir, &transition.path)?;
-        for kind in [SidecarKind::After, SidecarKind::Before] {
-            let name = sidecar_name(plan.operation_id, &transition.path, kind);
-            let Some(_) = optional_symlink_metadata(&parent, &name).map_err(map_project_error)?
-            else {
-                continue;
-            };
-            let (state, _) = supported_state_at_parent(&parent, &name)?;
-            let expected = match kind {
-                SidecarKind::After => &transition.after,
-                SidecarKind::Before => &transition.before,
-            };
-            if state != *expected {
-                return Err(WorkspaceFilesystemError::RecoveryRequired);
-            }
-            parent
-                .remove_file(&name)
-                .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
-            sync_directory(&parent, "sync_workspace_sidecar_cleanup").map_err(map_project_error)?;
+    let name = staging_directory_name(plan);
+    let Some(staging) = staging else {
+        return if optional_symlink_metadata(&opened.dir, &name)
+            .map_err(map_project_error)?
+            .is_none()
+        {
+            Ok(())
+        } else {
+            Err(WorkspaceFilesystemError::RecoveryRequired)
+        };
+    };
+    let Some(staging_dir) = open_staging_directory(opened, plan, staging)? else {
+        return Ok(());
+    };
+    validate_staging_entries(&staging_dir, plan, staging)?;
+    for object in &staging.objects {
+        let object_name = staged_object_name(&object.path, object.kind);
+        if optional_symlink_metadata(&staging_dir, &object_name)
+            .map_err(map_project_error)?
+            .is_none()
+        {
+            continue;
         }
+        remove_staged_object(&staging_dir, plan, object)?;
+        sync_directory(&staging_dir, "sync_workspace_staging_object_cleanup")
+            .map_err(map_project_error)?;
     }
+    validate_staging_entries(&staging_dir, plan, staging)?;
+    ensure_only_marker_entry(&staging_dir)?;
+    verify_staging_marker(&staging_dir, plan, staging)?;
+    staging_dir
+        .remove_file(STAGING_MARKER_NAME)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    sync_directory(&staging_dir, "sync_workspace_staging_marker_cleanup")
+        .map_err(map_project_error)?;
+    ensure_staging_empty(&staging_dir)?;
+    if workspace_directory_identity(&staging_dir)? != staging.directory_identity {
+        return Err(WorkspaceFilesystemError::RecoveryRequired);
+    }
+    drop(staging_dir);
+    opened
+        .dir
+        .remove_dir(&name)
+        .map_err(|_| WorkspaceFilesystemError::RecoveryRequired)?;
+    sync_directory(&opened.dir, "sync_workspace_staging_directory_cleanup")
+        .map_err(map_project_error)?;
     Ok(())
 }
 
@@ -864,26 +1447,38 @@ fn transition_for<'a>(
         .ok_or(WorkspaceFilesystemError::RecoveryRequired)
 }
 
-#[derive(Clone, Copy)]
-enum SidecarKind {
-    Before,
-    After,
+fn staged_receipt<'a>(
+    staging: &'a WorkspaceStagingReceipt,
+    path: &ProjectRelativePath,
+    kind: WorkspaceStagedObjectKind,
+) -> Result<&'a WorkspaceStagedObjectReceipt, WorkspaceFilesystemError> {
+    staging
+        .objects
+        .iter()
+        .find(|receipt| receipt.path == *path && receipt.kind == kind)
+        .ok_or(WorkspaceFilesystemError::RecoveryRequired)
 }
 
-fn sidecar_name(
-    operation_id: WorkspaceOperationId,
-    path: &ProjectRelativePath,
-    kind: SidecarKind,
-) -> OsString {
-    let digest = Sha256::digest(path.as_str().as_bytes());
+fn staged_object_name(path: &ProjectRelativePath, kind: WorkspaceStagedObjectKind) -> OsString {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dennett.workspace-staged-object.v1\0");
+    hasher.update([match kind {
+        WorkspaceStagedObjectKind::Before => 1,
+        WorkspaceStagedObjectKind::After => 2,
+    }]);
+    hasher.update(path.as_str().as_bytes());
+    let digest = hasher.finalize();
     let suffix = match kind {
-        SidecarKind::Before => "before",
-        SidecarKind::After => "after",
+        WorkspaceStagedObjectKind::Before => "before",
+        WorkspaceStagedObjectKind::After => "after",
     };
+    OsString::from(format!("{}-{suffix}.tmp", hex_hash(&digest)))
+}
+
+fn staging_directory_name(plan: &WorkspaceFileEffectPlan) -> OsString {
     OsString::from(format!(
-        ".dennett-ws-{}-{}-{suffix}.tmp",
-        operation_id.0,
-        hex_hash(&digest[..8])
+        ".dennett-ws-stage-{}",
+        hex_hash(&plan.staging_nonce.0)
     ))
 }
 
@@ -1673,12 +2268,20 @@ fn set_permission_bits(
 
 #[cfg(target_os = "linux")]
 fn move_noreplace(
-    dir: &Dir,
+    source_dir: &Dir,
     source: &OsStr,
+    target_dir: &Dir,
     target: &OsStr,
 ) -> Result<(), WorkspaceFilesystemError> {
     use rustix::fs::{RenameFlags, renameat_with};
-    renameat_with(dir, source, dir, target, RenameFlags::NOREPLACE).map_err(|error| {
+    renameat_with(
+        source_dir,
+        source,
+        target_dir,
+        target,
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| {
         map_publication_error(io::Error::from_raw_os_error(error.raw_os_error()), false)
     })
 }
@@ -1698,8 +2301,9 @@ fn all_transitions_before(
 
 #[cfg(windows)]
 fn move_noreplace(
-    dir: &Dir,
+    source_dir: &Dir,
     source: &OsStr,
+    target_dir: &Dir,
     target: &OsStr,
 ) -> Result<(), WorkspaceFilesystemError> {
     use std::{mem, os::windows::ffi::OsStrExt as _, os::windows::io::AsRawHandle, ptr};
@@ -1735,7 +2339,7 @@ fn move_noreplace(
         .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .sync(true);
-    let file = dir
+    let file = source_dir
         .open_with(source, &options)
         .map_err(|source| map_publication_error(source, false))?;
     let target_wide = target.encode_wide().collect::<Vec<_>>();
@@ -1752,7 +2356,7 @@ fn move_noreplace(
     // copied UTF-16 target. Both capability handles outlive the syscall.
     unsafe {
         (*info).Anonymous.ReplaceIfExists = false;
-        (*info).RootDirectory = dir.as_raw_handle().cast::<core::ffi::c_void>() as HANDLE;
+        (*info).RootDirectory = target_dir.as_raw_handle().cast::<core::ffi::c_void>() as HANDLE;
         (*info).FileNameLength = u32::try_from(target_wide.len() * 2)
             .map_err(|_| WorkspaceFilesystemError::ScopeDenied)?;
         ptr::copy_nonoverlapping(
@@ -1780,8 +2384,9 @@ fn move_noreplace(
 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn move_noreplace(
-    _dir: &Dir,
+    _source_dir: &Dir,
     _source: &OsStr,
+    _target_dir: &Dir,
     _target: &OsStr,
 ) -> Result<(), WorkspaceFilesystemError> {
     Err(WorkspaceFilesystemError::UnsupportedObject)
@@ -1855,7 +2460,7 @@ mod tests {
     use dennett_effect_core::workspace::{
         DurableCheckpointState, DurableWorkspaceOperationState, WorkspaceCheckpointRecord,
         WorkspaceFileEffectRequest, WorkspaceJournalPort, WorkspaceManifest,
-        WorkspaceOperationRecord,
+        WorkspaceOperationRecord, WorkspaceStagingNonce,
     };
     use dennett_head::{
         project::{
@@ -1924,12 +2529,22 @@ mod tests {
                 binding_id: scope.binding_id,
                 base_revision: revision,
                 intent_sha256: ContentSha256([9; 32]),
+                staging_nonce: WorkspaceStagingNonce([8; 32]),
                 safety_checkpoint_id: CheckpointId::new(),
                 prepared_at_unix_ms: 1,
                 changes: prepared.proposals.clone(),
             },
         )
         .expect("valid workspace effect plan")
+    }
+
+    fn stage(
+        scope: &WorkspaceFilesystemScope,
+        plan: &WorkspaceFileEffectPlan,
+        prepared: &PreparedWorkspaceFileEffect,
+    ) -> WorkspaceStagingReceipt {
+        stage_file_effect_sync(scope, plan, &prepared.proposed_blobs)
+            .expect("stage workspace effect")
     }
 
     fn change(
@@ -2044,7 +2659,7 @@ mod tests {
     }
 
     #[test]
-    fn applies_exact_multi_file_changes_and_removes_private_sidecars() {
+    fn applies_exact_multi_file_changes_and_removes_private_staging() {
         let temp = TempDir::new().expect("temporary project");
         fs::write(temp.path().join("modify.txt"), b"old modify").expect("seed modify");
         fs::write(temp.path().join("delete.txt"), b"old delete").expect("seed delete");
@@ -2071,9 +2686,9 @@ mod tests {
         )
         .expect("prepare file effect");
         let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let staging = stage(&scope, &plan, &prepared);
 
-        let after = apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs)
-            .expect("apply file effect");
+        let after = apply_file_effect_sync(&scope, &plan, &staging).expect("apply file effect");
 
         assert!(after.complete);
         assert_eq!(fs::read(temp.path().join("added.txt")).unwrap(), b"added");
@@ -2097,6 +2712,104 @@ mod tests {
     }
 
     #[test]
+    fn legacy_sidecar_name_collision_is_preserved_as_user_content() {
+        let temp = TempDir::new().expect("temporary project");
+        let scope = scope(temp.path());
+        let target_path = path("owned.txt");
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Add,
+                target_path.as_str(),
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare add");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let digest = Sha256::digest(target_path.as_str().as_bytes());
+        let collision_name = format!(
+            ".dennett-ws-{}-{}-after.tmp",
+            plan.operation_id.0,
+            hex_hash(&digest[..8])
+        );
+        let collision = temp.path().join(collision_name);
+        fs::write(&collision, b"agent").expect("seed legacy sidecar collision");
+
+        let staging = stage(&scope, &plan, &prepared);
+        apply_file_effect_sync(&scope, &plan, &staging).expect("apply add");
+
+        assert_eq!(fs::read(temp.path().join("owned.txt")).unwrap(), b"agent");
+        assert_eq!(
+            fs::read(collision).unwrap(),
+            b"agent",
+            "an adjacent user file must never be inferred as operation-owned"
+        );
+    }
+
+    #[test]
+    fn staging_directory_collision_is_preserved_without_publication() {
+        let temp = TempDir::new().expect("temporary project");
+        let scope = scope(temp.path());
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Add,
+                "owned.txt",
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare add");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let collision = temp.path().join(staging_directory_name(&plan));
+        fs::create_dir(&collision).expect("seed staging directory collision");
+        fs::write(collision.join("user.txt"), b"keep").expect("seed collision content");
+
+        assert_eq!(
+            stage_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
+            Err(WorkspaceFilesystemError::RecoveryRequired)
+        );
+        assert_eq!(fs::read(collision.join("user.txt")).unwrap(), b"keep");
+        assert!(!temp.path().join("owned.txt").exists());
+    }
+
+    #[test]
+    fn replaced_staged_file_with_identical_bytes_is_not_published_or_deleted() {
+        let temp = TempDir::new().expect("temporary project");
+        let scope = scope(temp.path());
+        let target_path = path("owned.txt");
+        let prepared = prepare_file_effect_sync(
+            &scope,
+            vec![change(
+                FileMutationKind::Add,
+                target_path.as_str(),
+                None,
+                Some(b"agent"),
+            )],
+        )
+        .expect("prepare add");
+        let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let staging = stage(&scope, &plan, &prepared);
+        let staged_path = temp
+            .path()
+            .join(staging_directory_name(&plan))
+            .join(staged_object_name(
+                &target_path,
+                WorkspaceStagedObjectKind::After,
+            ));
+        fs::remove_file(&staged_path).expect("remove owned staged file");
+        fs::write(&staged_path, b"agent").expect("replace with same bytes");
+
+        assert_eq!(
+            apply_file_effect_sync(&scope, &plan, &staging),
+            Err(WorkspaceFilesystemError::RecoveryRequired)
+        );
+        assert_eq!(fs::read(&staged_path).unwrap(), b"agent");
+        assert!(!temp.path().join("owned.txt").exists());
+    }
+
+    #[test]
     fn touched_path_race_fails_before_any_publication() {
         let temp = TempDir::new().expect("temporary project");
         fs::write(temp.path().join("owned.txt"), b"base").expect("seed file");
@@ -2113,7 +2826,7 @@ mod tests {
         fs::write(temp.path().join("owned.txt"), b"human").expect("external edit");
 
         assert_eq!(
-            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
+            stage_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
             Err(WorkspaceFilesystemError::Conflict)
         );
         assert_eq!(fs::read(temp.path().join("owned.txt")).unwrap(), b"human");
@@ -2235,8 +2948,8 @@ mod tests {
             Some(0o600)
         );
         let plan = plan(&scope, prepared.observation.clone(), &prepared);
-        apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs)
-            .expect("apply private file modification");
+        let staging = stage(&scope, &plan, &prepared);
+        apply_file_effect_sync(&scope, &plan, &staging).expect("apply private file modification");
 
         assert_eq!(fs::read(&target).unwrap(), b"private after");
         assert_eq!(
@@ -2272,7 +2985,7 @@ mod tests {
         .expect("set test extended attribute");
 
         assert_eq!(
-            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
+            stage_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert_eq!(fs::read(target).unwrap(), b"human");
@@ -2296,10 +3009,11 @@ mod tests {
         )
         .expect("prepare before publication race");
         let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let staging = stage(&scope, &plan, &prepared);
         let opened = open_scope(&scope).expect("open project scope");
-        let blobs = validated_blob_map(&prepared.proposed_blobs).expect("validate after image");
-        preflight_transitions(&opened, &plan).expect("preflight clean file");
-        stage_after_images(&opened, &plan, &blobs).expect("stage after image");
+        let staging_dir = open_staging_directory(&opened, &plan, &staging)
+            .expect("open staged effect")
+            .expect("staging directory exists");
         rustix::fs::setxattr(
             &target,
             "user.dennett-race",
@@ -2309,7 +3023,14 @@ mod tests {
         .expect("add metadata after preflight");
 
         assert_eq!(
-            publish_staged_modify(&opened, &plan, &path("raced.txt"), false),
+            publish_staged_modify(
+                &opened,
+                &staging_dir,
+                &plan,
+                &staging,
+                &path("raced.txt"),
+                false,
+            ),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert_eq!(fs::read(&target).unwrap(), b"human");
@@ -2338,24 +3059,35 @@ mod tests {
         )
         .expect("prepare late metadata race");
         let plan = plan(&scope, prepared.observation.clone(), &prepared);
+        let staging = stage(&scope, &plan, &prepared);
         let opened = open_scope(&scope).expect("open project scope");
-        let blobs = validated_blob_map(&prepared.proposed_blobs).expect("validate after image");
-        preflight_transitions(&opened, &plan).expect("preflight clean file");
-        stage_after_images(&opened, &plan, &blobs).expect("stage after image");
+        let staging_dir = open_staging_directory(&opened, &plan, &staging)
+            .expect("open staged effect")
+            .expect("staging directory exists");
         let (parent, target_name) =
             open_parent(&opened.dir, &target_path).expect("open target parent");
-        let backup = sidecar_name(plan.operation_id, &target_path, SidecarKind::Before);
-        let after = sidecar_name(plan.operation_id, &target_path, SidecarKind::After);
-        move_noreplace(&parent, &target_name, &backup).expect("move original to backup");
+        let backup = staged_object_name(&target_path, WorkspaceStagedObjectKind::Before);
+        let after = staged_object_name(&target_path, WorkspaceStagedObjectKind::After);
+        move_noreplace(&parent, &target_name, &staging_dir, &backup)
+            .expect("move original to backup");
+        let before_receipt =
+            staged_receipt(&staging, &target_path, WorkspaceStagedObjectKind::Before)
+                .expect("before receipt");
         verify_moved_backup(
-            &parent,
+            &staging_dir,
             &backup,
+            &parent,
             &target_name,
             &transition_for(&plan, &target_path).unwrap().before,
+            before_receipt.identity,
         )
         .expect("validate moved backup");
-        move_noreplace(&parent, &after, &target_name).expect("publish staged replacement");
-        let backup_path = temp.path().join(&backup);
+        move_noreplace(&staging_dir, &after, &parent, &target_name)
+            .expect("publish staged replacement");
+        let backup_path = temp
+            .path()
+            .join(staging_directory_name(&plan))
+            .join(&backup);
         rustix::fs::setxattr(
             &backup_path,
             "user.dennett-late-race",
@@ -2365,7 +3097,7 @@ mod tests {
         .expect("change original after publication validation");
 
         assert_eq!(
-            cleanup_sidecars(&opened, &plan),
+            cleanup_staging(&opened, &plan, Some(&staging)),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert!(backup_path.exists(), "changed backup must not be deleted");
@@ -2514,7 +3246,7 @@ mod tests {
         fs::write(&stream, b"preserve me").expect("seed alternate stream");
 
         assert_eq!(
-            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
+            stage_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert_eq!(fs::read(target).unwrap(), b"human");
@@ -2594,7 +3326,7 @@ mod tests {
         );
 
         assert_eq!(
-            apply_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
+            stage_file_effect_sync(&scope, &plan, &prepared.proposed_blobs),
             Err(WorkspaceFilesystemError::UnsupportedObject)
         );
         assert_eq!(fs::read(target).unwrap(), b"human");
@@ -2999,6 +3731,7 @@ mod tests {
                 binding_id: real.binding_id,
                 base_revision: base.manifest.revision,
                 intent_sha256: ContentSha256([9; 32]),
+                staging_nonce: WorkspaceStagingNonce([7; 32]),
                 safety_checkpoint_id: checkpoint_id,
                 prepared_at_unix_ms: 5,
                 changes: prepared.proposals,
@@ -3022,6 +3755,7 @@ mod tests {
         };
         let operation = WorkspaceOperationRecord {
             plan,
+            staging: None,
             state: DurableWorkspaceOperationState::Prepared,
             resulting_revision: None,
             failure: None,
@@ -3029,15 +3763,25 @@ mod tests {
         };
         let mut blobs = prepared.proposed_blobs;
         blobs.extend(prepared.checkpoint_blobs);
-        real.store
+        let operation = real
+            .store
             .prepare_file_effect(operation.clone(), checkpoint, blobs.clone())
             .await
             .expect("persist prepared operation");
+        let staging = stage_file_effect_sync(&scope, &operation.plan, &blobs)
+            .expect("stage interrupted operation");
+        let mut operation = operation;
+        operation.staging = Some(staging.clone());
+        let operation = real
+            .store
+            .transition_operation(DurableWorkspaceOperationState::Prepared, operation, None)
+            .await
+            .expect("persist staging receipts");
         assert_eq!(
             apply_file_effect_sync_with_failure(
                 &scope,
                 &operation.plan,
-                &blobs,
+                &staging,
                 Some(PublicationFailure::AfterModifyBackup(1)),
             ),
             Err(WorkspaceFilesystemError::RecoveryRequired)
