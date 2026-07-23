@@ -635,8 +635,8 @@
     },
     {
       "path": "blog/notes/M02_WP004_capture.md",
-      "bytes": 9365,
-      "sha256": "9b98f3e633135eabcc6a0cba67b5608490e2a3a7eb38e16b8b32ffa849261db7"
+      "bytes": 9711,
+      "sha256": "a49e6e8ee2ce1ddbd4fca47e59331fe19901f9e44eaa5fde114bb4db4b842e0b"
     },
     {
       "path": "blog/notes/M02_capture.md",
@@ -2180,8 +2180,8 @@
     },
     {
       "path": "services/head/src/workspace.rs",
-      "bytes": 64728,
-      "sha256": "e9becf6ec98f2534236ed81ab29326c88959da30f89d8ce54cfc14fbe6a4329b"
+      "bytes": 64832,
+      "sha256": "db177eeb1f4da08a1a9335168dcbcd9cd9cdbd9cc37116ea4450bc736021c4c2"
     },
     {
       "path": "services/head/tests/conversation_application.rs",

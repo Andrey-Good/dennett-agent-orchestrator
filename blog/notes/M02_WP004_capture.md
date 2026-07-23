@@ -120,6 +120,11 @@ This is capture material, not a published claim. A standalone field note is just
   impersonate the staged object even when bytes and permissions are identical.
   The staging directory is durably synchronized before its receipt is returned,
   keeping the proof ordered ahead of any user-path publication after a crash.
+- A later Linux run failed for a less profound reason: a privacy test searched
+  the entire debug string for the two characters `5a`, which can naturally
+  occur in a random project UUID. It now compares against the complete debug
+  representation of the seeded secret identity, preserving the privacy claim
+  without probabilistic false alarms.
 - The owner accepted this as an internal checkpoint because the existing M01
   desktop has no truthful control for inspecting snapshot identity or crash
   reconstruction. The visual owner gate remains WP-M02-007/WP-M02-008.

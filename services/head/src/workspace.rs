@@ -1683,17 +1683,19 @@ mod privacy_tests {
 
     #[test]
     fn filesystem_scope_debug_output_redacts_machine_specific_authority() {
+        let source_identity = WorkspaceSourceIdentity::new([0x5a; 32]);
+        let leaked_identity = format!("{source_identity:?}");
         let scope = WorkspaceFilesystemScope {
             project_id: ProjectId::new(),
             binding_id: WorkspaceBindingId::new(),
             absolute_path: r"C:\Users\owner\secret-project".to_owned(),
-            source_identity: WorkspaceSourceIdentity::new([0x5a; 32]),
+            source_identity,
             writable: true,
         };
 
         let debug = format!("{scope:?}");
         assert!(!debug.contains("secret-project"));
-        assert!(!debug.contains("5a"));
+        assert!(!debug.contains(&leaked_identity));
         assert!(debug.contains("<redacted>"));
     }
 
