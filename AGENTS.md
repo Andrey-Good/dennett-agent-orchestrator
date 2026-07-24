@@ -101,6 +101,29 @@ If late review exposes several failures with one architectural cause, return to 
 
 Keep design artifacts compact and decision-bearing. Put the contract, matrix, references and review result in the existing Work Package, decision record, acceptance tests or one nearby design note; do not duplicate prose across files. A gate that cannot change an implementation or test decision is bureaucracy and should be removed.
 
+## Subagent model routing and verification
+
+Subagent output is an untrusted candidate change until the integrating agent verifies it. Route work by the most difficult judgment, risk or ambiguity inside the task, not by the apparent amount of typing:
+
+- **Sol (`gpt-5.6-sol`)** is the default for architecture, detailed implementation plans, canonical documentation, ambiguous business behavior, cross-cutting changes, security and permissions, identity, durable storage, recovery, concurrency, cancellation, migrations, public protocols, final integration and independent review of P0-P2 risk. Use Sol for any high-risk design gate.
+- **Terra (`gpt-5.6-terra`)** may implement normal bounded work after its contract and design are stable: isolated components, adapters, focused tests, semantics-preserving refactors and structured documentation based on authoritative facts.
+- **Luna (`gpt-5.6-luna`, the lightweight model corresponding to the owner’s “Moon” tier)** is limited to work that requires no product or architectural judgment: repository search and inventory, deterministic transformations, formatting, exact template application, running checks and simple fixture or boilerplate generation from a complete specification. Luna must not infer missing semantics or design an API.
+
+Use the same or a stronger tier when the named model is unavailable; never silently substitute a weaker tier merely because limits are tight. Calibrate reasoning effort separately, but do not lower it below what the task’s hardest decision requires.
+
+Before delegating to Terra or Luna, the integrating Sol agent must provide a bounded deliverable, authoritative references, explicit non-goals, permitted write scope and objective acceptance evidence. A lower-tier agent must stop and escalate instead of choosing product semantics, expanding scope or resolving a high-risk ambiguity.
+
+Quality controls for lower-tier work are mandatory:
+
+1. keep write scopes isolated and do not grant the subagent authority to commit, push, merge or redefine acceptance;
+2. run the relevant automated checks after the candidate change;
+3. have Sol inspect the complete diff and authoritative sources rather than trusting the subagent summary;
+4. verify every acceptance condition with observed evidence and correct or reject unsupported work;
+5. require a separate Sol reviewer for security-, durability-, authority- or recovery-critical behavior;
+6. escalate after a material contract violation, invented semantics or repeated failed attempts instead of spending more cheap retries.
+
+Use a cheaper subagent only when execution savings exceed the cost of specifying and reviewing the task. If the work is too small, tightly coupled or judgment-heavy to delegate safely, Sol should perform it directly.
+
 ## Current runtime constraint
 
 Until the owner explicitly changes this constraint:
