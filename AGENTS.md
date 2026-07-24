@@ -79,6 +79,28 @@ If required product or architecture semantics are missing, ambiguous or contradi
 
 Prefer mature capabilities already provided by the selected runtime, SDK, framework or platform. Add translation, normalization, safety enforcement and stable project-level ports around them; implement custom lifecycle, session, tool, approval or discovery machinery only when the existing capability cannot satisfy the documented contract, reliability, portability or replacement requirements.
 
+## Risk-calibrated design-first protocol
+
+Do not give every change the same amount of ceremony. Classify the change before production editing:
+
+- a routine change is local, reversible and does not alter authority, durable state, protocol compatibility, concurrency, recovery, privacy or an external effect; it needs a compact behavior contract and focused tests, but no mandatory design review;
+- a high-risk change touches trust or permissions, identity, durable storage, filesystem or OS semantics, schema migration, concurrency or cancellation, external effects, recovery, privacy, wire compatibility or another difficult-to-reverse boundary; it must pass the design gate below before broad implementation.
+
+For a high-risk change:
+
+1. **Define the contract and invariants.** State the successful outcome, explicit non-goals, authoritative owner, identity or capability binding, metadata that must survive, atomicity boundary and prohibited intermediate states. An invariant must hold throughout the operation, not only in the final happy-path snapshot.
+2. **Build a failure and interference matrix.** Consider cancellation, process termination at every state transition, partial I/O, retry and replay, stale observations, concurrent writers, rename or replacement, permission and metadata changes, unsupported platform features and power loss where the platform makes a meaningful guarantee. For each case, choose and test one explicit outcome: prevent, detect, recover or fail closed.
+3. **Research the actual primitive.** Verify the pinned SDK, runtime, library and target-OS behavior in primary documentation. Inspect mature implementations when they can reveal established patterns or known traps. Prefer a supported high-level primitive; record why custom low-level behavior is necessary when no suitable primitive exists. Do not infer that the platform lacks a capability merely because one wrapper does not expose it.
+4. **Prove uncertain assumptions cheaply.** Use the smallest disposable spike or focused platform test that can falsify assumptions about atomicity, handle identity, inheritance, durability, recovery or compatibility. Exercise negative and interrupted paths, not only successful use.
+5. **Review the design before widening code.** An independent reviewer must challenge ownership, race windows, crash points, unsupported metadata, authority boundaries and whether a simpler mature mechanism satisfies the same contract. Resolve every P0-P2 design finding before broad implementation.
+6. **Derive tests from the risk model.** Name acceptance and scenario tests for the invariant and failure they prove. Mocks and in-memory tests prove orchestration; they do not prove an OS, filesystem, database or provider guarantee. Platform-specific claims need evidence on the relevant target.
+7. **Implement one thin end-to-end slice.** Expand only after the contract, spike, focused tests and design review agree. Keep each abstraction tied to a named invariant, recovery path, test seam or provider boundary.
+8. **Review the finished behavior independently.** Re-run the failure matrix against the implementation and observed evidence. Passing existing tests is not proof that the design covers an omitted failure mode.
+
+If late review exposes several failures with one architectural cause, return to the design gate and correct the model instead of stacking local patches. Do not continue broad implementation while a P0-P2 design finding is unresolved.
+
+Keep design artifacts compact and decision-bearing. Put the contract, matrix, references and review result in the existing Work Package, decision record, acceptance tests or one nearby design note; do not duplicate prose across files. A gate that cannot change an implementation or test decision is bureaucracy and should be removed.
+
 ## Current runtime constraint
 
 Until the owner explicitly changes this constraint:
@@ -158,6 +180,7 @@ A PC configured as a full Head uses the same canonical Memory Fabric and server-
 
 Before editing:
 
+- classify the change as routine or high-risk and complete the corresponding design gate above;
 - write a compact behavior contract for every non-trivial change: user-visible outcome, explicit non-goals, authoritative state owner, lifecycle/state transitions, failure and recovery behavior, and acceptance scenarios; keep it in the Work Package, test names or a nearby design note rather than creating a document when those existing artifacts are sufficient;
 - for an external SDK, runtime, OS or framework capability, verify the installed version and exercise the smallest disposable technical spike before designing a fallback or changing production architecture; do not infer that a lower-level official capability is absent only because a high-level wrapper does not expose it;
 - identify owner and invariant;
