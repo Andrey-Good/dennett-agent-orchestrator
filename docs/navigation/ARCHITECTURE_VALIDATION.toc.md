@@ -1,0 +1,23 @@
+# Navigation: ARCHITECTURE_VALIDATION.md
+
+Canonical file: [`ARCHITECTURE_VALIDATION.md`](../architecture/ARCHITECTURE_VALIDATION.md)
+
+- [Согласованность архитектуры 2.0: требования, стыки и проверки](../architecture/ARCHITECTURE_VALIDATION.md#согласованность-архитектуры-20-требования-стыки-и-проверки)
+  - [1. Объём и метод](../architecture/ARCHITECTURE_VALIDATION.md#1-объём-и-метод)
+  - [2. Кто владеет правилом](../architecture/ARCHITECTURE_VALIDATION.md#2-кто-владеет-правилом)
+  - [3. Трассировка предметной бизнес-логики](../architecture/ARCHITECTURE_VALIDATION.md#3-трассировка-предметной-бизнес-логики)
+    - [00. Назначение и функциональная концепция](../architecture/ARCHITECTURE_VALIDATION.md#00-назначение-и-функциональная-концепция)
+    - [01. Общие контракты и владельцы](../architecture/ARCHITECTURE_VALIDATION.md#01-общие-контракты-и-владельцы)
+    - [10. Memory Fabric](../architecture/ARCHITECTURE_VALIDATION.md#10-memory-fabric)
+    - [20. Agentic Control](../architecture/ARCHITECTURE_VALIDATION.md#20-agentic-control)
+    - [30. Trust, identity и автономность](../architecture/ARCHITECTURE_VALIDATION.md#30-trust-identity-и-автономность)
+    - [40. Voice и ambient](../architecture/ARCHITECTURE_VALIDATION.md#40-voice-и-ambient)
+    - [41. Capabilities/providers/integrations](../architecture/ARCHITECTURE_VALIDATION.md#41-capabilitiesprovidersintegrations)
+    - [50. Server/runtime/sync](../architecture/ARCHITECTURE_VALIDATION.md#50-serverruntimesync)
+    - [60. Desktop](../architecture/ARCHITECTURE_VALIDATION.md#60-desktop)
+    - [61. Mobile](../architecture/ARCHITECTURE_VALIDATION.md#61-mobile)
+    - [70. E2E и handoff](../architecture/ARCHITECTURE_VALIDATION.md#70-e2e-и-handoff)
+  - [4. Трассировка supplements и новых норм](../architecture/ARCHITECTURE_VALIDATION.md#4-трассировка-supplements-и-новых-норм)
+  - [5. Какие противоречия разрешены, а не замаскированы](../architecture/ARCHITECTURE_VALIDATION.md#5-какие-противоречия-разрешены-а-не-замаскированы)
+  - [6. Сценарная проверка на уровне документов](../architecture/ARCHITECTURE_VALIDATION.md#6-сценарная-проверка-на-уровне-документов)
+  - [7. Реально выполненное и невыполненное](../architecture/ARCHITECTURE_VALIDATION.md#7-реально-выполненное-и-невыполненное)

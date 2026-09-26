@@ -2,7 +2,7 @@
 
 Canonical file: [`CODE_MAP.md`](../architecture/CODE_MAP.md)
 
-- [Карта архитектуры и кода](../architecture/CODE_MAP.md#карта-архитектуры-и-кода)
-  - [Исполняемые процессы](../architecture/CODE_MAP.md#исполняемые-процессы)
-  - [Stable core](../architecture/CODE_MAP.md#stable-core)
-  - [Поток первого vertical slice](../architecture/CODE_MAP.md#поток-первого-vertical-slice)
+- [Архитектура и места будущей реализации](../architecture/CODE_MAP.md#архитектура-и-места-будущей-реализации)
+  - [Исполняемые корни](../architecture/CODE_MAP.md#исполняемые-корни)
+  - [Общие границы](../architecture/CODE_MAP.md#общие-границы)
+  - [Новые обязанности без новых обязательных сервисов](../architecture/CODE_MAP.md#новые-обязанности-без-новых-обязательных-сервисов)

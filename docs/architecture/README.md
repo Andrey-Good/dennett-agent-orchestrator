@@ -1,26 +1,27 @@
-# Архитектура Dennett
+# Архитектура Dennett 2.0
 
-Архитектура собрана в четыре цельных тома вместо десятков разрозненных заметок.
+Редакция 2026-09-26. Согласованная архитектурная база после завершения бизнес-логики; **приложение этой правкой не реализовано**. Приоритет и текущую фазу задаёт [состояние пересмотра](../restart/README.md).
 
-| Том | Главный вопрос |
-|---:|---|
-| [80](80_Dennett_System_Architecture_and_Runtime_Topology.md) | Какие исполняемые части существуют, где живут и как безопасно переживают отказы? |
-| [81](81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.md) | Где живёт состояние, как оно синхронизируется, ищется, мигрирует и восстанавливается? |
-| [82](82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md) | Как исполняются agents, models, voice, tools, MCP, connectors и computer-use? |
-| [83](83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md) | Как устроены clients, packaging, tests, CI/CD, repository structure и implementation plan? |
+## Четыре владельца
 
-## Стабильные принципы
+[80 — процессы и топология](80_Dennett_System_Architecture_and_Runtime_Topology.md): Head, постоянные Nodes, независимый memoryd, роли устройств, полноценный резерв и fencing.
 
-- Process-selective modular monolith вместо обязательных microservices.
-- Один логический Head и локально способные Nodes.
-- Роль устройства задаётся конфигурацией; Head eligibility требует явного разрешения.
-- Одна логическая Memory Fabric независимо от того, является Head выделенным сервером или ПК.
-- Для multi-device Head PostgreSQL/server storage каноничен; SQLite клиента — cache/offline state.
-- Provider-native runtimes остаются adapters; Dennett владеет Tasks, context, permissions, effects и history.
-- External effects idempotent или reconcilable.
-- Derived indexes заменяемы и пересобираемы.
-- У каждой значимой границы есть fake и conformance implementation.
+[81 — данные и восстановление](81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.md): PostgreSQL, клиентское offline-хранилище, Memory API, транзакции, упорядоченная доставка, репликация, объекты, RecoveryCut и backup.
 
-Краткие причины решений находятся в [`docs/decisions/`](../decisions/README.md).
+[82 — агенты и интеграции](82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md): слой агента Dennett, готовые harnesses, CLI/MCP, native tools, контекст, capabilities, голос, sensory processing и проверяемое самоулучшение.
 
-Для быстрой ориентации в реализации используйте [`CODE_MAP.md`](CODE_MAP.md), а нерешённые технологические вопросы перечислены в [`docs/OPEN_QUESTIONS.md`](../OPEN_QUESTIONS.md).
+[83 — клиенты и эксплуатация](83_Dennett_Client_Operations_Testing_and_Implementation_Blueprint.md): Tauri/React, mobile/native boundary, гибридное представление L, изоляция, packaging, совместимость и испытания.
+
+Это замена четырёх прежних томов, а не ещё один пакет противоречащих дополнений. Детальная бизнес-логика остаётся в спецификациях 00–70 и supplements с приоритетом F/E/L. Повторные меню экранов, исторические сравнения и необязательные примерные схемы не копируются ради объёма. Старые тома сохранены без изменения bytes в [архиве](../archive/architecture-2026-07-13/README.md), но их технические решения больше не являются обязательной инструкцией реализации.
+
+## Основной маршрут
+
+`Пользователь → клиент/Node → агент и сессия Dennett → адаптер готового harness → нативное исполнение`.
+
+Инструменты памяти обращаются к **отдельному memoryd**, доступному также внешним клиентам без Head. Наши инструменты исполняются Dennett, native tools — своим движком. PostgreSQL хранит каноническое состояние; полные совместимые резервы используют штатную streaming replication. Клиентский staging не превращается во вторую серверную память.
+
+## Как проверять и развивать
+
+[Трассировка, стыки и сценарии](ARCHITECTURE_VALIDATION.md) перечисляют принятые решения, границы с бизнес-логикой и ещё не выполненные runtime-проверки. [Источники AR01–AR20](../research/2026-09-26_architecture_evidence.md) показывают основания и ограничения. [CODE_MAP](CODE_MAP.md) связывает архитектуру с существующими roots, не утверждая готовность их кода. [ADR](../decisions/README.md) фиксируют долгоживущие решения.
+
+Следующий отдельный этап — процесс разработки агентами и приёмки. Старые WP, batches, scaffold/typed wire schemas не получают нового разрешения на исполнение этой редакцией. Необходимая runtime-проверка может выявить локальное несовпадение возможностей; оно фиксируется и решается адресно, без скрытого возврата отвергнутых графов, анкет или embedding памяти в Head.
