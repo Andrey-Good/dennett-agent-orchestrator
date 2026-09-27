@@ -6,7 +6,7 @@
 
 **Серверный резерв:** закрепить compatible PostgreSQL major/build/extensions и упаковку на выбранном ПК/сервере. Проверить native streaming/read-only, данные вне SQL, rewind/reseed и authority fencing. Без доказанного coordinator остаётся управляемый перенос; при partition новый полный Head не самоназначается.
 
-**Native runtimes:** закрепить версии App Server/Claude CLI/SDK и их реально поддержанные approvals/stop/resume/hooks. У полезного host не удалять обязанности ради сокращения процесса. Отдельно сверить условия публичного подписочного подключения; не обойти их извлечением токена.
+**Native runtimes:** первым на D0/D1 проверяется Claude Agent SDK/официальный CLI: streaming input, изолированные сессии, память MCP/CLI, AskUserQuestion, approvals/stop/resume/hooks и выбранная авторизация. Codex App Server — будущий R-CODEX, не prerequisite текущего цикла. У полезного host не удалять обязанности ради сокращения процесса. Отдельно сверить условия публичного подписочного подключения; не обойти их извлечением токена.
 
 **Memory:** сравнить выбранные индексы/обработчики в разработке. Полнота истории/current state/provenance не удаляется ради benchmark. Standalone auth/model/index configuration проверяется без Head.
 

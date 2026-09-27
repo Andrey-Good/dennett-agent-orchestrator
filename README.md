@@ -8,6 +8,10 @@
 
 Старая реализация сохранена в истории и на ветке `archive/before-code-reset-2026-09-27`. Архитектурный исходник этой подготовки — `b1bf960418da588a71f47a981e18b2fa93a0022f`. Ничего не удаляется из Git-истории или пользовательских данных вне репозитория.
 
+## Первый агентный движок
+
+Сначала реализуется **Claude Code через официальный Agent SDK/поддержанный CLI**, включая память и инструменты Dennett. Codex сохраняется как будущий адаптер **R-CODEX**, не входит в D0–D9 и не нужен для первого запуска. Модель кодирующего агента и конкретная Claude-модель не закрепляются. Подробности — [контракт M](docs/specifications/contracts/M_Runtime_Rollout_Contract.md) и [том82 §5](docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#5-claude-code-и-claude-agent-sdk).
+
 ## Как начать работу агентом
 
 Открой актуальный checkout и передай агенту:

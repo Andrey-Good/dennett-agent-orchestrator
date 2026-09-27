@@ -2,6 +2,8 @@
 
 Основной набор этих файлов разнесён из бывшего временного предархитектурного документа. Статус и приоритет во время перезапуска определяет [restart/README.md](../../restart/README.md). Контракт L добавлен 2026-09-26 по согласованному обсуждению гибридного вывода; его источники находятся в разделе L.10 самого контракта. Они нужны потому, что некоторые жизненные циклы пересекают Memory, Agentic, Trust, Capability, Server и UI. Копирование полного правила во все большие документы создало бы конфликтующие дубли.
 
+Контракт M добавлен 2026-09-27: первым продуктовым runtime реализуется Claude Code, Codex остаётся будущим подключением вне текущей приёмки D0–D9. Подробности integration принадлежат тому82, а не дублируются в бизнес-логике.
+
 Каждый supplement объявляет primary owner. Другие документы применяют контракт и описывают свою часть исполнения или интерфейса, не переопределяя смысл.
 
 | ID | Contract | Primary owner |
@@ -19,6 +21,7 @@
 | J | [Import/export and portable packages](J_Import_Export_and_Portable_Package_Compatibility_Contract.md) | Capability / Server |
 | K | [Composite experience recipes](K_Composite_Experience_Recipes.md) | Agentic / Capability |
 | L | [Presentation and interaction](L_Presentation_and_Interaction_Contract.md) | Desktop / Mobile presentation (60/61) |
+| M | [Runtime rollout: Claude first, Codex deferred](M_Runtime_Rollout_Contract.md) | Capability / Agentic Control (41/20) |
 | 90 | [Integrated scenarios and risk spikes](90_Integrated_End_to_End_Scenarios.md) | End-to-End Validation |
 
 Исторический исходник сохранён в `docs/archive/distributed/` только для provenance и сравнения diff; он не является вторым источником истины.

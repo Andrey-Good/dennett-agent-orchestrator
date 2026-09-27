@@ -130,7 +130,7 @@ Normal/failure/recovery/observability paths: 80 §14; 81 §14; 82 §17; 83 §§1
 
 **V03. UI закрыт.** Node/Head/memoryd продолжают разрешённую работу, процесс не зависит от окна. 80 §12; 83 §§1, 9.
 
-**V04. Codex читает память Dennett.** Собственный Agent+контекст сохранены; tool memory вызывает memoryd; UI не шлёт prompt напрямую мимо Dennett. 82 §§1, 4, 7–9.
+**V04. Claude читает память Dennett (текущий выпуск).** По решению 2026-09-27 и [M](../specifications/contracts/M_Runtime_Rollout_Contract.md) первой проверяется Claude SDK/CLI-интеграция; Codex-вариант сохранён для R-CODEX и не блокирует D0–D9. Это обновление сценария, не выполненный runtime-тест. Собственный Agent+контекст сохранены; tool memory вызывает memoryd; UI не шлёт prompt напрямую мимо Dennett. 82 §§1, 5, 7–9.
 
 **V05. Native tool получает approval.** Исполняет только native runtime, broker не запускает вторую копию. Hook coverage и внешние ограничения имеют тест. 82 §§4–5, 8.
 

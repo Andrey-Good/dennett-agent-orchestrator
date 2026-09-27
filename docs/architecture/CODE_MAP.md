@@ -1,6 +1,6 @@
 # Архитектура и места будущей реализации
 
-Архитектура 2.0; статус обновлён 2026-09-27. Ниже только целевые места и обязанности новой реализации. В текущем main нет исходников, старых тестов и каркаса сборки. Каталоги создаются по мере выполнения [плана](../implementation/04_MILESTONE_DEPENDENCY_MAP.md); код из истории не возвращается без нового решения владельца.
+Архитектура 2.0; статус обновлён 2026-09-27. Ниже только целевые места и обязанности новой реализации. В документационной отправной точке нет исходников, старых тестов и каркаса сборки. Каталоги создаются по мере выполнения [плана](../implementation/04_MILESTONE_DEPENDENCY_MAP.md); код из истории не возвращается без нового решения владельца.
 
 ## Исполняемые корни
 
@@ -12,7 +12,7 @@
 
 `apps/desktop` — Tauri bridge и React UI; `apps/mobile` — mobile UI и нативный lifecycle/local persistence. Клиенты не владеют permissions/tasks/server memory и не соединяются напрямую с provider из кнопки.
 
-`adapters/agent-runtimes` — прямой Codex App Server adapter, Claude CLI/SDK и другие поддержанные harnesses. Полезные Python/Node SDK hosts создаются при необходимости; пустой forwarding host не обязателен. Homegrown generic loop не baseline.
+`adapters/agent-runtimes` — сначала официальный Claude Agent SDK-host/поддержанный CLI по тому82 §5. Прямой Codex App Server adapter описан для будущего R-CODEX, вне текущего цикла D0–D9; его зависимости сейчас не добавляются. Полезные Python/Node SDK hosts создаются при необходимости; пустой forwarding host не обязателен. Homegrown generic loop не baseline.
 
 `adapters/mcp`, `tools/dennettctl` и подходящие client packages — фасады одних прикладных операций. Имена команд в архитектуре являются целевыми примерами; готового CLI в документационной отправной точке нет.
 
