@@ -1,25 +1,21 @@
-# Карта документации Dennett
+# Карта документации
 
-2026-09-26: бизнес-логика и согласованная архитектура 2.0 зафиксированы. Далее — процесс разработки агентами. Это документационный этап, не реализация. [Единственный реестр статуса](restart/README.md).
+Общий статус и приоритет: [restart/README.md](restart/README.md). Начало реализации: [implementation/STATUS.md](implementation/STATUS.md). В документационной отправной точке кода и исполнимых тестов нет.
 
-## Действующая база
+## Что строим
 
-[Основания F01–F10](restart/01_FOUNDATIONS.md) — назначение и принципы, в том числе текстовая кооперация и отдельные уровни code/prompt architecture. [E01–E10](restart/02_CHANGE_EVALUATION.md) — фактическая проверка самоулучшений. [Контракт L](specifications/contracts/L_Presentation_and_Interaction_Contract.md) — свободное сочетание вывода и обратного взаимодействия.
+[Функциональная концепция](specifications/00_Dennett_Functional_Concept.md), [общие контракты](specifications/01_Dennett_Specification_Index_and_Shared_Contracts.md), предметные спецификации 10–70 и [дополнения](specifications/contracts/README.md). Согласованные поправки — [основания](restart/01_FOUNDATIONS.md), [проверяемое самоулучшение](restart/02_CHANGE_EVALUATION.md), [представление L](specifications/contracts/L_Presentation_and_Interaction_Contract.md).
 
-Предметная бизнес-логика в `specifications/00–70` и [supplements](specifications/contracts/README.md) сохраняется с этими поправками. Функциональные сценарии, память, права, голос, приложения и перенос не вырезаны из-за сокращения архитектурных повторов.
+## Как устроено
 
-[Архитектура 2.0, четыре тома](architecture/README.md) — актуальные процессы, хранение, harness integration, CLI/MCP, standalone memoryd, full standby, доставка, backup, UI и eval. [Проверка соответствия](architecture/ARCHITECTURE_VALIDATION.md) перечисляет стыки и пределы проверки. [CODE_MAP](architecture/CODE_MAP.md) связывает требования с roots, не заявляя готовность старого кода. [ADR](decisions/README.md) фиксируют причины решений. [Оставшиеся проверки](OPEN_QUESTIONS.md) не возвращают уже решённые вопросы.
+[Архитектура 80–83](architecture/README.md), [карта будущего кода](architecture/CODE_MAP.md), [проверка согласованности V01–V29](architecture/ARCHITECTURE_VALIDATION.md), [решения](decisions/README.md). Архитектура задаёт границы, не доказывает работающую реализацию.
 
-[Исследования первого этапа](research/2026-09-22_restart_evidence.md) и [архитектурные источники AR01–AR20](research/2026-09-26_architecture_evidence.md) — evidence с ограничениями, не отдельные нормы. [AGENTS.md](../AGENTS.md) задаёт текущие обязанности.
+## Как реализуем и принимаем
 
-## История, не параллельные инструкции
+[Стратегия](implementation/00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md), [процесс агента](implementation/01_AGENT_EXECUTION_PROTOCOL.md), [владелец](implementation/02_OWNER_PLAYBOOK.md), [задачи](implementation/03_WORK_PACKAGE_SYSTEM.md), [D0–D9](implementation/04_MILESTONE_DEPENDENCY_MAP.md), [тесты](testing/TEST_CATALOGUE_AND_QUALITY_GATES.md), [покрытие](testing/REQUIREMENTS_COVERAGE.md), [статус](implementation/STATUS.md).
 
-Прежние четыре архитектурных тома перенесены без изменения bytes в [архив](archive/architecture-2026-07-13/README.md). Текущие пути 80–83 содержат новую редакцию. Старые labels «канонический» в архиве не действуют.
+## Материалы
 
-`implementation/`, `testing/`, `planning/`, старые milestones и утверждения о готовности — материал для следующего этапа и история исходной реализации. [TRACEABILITY](TRACEABILITY.md) и прежние generated manifests отражают свои снимки; их нельзя использовать для автоматического одобрения нового поведения. До обновления процесса они не разрешают начать старые Work Packages.
+[Визуальное направление](design/README.md) сохраняется, реализация экранов пишется заново. [Исследования разработки](research/2026-09-27_development_evidence.md) содержат первичные источники и ограничения. Старые архитектурные тексты и мысли в [archive](archive/README.md) являются историей, не новым заданием.
 
-`navigation/` помогает читать текущие тома, но не определяет их статус. Полное обновление repository manifests/checksums требует полного checkout; актуальное ограничение указано в реестре и матрице проверки.
-
-## Правило чтения
-
-Статус → нормативный владелец → нужный предметный раздел → свидетельства/проверки. Старое техническое предложение не становится обязательным только потому, что бизнес-документ всё ещё приводит его как пример. Новое обнаруженное существенное противоречие решается адресно и явно.
+Команды запуска/проверок создаются в D0 и попадают в [development runbook](runbooks/development.md). Не выдумывать работоспособность отсутствующих старых команд и не возвращать их код автоматически. Старые generated catalogues и planning-статусы не являются доказательством готовности.

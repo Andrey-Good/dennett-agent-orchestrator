@@ -1,6 +1,6 @@
 # Архитектура и места будущей реализации
 
-Редакция 2.0, 2026-09-26. Ниже существующие корни репозитория и целевые обязанности. Наличие каталога не доказывает реализацию; перенос/замена конкретного кода определяется этапом разработки.
+Архитектура 2.0; статус обновлён 2026-09-27. Ниже только целевые места и обязанности новой реализации. В текущем main нет исходников, старых тестов и каркаса сборки. Каталоги создаются по мере выполнения [плана](../implementation/04_MILESTONE_DEPENDENCY_MAP.md); код из истории не возвращается без нового решения владельца.
 
 ## Исполняемые корни
 
@@ -12,9 +12,9 @@
 
 `apps/desktop` — Tauri bridge и React UI; `apps/mobile` — mobile UI и нативный lifecycle/local persistence. Клиенты не владеют permissions/tasks/server memory и не соединяются напрямую с provider из кнопки.
 
-`adapters/agent-runtimes` — прямой Codex App Server adapter, Claude CLI/SDK и другие поддержанные harnesses. Полезные Python/Node SDK hosts сохраняются при необходимости; пустой forwarding host не обязателен. Homegrown generic loop не baseline.
+`adapters/agent-runtimes` — прямой Codex App Server adapter, Claude CLI/SDK и другие поддержанные harnesses. Полезные Python/Node SDK hosts создаются при необходимости; пустой forwarding host не обязателен. Homegrown generic loop не baseline.
 
-`adapters/mcp`, `tools/dennettctl` и подходящие client packages — фасады одних прикладных операций. Имена команд в архитектуре являются целевыми примерами; существующий CLI не объявляется их реализующим.
+`adapters/mcp`, `tools/dennettctl` и подходящие client packages — фасады одних прикладных операций. Имена команд в архитектуре являются целевыми примерами; готового CLI в документационной отправной точке нет.
 
 `adapters/browser`, `computer-use`, `connectors`, `local-models`, `sensors` и media workers — реальные границы внешних систем и ресурсов, по наличию соответствующего кода. Каталог не означает обязанность добавить отдельный процесс на каждую категорию.
 

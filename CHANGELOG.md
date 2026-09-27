@@ -1,8 +1,7 @@
-# Changelog
+# Изменения
 
-## Unreleased
+## 2026-09-27 — чистая документационная отправная точка
 
-- Consolidated canonical product and architecture documentation.
-- Distributed the pre-architecture completion document into cross-domain contracts.
-- Added the initial code, protocol, test and operations scaffold.
-- Clarified one logical Memory Fabric and opt-in Head eligibility.
+Принят старт с нуля. Сохранены бизнес-логика, архитектура 2.0 и визуальная документация. Из рабочего дерева исключены старый код, тесты, сборка, CI, схемы, зависимости, генераторы и их результаты. История сохранена.
+
+Утверждены D0–D9, обязательные остановки H0–H9, процесс работы агента, разнообразные тесты, намеренные отказы, регрессии, дизайн- и финальная приёмка. Никакие runtime-тесты этой записью не объявлены выполненными.

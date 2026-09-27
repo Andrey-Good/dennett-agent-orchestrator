@@ -1,10 +1,5 @@
-# Runbooks
+# Руководства эксплуатации
 
-Operational procedures for development, failure, recovery and maintenance. These files complement, but do not replace, architecture and automated safeguards.
+Это документируемые процедуры, не готовые скрипты. Действительные команды новой реализации появляются при соответствующем этапе и проверяются на disposable окружении. [Development](development.md) создаётся в D0; остановка и неизвестный эффект — D1/D2; backup/restore, pressure и handoff дополняются вместе с их реализацией, до работы с ценными данными.
 
-- [Development environment](development.md)
-- [Planned Head handoff](head-handoff.md)
-- [Unknown external effect](unknown-external-effect.md)
-- [Disk pressure](disk-pressure.md)
-- [Backup and restore](backup-restore.md)
-- [Emergency stop](emergency-stop.md)
+Старые короткие предметные памятки не являются доказательством текущего исполнения. Критерии и источники истины — [архитектура](../architecture/README.md) и [тестирование](../testing/TEST_CATALOGUE_AND_QUALITY_GATES.md).
