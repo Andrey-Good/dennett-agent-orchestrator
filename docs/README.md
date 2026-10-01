@@ -1,58 +1,25 @@
-# Карта документации Dennett
+# Карта документации
 
-Документация разделена по назначению. Большие канонические документы объясняют *зачем* и *что*. Небольшие cross-domain contracts описывают жизненные циклы, пересекающие несколько областей. Архитектурные тома объясняют *где* и *как*. Локальные `AGENTS.md` дают coding-agent-у практические правила для конкретной части кода.
+Общий статус и приоритет: [restart/README.md](restart/README.md). Начало реализации: [implementation/STATUS.md](implementation/STATUS.md). В документационной отправной точке кода и исполнимых тестов нет.
 
-## Быстрые маршруты чтения
+## Что строим
 
-### Обзор продукта за 15 минут
+[Функциональная концепция](specifications/00_Dennett_Functional_Concept.md), [общие контракты](specifications/01_Dennett_Specification_Index_and_Shared_Contracts.md), предметные спецификации 10–70 и [дополнения](specifications/contracts/README.md). Согласованные поправки — [основания](restart/01_FOUNDATIONS.md), [проверяемое самоулучшение](restart/02_CHANGE_EVALUATION.md), [представление L](specifications/contracts/L_Presentation_and_Interaction_Contract.md).
 
-1. [`00_Dennett_Functional_Concept.md`](specifications/00_Dennett_Functional_Concept.md)
-2. [`Карта архитектуры`](architecture/README.md)
-3. [`Трассируемость требований`](TRACEABILITY.md)
+## Как устроено
 
-### Продукт и бизнес-логика
+[Архитектура 80–83](architecture/README.md), [карта будущего кода](architecture/CODE_MAP.md), [проверка согласованности V01–V29](architecture/ARCHITECTURE_VALIDATION.md), [решения](decisions/README.md). Архитектура задаёт границы, не доказывает работающую реализацию.
 
-Читайте спецификации по номерам: 00, 01, 10, 20, 30, 40, 41, 50, 60, 61, 70. Cross-domain contract открывайте, когда на него ссылается изменяемая область.
+## Как реализуем и принимаем
 
-### Реализация
+[Стратегия](implementation/00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md), [процесс агента](implementation/01_AGENT_EXECUTION_PROTOCOL.md), [владелец](implementation/02_OWNER_PLAYBOOK.md), [задачи](implementation/03_WORK_PACKAGE_SYSTEM.md), [D0–D9](implementation/04_MILESTONE_DEPENDENCY_MAP.md), [тесты](testing/TEST_CATALOGUE_AND_QUALITY_GATES.md), [покрытие](testing/REQUIREMENTS_COVERAGE.md), [статус](implementation/STATUS.md).
 
-1. [`implementation/README.md`](implementation/README.md).
-2. Work Package или Autonomous Batch из [`../planning/`](../planning/).
-3. Корневой [`AGENTS.md`](../AGENTS.md).
-4. [`Карта архитектуры`](architecture/README.md).
-5. Ближайший вложенный `AGENTS.md`.
-6. Public trait/schema.
-7. Тесты и похожий реализованный модуль.
+## Материалы
 
-### Память
+[Визуальное направление](design/README.md) сохраняется, реализация экранов пишется заново. [Исследования разработки](research/2026-09-27_development_evidence.md) содержат первичные источники и ограничения. Старые архитектурные тексты и мысли в [archive](archive/README.md) являются историей, не новым заданием.
 
-`10` → contracts A/H/J → архитектура `81` → `crates/dennett-memory-core/AGENTS.md`.
+Команды запуска/проверок создаются в D0 и попадают в [development runbook](runbooks/development.md). Не выдумывать работоспособность отсутствующих старых команд и не возвращать их код автоматически. Старые generated catalogues и planning-статусы не являются доказательством готовности.
 
-### Provider/tool adapter
+## Приоритет подключения runtime
 
-`41` → архитектура `82` → `adapters/AGENTS.md`.
-
-### Desktop или mobile
-
-`60` или `61` → архитектура `83` → `apps/*/AGENTS.md`.
-
-## Каноничность
-
-- `docs/specifications/` и `docs/architecture/` — актуальные нормы.
-- `docs/decisions/` объясняет труднообратимые решения.
-- `docs/runbooks/` содержит эксплуатационные процедуры.
-- `docs/research/` поддерживает решения evidence, но не становится нормой автоматически.
-- `docs/archive/` не является источником истины.
-
-## Навигация
-
-Сгенерированные индексы заголовков находятся в [`navigation/`](navigation/README.md). Они позволяют прыгать по большим файлам без искусственного разрезания канонического текста.
-
-## Дополнительные карты
-
-- [`implementation/README.md`](implementation/README.md) — стратегия реализации, агентный протокол и роль владельца.
-- [`testing/TEST_CATALOGUE_AND_QUALITY_GATES.md`](testing/TEST_CATALOGUE_AND_QUALITY_GATES.md) — структурированный каталог тестовых обязательств.
-
-- [`TRACEABILITY.md`](TRACEABILITY.md) — спецификация → архитектура → код → тест.
-- [`architecture/CODE_MAP.md`](architecture/CODE_MAP.md) — процессы и code roots.
-- [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) — решения, требующие risk spike или измерения.
+[Контракт M](specifications/contracts/M_Runtime_Rollout_Contract.md) фиксирует Claude Code первым и Codex как будущий R-CODEX. Техническая интеграция — том82 §5, критерии — [C01–C12](testing/CLAUDE_RUNTIME_ACCEPTANCE.md). Остальные источники сохраняют описание будущих возможностей, а не конкурирующий порядок реализации.

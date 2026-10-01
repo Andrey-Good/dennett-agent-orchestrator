@@ -1,21 +1,13 @@
-# Implementation Documentation
+# Реализация Dennett с нуля
 
-This section turns the product and architecture into a sustainable execution system.
+Процесс принят 2026-09-27. Новая кодовая база создаётся после запуска владельцем по D0–D9. Сейчас репозиторий содержит документацию, а не готовую программу.
 
-## Reading order
+- [Стратегия](00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md).
+- [Процесс агента](01_AGENT_EXECUTION_PROTOCOL.md).
+- [Личная приёмка и дизайн](02_OWNER_PLAYBOOK.md).
+- [Задачи и передача](03_WORK_PACKAGE_SYSTEM.md).
+- [План D0–D9](04_MILESTONE_DEPENDENCY_MAP.md).
+- [Текущий статус](STATUS.md).
+- [Обязательные тесты](../testing/TEST_CATALOGUE_AND_QUALITY_GATES.md) и [покрытие](../testing/REQUIREMENTS_COVERAGE.md).
 
-1. [`00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md`](00_IMPLEMENTATION_AND_EVOLUTION_STRATEGY.md) — how Dennett is built and kept maintainable for years.
-2. [`01_AGENT_EXECUTION_PROTOCOL.md`](01_AGENT_EXECUTION_PROTOCOL.md) — exact operating protocol for GPT-5.6 Sol or another coding agent.
-3. [`02_OWNER_PLAYBOOK.md`](02_OWNER_PLAYBOOK.md) — what the repository owner decides and how to supervise without micromanaging code.
-4. [`03_WORK_PACKAGE_SYSTEM.md`](03_WORK_PACKAGE_SYSTEM.md) — machine-readable milestones, work packages and autonomous batches.
-5. [`../testing/TEST_CATALOGUE_AND_QUALITY_GATES.md`](../testing/TEST_CATALOGUE_AND_QUALITY_GATES.md) — structured test requirements and release gates.
-
-## Core rule
-
-A coding agent may reason freely inside a bounded Work Package. It may not silently redefine product semantics, state ownership, permissions, external effects or architecture.
-
-## Current planning
-
-See [`../../planning/README.md`](../../planning/README.md) and the nearest milestone file.
-
-- [`04_MILESTONE_DEPENDENCY_MAP.md`](04_MILESTONE_DEPENDENCY_MAP.md) — зависимость этапов, owner gates и автономные горизонты.
+Первое «начинай» означает D0 до остановки H0. Обычные технические шаги внутри этапа выполняются самостоятельно. Приёмку и существенные изменения дизайна решает владелец, не другой агент. Старые код, генераторы, WP и утверждения о тестах остаются историей.

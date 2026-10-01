@@ -1,102 +1,38 @@
 # Dennett
 
-[Русская версия](README.ru.md)
+**Агентная операционная среда: разговор, самостоятельные агенты, независимая память, длительные поручения и работа между устройствами.**
 
-**Dennett — персональная агентная операционная среда:** постоянный главный оркестратор, прямые проектные агенты в реальных папках и репозиториях, доказательная долговременная память, голосовое и фоновое восприятие, заменяемые модели и инструменты, работа с нескольких устройств и регулируемая пользователем автономность.
+## Текущая отправная точка
 
-> **Статус репозитория:** milestones M00 и M01 приняты. Native Windows Project Chat уже проводит локальный разговор через persistent Node, embedded Head и Codex из ChatGPT subscription, сохраняет authoritative session и восстанавливает её после перезапуска UI. Это первый ограниченный vertical slice, не production release: project file/Git work, другие providers, sync, voice и installers остаются следующими этапами.
+27 сентября 2026 года владелец выбрал **реализацию с нуля**. В этой версии находятся документация и её иллюстрации, без исходников приложения, старых тестов, сборки, CI, зависимостей и исполнимых заготовок. Архитектура и бизнес-логика сохранены. Код и тесты будут создаваться заново по плану; готовый продукт и успешные runtime-проверки сейчас не заявляются.
 
-## С чего начать
+Старая реализация сохранена в истории и на ветке `archive/before-code-reset-2026-09-27`. Архитектурный исходник этой подготовки — `b1bf960418da588a71f47a981e18b2fa93a0022f`. Ничего не удаляется из Git-истории или пользовательских данных вне репозитория.
 
-| Цель | Что читать |
-|---|---|
-| Понять продукт за 15 минут | [`docs/README.md`](docs/README.md) → [`00_Dennett_Functional_Concept.md`](docs/specifications/00_Dennett_Functional_Concept.md) |
-| Понять архитектуру | [`docs/architecture/README.md`](docs/architecture/README.md) → тома 80–83 |
-| Реализовать конкретную часть | [`docs/implementation/README.md`](docs/implementation/README.md) → корневой [`AGENTS.md`](AGENTS.md) → ближайший вложенный `AGENTS.md` |
-| Понять порядок реализации всего проекта | [`04_MILESTONE_DEPENDENCY_MAP.md`](docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md) → [`ROADMAP.md`](ROADMAP.md) |
-| Добавить провайдера, MCP, skill, connector, voice- или computer-use-backend | [Том 82](docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md) и [`adapters/AGENTS.md`](adapters/AGENTS.md) |
-| Работать с памятью или синхронизацией | [Спецификация 10](docs/specifications/10_Dennett_Memory_Fabric.md), [том 81](docs/architecture/81_Dennett_Data_Memory_Storage_Sync_and_Protocol_Architecture.md), затем `crates/dennett-memory-core/AGENTS.md` |
-| Посмотреть принятые решения и компромиссы | [`docs/decisions/README.md`](docs/decisions/README.md) |
-| Прочитать историю разработки изнутри | [`blog/INDEX.md`](blog/INDEX.md) — факты, ошибки, owner feedback и технические развилки от первого лица coding-agent-а |
+## Первый агентный движок
 
-## Ключевые принципы
+Сначала реализуется **Claude Code через официальный Agent SDK/поддержанный CLI**, включая память и инструменты Dennett. Codex сохраняется как будущий адаптер **R-CODEX**, не входит в D0–D9 и не нужен для первого запуска. Модель кодирующего агента и конкретная Claude-модель не закрепляются. Подробности — [контракт M](docs/specifications/contracts/M_Runtime_Rollout_Contract.md) и [том82 §5](docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#5-claude-code-и-claude-agent-sdk).
 
-- **Прямая проектная работа остаётся простой.** Проект — реальная папка или репозиторий с прямым чатом агента, в основе похожим на Codex App и Claude Code.
-- **Один сильный агент — baseline.** Команды, ревьюеры и долговечные workflow появляются только тогда, когда их польза выше расходов на контекст, задержку и координацию.
-- **Одна логическая память при разных ролях устройств.** ПК, назначенный Head, использует ту же каноническую Memory Fabric, что и выделенный сервер. SQLite обычного клиента — кэш и offline-журнал, а не вторая конкурирующая память.
-- **Переход устройства в Head — только по предварительному разрешению.** Новое устройство всегда получает `head_eligibility = none`; только владелец может выдать `emergency` или `full`.
-- **Стабильное ядро, заменяемые края.** Провайдеры, agent runtimes, speech, computer-use, screen capture, MCP и connectors подключаются адаптерами через типизированные порты.
-- **Каноническое состояние живёт вне model context.** Задачи, разрешения, эффекты, память, artifacts и sync имеют явных владельцев и пути восстановления.
-- **Закрытие окна не останавливает Dennett.** Tauri — оболочка desktop; `dennett-node` — постоянный локальный демон.
-- **Тестируемость является частью архитектуры.** Для границ предусмотрены fake-реализации, conformance suites, детерминированные сценарии отказов и наблюдаемое состояние.
+## Как начать работу агентом
 
-## Карта репозитория
+Открой актуальный checkout и передай агенту:
 
-```text
-docs/          Спецификации, shared contracts, архитектура, ADR и runbooks
-apps/          Desktop- и mobile-клиенты
-services/      Head, Node, memory service, adapter hosts и sensor worker
-crates/        Стабильные Rust-модули домена и application layer
-adapters/      Заменяемые интеграции провайдеров, инструментов, транспорта и storage
-protocols/     Protobuf-контракты и описание протоколов
-schemas/       JSON Schema переносимых пакетов и component descriptors
-tests/         Structured test catalogue, contract, integration, E2E и deterministic scenarios
-planning/      Milestones, Work Packages, autonomous batches, decisions and debt
-blog/          Неканоническая, evidence-linked инженерная хроника разработки
-tools/         Проверки репозитория, документации и инструменты разработчика
-```
+> Прочитай AGENTS.md и docs/implementation/STATUS.md. Начни новую реализацию Dennett с этапа D0 по утверждённому плану. Пиши тесты вместе с кодом, проверяй крайние случаи, намеренные отказы и регрессии. Не восстанавливай старую реализацию из истории. Работай самостоятельно внутри этапа; остановись на H0, покажи реальные результаты и дождись моей приёмки. На дальнейшем движении соблюдай все остановки и дизайн-согласования.
 
-## Команды разработки
+После принятия Hn агент продолжает следующий этап до его остановки. Владелец проверяет понятный результат и дизайн, а не управляет каждой функцией. Модель разработки не закреплена. Для Claude Code файл CLAUDE.md импортирует общие правила, не создаёт второй регламент.
 
-Каркас намеренно реализует только тонкий vertical slice и стабильные интерфейсы. В нём нет фиктивной «полной реализации», спрятанной за сотнями `TODO`.
+## Документы
 
-```bash
-# Один раз после установки mise
-mise trust
-mise install
-just bootstrap
+- [План D0–D9](docs/implementation/04_MILESTONE_DEPENDENCY_MAP.md) — порядок, результат этапа, приёмка и остановки.
+- [Процесс агента](docs/implementation/01_AGENT_EXECUTION_PROTOCOL.md) — написание, проверка, интеграция и диагностика.
+- [Стратегия тестов](docs/testing/TEST_CATALOGUE_AND_QUALITY_GATES.md) — unit, contract, integration, end-to-end, генеративные и отказные проверки, регрессии.
+- [Личная приёмка](docs/implementation/02_OWNER_PLAYBOOK.md) — что смотреть самому и когда согласовывать макет.
+- [Текущий статус](docs/implementation/STATUS.md) и [покрытие требований](docs/testing/REQUIREMENTS_COVERAGE.md) — без наследования старых отметок готовности.
+- [Архитектура](docs/architecture/README.md) и [карта всей документации](docs/README.md).
 
-# Все локальные проверки
-just check
+Целевой результат — весь обязательный согласованный продукт, не только демонстрационный чат. Завершение требует работающей устанавливаемой сборки, выполненных проверок, сохранения принятых возможностей и владельческой приёмки. Необязательный backend можно отложить; обязательную функцию нельзя молча вычеркнуть.
 
-# Отдельные группы проверок
-just verify
-just rust
-just python
-just ts
-just generate
-just test-contracts
+## Сохранённые границы
 
-# Credential-free вертикальный demo-путь через Head, fake runtime и in-memory Memory
-just demo-fake
-```
+Память работает отдельным memoryd и доступна без Head. Каноническое серверное хранение — PostgreSQL, полный резервный ПК имеет серверный комплект. Готовые агентные движки используются без дублирования их исполнения. Смысловые связи агентов описываются текстом. Python-графики, файлы и произвольная веб-графика не ограничены MCP Apps/A2UI.
 
-`mise.toml`, `rust-toolchain.toml`, `uv.lock`, `pnpm-lock.yaml` и `Cargo.lock`
-фиксируют инструменты и зависимости. Python и его пакеты устанавливаются только через `uv`;
-cloud credentials для bootstrap и проверок не нужны. На Windows для Rust требуется Visual Studio
-Build Tools с workload **Desktop development with C++**; `just rust` сам активирует MSVC environment.
-
-`just generate` воспроизводит зафиксированные Rust- и TypeScript-клиенты из
-`protocols/proto`; `just test-contracts` проверяет формат, точное совпадение generated-кода
-и совместимость протокола с `main`.
-
-Каждый pull request и push в `main` запускает один обязательный GitHub check `Fast Gate`.
-Он выполняет frozen bootstrap, отклоняет generated/lockfile drift и запускает полный
-`just check`; branch protection требует этот check на актуальном `main`, запрещает force-push
-и применяется также к администраторам. Gate не зависит от скрытого provider token или
-отдельного сокращённого CI-сценария.
-
-`just demo-fake` выполняет публичный `ProjectChatUseCase` через `HeadApplication`,
-детерминированный provider-neutral fake runtime и in-memory canonical `MemoryPort`. Команда
-не читает cloud credentials и печатает идентификаторы submitted command, Result Envelope и
-записанного Memory Event, чтобы путь можно было проверить без UI и внешнего провайдера.
-
-Перед изменениями прочитайте [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-## Безопасность
-
-Не публикуйте уязвимости в открытых issues. Следуйте [`SECURITY.md`](SECURITY.md). Ни prompt модели, ни запись памяти, ни файл проекта, ни plugin не могут самостоятельно выдать себе права; реальные эффекты всегда проходят через Trust и Effect boundaries.
-
-## Лицензия
-
-Лицензия проекта пока не выбрана. Файл `LICENSE` намеренно отсутствует до отдельного решения владельца.
+Источники, сила свидетельств и реальные проверки различаются. Наличие плана и зелёного CI не доказывает отсутствия всех ошибок. [Статус документов](docs/restart/README.md) определяет приоритет; [SECURITY.md](SECURITY.md) — границы безопасной разработки. Лицензия публичного продукта ещё требует явного решения владельца.

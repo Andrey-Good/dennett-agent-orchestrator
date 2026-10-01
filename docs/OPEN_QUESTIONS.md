@@ -1,24 +1,27 @@
-# Open Implementation Questions
+# Проверки перед реализацией и выпуском
 
-These are intentional architecture choices that remain to be resolved by ADRs or risk spikes. Coding agents must not silently make them global defaults.
+Обновлено 2026-09-27. Согласованные архитектурные решения больше не являются открытым выбором: память — отдельный самостоятельный memoryd; canonical DB — PostgreSQL; semantic coordination — текст; готовые harnesses предпочтительны. [Архитектура 2.0](architecture/README.md) задаёт базу, [матрица](architecture/ARCHITECTURE_VALIDATION.md) — проверку.
 
-| Question | Current baseline | Decision gate |
-|---|---|---|
-| SQLite encryption | SQLCipher candidate | packaging, performance and recovery spike |
-| Local vector index | adapter boundary; no final backend | realistic retrieval benchmark on target devices |
-| Dedicated vector service | PostgreSQL/pgvector first | filtered ANN, rebuild and latency benchmark |
-| Self-hosted object store | filesystem/S3 port | personal-server scale and operational-cost test |
-| Durable workflow engine | lightweight Managed Run first | only if timers/replay/retries reproduce Temporal/Restate complexity |
-| Device transport | direct TLS plus optional Tailscale/Headscale | NAT, mobile and failure-spike results |
-| Mobile transport | generated gRPC baseline | switch to HTTPS/WebSocket only on measured platform friction |
-| React Native vs native mobile | React Native presentation + native node | replace if OS integrations or stability fail acceptance gates |
-| Screen capture backend | Screenpipe candidate + native fallback | license, privacy, resource and fidelity spike |
-| Computer-use backend set | structured-first resolver | per-backend reliability and safety benchmarks |
-| Realtime voice transport | one chained + one realtime backend | latency, interruption and strong-sidecar spike |
-| Exact provider set for first public build | fake + 1–2 high-value runtimes | maintenance value and user demand |
-| RPO/RTO defaults | conservative personal-server proposal | measured backup/restore drill |
-| Default sensory retention | profile-based, local-first | storage, privacy and user-study results |
-| Public license | no license selected; no license file present | owner decision before public release/contributions |
-| JavaScript lockfile | generate in first dependency-resolution commit | successful clean install and CI pass |
+## Конкретные проверки совместимости
 
-Architecture volumes contain the full alternatives and replacement triggers. Add an ADR when a decision becomes binding.
+**Серверный резерв:** закрепить compatible PostgreSQL major/build/extensions и упаковку на выбранном ПК/сервере. Проверить native streaming/read-only, данные вне SQL, rewind/reseed и authority fencing. Без доказанного coordinator остаётся управляемый перенос; при partition новый полный Head не самоназначается.
+
+**Native runtimes:** первым на D0/D1 проверяется Claude Agent SDK/официальный CLI: streaming input, изолированные сессии, память MCP/CLI, AskUserQuestion, approvals/stop/resume/hooks и выбранная авторизация. Codex App Server — будущий R-CODEX, не prerequisite текущего цикла. У полезного host не удалять обязанности ради сокращения процесса. Отдельно сверить условия публичного подписочного подключения; не обойти их извлечением токена.
+
+**Memory:** сравнить выбранные индексы/обработчики в разработке. Полнота истории/current state/provenance не удаляется ради benchmark. Standalone auth/model/index configuration проверяется без Head.
+
+**Клиенты:** SQLite encryption и native keystore, notification/process-death, browser isolation, Windows session capture и mobile background capabilities. Полный mobile Head не обещается без поддержанного runtime.
+
+**Графика:** закрепить AppBridge/A2UI renderer и необязательный AG-UI adapter по совместимости, а не по слову latest. Отказ компонента имеет file/custom-web fallback с явными ограничениями; не создаёт второй state authority.
+
+**Backup и performance:** измерить complete RecoveryCut RPO/RTO, retention-boundary restore, busy ordering key, UI/voice latency, sensory и WAL pressure на целевых устройствах. Архитектурные targets не выдаются за выполненные SLO.
+
+## Оставшиеся продуктовые/организационные решения
+
+Публичная лицензия ещё не установлена и выбирается владельцем до распространения готового продукта. Процесс разработки и этапы H0–H9 приняты в [implementation](implementation/README.md); конкретная модель не закреплена. После команды «начинай» агент начинает D0, а не новое общее перепроектирование. Доступ к требуемым аккаунтам, целевым устройствам и защищённым операциям запрашивается одним понятным списком по мере необходимости; приватные данные не подставляются по умолчанию.
+
+## Граница доказательств
+
+Отправная точка содержит только документацию; старые исходники, тесты, сборка, CI и сгенерированные манифесты удалены из её рабочего дерева. Их прежние статусы не переносятся. D0 создаёт новые команды проверки и CI, не восстанавливает старые файлы ради закрытия исторического долга. Защита main не меняется автоматически; требование старого статуса решается явным административным действием владельца, если оно блокирует корректный переход.
+
+Архитектурные walkthrough V01–V29 выполнены только на уровне документов. Проверки runtime, репликации, миграций, восстановления, native UI и нагрузки ещё предстоят в новой реализации. Недоступное окружение не считается успешным испытанием и не оправдывает объявление функции готовой.
