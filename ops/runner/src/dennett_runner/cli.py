@@ -214,6 +214,32 @@ def build_tool_env(
     return env
 
 
+def _safe_write_stream(stream: object, text: str) -> None:
+    """Write UTF-8 text to stdout/stderr without crashing on legacy Windows cp1252 consoles."""
+    if not text:
+        return
+    write = getattr(stream, "write", None)
+    if write is None:
+        return
+    try:
+        write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        write(safe_text)
+
+
+def _configure_stdio_utf8() -> None:
+    """Prefer UTF-8 with replacement on stdout/stderr so CI logs on Windows never fail on Unicode."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def run_cmd(
     args: Sequence[str],
     *,
@@ -254,15 +280,15 @@ def run_cmd(
 
     if capture and echo_output:
         if proc.stdout:
-            sys.stdout.write(proc.stdout)
+            _safe_write_stream(sys.stdout, proc.stdout)
         if proc.stderr:
-            sys.stderr.write(proc.stderr)
+            _safe_write_stream(sys.stderr, proc.stderr)
     if check and proc.returncode != 0:
         if capture and not echo_output:
             if proc.stdout:
-                sys.stdout.write(proc.stdout)
+                _safe_write_stream(sys.stdout, proc.stdout)
             if proc.stderr:
-                sys.stderr.write(proc.stderr)
+                _safe_write_stream(sys.stderr, proc.stderr)
         raise CheckError(f"Command failed with exit code {proc.returncode}: {display}")
     return proc
 
@@ -1595,6 +1621,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for `dennett-check`."""
+    _configure_stdio_utf8()
     parser = build_parser()
     args = parser.parse_args(argv)
 
