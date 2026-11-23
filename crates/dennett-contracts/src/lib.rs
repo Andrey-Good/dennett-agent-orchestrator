@@ -3,6 +3,7 @@
 //! This crate intentionally stays free of SQL drivers, HTTP stacks, UI layers,
 //! and model-provider SDKs so that all services share stable boundary types.
 
+pub mod control;
 pub mod memory;
 pub mod redact;
 
@@ -12,6 +13,26 @@ use core::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
+
+pub use control::{
+    AgentConfigHistoryResponse, AgentConfigVersion, AgentConfigVersionId, AgentId, AgentRecord,
+    ArtifactId, ArtifactRecord, AuditEventId, CancelRunResponse, CommitMemoryNoteRequest,
+    CommitMemoryNoteResponse, CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest,
+    CreateProjectRequest, CreateSessionRequest, DiagnosticEvent, DiagnosticsResponse,
+    FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
+    ListAgentsResponse, ListArtifactsResponse, ListOutboxResponse, ListPolicyRulesResponse,
+    ListProjectsResponse, ListSessionsResponse, MAX_ADAPTER_ID_LEN, MAX_AGENT_DESCRIPTION_BYTES,
+    MAX_AGENT_MEMORY_SCOPES, MAX_AGENT_NAME_LEN, MAX_ALLOWED_WRITE_PREFIXES,
+    MAX_ARTIFACT_CONTENT_BYTES, MAX_ARTIFACT_MIME_LEN, MAX_ARTIFACT_NAME_LEN,
+    MAX_MESSAGE_CONTENT_BYTES, MAX_MODEL_NAME_LEN, MAX_POLICY_PATTERN_LEN, MAX_POLICY_SCOPE_LEN,
+    MAX_PROJECT_NAME_LEN, MAX_PROVIDER_SESSION_ID_LEN, MAX_REASON_BYTES, MAX_SESSION_TITLE_LEN,
+    MAX_SYSTEM_PROMPT_BYTES, MAX_WORKSPACE_PATH_LEN, MemoryOutboxItem, MemoryOutboxStatus,
+    MemoryStatus, MessageId, MessageRecord, MessageRole, OutboxItemId, PermissionDecisionId,
+    PermissionDecisionRecord, PolicyEffect, PolicyRule, PolicyRuleId, ProjectId, ProjectRecord,
+    RunId, RunRecord, RunStatus, RuntimeBinding, RuntimeBindingId, SendMessageRequest,
+    SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord, SessionStatus,
+    ThinkingLevel, UpdateAgentConfigRequest, WorkspaceWritePolicy,
+};
 
 pub use memory::{
     AuthPrincipal, CorrectNoteRequest, CreateNoteRequest, DEFAULT_SEARCH_LIMIT, EventEvidenceLink,

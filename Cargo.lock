@@ -306,6 +306,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "dennett-head"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "deadpool-postgres",
+ "dennett-contracts",
+ "dennett-memory-client",
+ "dennett-runtime-antigravity",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+]
+
+[[package]]
+name = "dennett-head-client"
+version = "0.1.0"
+dependencies = [
+ "dennett-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "dennett-memory-client"
 version = "0.1.0"
 dependencies = [
@@ -363,10 +393,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dennett-runtime-antigravity"
+version = "0.1.0"
+dependencies = [
+ "dennett-contracts",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "dennett-testkit"
 version = "0.1.0"
 dependencies = [
  "dennett-contracts",
+ "dennett-head-client",
  "dennett-memory-client",
  "dennett-memory-core",
  "proptest",

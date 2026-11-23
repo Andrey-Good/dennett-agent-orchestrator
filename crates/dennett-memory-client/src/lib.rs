@@ -22,6 +22,10 @@ use serde::de::DeserializeOwned;
 pub const DEFAULT_CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Default TCP connect timeout for [`MemoryClient`].
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Maximum HTTP response body size accepted from `dennett-memoryd` (32 MiB).
+///
+/// Prevents a misconfigured or adversarial upstream from exhausting client memory.
+pub const MAX_RESPONSE_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
 
@@ -360,11 +364,17 @@ impl MemoryClient {
         &self,
         resp: reqwest::Response,
     ) -> Result<Resp, DennettError> {
-        let status = resp.status();
-        let body_bytes = resp
-            .bytes()
+        self.decode_response_with_limit(resp, MAX_RESPONSE_BODY_BYTES)
             .await
-            .map_err(|err| self.map_transport_error(&err))?;
+    }
+
+    async fn decode_response_with_limit<Resp: DeserializeOwned>(
+        &self,
+        mut resp: reqwest::Response,
+        max_bytes: usize,
+    ) -> Result<Resp, DennettError> {
+        let status = resp.status();
+        let body_bytes = self.read_bounded_body(&mut resp, max_bytes).await?;
 
         if status.is_success() {
             return serde_json::from_slice(&body_bytes).map_err(|err| DennettError::Internal {
@@ -426,6 +436,45 @@ impl MemoryClient {
         })
     }
 
+    async fn read_bounded_body(
+        &self,
+        resp: &mut reqwest::Response,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, DennettError> {
+        if let Some(content_len) = resp.content_length()
+            && content_len > max_bytes as u64
+        {
+            return Err(DennettError::Internal {
+                detail: format!(
+                    "memoryd response Content-Length ({content_len} bytes) exceeded client limit ({max_bytes} bytes)"
+                ),
+            });
+        }
+
+        let initial_cap = resp
+            .content_length()
+            .and_then(|len| usize::try_from(len).ok())
+            .map_or(0, |len| len.min(max_bytes));
+        let mut buf = Vec::with_capacity(initial_cap);
+
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|err| self.map_transport_error(&err))?
+        {
+            if buf.len().saturating_add(chunk.len()) > max_bytes {
+                return Err(DennettError::Internal {
+                    detail: format!(
+                        "memoryd response body exceeded client limit of {max_bytes} bytes"
+                    ),
+                });
+            }
+            buf.extend_from_slice(&chunk);
+        }
+
+        Ok(buf)
+    }
+
     fn map_transport_error(&self, err: &reqwest::Error) -> DennettError {
         if err.is_timeout() {
             return DennettError::Timeout {
@@ -452,6 +501,9 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
     use super::*;
 
     #[test]
@@ -467,5 +519,82 @@ mod tests {
         assert!(MemoryClient::new("ftp://127.0.0.1:18080", secret).is_err());
         assert!(MemoryClient::new("http://127.0.0.1:18080", "").is_err());
         assert!(MemoryClient::new("http://127.0.0.1:18080", "bad token").is_err());
+    }
+
+    async fn spawn_raw_http_server(raw_response: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback test server");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut req_buf = [0_u8; 2048];
+                let _ = stream.read(&mut req_buf).await;
+                let _ = stream.write_all(raw_response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn decode_response_rejects_oversized_content_length_and_chunked_streams() {
+        // 1. Oversized Content-Length rejected immediately before reading payload.
+        let url_cl = spawn_raw_http_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9999\r\nConnection: close\r\n\r\n{}",
+        )
+        .await;
+        let client = MemoryClient::unauthenticated(&url_cl).expect("client");
+        let resp = client
+            .http
+            .get(format!("{url_cl}/healthz"))
+            .send()
+            .await
+            .expect("send request");
+        let err = client
+            .decode_response_with_limit::<serde_json::Value>(resp, 64)
+            .await;
+        assert!(
+            matches!(err, Err(DennettError::Internal { ref detail }) if detail.contains("exceeded client limit")),
+            "expected bounded Content-Length rejection, got: {err:?}"
+        );
+
+        // 2. Oversized chunked response without Content-Length rejected while streaming.
+        let url_chunked = spawn_raw_http_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n50\r\n{\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\":1}\r\n0\r\n\r\n",
+        )
+        .await;
+        let client2 = MemoryClient::unauthenticated(&url_chunked).expect("client");
+        let resp2 = client2
+            .http
+            .get(format!("{url_chunked}/healthz"))
+            .send()
+            .await
+            .expect("send request");
+        let err2 = client2
+            .decode_response_with_limit::<serde_json::Value>(resp2, 64)
+            .await;
+        assert!(
+            matches!(err2, Err(DennettError::Internal { ref detail }) if detail.contains("exceeded client limit")),
+            "expected bounded chunked stream rejection, got: {err2:?}"
+        );
+
+        // 3. Response within limit decodes normally.
+        let url_ok = spawn_raw_http_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+        )
+        .await;
+        let client3 = MemoryClient::unauthenticated(&url_ok).expect("client");
+        let resp3 = client3
+            .http
+            .get(format!("{url_ok}/healthz"))
+            .send()
+            .await
+            .expect("send request");
+        let val = client3
+            .decode_response_with_limit::<serde_json::Value>(resp3, 64)
+            .await
+            .expect("valid response within limit");
+        assert_eq!(val["ok"], true);
     }
 }

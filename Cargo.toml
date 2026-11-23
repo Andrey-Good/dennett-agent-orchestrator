@@ -4,9 +4,12 @@ members = [
     "crates/dennett-contracts",
     "crates/dennett-memory-core",
     "crates/dennett-memory-client",
+    "crates/dennett-head-client",
     "crates/dennett-testkit",
     "services/memoryd",
+    "services/head",
     "adapters/memory-mcp",
+    "adapters/antigravity-acp",
 ]
 
 [workspace.package]
@@ -20,8 +23,10 @@ axum = "0.8"
 base64 = "0.22"
 deadpool-postgres = "0.14"
 dennett-contracts = { path = "crates/dennett-contracts" }
+dennett-head-client = { path = "crates/dennett-head-client" }
 dennett-memory-client = { path = "crates/dennett-memory-client" }
 dennett-memory-core = { path = "crates/dennett-memory-core" }
+dennett-runtime-antigravity = { path = "adapters/antigravity-acp" }
 hex = "0.4"
 hmac = "0.12"
 proptest = "1.6"

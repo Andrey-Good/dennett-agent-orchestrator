@@ -17,9 +17,9 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_INTEGRATION_TESTS = 20
+MIN_INTEGRATION_TESTS = 25
 
-FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe))"
+FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
 
 REQUIRED_DOCS = (
@@ -92,6 +92,38 @@ FORBIDDEN_HEAD_DEPS = (
     "dennett-memory-core",
     "dennett-memoryd",
     "dennett-testkit",
+    "tauri",
+    "wry",
+    "egui",
+) + FORBIDDEN_DEFERRED_RUNTIME_CRATES
+
+FORBIDDEN_HEAD_CLIENT_DEPS = (
+    "dennett-head",
+    "dennett-memory-core",
+    "dennett-memoryd",
+    "dennett-testkit",
+    "tokio-postgres",
+    "deadpool-postgres",
+    "postgres",
+    "sqlx",
+    "rusqlite",
+    "diesel",
+    "tauri",
+    "wry",
+    "egui",
+) + FORBIDDEN_DEFERRED_RUNTIME_CRATES
+
+FORBIDDEN_RUNTIME_ANTIGRAVITY_DEPS = (
+    "dennett-head",
+    "dennett-memory-core",
+    "dennett-memoryd",
+    "dennett-testkit",
+    "tokio-postgres",
+    "deadpool-postgres",
+    "postgres",
+    "sqlx",
+    "rusqlite",
+    "diesel",
     "tauri",
     "wry",
     "egui",
@@ -515,14 +547,29 @@ def check_deps(repo_root: Path) -> None:
                     f"`{client_pkg}` violates thin-client boundary by depending on: {', '.join(sorted(hits))}"
                 )
 
-    if "dennett-head" in packages_by_name:
-        head_trans = {n.lower() for n in transitive_prod_dep_names("dennett-head")}
-        for forbidden in FORBIDDEN_HEAD_DEPS:
-            hits = [name for name in head_trans if name == forbidden or forbidden in name]
-            if hits:
-                raise CheckError(
-                    f"`dennett-head` violates Memory separation boundary by depending on: {', '.join(sorted(hits))}"
-                )
+    head_trans = {n.lower() for n in transitive_prod_dep_names("dennett-head")}
+    for forbidden in FORBIDDEN_HEAD_DEPS:
+        hits = [name for name in head_trans if name == forbidden or forbidden in name]
+        if hits:
+            raise CheckError(
+                f"`dennett-head` violates Memory separation boundary by depending on: {', '.join(sorted(hits))}"
+            )
+
+    head_client_trans = {n.lower() for n in transitive_prod_dep_names("dennett-head-client")}
+    for forbidden in FORBIDDEN_HEAD_CLIENT_DEPS:
+        hits = [name for name in head_client_trans if name == forbidden or forbidden in name]
+        if hits:
+            raise CheckError(
+                f"`dennett-head-client` violates thin-client boundary by depending on: {', '.join(sorted(hits))}"
+            )
+
+    runtime_trans = {n.lower() for n in transitive_prod_dep_names("dennett-runtime-antigravity")}
+    for forbidden in FORBIDDEN_RUNTIME_ANTIGRAVITY_DEPS:
+        hits = [name for name in runtime_trans if name == forbidden or forbidden in name]
+        if hits:
+            raise CheckError(
+                f"`dennett-runtime-antigravity` violates adapter boundary by depending on: {', '.join(sorted(hits))}"
+            )
 
     print(
         f"[dennett-check] deps OK: {len(meta['packages'])} locked crates verified, "
@@ -800,6 +847,10 @@ def check_integration(repo_root: Path, *, manage_pg: bool) -> None:
             "--bin",
             "dennett-memory-mcp",
             "--bin",
+            "dennett-head",
+            "--bin",
+            "dennettctl",
+            "--bin",
             "dennett-d0-mcp-fixture",
         ],
         cwd=repo_root,
@@ -873,8 +924,16 @@ def parse_semver_tuple(raw: str) -> tuple[int, int, int]:
     )
 
 
+def count_real_agy_conversations() -> int:
+    """Count entries in the user's real `~/.gemini/antigravity-cli/conversations` directory."""
+    conv_dir = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+    if not conv_dir.is_dir():
+        return -1
+    return sum(1 for _ in conv_dir.iterdir())
+
+
 def check_runtime_probe(repo_root: Path) -> None:
-    """Run live `agy acp` D0 compatibility probes (A01/A03/A05/A06)."""
+    """Run live `agy acp` D0 + D1 E2E probes (A01–A06, A09, V04) with isolated PG and ~/.gemini check."""
     agy_bin = os.environ.get("DENNETT_AGY_BIN", "").strip() or "agy"
     if shutil.which(agy_bin) is None and not Path(agy_bin).is_file():
         raise CheckError(
@@ -901,35 +960,94 @@ def check_runtime_probe(repo_root: Path) -> None:
         flush=True,
     )
 
+    compose_file = repo_root / "ops" / "test-env" / "docker-compose.test.yml"
+    if not compose_file.is_file():
+        raise CheckError(f"Missing docker compose file: {compose_file}")
+
     run_cmd(
-        ["cargo", "build", "-p", "dennett-testkit", "--bin", "dennett-d0-mcp-fixture"],
+        [
+            "cargo",
+            "build",
+            "--bin",
+            "dennett-memoryd",
+            "--bin",
+            "dennett-memory-mcp",
+            "--bin",
+            "dennett-head",
+            "--bin",
+            "dennettctl",
+            "--bin",
+            "dennett-d0-mcp-fixture",
+        ],
         cwd=repo_root,
     )
 
-    probe_env = build_tool_env(
-        overrides={
-            "DENNETT_TEST_PROFILE": "1",
-            "DENNETT_LIVE_ACP_PROBE": "1",
-        }
+    conv_before = count_real_agy_conversations()
+    scrub_prod_pg = ("DENNETT_MEMORY_PG_URL", "DENNETT_CONTROL_PG_URL")
+    project_name = f"dennett-probe-{uuid.uuid4().hex[:8]}"
+    compose_base = ["docker", "compose", "-p", project_name, "-f", str(compose_file)]
+
+    try:
+        run_cmd([*compose_base, "up", "-d", "--wait"], cwd=repo_root)
+        host_port = resolve_compose_host_port(repo_root, compose_file, project_name)
+        mem_url = (
+            f"postgres://dennett_memory_role:dennett_memory_test_pw"
+            f"@127.0.0.1:{host_port}/dennett_memory_test"
+        )
+        ctrl_url = (
+            f"postgres://dennett_control_role:dennett_control_test_pw"
+            f"@127.0.0.1:{host_port}/dennett_control_test"
+        )
+        validate_test_pg_url("DENNETT_TEST_MEMORY_PG_URL", mem_url)
+        validate_test_pg_url("DENNETT_TEST_CONTROL_PG_URL", ctrl_url)
+
+        probe_env = build_tool_env(
+            overrides={
+                "DENNETT_TEST_PROFILE": "1",
+                "DENNETT_LIVE_ACP_PROBE": "1",
+                "DENNETT_TEST_MEMORY_PG_URL": mem_url,
+                "DENNETT_TEST_CONTROL_PG_URL": ctrl_url,
+            },
+            removals=scrub_prod_pg,
+        )
+        run_nextest_checked(
+            [
+                "-p",
+                "dennett-testkit",
+                "--test",
+                "acp_live_probe",
+                "--test",
+                "head_live_agy_e2e",
+                "--run-ignored",
+                "only",
+                "--test-threads",
+                "1",
+            ],
+            cwd=repo_root,
+            env=probe_env,
+            min_passed=4,
+            allow_skipped=False,
+            timeout_seconds=420,
+        )
+    finally:
+        run_cmd(
+            [*compose_base, "down", "-v"],
+            cwd=repo_root,
+            check=False,
+            timeout_seconds=60,
+        )
+
+    conv_after = count_real_agy_conversations()
+    if conv_before != conv_after:
+        raise CheckError(
+            f"Live runtime-probe polluted real ~/.gemini/antigravity-cli/conversations "
+            f"(before={conv_before}, after={conv_after})!"
+        )
+    print(
+        f"[dennett-check] runtime-probe OK (real ~/.gemini conversations untouched: "
+        f"before={conv_before} after={conv_after}).",
+        flush=True,
     )
-    run_nextest_checked(
-        [
-            "-p",
-            "dennett-testkit",
-            "--test",
-            "acp_live_probe",
-            "--run-ignored",
-            "only",
-            "--test-threads",
-            "1",
-        ],
-        cwd=repo_root,
-        env=probe_env,
-        min_passed=2,
-        allow_skipped=False,
-        timeout_seconds=300,
-    )
-    print("[dennett-check] runtime-probe OK.", flush=True)
 
 
 def build_parser() -> argparse.ArgumentParser:

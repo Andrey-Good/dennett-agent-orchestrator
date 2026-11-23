@@ -11,7 +11,7 @@ pub const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 /// URI and key-value rules without corrupting unrelated English words).
 const MIN_AUTO_GLOBAL_SECRET_LEN: usize = 3;
 
-const SECRET_KEY_NAMES: [&str; 10] = [
+const SECRET_KEY_NAMES: [&str; 12] = [
     "password",
     "gemini_api_key",
     "google_api_key",
@@ -20,6 +20,8 @@ const SECRET_KEY_NAMES: [&str; 10] = [
     "refresh_token",
     "dennett_memory_token",
     "memory_token",
+    "dennett_head_token",
+    "head_token",
     "auth_secret",
     "hmac_secret",
 ];
