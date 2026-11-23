@@ -3,6 +3,7 @@
 //! This crate intentionally stays free of SQL drivers, HTTP stacks, UI layers,
 //! and model-provider SDKs so that all services share stable boundary types.
 
+pub mod memory;
 pub mod redact;
 
 use core::fmt;
@@ -12,6 +13,20 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use memory::{
+    AuthPrincipal, CorrectNoteRequest, CreateNoteRequest, DEFAULT_SEARCH_LIMIT, EventEvidenceLink,
+    EvidenceAnchor, EvidenceId, EvidenceLinkId, EvidenceLinkInput, EvidenceObject,
+    EvidenceRelationship, IdempotencyKey, IngestEvidenceRequest, IngestEvidenceResponse,
+    MAX_ANCHOR_ATTRIBUTES, MAX_ANCHOR_KIND_LEN, MAX_ANCHOR_LOCATOR_LEN, MAX_AUTHOR_LABEL_BYTES,
+    MAX_EVIDENCE_CONTENT_BYTES, MAX_IDEMPOTENCY_KEY_LEN, MAX_LINKS_PER_EVENT, MAX_MEDIA_TYPE_LEN,
+    MAX_METADATA_ENTRIES, MAX_METADATA_KEY_LEN, MAX_METADATA_VALUE_LEN, MAX_NOTE_BODY_BYTES,
+    MAX_NOTE_TITLE_BYTES, MAX_PRINCIPAL_ID_LEN, MAX_RATIONALE_BYTES, MAX_RELATIONSHIP_LEN,
+    MAX_SCOPE_LEN, MAX_SEARCH_LIMIT, MAX_SEARCH_QUERY_BYTES, MAX_SOURCE_URI_LEN, MAX_TAG_LEN,
+    MAX_TAGS_PER_NOTE, MAX_TIMESTAMP_MS, MIN_TIMESTAMP_MS, MemoryCapability, MemoryEvent,
+    MemoryEventId, MemoryEventKind, MemoryNote, MemoryNoteId, MemoryScope, NoteHistoryResponse,
+    NoteMutationResponse, NoteRevision, NoteRevisionId, PrincipalId, SHA256_HEX_LEN,
+    SearchNotesRequest, SearchNotesResponse, Sha256Hex, TimestampMs,
+};
 pub use redact::{
     REDACTED_PLACEHOLDER, extract_connection_secrets, redact_secrets, redact_secrets_owned,
     sanitize_cli_arg, sanitize_pg_error, sanitize_pg_error_with_password,
@@ -209,11 +224,11 @@ fn validate_correlation_id(candidate: &str) -> Result<(), DennettError> {
 pub struct ServiceHealth {
     /// Service reporting this health snapshot.
     pub service: ServiceKind,
-    /// Current implementation milestone label (e.g. `"D0"`).
+    /// Current implementation milestone label (e.g. `"D1"`).
     pub stage: String,
     /// Active execution profile mode.
     pub profile_mode: ProfileMode,
-    /// Whether the Memory Fabric domain API is implemented (`false` in D0).
+    /// Whether the Memory Fabric domain API is implemented.
     pub memory_fabric_implemented: bool,
     /// Whether live PostgreSQL connectivity succeeded for this probe.
     pub postgres_connected: bool,
@@ -221,10 +236,37 @@ pub struct ServiceHealth {
     pub postgres_role: Option<String>,
     /// Active PostgreSQL database reported by `current_database()`, when connected.
     pub postgres_database: Option<String>,
+    /// Highest applied schema migration version when the service schema is initialized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<i64>,
     /// Explicitly supported capabilities for the current stage.
     pub capabilities: Vec<String>,
     /// Correlation identifier attached to this health check.
     pub correlation_id: CorrelationId,
+}
+
+/// Structured HTTP error envelope returned by versioned Dennett service endpoints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiErrorResponse {
+    /// Stable machine-readable error code matching [`DennettError::code`].
+    pub code: String,
+    /// Typed secret-free domain error payload.
+    pub error: DennettError,
+    /// Correlation identifier propagated or assigned for the failing request.
+    pub correlation_id: CorrelationId,
+}
+
+impl ApiErrorResponse {
+    /// Wraps a [`DennettError`] and [`CorrelationId`] into a wire error response.
+    #[must_use]
+    pub fn new(error: DennettError, correlation_id: CorrelationId) -> Self {
+        let code = String::from(error.code());
+        Self {
+            code,
+            error,
+            correlation_id,
+        }
+    }
 }
 
 /// Typed, secret-safe error surface shared across Dennett crates.
@@ -251,6 +293,50 @@ pub enum DennettError {
     DatabaseUnavailable {
         /// Redacted diagnostic detail with credentials stripped.
         detail: String,
+    },
+    /// Bearer credential was missing, malformed, expired, revoked, or failed verification.
+    #[error("unauthorized: {reason}")]
+    Unauthorized {
+        /// Safe diagnostic reason without raw credential material.
+        reason: String,
+    },
+    /// Authenticated principal lacks scope or capability permission for the requested resource.
+    #[error("forbidden scope `{scope}`: {reason}")]
+    ForbiddenScope {
+        /// Scope that was denied.
+        scope: String,
+        /// Safe explanation of the missing scope or capability.
+        reason: String,
+    },
+    /// Requested domain resource does not exist.
+    #[error("{resource} `{id}` not found")]
+    NotFound {
+        /// Logical resource kind (e.g. `"memory_note"`, `"evidence"`, `"memory_event"`).
+        resource: String,
+        /// Identifier that was not found.
+        id: String,
+    },
+    /// Optimistic revision check or state invariant conflict prevented the write.
+    #[error("conflict on {resource}: {reason}")]
+    Conflict {
+        /// Logical resource kind (e.g. `"memory_note"`).
+        resource: String,
+        /// Caller's expected revision when applicable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_revision: Option<i64>,
+        /// Actual current revision observed in canonical storage when applicable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actual_revision: Option<i64>,
+        /// Safe description of the conflict.
+        reason: String,
+    },
+    /// Caller reused an idempotency key with a different operation or payload fingerprint.
+    #[error("idempotency mismatch for key `{idempotency_key}`: {reason}")]
+    IdempotencyMismatch {
+        /// Conflicting idempotency key.
+        idempotency_key: String,
+        /// Safe explanation of the mismatch.
+        reason: String,
     },
     /// Operation was denied by scope or permission boundaries.
     #[error("access denied for `{scope}`: {reason}")]
@@ -312,6 +398,11 @@ impl DennettError {
             Self::InvalidInput { .. } => "INVALID_INPUT",
             Self::SafetyGuardRejected { .. } => "SAFETY_GUARD_REJECTED",
             Self::DatabaseUnavailable { .. } => "DATABASE_UNAVAILABLE",
+            Self::Unauthorized { .. } => "UNAUTHORIZED",
+            Self::ForbiddenScope { .. } => "FORBIDDEN_SCOPE",
+            Self::NotFound { .. } => "NOT_FOUND",
+            Self::Conflict { .. } => "CONFLICT",
+            Self::IdempotencyMismatch { .. } => "IDEMPOTENCY_MISMATCH",
             Self::AccessDenied { .. } => "ACCESS_DENIED",
             Self::AuthRequired { .. } => "AUTH_REQUIRED",
             Self::RuntimeProtocol { .. } => "RUNTIME_PROTOCOL",
@@ -330,6 +421,7 @@ const _: () = {
     assert_send_sync::<ServiceKind>();
     assert_send_sync::<CorrelationId>();
     assert_send_sync::<ServiceHealth>();
+    assert_send_sync::<ApiErrorResponse>();
     assert_send_sync::<DennettError>();
 };
 
@@ -389,10 +481,62 @@ mod tests {
 
     #[test]
     fn error_codes_are_stable() {
-        let err = DennettError::DatabaseUnavailable {
-            detail: String::from("connection refused"),
-        };
-        assert_eq!(err.code(), "DATABASE_UNAVAILABLE");
+        let cases = [
+            (
+                DennettError::DatabaseUnavailable {
+                    detail: String::from("connection refused"),
+                },
+                "DATABASE_UNAVAILABLE",
+            ),
+            (
+                DennettError::Unauthorized {
+                    reason: String::from("token expired"),
+                },
+                "UNAUTHORIZED",
+            ),
+            (
+                DennettError::ForbiddenScope {
+                    scope: String::from("project-beta"),
+                    reason: String::from("not permitted"),
+                },
+                "FORBIDDEN_SCOPE",
+            ),
+            (
+                DennettError::NotFound {
+                    resource: String::from("memory_note"),
+                    id: String::from("00000000-0000-0000-0000-000000000000"),
+                },
+                "NOT_FOUND",
+            ),
+            (
+                DennettError::Conflict {
+                    resource: String::from("memory_note"),
+                    expected_revision: Some(1),
+                    actual_revision: Some(2),
+                    reason: String::from("stale revision"),
+                },
+                "CONFLICT",
+            ),
+            (
+                DennettError::IdempotencyMismatch {
+                    idempotency_key: String::from("op-1"),
+                    reason: String::from("payload fingerprint mismatch"),
+                },
+                "IDEMPOTENCY_MISMATCH",
+            ),
+        ];
+
+        for (err, expected_code) in cases {
+            assert_eq!(err.code(), expected_code);
+            let envelope = ApiErrorResponse::new(err.clone(), CorrelationId::generate());
+            assert_eq!(envelope.code, expected_code);
+            let encoded = serde_json::to_string(&envelope);
+            assert!(encoded.is_ok());
+            if let Ok(json) = encoded {
+                let decoded: Result<ApiErrorResponse, _> = serde_json::from_str(&json);
+                assert_eq!(decoded.ok(), Some(envelope));
+            }
+        }
     }
 
     fn control_char_strategy() -> impl Strategy<Value = char> {

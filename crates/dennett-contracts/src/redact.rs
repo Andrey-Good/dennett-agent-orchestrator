@@ -11,13 +11,17 @@ pub const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 /// URI and key-value rules without corrupting unrelated English words).
 const MIN_AUTO_GLOBAL_SECRET_LEN: usize = 3;
 
-const SECRET_KEY_NAMES: [&str; 6] = [
+const SECRET_KEY_NAMES: [&str; 10] = [
     "password",
     "gemini_api_key",
     "google_api_key",
     "x-goog-api-key",
     "access_token",
     "refresh_token",
+    "dennett_memory_token",
+    "memory_token",
+    "auth_secret",
+    "hmac_secret",
 ];
 
 /// Redacts explicit `extra_secrets` and common credential patterns from `input`.
@@ -30,6 +34,28 @@ const SECRET_KEY_NAMES: [&str; 6] = [
 ///   (`AIza...`), OAuth access/refresh tokens (`ya29....`, `1//...`), and JWT tokens.
 #[must_use]
 pub fn redact_secrets(input: &str, extra_secrets: &[&str]) -> String {
+    let mut ordered: Vec<&str> = extra_secrets
+        .iter()
+        .copied()
+        .filter(|s| !s.is_empty() && *s != REDACTED_PLACEHOLDER)
+        .collect();
+    ordered.sort_by_key(|s| std::cmp::Reverse(s.len()));
+
+    // Run to a bounded fixpoint so that replacing an explicit `extra_secret` adjacent to a
+    // secret key (for example `"cGEMINI_API_KEY="` with extra `"c"` -> `"[REDACTED]GEMINI_API_KEY="`)
+    // also applies structural redaction on the first call, preserving strict idempotence.
+    let mut out = input.to_owned();
+    for _ in 0..4 {
+        let next = redact_once(&out, &ordered);
+        if next == out {
+            break;
+        }
+        out = next;
+    }
+    out
+}
+
+fn redact_once(input: &str, ordered_extra_secrets: &[&str]) -> String {
     // 1. Apply structural redaction first so key/URI/token patterns produce clean
     //    `[REDACTED]` spans before substring replacement of `extra_secrets`.
     let mut out = redact_uri_userinfo(input);
@@ -44,14 +70,7 @@ pub fn redact_secrets(input: &str, extra_secrets: &[&str]) -> String {
     out = redact_jwt_tokens(&out);
 
     // 2. Replace explicit caller-supplied secrets strictly outside `[REDACTED]` spans.
-    let mut ordered: Vec<&str> = extra_secrets
-        .iter()
-        .copied()
-        .filter(|s| !s.is_empty() && *s != REDACTED_PLACEHOLDER)
-        .collect();
-    ordered.sort_by_key(|s| std::cmp::Reverse(s.len()));
-
-    for secret in ordered {
+    for secret in ordered_extra_secrets {
         out = replace_outside_redacted(&out, secret);
     }
     out
@@ -634,6 +653,7 @@ mod tests {
             ("password: foo", &["D"][..]),
             ("{\"access_token\": \"secret\"}", &["E"][..]),
             ("password=foo&sslmode=disable", &["fo"][..]),
+            ("cGEMINI_API_KEY=", &["c"][..]),
         ];
         for (input, extra) in cases {
             let once = redact_secrets(input, extra);

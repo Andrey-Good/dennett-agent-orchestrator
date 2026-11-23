@@ -20,6 +20,8 @@ tokio-postgres.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+dennett-memory-client.workspace = true
+dennett-memory-core.workspace = true
 proptest.workspace = true
 
 [lints]

@@ -1,53 +1,52 @@
-//! Standalone `dennett-memoryd` process scaffold for Dennett milestone D0.
+//! Standalone `dennett-memoryd` daemon for Dennett Memory Fabric (D1+).
 //!
-//! Runs independently of any Head or UI component, probes real PostgreSQL
-//! connectivity, reports `memory_fabric_implemented: false` honestly, and strips
-//! database credentials from every diagnostic response.
+//! Runs completely independently of any Head or UI component, owns its PostgreSQL
+//! schema migrations, enforces standalone scoped bearer authentication via
+//! [`StandaloneAuthVerifier`], exposes versioned `/v1/memory/*` JSON endpoints and
+//! `/healthz` over `axum`, and redacts secrets from every error path.
 
 use std::env;
 use std::io::{self, Write};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dennett_contracts::redact::{
-    sanitize_cli_arg, sanitize_pg_error, sanitize_pg_error_with_password,
+use axum::body::Bytes;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
+use axum::http::header::{AUTHORIZATION, HOST};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use dennett_contracts::redact::{redact_secrets, sanitize_cli_arg, sanitize_pg_error};
+use dennett_contracts::{
+    ApiErrorResponse, AuthPrincipal, CorrectNoteRequest, CorrelationId, CreateNoteRequest,
+    DennettError, EvidenceId, IngestEvidenceRequest, MemoryEventId, MemoryNoteId, ProfileMode,
+    SearchNotesRequest, ServiceHealth, ServiceKind, TimestampMs,
 };
-use dennett_contracts::{CorrelationId, DennettError, ProfileMode, ServiceHealth, ServiceKind};
+use dennett_memory_core::{
+    AuthVerifier, MEMORYD_STAGE_LABEL, MemoryService, StandaloneAuthVerifier, ValidatedPgTarget,
+    d1_memoryd_capabilities, parse_bearer_header,
+};
 use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
-use tokio::task::JoinHandle;
 use tokio::time;
-use tokio_postgres::{Config as PgConfig, NoTls};
 
-/// Maximum incoming HTTP header block size accepted by the D0 health endpoint.
-const MAX_HTTP_REQUEST_BYTES: usize = 16 * 1024;
-/// Maximum HTTP request body bytes drained before replying so Windows Winsock avoids `TCP RST`.
-const MAX_HTTP_DRAIN_BODY_BYTES: usize = 64 * 1024;
-/// Maximum concurrent HTTP connections served simultaneously by the D0 scaffold.
-const MAX_CONCURRENT_CONNECTIONS: usize = 32;
-/// Timeout applied to reading an HTTP header block from a connected client.
-const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(5);
-/// Short timeout applied while draining an incoming request body before replying.
-const HTTP_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
-/// Timeout applied to writing an HTTP response back to a client.
-const HTTP_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Timeout applied to establishing and running a PostgreSQL health query.
-const PG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-/// Current milestone identifier reported in [`ServiceHealth`].
-const STAGE_LABEL: &str = "D0";
+/// Maximum incoming HTTP request body size (512 KiB, accommodating 256 KiB evidence + JSON overhead).
+const MAX_HTTP_BODY_BYTES: usize = 512 * 1024;
+/// Maximum concurrent in-flight HTTP requests accepted simultaneously by `dennett-memoryd`.
+const MAX_CONCURRENT_REQUESTS: usize = 64;
+/// Maximum end-to-end wall time permitted for a single HTTP request handler.
+const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// RAII guard that aborts a spawned background task on early return, timeout, or panic.
-struct AbortOnDrop(JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
+static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
+static HEADER_SHUTDOWN: HeaderName = HeaderName::from_static("x-dennett-shutdown");
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -57,6 +56,7 @@ enum Command {
     Serve {
         addr: SocketAddr,
         pg_url: Option<String>,
+        auth_config_file: Option<PathBuf>,
     },
     Help,
     Version,
@@ -75,67 +75,13 @@ struct ShutdownAck {
     correlation_id: CorrelationId,
 }
 
-#[derive(Debug)]
-struct HttpHead<'a> {
-    method: &'a str,
-    path: &'a str,
-    host: Option<&'a str>,
-    shutdown_header_valid: bool,
-    content_length: usize,
-    correlation_id: CorrelationId,
-}
-
-/// Validated PostgreSQL configuration parsed once by `tokio_postgres::Config` to avoid
-/// parser differentials between validation and connection establishment.
 #[derive(Clone)]
-struct ValidatedPgTarget {
-    raw_url: String,
-    config: PgConfig,
-}
-
-impl ValidatedPgTarget {
-    fn parse(raw_url: &str, profile_mode: ProfileMode) -> Result<Self, DennettError> {
-        let config: PgConfig = raw_url.parse().map_err(|err| {
-            let safe = sanitize_pg_error(&format!("{err}"), Some(raw_url));
-            if profile_mode == ProfileMode::TestIsolated {
-                DennettError::SafetyGuardRejected {
-                    reason: format!("invalid PostgreSQL connection string: {safe}"),
-                }
-            } else {
-                DennettError::DatabaseUnavailable {
-                    detail: format!("invalid PostgreSQL connection string: {safe}"),
-                }
-            }
-        })?;
-
-        if profile_mode == ProfileMode::TestIsolated {
-            let Some(db_name) = config.get_dbname() else {
-                return Err(DennettError::SafetyGuardRejected {
-                    reason: String::from(
-                        "test_isolated profile requires an explicit `*_test` PostgreSQL database",
-                    ),
-                });
-            };
-            if db_name.len() <= "_test".len() || !db_name.ends_with("_test") {
-                return Err(DennettError::SafetyGuardRejected {
-                    reason: format!(
-                        "test_isolated profile requires a `*_test` PostgreSQL database, got `{db_name}`"
-                    ),
-                });
-            }
-        }
-
-        Ok(Self {
-            raw_url: raw_url.to_owned(),
-            config,
-        })
-    }
-
-    fn parsed_password(&self) -> Option<&str> {
-        self.config
-            .get_password()
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-    }
+struct AppState {
+    service: Option<MemoryService>,
+    auth: StandaloneAuthVerifier,
+    profile_mode: ProfileMode,
+    shutdown_tx: watch::Sender<bool>,
+    request_limit: Arc<Semaphore>,
 }
 
 #[tokio::main]
@@ -157,13 +103,17 @@ async fn main() -> ExitCode {
         }
         Command::Version => {
             println!(
-                "dennett-memoryd {} ({STAGE_LABEL})",
+                "dennett-memoryd {} ({MEMORYD_STAGE_LABEL})",
                 env!("CARGO_PKG_VERSION")
             );
             ExitCode::SUCCESS
         }
         Command::HealthOnce { pg_url } => run_health_once(pg_url, profile_mode).await,
-        Command::Serve { addr, pg_url } => run_serve(addr, pg_url, profile_mode).await,
+        Command::Serve {
+            addr,
+            pg_url,
+            auth_config_file,
+        } => run_serve(addr, pg_url, auth_config_file, profile_mode).await,
     }
 }
 
@@ -175,6 +125,7 @@ where
     let mut health_once = false;
     let mut serve_addr: Option<String> = None;
     let mut pg_url: Option<String> = None;
+    let mut auth_config_file: Option<PathBuf> = None;
     let mut allow_non_loopback = false;
 
     while let Some(arg) = iter.next() {
@@ -196,6 +147,13 @@ where
                     reason: String::from("expected PostgreSQL URL after --pg-url"),
                 })?;
                 pg_url = Some(raw);
+            }
+            "--auth-config" => {
+                let raw = iter.next().ok_or_else(|| DennettError::InvalidInput {
+                    field: String::from("--auth-config"),
+                    reason: String::from("expected JSON file path after --auth-config"),
+                })?;
+                auth_config_file = Some(PathBuf::from(raw));
             }
             other => {
                 let safe = sanitize_cli_arg(other);
@@ -228,7 +186,11 @@ where
                     ),
                 });
             }
-            Ok(Command::Serve { addr, pg_url })
+            Ok(Command::Serve {
+                addr,
+                pg_url,
+                auth_config_file,
+            })
         }
         (false, None) => Err(DennettError::InvalidInput {
             field: String::from("cli"),
@@ -275,6 +237,25 @@ fn resolve_pg_target_from_sources(
         .transpose()
 }
 
+fn load_auth_verifier(cli_file: Option<&PathBuf>) -> Result<StandaloneAuthVerifier, DennettError> {
+    if let Some(path) = cli_file {
+        return StandaloneAuthVerifier::from_file(path);
+    }
+    if let Ok(env_path) = env::var("DENNETT_MEMORY_AUTH_CONFIG_FILE") {
+        let trimmed = env_path.trim();
+        if !trimmed.is_empty() {
+            return StandaloneAuthVerifier::from_file(&PathBuf::from(trimmed));
+        }
+    }
+    if let Ok(inline_json) = env::var("DENNETT_MEMORY_AUTH_CONFIG") {
+        let trimmed = inline_json.trim();
+        if !trimmed.is_empty() {
+            return StandaloneAuthVerifier::from_json_str(trimmed);
+        }
+    }
+    Ok(StandaloneAuthVerifier::fail_closed())
+}
+
 fn non_empty(val: Option<&str>) -> Option<&str> {
     val.map(str::trim).filter(|s| !s.is_empty())
 }
@@ -289,7 +270,20 @@ async fn run_health_once(cli_pg_url: Option<String>, profile_mode: ProfileMode) 
         }
     };
 
-    match probe_postgres(target.as_ref(), profile_mode, correlation_id).await {
+    let Some(pg_target) = target else {
+        emit_stderr_error(&unconfigured_pg_error());
+        return ExitCode::from(1);
+    };
+
+    let service = match MemoryService::new(pg_target) {
+        Ok(s) => s,
+        Err(err) => {
+            emit_stderr_error(&err);
+            return ExitCode::from(1);
+        }
+    };
+
+    match service.health_check(profile_mode, correlation_id).await {
         Ok(health) => match serde_json::to_string(&health) {
             Ok(json) => {
                 println!("{json}");
@@ -312,6 +306,7 @@ async fn run_health_once(cli_pg_url: Option<String>, profile_mode: ProfileMode) 
 async fn run_serve(
     addr: SocketAddr,
     cli_pg_url: Option<String>,
+    auth_config_file: Option<PathBuf>,
     profile_mode: ProfileMode,
 ) -> ExitCode {
     let target = match resolve_pg_target(cli_pg_url.as_deref(), profile_mode) {
@@ -320,6 +315,39 @@ async fn run_serve(
             emit_stderr_error(&err);
             return ExitCode::from(1);
         }
+    };
+
+    let auth = match load_auth_verifier(auth_config_file.as_ref()) {
+        Ok(v) => v,
+        Err(err) => {
+            emit_stderr_error(&err);
+            return ExitCode::from(1);
+        }
+    };
+
+    let service = match target {
+        Some(pg_target) => match MemoryService::new(pg_target) {
+            Ok(svc) => {
+                match svc.ensure_migrated().await {
+                    Ok(_) => {}
+                    // Fail fast on schema corruption / incompatible newer DB version.
+                    Err(err @ DennettError::SafetyGuardRejected { .. }) => {
+                        emit_stderr_error(&err);
+                        return ExitCode::from(1);
+                    }
+                    // Transient PostgreSQL outage still lets `/healthz` report honest 503.
+                    Err(err) => {
+                        emit_stderr_error(&err);
+                    }
+                }
+                Some(svc)
+            }
+            Err(err) => {
+                emit_stderr_error(&err);
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
     };
 
     let listener = match TcpListener::bind(addr).await {
@@ -342,16 +370,7 @@ async fn run_serve(
         }
     };
 
-    if writeln!(io::stdout(), "LISTENING {bound_addr}").is_err() || io::stdout().flush().is_err() {
-        emit_stderr_error(&DennettError::Internal {
-            detail: String::from("failed to flush listening announcement to stdout"),
-        });
-        return ExitCode::from(1);
-    }
-
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-    let conn_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
-
     let ctrl_c_tx = shutdown_tx.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -359,162 +378,500 @@ async fn run_serve(
         }
     });
 
-    loop {
-        tokio::select! {
-            changed = shutdown_rx.changed() => {
-                if changed.is_err() || *shutdown_rx.borrow() {
-                    break;
-                }
-            }
-            accepted = listener.accept() => {
-                let (mut stream, peer_addr) = match accepted {
-                    Ok(pair) => pair,
-                    Err(err) => {
-                        emit_stderr_error(&DennettError::Internal {
-                            detail: format!("accept failed: {err}"),
-                        });
-                        continue;
-                    }
-                };
-                let Ok(permit) = Arc::clone(&conn_limit).try_acquire_owned() else {
-                    let busy = DennettError::Internal {
-                        detail: String::from("connection limit reached"),
-                    };
-                    let _ = write_http_json(&mut stream, "503 Service Unavailable", &busy).await;
-                    continue;
-                };
-                let target_clone = target.clone();
-                let tx_clone = shutdown_tx.clone();
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    handle_connection(
-                        stream,
-                        peer_addr,
-                        target_clone.as_ref(),
-                        profile_mode,
-                        tx_clone,
-                    )
-                    .await;
-                });
+    let state = AppState {
+        service,
+        auth,
+        profile_mode,
+        shutdown_tx,
+        request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+    };
+
+    let app = build_router(state);
+
+    if writeln!(io::stdout(), "LISTENING {bound_addr}").is_err() || io::stdout().flush().is_err() {
+        emit_stderr_error(&DennettError::Internal {
+            detail: String::from("failed to flush listening announcement to stdout"),
+        });
+        return ExitCode::from(1);
+    }
+
+    let serve_result = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        while !*shutdown_rx.borrow() {
+            if shutdown_rx.changed().await.is_err() {
+                break;
             }
         }
+    })
+    .await;
+
+    if let Err(err) = serve_result {
+        emit_stderr_error(&DennettError::Internal {
+            detail: format!("HTTP server error: {err}"),
+        });
+        return ExitCode::from(1);
     }
 
     ExitCode::SUCCESS
 }
 
-async fn handle_connection(
-    mut stream: TcpStream,
-    peer_addr: SocketAddr,
-    pg_target: Option<&ValidatedPgTarget>,
-    profile_mode: ProfileMode,
-    shutdown_tx: watch::Sender<bool>,
-) {
-    let Ok((header_bytes, already_read_body_len)) = read_http_header_block(&mut stream).await
-    else {
-        let _ = write_http_json(
-            &mut stream,
-            "400 Bad Request",
-            &DennettError::InvalidInput {
-                field: String::from("http"),
-                reason: String::from("malformed or timed-out HTTP request"),
-            },
+fn build_router(state: AppState) -> Router {
+    let mut router = Router::new()
+        .route("/healthz", get(handle_healthz))
+        .route("/v1/memory/evidence", post(handle_ingest_evidence))
+        .route(
+            "/v1/memory/evidence/{evidence_id}",
+            get(handle_get_evidence),
         )
-        .await;
-        return;
-    };
-
-    let Ok(header_text) = std::str::from_utf8(&header_bytes) else {
-        let _ = write_http_json(
-            &mut stream,
-            "400 Bad Request",
-            &DennettError::InvalidInput {
-                field: String::from("http"),
-                reason: String::from("HTTP request header is not valid UTF-8"),
-            },
+        .route("/v1/memory/notes", post(handle_create_note))
+        .route("/v1/memory/notes/search", post(handle_search_notes))
+        .route("/v1/memory/notes/{note_id}", get(handle_get_note_current))
+        .route(
+            "/v1/memory/notes/{note_id}/history",
+            get(handle_get_note_history),
         )
-        .await;
-        return;
-    };
-
-    let Some(head) = parse_http_head(header_text) else {
-        let _ = write_http_json(
-            &mut stream,
-            "400 Bad Request",
-            &DennettError::InvalidInput {
-                field: String::from("http"),
-                reason: String::from("missing HTTP method or path"),
-            },
+        .route(
+            "/v1/memory/notes/{note_id}/corrections",
+            post(handle_correct_note),
         )
-        .await;
-        return;
-    };
+        .route("/v1/memory/events/{event_id}", get(handle_get_event));
 
-    // Drain any bounded incoming request body before replying/closing to prevent Winsock TCP RST.
-    let remaining_body = head
-        .content_length
-        .saturating_sub(already_read_body_len)
-        .min(MAX_HTTP_DRAIN_BODY_BYTES);
-    if remaining_body > 0 {
-        drain_remaining_body(&mut stream, remaining_body).await;
+    if state.profile_mode == ProfileMode::TestIsolated {
+        router = router.route("/shutdown", post(handle_shutdown));
     }
 
-    dispatch_http_request(
-        &mut stream,
-        head,
-        peer_addr,
-        pg_target,
-        profile_mode,
-        shutdown_tx,
-    )
-    .await;
+    router
+        .fallback(handle_not_found)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            enforce_limits_and_timeout,
+        ))
+        .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
+        .with_state(state)
 }
 
-fn parse_http_head(header_block: &str) -> Option<HttpHead<'_>> {
-    // Defense-in-depth: never inspect anything after the header/body delimiter.
-    let headers_only = header_block
-        .split_once("\r\n\r\n")
-        .map_or(header_block, |(h, _)| h);
+async fn enforce_limits_and_timeout(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let correlation_id = extract_correlation_id_lossy(request.headers());
 
-    let mut lines = headers_only.lines();
-    let request_line = lines.next()?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next()?;
-    let raw_target = parts.next()?;
-    let path = raw_target.split('?').next().unwrap_or(raw_target);
-
-    let mut correlation_id: Option<CorrelationId> = None;
-    let mut host: Option<&str> = None;
-    let mut shutdown_header_valid = false;
-    let mut content_length: usize = 0;
-
-    for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
+    let Ok(_permit) = Arc::clone(&state.request_limit).try_acquire_owned() else {
+        let err = DennettError::Internal {
+            detail: String::from("concurrent request limit reached"),
         };
-        let key = name.trim();
-        let val = value.trim();
-        if key.eq_ignore_ascii_case("x-correlation-id") && correlation_id.is_none() {
-            correlation_id = CorrelationId::try_new(val).ok();
-        } else if key.eq_ignore_ascii_case("host") && host.is_none() {
-            host = Some(val);
-        } else if key.eq_ignore_ascii_case("x-dennett-shutdown") && val == "1" {
-            shutdown_header_valid = true;
-        } else if key.eq_ignore_ascii_case("content-length")
-            && let Ok(parsed) = val.parse::<usize>()
-        {
-            content_length = parsed;
+        return json_api_error(StatusCode::SERVICE_UNAVAILABLE, err, &correlation_id);
+    };
+
+    if let Ok(resp) = time::timeout(HTTP_REQUEST_TIMEOUT, next.run(request)).await {
+        resp
+    } else {
+        let err = DennettError::Timeout {
+            operation: String::from("http_request"),
+        };
+        json_api_error(StatusCode::GATEWAY_TIMEOUT, err, &correlation_id)
+    }
+}
+
+async fn handle_healthz(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let correlation_id = match extract_correlation_id(&headers) {
+        Ok(id) => id,
+        Err(err) => {
+            return json_api_error(StatusCode::BAD_REQUEST, err, &CorrelationId::generate());
+        }
+    };
+
+    let result = match &state.service {
+        Some(svc) => {
+            svc.health_check(state.profile_mode, correlation_id.clone())
+                .await
+        }
+        None => Err(unconfigured_pg_error()),
+    };
+
+    match result {
+        Ok(health) => json_with_correlation(StatusCode::OK, &health, &correlation_id),
+        Err(err) => {
+            let body = HealthFailureBody {
+                health: ServiceHealth {
+                    service: ServiceKind::Memoryd,
+                    stage: String::from(MEMORYD_STAGE_LABEL),
+                    profile_mode: state.profile_mode,
+                    memory_fabric_implemented: true,
+                    postgres_connected: false,
+                    postgres_role: None,
+                    postgres_database: None,
+                    schema_version: None,
+                    capabilities: d1_memoryd_capabilities(),
+                    correlation_id: correlation_id.clone(),
+                },
+                error: err,
+            };
+            json_with_correlation(StatusCode::SERVICE_UNAVAILABLE, &body, &correlation_id)
         }
     }
+}
 
-    Some(HttpHead {
-        method,
-        path,
-        host,
-        shutdown_header_valid,
-        content_length,
-        correlation_id: correlation_id.unwrap_or_else(CorrelationId::generate),
-    })
+async fn handle_shutdown(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    // Drain bounded body cleanly before replying so Windows Winsock avoids TCP RST (H0-11).
+    _body: Bytes,
+) -> Response {
+    let correlation_id = extract_correlation_id_lossy(&headers);
+
+    if state.profile_mode != ProfileMode::TestIsolated {
+        let err = DennettError::NotFound {
+            resource: String::from("http.path"),
+            id: String::from("/shutdown"),
+        };
+        return json_api_error(StatusCode::NOT_FOUND, err, &correlation_id);
+    }
+
+    let shutdown_header_valid = headers
+        .get(&HEADER_SHUTDOWN)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim() == "1");
+
+    let host_ok = headers
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(is_loopback_host);
+
+    if !peer_addr.ip().is_loopback() || !shutdown_header_valid || !host_ok {
+        let err = DennettError::AccessDenied {
+            scope: String::from("/shutdown"),
+            reason: String::from(
+                "shutdown requires test_isolated mode, loopback peer/Host, and `X-Dennett-Shutdown: 1`",
+            ),
+        };
+        return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
+    }
+
+    let ack = ShutdownAck {
+        status: "shutting_down",
+        correlation_id: correlation_id.clone(),
+    };
+    let _ = state.shutdown_tx.send(true);
+    json_with_correlation(StatusCode::OK, &ack, &correlation_id)
+}
+
+async fn handle_ingest_evidence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<IngestEvidenceRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.ingest_evidence(&principal, &correlation_id, req).await {
+        Ok(resp) => {
+            let status = if resp.idempotent_replay {
+                StatusCode::OK
+            } else {
+                StatusCode::CREATED
+            };
+            json_with_correlation(status, &resp, &correlation_id)
+        }
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_evidence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let evidence_id = match EvidenceId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_evidence(&principal, evidence_id).await {
+        Ok(evidence) => json_with_correlation(StatusCode::OK, &evidence, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_create_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateNoteRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.create_note(&principal, &correlation_id, req).await {
+        Ok(resp) => {
+            let status = if resp.idempotent_replay {
+                StatusCode::OK
+            } else {
+                StatusCode::CREATED
+            };
+            json_with_correlation(status, &resp, &correlation_id)
+        }
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_note_current(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let note_id = match MemoryNoteId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_note_current(&principal, note_id).await {
+        Ok(note) => json_with_correlation(StatusCode::OK, &note, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_note_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let note_id = match MemoryNoteId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_note_history(&principal, note_id).await {
+        Ok(history) => json_with_correlation(StatusCode::OK, &history, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_correct_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<CorrectNoteRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let path_note_id = match MemoryNoteId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+    if req.note_id != path_note_id {
+        let err = DennettError::InvalidInput {
+            field: String::from("note_id"),
+            reason: String::from("path note_id does not match request body note_id"),
+        };
+        return domain_error_response(err, &correlation_id);
+    }
+
+    match svc.correct_note(&principal, &correlation_id, req).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_search_notes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<SearchNotesRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.search_notes(&principal, req).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let event_id = match MemoryEventId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_event(&principal, event_id).await {
+        Ok(event) => json_with_correlation(StatusCode::OK, &event, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_not_found(headers: HeaderMap) -> Response {
+    let correlation_id = extract_correlation_id_lossy(&headers);
+    let err = DennettError::NotFound {
+        resource: String::from("http.path"),
+        id: String::from("unknown"),
+    };
+    json_api_error(StatusCode::NOT_FOUND, err, &correlation_id)
+}
+
+fn authorize_and_get_service(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(CorrelationId, AuthPrincipal, MemoryService), Box<Response>> {
+    let correlation_id = match extract_correlation_id(headers) {
+        Ok(id) => id,
+        Err(err) => {
+            return Err(Box::new(json_api_error(
+                StatusCode::BAD_REQUEST,
+                err,
+                &CorrelationId::generate(),
+            )));
+        }
+    };
+
+    let raw_auth = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            Box::new(json_api_error(
+                StatusCode::UNAUTHORIZED,
+                DennettError::Unauthorized {
+                    reason: String::from("missing `Authorization: Bearer <token>` header"),
+                },
+                &correlation_id,
+            ))
+        })?;
+
+    let token = parse_bearer_header(raw_auth)
+        .map_err(|err| Box::new(domain_error_response(err, &correlation_id)))?;
+
+    let principal = state
+        .auth
+        .verify_bearer(token, TimestampMs::now())
+        .map_err(|err| Box::new(domain_error_response(err, &correlation_id)))?;
+
+    let svc = state.service.clone().ok_or_else(|| {
+        Box::new(domain_error_response(
+            unconfigured_pg_error(),
+            &correlation_id,
+        ))
+    })?;
+
+    Ok((correlation_id, principal, svc))
+}
+
+fn extract_correlation_id(headers: &HeaderMap) -> Result<CorrelationId, DennettError> {
+    let Some(raw) = headers.get(&HEADER_CORRELATION_ID) else {
+        return Ok(CorrelationId::generate());
+    };
+    let text = raw.to_str().map_err(|_| DennettError::InvalidInput {
+        field: String::from("X-Correlation-Id"),
+        reason: String::from("header must be valid ASCII"),
+    })?;
+    CorrelationId::try_new(text)
+}
+
+fn extract_correlation_id_lossy(headers: &HeaderMap) -> CorrelationId {
+    extract_correlation_id(headers).unwrap_or_else(|_| CorrelationId::generate())
+}
+
+fn json_rejection_response(rej: &JsonRejection, correlation_id: &CorrelationId) -> Response {
+    let status = match rej {
+        JsonRejection::BytesRejection(_) => StatusCode::PAYLOAD_TOO_LARGE,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    let safe_reason = redact_secrets(&rej.body_text(), &[]);
+    let err = DennettError::InvalidInput {
+        field: String::from("body"),
+        reason: safe_reason,
+    };
+    json_api_error(status, err, correlation_id)
+}
+
+fn domain_error_response(err: DennettError, correlation_id: &CorrelationId) -> Response {
+    let status = match &err {
+        DennettError::InvalidInput { .. } => StatusCode::BAD_REQUEST,
+        DennettError::Unauthorized { .. } | DennettError::AuthRequired { .. } => {
+            StatusCode::UNAUTHORIZED
+        }
+        DennettError::ForbiddenScope { .. }
+        | DennettError::AccessDenied { .. }
+        | DennettError::SafetyGuardRejected { .. } => StatusCode::FORBIDDEN,
+        DennettError::NotFound { .. } => StatusCode::NOT_FOUND,
+        DennettError::Conflict { .. } | DennettError::IdempotencyMismatch { .. } => {
+            StatusCode::CONFLICT
+        }
+        DennettError::DatabaseUnavailable { .. } | DennettError::Cancelled { .. } => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        DennettError::Timeout { .. } => StatusCode::GATEWAY_TIMEOUT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_api_error(status, err, correlation_id)
+}
+
+fn json_api_error(
+    status: StatusCode,
+    err: DennettError,
+    correlation_id: &CorrelationId,
+) -> Response {
+    let envelope = ApiErrorResponse::new(err, correlation_id.clone());
+    json_with_correlation(status, &envelope, correlation_id)
+}
+
+fn json_with_correlation<T: Serialize>(
+    status: StatusCode,
+    payload: &T,
+    correlation_id: &CorrelationId,
+) -> Response {
+    let mut resp = (status, Json(payload)).into_response();
+    if let Ok(val) = HeaderValue::from_str(correlation_id.as_str()) {
+        resp.headers_mut()
+            .insert(HEADER_CORRELATION_ID.clone(), val);
+    }
+    resp
 }
 
 fn is_loopback_host(host_header: &str) -> bool {
@@ -530,242 +887,12 @@ fn is_loopback_host(host_header: &str) -> bool {
     host_only.eq_ignore_ascii_case("localhost") || host_only == "127.0.0.1" || host_only == "::1"
 }
 
-async fn dispatch_http_request(
-    stream: &mut TcpStream,
-    head: HttpHead<'_>,
-    peer_addr: SocketAddr,
-    pg_target: Option<&ValidatedPgTarget>,
-    profile_mode: ProfileMode,
-    shutdown_tx: watch::Sender<bool>,
-) {
-    let HttpHead {
-        method,
-        path,
-        host,
-        shutdown_header_valid,
-        content_length: _,
-        correlation_id,
-    } = head;
-
-    match (method, path) {
-        ("GET", "/healthz") => {
-            match probe_postgres(pg_target, profile_mode, correlation_id.clone()).await {
-                Ok(health) => {
-                    let _ = write_http_json(stream, "200 OK", &health).await;
-                }
-                Err(err) => {
-                    let body = HealthFailureBody {
-                        health: ServiceHealth {
-                            service: ServiceKind::Memoryd,
-                            stage: String::from(STAGE_LABEL),
-                            profile_mode,
-                            memory_fabric_implemented: false,
-                            postgres_connected: false,
-                            postgres_role: None,
-                            postgres_database: None,
-                            capabilities: d0_capabilities(),
-                            correlation_id,
-                        },
-                        error: err,
-                    };
-                    let _ = write_http_json(stream, "503 Service Unavailable", &body).await;
-                }
-            }
-        }
-        ("POST", "/shutdown") => {
-            if profile_mode != ProfileMode::TestIsolated {
-                let err = DennettError::InvalidInput {
-                    field: String::from("http.path"),
-                    reason: String::from("unknown path `/shutdown`"),
-                };
-                let _ = write_http_json(stream, "404 Not Found", &err).await;
-                return;
-            }
-            if !peer_addr.ip().is_loopback()
-                || !shutdown_header_valid
-                || host.is_some_and(|h| !is_loopback_host(h))
-            {
-                let err = DennettError::AccessDenied {
-                    scope: String::from("/shutdown"),
-                    reason: String::from(
-                        "shutdown requires test_isolated mode, loopback peer/Host, and `X-Dennett-Shutdown: 1`",
-                    ),
-                };
-                let _ = write_http_json(stream, "403 Forbidden", &err).await;
-                return;
-            }
-            let ack = ShutdownAck {
-                status: "shutting_down",
-                correlation_id,
-            };
-            let _ = write_http_json(stream, "200 OK", &ack).await;
-            let _ = shutdown_tx.send(true);
-        }
-        (_, "/healthz") => {
-            let err = DennettError::InvalidInput {
-                field: String::from("http.method"),
-                reason: format!("method `{method}` is not allowed for `/healthz`"),
-            };
-            let _ = write_http_json(stream, "405 Method Not Allowed", &err).await;
-        }
-        (_, "/shutdown") if profile_mode == ProfileMode::TestIsolated => {
-            let err = DennettError::InvalidInput {
-                field: String::from("http.method"),
-                reason: format!("method `{method}` is not allowed for `/shutdown`"),
-            };
-            let _ = write_http_json(stream, "405 Method Not Allowed", &err).await;
-        }
-        _ => {
-            let err = DennettError::InvalidInput {
-                field: String::from("http.path"),
-                reason: format!("unknown path `{path}`"),
-            };
-            let _ = write_http_json(stream, "404 Not Found", &err).await;
-        }
+fn unconfigured_pg_error() -> DennettError {
+    DennettError::DatabaseUnavailable {
+        detail: String::from(
+            "PostgreSQL URL is not configured (set --pg-url, DENNETT_TEST_MEMORY_PG_URL in test_isolated, or DENNETT_MEMORY_PG_URL in production)",
+        ),
     }
-}
-
-async fn read_http_header_block(stream: &mut TcpStream) -> io::Result<(Vec<u8>, usize)> {
-    let mut buf = Vec::with_capacity(512);
-    let mut chunk = [0_u8; 1024];
-
-    let read_fut = async {
-        loop {
-            let n = stream.read(&mut chunk).await?;
-            if n == 0 {
-                return Ok((buf, 0));
-            }
-            if buf.len() + n > MAX_HTTP_REQUEST_BYTES {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "HTTP request exceeds maximum size",
-                ));
-            }
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                let body_start = header_end + 4;
-                let already_read_body = buf.len().saturating_sub(body_start);
-                buf.truncate(header_end);
-                return Ok((buf, already_read_body));
-            }
-        }
-    };
-
-    time::timeout(HTTP_READ_TIMEOUT, read_fut)
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "HTTP request read timed out"))?
-}
-
-async fn drain_remaining_body(stream: &mut TcpStream, mut remaining: usize) {
-    let mut sink = [0_u8; 2048];
-    let _ = time::timeout(HTTP_DRAIN_TIMEOUT, async {
-        while remaining > 0 {
-            let to_read = remaining.min(sink.len());
-            match stream.read(&mut sink[..to_read]).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => remaining = remaining.saturating_sub(n),
-            }
-        }
-    })
-    .await;
-}
-
-async fn write_http_json<T: Serialize>(
-    stream: &mut TcpStream,
-    status: &str,
-    payload: &T,
-) -> io::Result<()> {
-    let body = serde_json::to_vec(payload)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let write_fut = async {
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(&body).await?;
-        stream.flush().await?;
-        let _ = stream.shutdown().await;
-        Ok(())
-    };
-    time::timeout(HTTP_WRITE_TIMEOUT, write_fut)
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "HTTP response write timed out"))?
-}
-
-async fn probe_postgres(
-    pg_target: Option<&ValidatedPgTarget>,
-    profile_mode: ProfileMode,
-    correlation_id: CorrelationId,
-) -> Result<ServiceHealth, DennettError> {
-    let Some(target) = pg_target else {
-        return Err(DennettError::DatabaseUnavailable {
-            detail: String::from(
-                "PostgreSQL URL is not configured (set --pg-url, DENNETT_TEST_MEMORY_PG_URL in test_isolated, or DENNETT_MEMORY_PG_URL in production)",
-            ),
-        });
-    };
-
-    let raw_url = target.raw_url.as_str();
-    let parsed_pw = target.parsed_password();
-
-    let probe_fut = async {
-        let (client, connection) = target.config.connect(NoTls).await.map_err(|err| {
-            DennettError::DatabaseUnavailable {
-                detail: sanitize_pg_error_with_password(&err.to_string(), Some(raw_url), parsed_pw),
-            }
-        })?;
-
-        let _conn_guard = AbortOnDrop(tokio::spawn(async move {
-            let _ = connection.await;
-        }));
-
-        let row = client
-            .query_one(
-                "SELECT 1::int4, current_user::text, current_database()::text",
-                &[],
-            )
-            .await
-            .map_err(|err| DennettError::DatabaseUnavailable {
-                detail: sanitize_pg_error_with_password(&err.to_string(), Some(raw_url), parsed_pw),
-            })?;
-
-        let check: i32 = row.get(0);
-        let role: String = row.get(1);
-        let database: String = row.get(2);
-        drop(client);
-
-        if check != 1 {
-            return Err(DennettError::DatabaseUnavailable {
-                detail: String::from("unexpected SELECT 1 result from PostgreSQL"),
-            });
-        }
-
-        Ok(ServiceHealth {
-            service: ServiceKind::Memoryd,
-            stage: String::from(STAGE_LABEL),
-            profile_mode,
-            memory_fabric_implemented: false,
-            postgres_connected: true,
-            postgres_role: Some(role),
-            postgres_database: Some(database),
-            capabilities: d0_capabilities(),
-            correlation_id,
-        })
-    };
-
-    time::timeout(PG_PROBE_TIMEOUT, probe_fut)
-        .await
-        .map_err(|_| DennettError::DatabaseUnavailable {
-            detail: String::from("PostgreSQL health probe timed out"),
-        })?
-}
-
-fn d0_capabilities() -> Vec<String> {
-    vec![
-        String::from("healthz"),
-        String::from("postgres-connectivity"),
-    ]
 }
 
 fn emit_stderr_error(err: &DennettError) {
@@ -777,13 +904,15 @@ fn emit_stderr_error(err: &DennettError) {
 
 fn print_usage() {
     println!(
-        "dennett-memoryd (D0 scaffold — Memory Fabric not yet implemented)\n\
+        "dennett-memoryd ({MEMORYD_STAGE_LABEL} — standalone Memory Fabric daemon on PostgreSQL)\n\
          Usage:\n\
          \x20 dennett-memoryd --health-once [--pg-url <URL>]\n\
-         \x20 dennett-memoryd --serve <IP:PORT> [--allow-non-loopback] [--pg-url <URL>]\n\
+         \x20 dennett-memoryd --serve <IP:PORT> [--allow-non-loopback] [--pg-url <URL>] [--auth-config <FILE>]\n\
          Env:\n\
          \x20 DENNETT_TEST_MEMORY_PG_URL (required in test_isolated unless --pg-url given; requires *_test DB)\n\
-         \x20 DENNETT_MEMORY_PG_URL (production profile only)"
+         \x20 DENNETT_MEMORY_PG_URL (production profile only)\n\
+         \x20 DENNETT_MEMORY_AUTH_CONFIG_FILE (optional path to standalone auth JSON)\n\
+         \x20 DENNETT_MEMORY_AUTH_CONFIG (optional inline standalone auth JSON; fail-closed if omitted)"
     );
 }
 
@@ -829,7 +958,6 @@ mod tests {
 
     #[test]
     fn h0_02_test_isolated_forbids_prod_fallback_and_blocks_dsn_override_exploits() {
-        // TestIsolated must NEVER fall back to DENNETT_MEMORY_PG_URL.
         let no_fallback = resolve_pg_target_from_sources(
             None,
             None,
@@ -841,27 +969,24 @@ mod tests {
             "TestIsolated must not fall back to DENNETT_MEMORY_PG_URL"
         );
 
-        // Exploit 1: URI path looks like `_test`, query `dbname` overrides to production_db.
         let uri_override = ValidatedPgTarget::parse(
             "postgres://u:p@127.0.0.1:1/fake_test?dbname=production_db",
             ProfileMode::TestIsolated,
         );
-        assert!(
-            matches!(uri_override, Err(DennettError::SafetyGuardRejected { .. })),
-            "URI query dbname override must be rejected with SafetyGuardRejected"
-        );
+        assert!(matches!(
+            uri_override,
+            Err(DennettError::SafetyGuardRejected { .. })
+        ));
 
-        // Exploit 2: duplicate libpq `dbname` keys where second points to production_db.
         let kv_override = ValidatedPgTarget::parse(
             "host=127.0.0.1 port=1 user=u password=p dbname=fake_test dbname=production_db",
             ProfileMode::TestIsolated,
         );
-        assert!(
-            matches!(kv_override, Err(DennettError::SafetyGuardRejected { .. })),
-            "libpq duplicate dbname override must be rejected with SafetyGuardRejected"
-        );
+        assert!(matches!(
+            kv_override,
+            Err(DennettError::SafetyGuardRejected { .. })
+        ));
 
-        // Valid isolated `_test` DSN passes cleanly.
         let valid = resolve_pg_target_from_sources(
             None,
             Some("postgres://u:p@127.0.0.1:55432/dennett_memory_test"),
@@ -872,24 +997,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_http_head_ignores_body_headers_and_parses_content_length() {
-        let raw = "POST /shutdown HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nContent-Length: 4096\r\n\r\nX-Dennett-Shutdown: 1\r\nX-Correlation-Id: from-body";
-        let Some(head) = parse_http_head(raw) else {
-            panic!("expected valid HTTP head");
-        };
-        assert_eq!(head.content_length, 4096);
-        assert!(
-            !head.shutdown_header_valid,
-            "shutdown header inside body must never be honored"
-        );
-        assert_ne!(
-            head.correlation_id.as_str(),
-            "from-body",
-            "correlation id inside body must never be honored"
-        );
+    fn loopback_host_validation_matches_exact_loopback_hosts() {
         assert!(is_loopback_host("127.0.0.1:8080"));
         assert!(is_loopback_host("[::1]:8080"));
         assert!(is_loopback_host("localhost:8080"));
         assert!(!is_loopback_host("evil.example:8080"));
+        assert!(!is_loopback_host(""));
     }
 }

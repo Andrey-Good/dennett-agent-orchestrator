@@ -153,11 +153,11 @@ async fn memoryd_health_once_succeeds_standalone_against_postgres() {
     };
 
     assert_eq!(health.service, ServiceKind::Memoryd);
-    assert_eq!(health.stage, "D0");
+    assert_eq!(health.stage, "D1");
     assert_eq!(health.profile_mode, ProfileMode::TestIsolated);
     assert!(
-        !health.memory_fabric_implemented,
-        "D0 scaffold must honestly report memory_fabric_implemented=false"
+        health.memory_fabric_implemented,
+        "D1 dennett-memoryd must report memory_fabric_implemented=true"
     );
     assert!(health.postgres_connected);
     assert_eq!(
@@ -202,8 +202,10 @@ async fn memoryd_serve_healthz_and_graceful_loopback_shutdown() {
         Err(err) => panic!("invalid /healthz JSON `{body}`: {err}"),
     };
     assert_eq!(health.service, ServiceKind::Memoryd);
-    assert!(!health.memory_fabric_implemented);
+    assert_eq!(health.stage, "D1");
+    assert!(health.memory_fabric_implemented);
     assert!(health.postgres_connected);
+    assert_eq!(health.schema_version, Some(1));
     assert_eq!(health.correlation_id.as_str(), "d0-live-healthz");
 
     let (shutdown_status, shutdown_body) = send_http_request(&addr, &shutdown_request(&addr)).await;
@@ -379,7 +381,7 @@ async fn memoryd_serve_returns_503_and_redacts_password_when_pg_unreachable() {
         Err(err) => panic!("invalid 503 JSON `{body}`: {err}"),
     };
     assert_eq!(parsed["postgres_connected"], Value::Bool(false));
-    assert_eq!(parsed["memory_fabric_implemented"], Value::Bool(false));
+    assert_eq!(parsed["memory_fabric_implemented"], Value::Bool(true));
     assert_eq!(
         parsed["error"]["kind"],
         Value::String(String::from("database_unavailable"))

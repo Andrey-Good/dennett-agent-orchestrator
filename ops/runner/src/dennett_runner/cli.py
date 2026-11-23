@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_INTEGRATION_TESTS = 8
+MIN_INTEGRATION_TESTS = 20
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
@@ -65,6 +65,33 @@ FORBIDDEN_MEMORYD_DEPS = (
     "dennett-head",
     "dennett-ui",
     "dennett-desktop",
+    "tauri",
+    "wry",
+    "egui",
+) + FORBIDDEN_DEFERRED_RUNTIME_CRATES
+
+FORBIDDEN_MEMORY_CLIENT_DEPS = (
+    "dennett-memory-core",
+    "dennett-memoryd",
+    "dennett-testkit",
+    "dennett-head",
+    "dennett-ui",
+    "dennett-desktop",
+    "tokio-postgres",
+    "deadpool-postgres",
+    "postgres",
+    "sqlx",
+    "rusqlite",
+    "diesel",
+    "tauri",
+    "wry",
+    "egui",
+) + FORBIDDEN_DEFERRED_RUNTIME_CRATES
+
+FORBIDDEN_HEAD_DEPS = (
+    "dennett-memory-core",
+    "dennett-memoryd",
+    "dennett-testkit",
     "tauri",
     "wry",
     "egui",
@@ -470,13 +497,32 @@ def check_deps(repo_root: Path) -> None:
                 f"`dennett-contracts` violates boundary by depending on: {', '.join(sorted(hits))}"
             )
 
-    memoryd_trans = {n.lower() for n in transitive_prod_dep_names("dennett-memoryd")}
-    for forbidden in FORBIDDEN_MEMORYD_DEPS:
-        hits = [name for name in memoryd_trans if name == forbidden or forbidden in name]
-        if hits:
-            raise CheckError(
-                f"`dennett-memoryd` violates standalone boundary by depending on: {', '.join(sorted(hits))}"
-            )
+    for pkg_name in ("dennett-memoryd", "dennett-memory-core"):
+        trans = {n.lower() for n in transitive_prod_dep_names(pkg_name)}
+        for forbidden in FORBIDDEN_MEMORYD_DEPS:
+            hits = [name for name in trans if name == forbidden or forbidden in name]
+            if hits:
+                raise CheckError(
+                    f"`{pkg_name}` violates standalone boundary by depending on: {', '.join(sorted(hits))}"
+                )
+
+    for client_pkg in ("dennett-memory-client", "dennett-memory-mcp"):
+        trans = {n.lower() for n in transitive_prod_dep_names(client_pkg)}
+        for forbidden in FORBIDDEN_MEMORY_CLIENT_DEPS:
+            hits = [name for name in trans if name == forbidden or forbidden in name]
+            if hits:
+                raise CheckError(
+                    f"`{client_pkg}` violates thin-client boundary by depending on: {', '.join(sorted(hits))}"
+                )
+
+    if "dennett-head" in packages_by_name:
+        head_trans = {n.lower() for n in transitive_prod_dep_names("dennett-head")}
+        for forbidden in FORBIDDEN_HEAD_DEPS:
+            hits = [name for name in head_trans if name == forbidden or forbidden in name]
+            if hits:
+                raise CheckError(
+                    f"`dennett-head` violates Memory separation boundary by depending on: {', '.join(sorted(hits))}"
+                )
 
     print(
         f"[dennett-check] deps OK: {len(meta['packages'])} locked crates verified, "
@@ -749,6 +795,10 @@ def check_integration(repo_root: Path, *, manage_pg: bool) -> None:
             "build",
             "--bin",
             "dennett-memoryd",
+            "--bin",
+            "dennett-memory-cli",
+            "--bin",
+            "dennett-memory-mcp",
             "--bin",
             "dennett-d0-mcp-fixture",
         ],
