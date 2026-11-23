@@ -1,0 +1,120 @@
+name: Dennett D0 CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-deps-fast:
+    name: Docs, deps, fast & self-check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt, clippy
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: nextest@0.9.152
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.11.23"
+          enable-cache: false
+
+      - name: Sync runner environment
+        run: uv sync --project ops/runner --frozen
+
+      - name: Check documentation and links
+        run: uv run --project ops/runner dennett-check docs
+
+      - name: Check locked dependencies and boundaries
+        run: uv run --project ops/runner dennett-check deps
+
+      - name: Run formatting, clippy, and fast unit/safety suite
+        run: uv run --project ops/runner dennett-check fast
+
+      - name: Run test-harness self-check
+        run: uv run --project ops/runner dennett-check self-check
+
+  postgres-integration:
+    name: PostgreSQL isolation & standalone memoryd
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dennett_bootstrap
+          POSTGRES_PASSWORD: dennett_bootstrap_test_only
+          POSTGRES_DB: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U dennett_bootstrap -d postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt, clippy
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: nextest@0.9.152
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.11.23"
+          enable-cache: false
+
+      - name: Sync runner environment
+        run: uv sync --project ops/runner --frozen
+
+      - name: Initialize isolated test PostgreSQL roles and databases
+        env:
+          PGPASSWORD: dennett_bootstrap_test_only
+        run: |
+          psql -h 127.0.0.1 -p 55432 -U dennett_bootstrap -d postgres -v ON_ERROR_STOP=1 \
+            -f ops/test-env/init/01_init_roles_and_dbs.sql
+
+      - name: Run PostgreSQL isolation and standalone memoryd integration tests
+        env:
+          DENNETT_TEST_PROFILE: "1"
+          DENNETT_TEST_MEMORY_PG_URL: postgres://dennett_memory_role:dennett_memory_test_pw@127.0.0.1:55432/dennett_memory_test
+          DENNETT_TEST_CONTROL_PG_URL: postgres://dennett_control_role:dennett_control_test_pw@127.0.0.1:55432/dennett_control_test
+        run: uv run --project ops/runner dennett-check integration

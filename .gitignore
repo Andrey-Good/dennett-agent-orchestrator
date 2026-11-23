@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Python / uv artifacts
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Isolated test scratch directories
+.dennett-test-tmp/
+
+# Local environment files and keys
+.env
+.env.*
+*.local.key

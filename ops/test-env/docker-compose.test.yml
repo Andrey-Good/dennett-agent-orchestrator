@@ -1,0 +1,22 @@
+name: dennett-test-env
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: dennett_bootstrap
+      POSTGRES_PASSWORD: dennett_bootstrap_test_only
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./init/01_init_roles_and_dbs.sql:/docker-entrypoint-initdb.d/01_init_roles_and_dbs.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U dennett_bootstrap -d dennett_memory_test && pg_isready -h 127.0.0.1 -U dennett_bootstrap -d dennett_control_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s

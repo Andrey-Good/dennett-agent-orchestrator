@@ -64,7 +64,7 @@ read through `GetProject`. Turn completion remains authoritative through
 
 ## Compatibility and migration evidence
 
-[`protocols/epoch-migrations/m00-to-m01.json`](../../protocols/epoch-migrations/m00-to-m01.json)
+`protocols/epoch-migrations/m00-to-m01.json` (preserved on the pre-reset archive branch `archive/before-code-reset-2026-09-27`; see [docs/restart/README.md](../restart/README.md))
 records the exact old/new protocol-tree fingerprints, retired and introduced
 packages, generated public symbol families, decision reference, and owner gate.
 

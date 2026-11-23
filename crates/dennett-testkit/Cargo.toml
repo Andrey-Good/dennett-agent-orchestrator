@@ -1,0 +1,26 @@
+[package]
+name = "dennett-testkit"
+description = "Isolated test profile guards, redaction helpers, PostgreSQL harness, and ACP probe for Dennett"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "dennett-d0-mcp-fixture"
+path = "src/bin/dennett-d0-mcp-fixture.rs"
+
+[dependencies]
+dennett-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
