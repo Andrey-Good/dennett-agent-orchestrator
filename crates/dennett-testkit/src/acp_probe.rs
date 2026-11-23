@@ -16,7 +16,9 @@ use std::time::{Duration, Instant as StdInstant};
 use dennett_contracts::{DennettError, RuntimeAuthProfile};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time;
 
@@ -656,142 +658,35 @@ impl AcpClient {
         text: &str,
         timeout: Duration,
         cancel_mode: CancelMode,
-        mut on_permission: F,
+        on_permission: F,
     ) -> Result<PromptOutcome, DennettError>
     where
         F: FnMut(&PermissionRequestView) -> PermissionDecision,
     {
         let req_id = self.allocate_id();
-        self.write_json(&json!({
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "method": "session/prompt",
-            "params": {
-                "sessionId": session_id,
-                "prompt": [{ "type": "text", "text": text }]
-            }
-        }))
-        .await?;
-
-        let deadline = time::Instant::now() + timeout;
-        let mut collected_text = String::new();
-        let mut tool_events = Vec::new();
-        let mut permission_events = Vec::new();
-        let mut cancel_sent = false;
-
-        loop {
-            let remaining = deadline.saturating_duration_since(time::Instant::now());
-            if remaining.is_zero() {
-                return Err(DennettError::Timeout {
-                    operation: String::from("session/prompt"),
-                });
-            }
-
-            let msg = self.read_message(remaining).await?;
-
-            if msg.get("id").and_then(Value::as_u64) == Some(req_id) && msg.get("method").is_none()
-            {
-                let result = self.unwrap_rpc_result(&msg)?;
-                let stop_reason = result
-                    .get("stopReason")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let usage = result.get("usage").cloned();
-                return Ok(PromptOutcome {
-                    stop_reason,
-                    text: collected_text,
-                    tool_events,
-                    permission_events,
-                    usage,
-                });
-            }
-
-            let Some(method) = msg.get("method").and_then(Value::as_str) else {
-                continue;
-            };
-
-            match method {
-                "session/update" => {
-                    self.record_session_update(
-                        msg.get("params").unwrap_or(&Value::Null),
-                        &mut collected_text,
-                        &mut tool_events,
-                    );
-                    if cancel_mode == CancelMode::CancelOnFirstUpdate && !cancel_sent {
-                        self.send_cancel(session_id).await?;
-                        cancel_sent = true;
-                    }
-                }
-                "session/request_permission" => {
-                    if let Some(server_req_id) = msg.get("id").cloned() {
-                        let event = self
-                            .handle_permission_request(
-                                server_req_id,
-                                msg.get("params").unwrap_or(&Value::Null),
-                                &mut on_permission,
-                            )
-                            .await?;
-                        permission_events.push(event);
-                    }
-                }
-                _ => {
-                    if let Some(server_req_id) = msg.get("id").cloned() {
-                        self.write_json(&json!({
-                            "jsonrpc": "2.0",
-                            "id": server_req_id,
-                            "error": {
-                                "code": -32601,
-                                "message": format!("unsupported client method `{method}`")
-                            }
-                        }))
-                        .await?;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn handle_permission_request<F>(
-        &mut self,
-        server_req_id: Value,
-        params: &Value,
-        on_permission: &mut F,
-    ) -> Result<PermissionRequestEvent, DennettError>
-    where
-        F: FnMut(&PermissionRequestView) -> PermissionDecision,
-    {
-        let view = parse_permission_request(params);
-        let decision = on_permission(&view);
-        let chosen = select_permission_option(&view.options, decision);
-        let outcome_json = match &chosen {
-            Some(option_id) => json!({
-                "outcome": {
-                    "outcome": "selected",
-                    "optionId": option_id
-                }
-            }),
-            None => json!({
-                "outcome": {
-                    "outcome": "cancelled"
-                }
-            }),
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(DennettError::RuntimeProtocol {
+                code: None,
+                detail: String::from("cannot write JSON-RPC message after stdin closed"),
+            });
         };
-        self.write_json(&json!({
-            "jsonrpc": "2.0",
-            "id": server_req_id,
-            "result": outcome_json
-        }))
-        .await?;
-
-        Ok(PermissionRequestEvent {
-            tool_call_id: view.tool_call_id,
-            title: view.title,
-            kind: view.kind,
-            options: view.options,
-            chosen_option_id: chosen,
-            decision,
-        })
+        let stderr_buf = Arc::clone(&self.stderr_buf);
+        let secrets = &self.secrets;
+        exchange_prompt_turn_io(
+            &mut self.stdout,
+            stdin,
+            PromptTurnRequest {
+                req_id,
+                session_id,
+                text,
+                timeout,
+                cancel_mode,
+                secrets,
+            },
+            on_permission,
+            move || snapshot_stderr_buf(&stderr_buf, secrets),
+        )
+        .await
     }
 
     async fn request(
@@ -801,89 +696,27 @@ impl AcpClient {
         timeout: Duration,
     ) -> Result<Value, DennettError> {
         let req_id = self.allocate_id();
-        self.write_json(&json!({
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "method": method,
-            "params": params
-        }))
-        .await?;
-
-        let deadline = time::Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(time::Instant::now());
-            if remaining.is_zero() {
-                return Err(DennettError::Timeout {
-                    operation: method.to_owned(),
-                });
-            }
-            let msg = self.read_message(remaining).await?;
-            if msg.get("id").and_then(Value::as_u64) == Some(req_id) && msg.get("method").is_none()
-            {
-                return self.unwrap_rpc_result(&msg);
-            }
-        }
-    }
-
-    fn unwrap_rpc_result(&self, msg: &Value) -> Result<Value, DennettError> {
-        if let Some(err) = extract_json_rpc_error(msg, &self.secrets) {
-            return Err(err);
-        }
-        Ok(msg.get("result").cloned().unwrap_or(Value::Null))
-    }
-
-    fn record_session_update(
-        &self,
-        params: &Value,
-        collected_text: &mut String,
-        tool_events: &mut Vec<ToolCallEvent>,
-    ) {
-        let update = params.get("update").unwrap_or(params);
-        let kind = update
-            .get("sessionUpdate")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-
-        match kind {
-            "agent_message_chunk" => {
-                if let Some(content) = update.get("content") {
-                    extract_text_chunks(content, collected_text);
-                }
-            }
-            "tool_call" | "tool_call_update" => {
-                let tool_call_id = update
-                    .get("toolCallId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let title = update
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let status = update
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or(kind)
-                    .to_owned();
-                let mut excerpt = String::new();
-                if let Some(content) = update.get("content") {
-                    extract_text_chunks(content, &mut excerpt);
-                }
-                if excerpt.is_empty()
-                    && let Some(raw_out) = update.get("rawOutput")
-                {
-                    excerpt = raw_out.to_string();
-                }
-                tool_events.push(ToolCallEvent {
-                    tool_call_id,
-                    title,
-                    status,
-                    output_excerpt: redact_secrets_owned(&excerpt, &self.secrets),
-                });
-            }
-            _ => {}
-        }
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(DennettError::RuntimeProtocol {
+                code: None,
+                detail: String::from("cannot write JSON-RPC message after stdin closed"),
+            });
+        };
+        let stderr_buf = Arc::clone(&self.stderr_buf);
+        let secrets = &self.secrets;
+        exchange_request_io(
+            &mut self.stdout,
+            stdin,
+            RpcRequestArgs {
+                req_id,
+                method,
+                params,
+                timeout,
+                secrets,
+            },
+            move || snapshot_stderr_buf(&stderr_buf, secrets),
+        )
+        .await
     }
 
     async fn write_json(&mut self, value: &Value) -> Result<(), DennettError> {
@@ -893,75 +726,437 @@ impl AcpClient {
                 detail: String::from("cannot write JSON-RPC message after stdin closed"),
             });
         };
-        let mut line = serde_json::to_string(value).map_err(|err| DennettError::Internal {
-            detail: format!("failed to serialize JSON-RPC message: {err}"),
-        })?;
-        line.push('\n');
-
-        let write_fut = async {
-            stdin.write_all(line.as_bytes()).await?;
-            stdin.flush().await
-        };
-
-        time::timeout(ACP_WRITE_TIMEOUT, write_fut)
-            .await
-            .map_err(|_| DennettError::Timeout {
-                operation: String::from("agy acp stdin write"),
-            })?
-            .map_err(|err| DennettError::RuntimeProtocol {
-                code: None,
-                detail: format!("failed to write to agy acp stdin: {err}"),
-            })?;
-        Ok(())
-    }
-
-    async fn read_message(&mut self, timeout: Duration) -> Result<Value, DennettError> {
-        let deadline = time::Instant::now() + timeout;
-
-        loop {
-            let remaining = deadline.saturating_duration_since(time::Instant::now());
-            if remaining.is_zero() {
-                return Err(DennettError::Timeout {
-                    operation: String::from("agy acp stdout read"),
-                });
-            }
-
-            let maybe_line = time::timeout(
-                remaining,
-                read_bounded_line(&mut self.stdout, MAX_ACP_STDOUT_LINE_BYTES),
-            )
-            .await
-            .map_err(|_| DennettError::Timeout {
-                operation: String::from("agy acp stdout read"),
-            })??;
-
-            let Some(line) = maybe_line else {
-                let stderr = self.stderr_snapshot();
-                return Err(DennettError::RuntimeProtocol {
-                    code: None,
-                    detail: format!("agy acp closed stdout unexpectedly; stderr: {stderr}"),
-                });
-            };
-
-            let trimmed = line.trim();
-            if trimmed.is_empty() || !trimmed.starts_with('{') {
-                continue;
-            }
-
-            return serde_json::from_str(trimmed).map_err(|err| DennettError::RuntimeProtocol {
-                code: None,
-                detail: redact_secrets_owned(
-                    &format!("invalid JSON-RPC frame from agy acp: {err}"),
-                    &self.secrets,
-                ),
-            });
-        }
+        write_json_to(stdin, value).await
     }
 
     const fn allocate_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+}
+
+struct RpcRequestArgs<'a> {
+    req_id: u64,
+    method: &'a str,
+    params: Value,
+    timeout: Duration,
+    secrets: &'a [String],
+}
+
+struct PromptTurnRequest<'a> {
+    req_id: u64,
+    session_id: &'a str,
+    text: &'a str,
+    timeout: Duration,
+    cancel_mode: CancelMode,
+    secrets: &'a [String],
+}
+
+fn snapshot_stderr_buf(stderr_buf: &Mutex<String>, secrets: &[String]) -> String {
+    let raw = stderr_buf.lock().map_or_default(|guard| guard.clone());
+    redact_secrets_owned(&raw, secrets)
+}
+
+fn is_uncorrelated_error_frame(msg: &Value) -> bool {
+    msg.get("method").is_none()
+        && msg.get("error").is_some()
+        && matches!(msg.get("id"), None | Some(Value::Null))
+}
+
+fn unwrap_rpc_result(msg: &Value, secrets: &[String]) -> Result<Value, DennettError> {
+    if let Some(err) = extract_json_rpc_error(msg, secrets) {
+        return Err(err);
+    }
+    Ok(msg.get("result").cloned().unwrap_or(Value::Null))
+}
+
+async fn write_json_to<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    value: &Value,
+) -> Result<(), DennettError> {
+    let mut line = serde_json::to_string(value).map_err(|err| DennettError::Internal {
+        detail: format!("failed to serialize JSON-RPC message: {err}"),
+    })?;
+    line.push('\n');
+
+    let write_fut = async {
+        writer.write_all(line.as_bytes()).await?;
+        writer.flush().await
+    };
+
+    time::timeout(ACP_WRITE_TIMEOUT, write_fut)
+        .await
+        .map_err(|_| DennettError::Timeout {
+            operation: String::from("agy acp stdin write"),
+        })?
+        .map_err(|err| DennettError::RuntimeProtocol {
+            code: None,
+            detail: format!("failed to write to agy acp stdin: {err}"),
+        })?;
+    Ok(())
+}
+
+async fn read_message_from<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    timeout: Duration,
+    secrets: &[String],
+    stderr_hint: impl FnOnce() -> String,
+) -> Result<Value, DennettError> {
+    let deadline = time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(time::Instant::now());
+        if remaining.is_zero() {
+            return Err(DennettError::Timeout {
+                operation: String::from("agy acp stdout read"),
+            });
+        }
+
+        let maybe_line = time::timeout(
+            remaining,
+            read_bounded_line(reader, MAX_ACP_STDOUT_LINE_BYTES),
+        )
+        .await
+        .map_err(|_| DennettError::Timeout {
+            operation: String::from("agy acp stdout read"),
+        })??;
+
+        let Some(line) = maybe_line else {
+            let stderr = stderr_hint();
+            return Err(DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("agy acp closed stdout unexpectedly; stderr: {stderr}"),
+            });
+        };
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with('{') {
+            continue;
+        }
+
+        return serde_json::from_str(trimmed).map_err(|err| DennettError::RuntimeProtocol {
+            code: None,
+            detail: redact_secrets_owned(
+                &format!("invalid JSON-RPC frame from agy acp: {err}"),
+                secrets,
+            ),
+        });
+    }
+}
+
+async fn exchange_request_io<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
+    reader: &mut R,
+    writer: &mut W,
+    req: RpcRequestArgs<'_>,
+    stderr_hint: impl Fn() -> String,
+) -> Result<Value, DennettError> {
+    write_json_to(
+        writer,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": req.req_id,
+            "method": req.method,
+            "params": req.params
+        }),
+    )
+    .await?;
+
+    let deadline = time::Instant::now() + req.timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(time::Instant::now());
+        if remaining.is_zero() {
+            return Err(DennettError::Timeout {
+                operation: req.method.to_owned(),
+            });
+        }
+        let msg = read_message_from(reader, remaining, req.secrets, &stderr_hint).await?;
+
+        if msg.get("id").and_then(Value::as_u64) == Some(req.req_id) && msg.get("method").is_none()
+        {
+            return unwrap_rpc_result(&msg, req.secrets);
+        }
+
+        if is_uncorrelated_error_frame(&msg) {
+            return Err(
+                extract_json_rpc_error(&msg, req.secrets).unwrap_or_else(|| {
+                    DennettError::RuntimeProtocol {
+                        code: None,
+                        detail: String::from("received uncorrelated JSON-RPC error frame"),
+                    }
+                }),
+            );
+        }
+
+        // Reply `-32601 Method not found` to interleaved server->client requests so the peer never deadlocks.
+        if let Some(server_method) = msg.get("method").and_then(Value::as_str)
+            && let Some(server_req_id) = msg.get("id").filter(|id| !id.is_null()).cloned()
+        {
+            write_json_to(
+                writer,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": server_req_id,
+                    "error": {
+                        "code": -32601,
+                        "message": format!("unsupported client method `{server_method}`")
+                    }
+                }),
+            )
+            .await?;
+        }
+    }
+}
+
+struct PromptTurnState {
+    collected_text: String,
+    tool_events: Vec<ToolCallEvent>,
+    permission_events: Vec<PermissionRequestEvent>,
+    cancel_sent: bool,
+}
+
+async fn exchange_prompt_turn_io<R, W, F>(
+    reader: &mut R,
+    writer: &mut W,
+    req: PromptTurnRequest<'_>,
+    mut on_permission: F,
+    stderr_hint: impl Fn() -> String,
+) -> Result<PromptOutcome, DennettError>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: FnMut(&PermissionRequestView) -> PermissionDecision,
+{
+    write_json_to(
+        writer,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": req.req_id,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": req.session_id,
+                "prompt": [{ "type": "text", "text": req.text }]
+            }
+        }),
+    )
+    .await?;
+
+    let deadline = time::Instant::now() + req.timeout;
+    let mut state = PromptTurnState {
+        collected_text: String::new(),
+        tool_events: Vec::new(),
+        permission_events: Vec::new(),
+        cancel_sent: false,
+    };
+
+    loop {
+        let remaining = deadline.saturating_duration_since(time::Instant::now());
+        if remaining.is_zero() {
+            return Err(DennettError::Timeout {
+                operation: String::from("session/prompt"),
+            });
+        }
+
+        let msg = read_message_from(reader, remaining, req.secrets, &stderr_hint).await?;
+
+        if msg.get("id").and_then(Value::as_u64) == Some(req.req_id) && msg.get("method").is_none()
+        {
+            let result = unwrap_rpc_result(&msg, req.secrets)?;
+            let stop_reason = result
+                .get("stopReason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let usage = result.get("usage").cloned();
+            return Ok(PromptOutcome {
+                stop_reason,
+                text: state.collected_text,
+                tool_events: state.tool_events,
+                permission_events: state.permission_events,
+                usage,
+            });
+        }
+
+        if is_uncorrelated_error_frame(&msg) {
+            return Err(
+                extract_json_rpc_error(&msg, req.secrets).unwrap_or_else(|| {
+                    DennettError::RuntimeProtocol {
+                        code: None,
+                        detail: String::from("received uncorrelated JSON-RPC error frame"),
+                    }
+                }),
+            );
+        }
+
+        dispatch_prompt_server_message(writer, &msg, &req, &mut state, &mut on_permission).await?;
+    }
+}
+
+async fn dispatch_prompt_server_message<W, F>(
+    writer: &mut W,
+    msg: &Value,
+    req: &PromptTurnRequest<'_>,
+    state: &mut PromptTurnState,
+    on_permission: &mut F,
+) -> Result<(), DennettError>
+where
+    W: AsyncWrite + Unpin,
+    F: FnMut(&PermissionRequestView) -> PermissionDecision,
+{
+    let Some(method) = msg.get("method").and_then(Value::as_str) else {
+        return Ok(());
+    };
+
+    match method {
+        "session/update" => {
+            record_session_update(
+                msg.get("params").unwrap_or(&Value::Null),
+                req.secrets,
+                &mut state.collected_text,
+                &mut state.tool_events,
+            );
+            if req.cancel_mode == CancelMode::CancelOnFirstUpdate && !state.cancel_sent {
+                write_json_to(
+                    writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "session/cancel",
+                        "params": { "sessionId": req.session_id }
+                    }),
+                )
+                .await?;
+                state.cancel_sent = true;
+            }
+        }
+        "session/request_permission" => {
+            if let Some(server_req_id) = msg.get("id").filter(|id| !id.is_null()).cloned() {
+                let event = handle_permission_request_io(
+                    writer,
+                    server_req_id,
+                    msg.get("params").unwrap_or(&Value::Null),
+                    on_permission,
+                )
+                .await?;
+                state.permission_events.push(event);
+            }
+        }
+        _ => {
+            if let Some(server_req_id) = msg.get("id").filter(|id| !id.is_null()).cloned() {
+                write_json_to(
+                    writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": server_req_id,
+                        "error": {
+                            "code": -32601,
+                            "message": format!("unsupported client method `{method}`")
+                        }
+                    }),
+                )
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_permission_request_io<W, F>(
+    writer: &mut W,
+    server_req_id: Value,
+    params: &Value,
+    on_permission: &mut F,
+) -> Result<PermissionRequestEvent, DennettError>
+where
+    W: AsyncWrite + Unpin,
+    F: FnMut(&PermissionRequestView) -> PermissionDecision,
+{
+    let view = parse_permission_request(params);
+    let decision = on_permission(&view);
+    let chosen = select_permission_option(&view.options, decision);
+    let outcome_json = match &chosen {
+        Some(option_id) => json!({
+            "outcome": {
+                "outcome": "selected",
+                "optionId": option_id
+            }
+        }),
+        None => json!({
+            "outcome": {
+                "outcome": "cancelled"
+            }
+        }),
+    };
+    write_json_to(
+        writer,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": server_req_id,
+            "result": outcome_json
+        }),
+    )
+    .await?;
+
+    Ok(PermissionRequestEvent {
+        tool_call_id: view.tool_call_id,
+        title: view.title,
+        kind: view.kind,
+        options: view.options,
+        chosen_option_id: chosen,
+        decision,
+    })
+}
+
+fn record_session_update(
+    params: &Value,
+    secrets: &[String],
+    collected_text: &mut String,
+    tool_events: &mut Vec<ToolCallEvent>,
+) {
+    let update = params.get("update").unwrap_or(params);
+    let kind = update
+        .get("sessionUpdate")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    match kind {
+        "agent_message_chunk" => {
+            if let Some(content) = update.get("content") {
+                extract_text_chunks(content, collected_text);
+            }
+        }
+        "tool_call" | "tool_call_update" => {
+            let tool_call_id = update
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let title = update
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let status = update
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or(kind)
+                .to_owned();
+            let mut excerpt = String::new();
+            if let Some(content) = update.get("content") {
+                extract_text_chunks(content, &mut excerpt);
+            }
+            if excerpt.is_empty()
+                && let Some(raw_out) = update.get("rawOutput")
+            {
+                excerpt = raw_out.to_string();
+            }
+            tool_events.push(ToolCallEvent {
+                tool_call_id,
+                title,
+                status,
+                output_excerpt: redact_secrets_owned(&excerpt, secrets),
+            });
+        }
+        _ => {}
     }
 }
 
@@ -1419,5 +1614,129 @@ mod tests {
         assert!(!detail.contains("ya29.secret_oauth_token_123456"));
         assert!(!detail.contains("AIzaSySecretKeyValue1234567890abcd"));
         assert!(detail.contains("Authentication required"));
+    }
+
+    #[tokio::test]
+    async fn h0_10_request_fails_fast_on_null_and_missing_id_error_frames() {
+        for frame in [
+            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"Invalid Request\"}}\n",
+        ] {
+            let mut reader = BufReader::new(frame.as_bytes());
+            let mut writer = Vec::new();
+            let res = exchange_request_io(
+                &mut reader,
+                &mut writer,
+                RpcRequestArgs {
+                    req_id: 1,
+                    method: "initialize",
+                    params: json!({}),
+                    timeout: Duration::from_secs(5),
+                    secrets: &[],
+                },
+                String::new,
+            )
+            .await;
+            assert!(
+                matches!(
+                    res,
+                    Err(DennettError::RuntimeProtocol {
+                        code: Some(-32700 | -32600),
+                        ..
+                    })
+                ),
+                "expected immediate RuntimeProtocol error for frame `{frame}`, got: {res:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn h0_10_prompt_turn_fails_fast_on_null_id_error_frame() {
+        let frame = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}\n";
+        let mut reader = BufReader::new(frame.as_bytes());
+        let mut writer = Vec::new();
+        let res = exchange_prompt_turn_io(
+            &mut reader,
+            &mut writer,
+            PromptTurnRequest {
+                req_id: 7,
+                session_id: "sess-1",
+                text: "hello",
+                timeout: Duration::from_secs(5),
+                cancel_mode: CancelMode::RunToCompletion,
+                secrets: &[],
+            },
+            |_req| PermissionDecision::RejectOnce,
+            String::new,
+        )
+        .await;
+        assert!(
+            matches!(
+                res,
+                Err(DennettError::RuntimeProtocol {
+                    code: Some(-32700),
+                    ..
+                })
+            ),
+            "prompt turn must fail immediately on id:null error frame, got: {res:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn h0_10_request_answers_interleaved_server_request_without_deadlock() {
+        let (mut client_to_srv_w, client_to_srv_r) = tokio::io::duplex(4096);
+        let (srv_to_client_w, srv_to_client_r) = tokio::io::duplex(4096);
+
+        let server_task = tokio::spawn(async move {
+            let mut srv_reader = BufReader::new(client_to_srv_r);
+            let mut srv_writer = srv_to_client_w;
+
+            // 1. Receive client's `session/new` request.
+            let mut line = String::new();
+            let _ = srv_reader.read_line(&mut line).await;
+
+            // 2. Send an interleaved server->client request before answering `session/new`.
+            let _ = srv_writer
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"fs/read_text_file\",\"params\":{}}\n",
+                )
+                .await;
+            let _ = srv_writer.flush().await;
+
+            // 3. Expect the client to reply `-32601` for id 99 instead of deadlocking.
+            let mut reply_line = String::new();
+            let _ = srv_reader.read_line(&mut reply_line).await;
+            let reply_json: Value = serde_json::from_str(&reply_line).unwrap_or(Value::Null);
+
+            // 4. Send final response to client's original request id 1.
+            let _ = srv_writer
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n")
+                .await;
+            let _ = srv_writer.flush().await;
+            reply_json
+        });
+
+        let mut client_reader = BufReader::new(srv_to_client_r);
+        let result = exchange_request_io(
+            &mut client_reader,
+            &mut client_to_srv_w,
+            RpcRequestArgs {
+                req_id: 1,
+                method: "session/new",
+                params: json!({}),
+                timeout: Duration::from_secs(5),
+                secrets: &[],
+            },
+            String::new,
+        )
+        .await;
+        assert_eq!(result, Ok(json!({ "ok": true })));
+
+        let server_observed = match server_task.await {
+            Ok(v) => v,
+            Err(err) => panic!("mock peer task panicked: {err}"),
+        };
+        assert_eq!(server_observed["id"], json!(99));
+        assert_eq!(server_observed["error"]["code"], json!(-32601));
     }
 }

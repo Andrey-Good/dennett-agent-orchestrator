@@ -28,7 +28,7 @@ const ALLOWED_ISOLATED_PREFIXES: [&str; 2] = ["dennett-test-", "dennett-d0-"];
 ///
 /// Fields are private so callers cannot silently mutate paths or safety flags after
 /// construction; [`FaultInjectionGuard::acquire`] still re-validates all paths against
-/// live filesystem state to prevent symlink or TOCTOU bypasses.
+/// live filesystem state to prevent symlink, junction, or TOCTOU bypasses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestProfile {
     mode: ProfileMode,
@@ -175,7 +175,7 @@ impl TestProfile {
     }
 
     /// Validates that `root_dir`, `data_dir`, and `workspace_dir` satisfy all sandbox,
-    /// traversal, repository-isolation, and symlink invariants.
+    /// traversal, repository-isolation, and symlink/reparse-point invariants.
     ///
     /// # Errors
     ///
@@ -213,6 +213,7 @@ impl Drop for TempProfileDir {
 /// destructive probes or fault-injection tests.
 #[derive(Debug)]
 pub struct FaultInjectionGuard {
+    raw_root: PathBuf,
     profile_root: PathBuf,
     data_dir: PathBuf,
     workspace_dir: PathBuf,
@@ -282,6 +283,7 @@ impl FaultInjectionGuard {
         let validated = validate_all_profile_paths(profile, ctx)?;
 
         Ok(Self {
+            raw_root: profile.root_dir.clone(),
             profile_root: validated.root,
             data_dir: validated.data,
             workspace_dir: validated.workspace,
@@ -291,14 +293,14 @@ impl FaultInjectionGuard {
     }
 
     /// Validates that `candidate` is strictly contained within this guard's isolated
-    /// root directory, has no `..` traversal, and crosses no symlink components.
+    /// root directory, has no `..` traversal, and crosses no symlink or NTFS junction.
     ///
     /// # Errors
     ///
     /// Returns [`DennettError::SafetyGuardRejected`] if `candidate` escapes the profile
-    /// root or traverses a symlink.
+    /// root or traverses a symlink/reparse point.
     pub fn validate_subpath(&self, candidate: &Path) -> Result<PathBuf, DennettError> {
-        validate_child_within_root(candidate, &self.profile_root, "subpath")
+        validate_child_within_root(candidate, &self.raw_root, &self.profile_root, "subpath")
     }
 
     /// Returns the validated isolated root directory.
@@ -397,9 +399,14 @@ fn validate_all_profile_paths(
     ctx: &PathValidationContext,
 ) -> Result<ValidatedPaths, DennettError> {
     let root_norm = validate_isolated_root_dir(&profile.root_dir, ctx)?;
-    let data_norm = validate_child_within_root(&profile.data_dir, &root_norm, "data_dir")?;
-    let workspace_norm =
-        validate_child_within_root(&profile.workspace_dir, &root_norm, "workspace_dir")?;
+    let data_norm =
+        validate_child_within_root(&profile.data_dir, &profile.root_dir, &root_norm, "data_dir")?;
+    let workspace_norm = validate_child_within_root(
+        &profile.workspace_dir,
+        &profile.root_dir,
+        &root_norm,
+        "workspace_dir",
+    )?;
 
     if data_norm == workspace_norm {
         return Err(DennettError::SafetyGuardRejected {
@@ -450,7 +457,8 @@ fn validate_isolated_root_dir(
     ensure_clean_absolute_path(root_dir, "root_dir")?;
     reject_symlinks_from_anchor(root_dir, &ctx.temp_dir_raw, &ctx.temp_dir_norm, "root_dir")?;
 
-    let normalized_root = normalize_fail_closed(root_dir, "root_dir")?;
+    let normalized_root =
+        normalize_fail_closed(root_dir, &ctx.temp_dir_raw, &ctx.temp_dir_norm, "root_dir")?;
 
     if normalized_root.parent().is_none() {
         return Err(DennettError::SafetyGuardRejected {
@@ -524,12 +532,13 @@ fn validate_isolated_root_dir(
 
 fn validate_child_within_root(
     child: &Path,
+    raw_root: &Path,
     normalized_root: &Path,
     label: &str,
 ) -> Result<PathBuf, DennettError> {
     ensure_clean_absolute_path(child, label)?;
-    reject_symlinks_from_anchor(child, normalized_root, normalized_root, label)?;
-    let normalized_child = normalize_fail_closed(child, label)?;
+    reject_symlinks_from_anchor(child, raw_root, normalized_root, label)?;
+    let normalized_child = normalize_fail_closed(child, raw_root, normalized_root, label)?;
 
     if !is_strictly_inside(&normalized_child, normalized_root) {
         return Err(DennettError::SafetyGuardRejected {
@@ -553,8 +562,24 @@ fn ensure_clean_absolute_path(path: &Path, label: &str) -> Result<(), DennettErr
     Ok(())
 }
 
-/// Checks every path prefix below `anchor_raw` / `anchor_norm` using `symlink_metadata`
-/// so both live symlinks and dangling symlinks are rejected fail-closed.
+/// Checks whether filesystem metadata describes a symlink or Windows reparse point (NTFS junction).
+#[cfg(windows)]
+fn is_symlink_or_reparse_point(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    meta.file_type().is_symlink() || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+}
+
+/// Checks whether filesystem metadata describes a symlink.
+#[cfg(not(windows))]
+fn is_symlink_or_reparse_point(meta: &fs::Metadata) -> bool {
+    meta.file_type().is_symlink()
+}
+
+/// Checks every path prefix strictly below `anchor_raw` / `anchor_norm` using
+/// `symlink_metadata` so live and dangling symlinks (and Windows NTFS junctions) are
+/// rejected fail-closed while allowing an OS-level symlink/junction above `anchor_raw`
+/// (such as macOS `/var -> /private/var` or a redirected `TEMP`).
 fn reject_symlinks_from_anchor(
     candidate: &Path,
     anchor_raw: &Path,
@@ -571,22 +596,18 @@ fn reject_symlinks_from_anchor(
         to_check.push(ancestor);
     }
 
-    // Walk top-down so symlink components on intermediate directories are caught too.
     for path in to_check.into_iter().rev() {
         match fs::symlink_metadata(path) {
             Ok(meta) => {
-                if meta.file_type().is_symlink() {
+                if is_symlink_or_reparse_point(&meta) {
                     return Err(DennettError::SafetyGuardRejected {
                         reason: format!(
-                            "{label} contains a symlink component and is rejected fail-closed"
+                            "{label} contains a symlink or reparse point and is rejected fail-closed"
                         ),
                     });
                 }
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                // Non-existent suffix is allowed; continue checking remaining path entries
-                // in case a caller passed a deeper path beneath an uncreated parent.
-            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
                 return Err(DennettError::SafetyGuardRejected {
                     reason: format!("failed inspecting metadata for {label} (fail-closed): {err}"),
@@ -605,17 +626,31 @@ fn canonicalize_existing_dir(path: &Path, label: &str) -> Result<PathBuf, Dennet
 }
 
 /// Normalizes a path by locating the longest existing ancestor via `symlink_metadata`,
-/// rejecting symlinks fail-closed, and canonicalizing that ancestor without silent fallback.
-fn normalize_fail_closed(path: &Path, label: &str) -> Result<PathBuf, DennettError> {
+/// rejecting symlinks/junctions strictly below `anchor_raw`/`anchor_norm`, and
+/// canonicalizing that ancestor without any silent fallback.
+fn normalize_fail_closed(
+    path: &Path,
+    anchor_raw: &Path,
+    anchor_norm: &Path,
+    label: &str,
+) -> Result<PathBuf, DennettError> {
     let mut existing = path.to_path_buf();
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
+
+    let anchor_raw_norm = normalize_platform_path(anchor_raw);
+    let anchor_norm_clean = normalize_platform_path(anchor_norm);
 
     loop {
         match fs::symlink_metadata(&existing) {
             Ok(meta) => {
-                if meta.file_type().is_symlink() {
+                let existing_clean = normalize_platform_path(&existing);
+                let strictly_below_anchor = is_strictly_inside(&existing_clean, &anchor_raw_norm)
+                    || is_strictly_inside(&existing_clean, &anchor_norm_clean);
+                if strictly_below_anchor && is_symlink_or_reparse_point(&meta) {
                     return Err(DennettError::SafetyGuardRejected {
-                        reason: format!("{label} points through a symlink and is rejected"),
+                        reason: format!(
+                            "{label} points through a symlink or reparse point and is rejected"
+                        ),
                     });
                 }
                 break;
@@ -693,6 +728,38 @@ mod tests {
         }
     }
 
+    /// Creates an unprivileged directory link (NTFS junction on Windows, symlink on Unix).
+    fn create_unprivileged_dir_link(link_path: &Path, target_path: &Path) {
+        #[cfg(windows)]
+        {
+            let link_str = link_path.to_string_lossy();
+            let target_str = target_path.to_string_lossy();
+            let output = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J", &link_str, &target_str])
+                .output();
+            match output {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => panic!(
+                    "mklink /J failed ({}): stdout=`{}` stderr=`{}`",
+                    out.status,
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                ),
+                Err(err) => panic!("failed spawning cmd /C mklink /J: {err}"),
+            }
+        }
+        #[cfg(unix)]
+        {
+            if let Err(err) = std::os::unix::fs::symlink(target_path, link_path) {
+                panic!(
+                    "failed creating unix symlink `{}` -> `{}`: {err}",
+                    link_path.display(),
+                    target_path.display()
+                );
+            }
+        }
+    }
+
     #[test]
     fn guard_accepts_valid_isolated_profile_and_subpaths() {
         let profile = match TestProfile::new_isolated("mod-ok") {
@@ -727,7 +794,6 @@ mod tests {
         };
         let ctx = test_ctx();
 
-        // Missing or non-"1" env marker.
         assert!(matches!(
             FaultInjectionGuard::acquire_internal(&base, None, &ctx),
             Err(DennettError::SafetyGuardRejected { .. })
@@ -737,7 +803,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Production mode.
         let mut prod = base.clone();
         prod.mode = ProfileMode::Production;
         assert!(matches!(
@@ -745,7 +810,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Live external effects enabled.
         let mut live = base.clone();
         live.allow_live_external_effects = true;
         assert!(matches!(
@@ -753,7 +817,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Non-_test or duplicate DB names.
         let mut bad_mem = base.clone();
         bad_mem.postgres_memory_database = String::from("dennett_memory");
         assert!(matches!(
@@ -775,7 +838,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Subpath escaping root_dir (`data_dir` or `workspace_dir`).
         let mut escaped_data = base.clone();
         escaped_data.data_dir = env::temp_dir().join("outside-data");
         assert!(matches!(
@@ -790,7 +852,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Duplicate data_dir and workspace_dir.
         let mut dup_dirs = base.clone();
         dup_dirs.workspace_dir = dup_dirs.data_dir.clone();
         assert!(matches!(
@@ -798,7 +859,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Root matching or inside cwd / repo root (even when simulated under temp_dir).
         let simulated_repo_in_temp = ctx.temp_dir_norm.join("fake-repo-in-tmp");
         let mut ctx_repo_in_tmp = test_ctx();
         ctx_repo_in_tmp.repo_root_norm = Some(simulated_repo_in_temp.clone());
@@ -811,7 +871,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Bare temp_dir or filesystem root.
         let mut bare_temp = base.clone();
         bare_temp.root_dir = env::temp_dir();
         bare_temp.data_dir = bare_temp.root_dir.join("data");
@@ -834,7 +893,6 @@ mod tests {
             repo_root_norm: base_ctx.repo_root_norm.clone(),
         };
 
-        // `.gemini` directly under temp_dir==HOME must be rejected!
         let mut bad_home_sub = match TestProfile::new_isolated("home-overlap") {
             Ok(p) => p,
             Err(err) => panic!("profile build failed: {err}"),
@@ -847,7 +905,6 @@ mod tests {
             Err(DennettError::SafetyGuardRejected { .. })
         ));
 
-        // Standard `dennett-test-isolated/...` under temp_dir==HOME is accepted.
         let good = match TestProfile::new_isolated("home-ok") {
             Ok(p) => p,
             Err(err) => panic!("profile build failed: {err}"),
@@ -859,45 +916,135 @@ mod tests {
     }
 
     #[test]
-    fn guard_rejects_dangling_and_live_symlinks_when_supported() {
+    fn h0_07_guard_rejects_dangling_and_live_symlinks_and_junctions() {
         let (profile, _tmp) = match TestProfile::create_on_disk("symlink-probe") {
             Ok(pair) => pair,
             Err(err) => panic!("failed creating on-disk profile: {err}"),
         };
+        let (external_profile, _ext_tmp) = match TestProfile::create_on_disk("symlink-target") {
+            Ok(pair) => pair,
+            Err(err) => panic!("failed creating external target dir: {err}"),
+        };
         let ctx = test_ctx();
 
-        let dangling_link = profile.workspace_dir().join("dangling_sub");
-        let missing_target = profile.root_dir().join("does-not-exist-target");
-
-        #[cfg(unix)]
-        let link_res = std::os::unix::fs::symlink(&missing_target, &dangling_link);
-        #[cfg(windows)]
-        let link_res = std::os::windows::fs::symlink_dir(&missing_target, &dangling_link);
-
-        // On Windows without Developer Mode / SeCreateSymbolicLinkPrivilege, creating a
-        // symlink returns PermissionDenied; run the assertion whenever the OS permits it.
-        if link_res.is_ok() {
-            let guard = match FaultInjectionGuard::acquire_internal(&profile, Some("1"), &ctx) {
-                Ok(g) => g,
-                Err(err) => panic!("baseline profile should pass guard: {err}"),
-            };
-            assert!(
-                matches!(
-                    guard.validate_subpath(&dangling_link),
-                    Err(DennettError::SafetyGuardRejected { .. })
-                ),
-                "dangling symlink subpath must be rejected fail-closed"
-            );
-
-            let mut symlink_data = profile.clone();
-            symlink_data.data_dir = dangling_link;
-            assert!(
-                matches!(
-                    FaultInjectionGuard::acquire_internal(&symlink_data, Some("1"), &ctx),
-                    Err(DennettError::SafetyGuardRejected { .. })
-                ),
-                "profile with symlink data_dir must be rejected fail-closed"
-            );
+        let external_target = external_profile.workspace_dir().join("outside_real");
+        if let Err(err) = fs::create_dir_all(&external_target) {
+            panic!("failed creating external link target: {err}");
         }
+
+        let dir_link = profile.workspace_dir().join("evil_link");
+        create_unprivileged_dir_link(&dir_link, &external_target);
+
+        let guard = match FaultInjectionGuard::acquire_internal(&profile, Some("1"), &ctx) {
+            Ok(g) => g,
+            Err(err) => panic!("baseline profile should pass guard: {err}"),
+        };
+
+        // 1. Live symlink/junction pointing outside must be rejected fail-closed.
+        assert!(
+            matches!(
+                guard.validate_subpath(&dir_link),
+                Err(DennettError::SafetyGuardRejected { .. })
+            ),
+            "live symlink/junction subpath must be rejected fail-closed"
+        );
+        let mut live_link_data = profile.clone();
+        live_link_data.data_dir = dir_link.clone();
+        assert!(
+            matches!(
+                FaultInjectionGuard::acquire_internal(&live_link_data, Some("1"), &ctx),
+                Err(DennettError::SafetyGuardRejected { .. })
+            ),
+            "profile with live symlink/junction data_dir must be rejected fail-closed"
+        );
+
+        // 2. Remove target so the link becomes dangling; must STILL be rejected fail-closed.
+        if let Err(err) = fs::remove_dir(&external_target) {
+            panic!("failed removing target dir to make link dangling: {err}");
+        }
+        assert!(
+            matches!(
+                guard.validate_subpath(&dir_link),
+                Err(DennettError::SafetyGuardRejected { .. })
+            ),
+            "dangling symlink/junction subpath must be rejected fail-closed"
+        );
+        let mut dangling_link_data = profile.clone();
+        dangling_link_data.data_dir = dir_link;
+        assert!(
+            matches!(
+                FaultInjectionGuard::acquire_internal(&dangling_link_data, Some("1"), &ctx),
+                Err(DennettError::SafetyGuardRejected { .. })
+            ),
+            "profile with dangling symlink/junction data_dir must be rejected fail-closed"
+        );
+    }
+
+    #[test]
+    fn h0_06_guard_accepts_profile_when_temp_dir_traverses_junction_or_symlink() {
+        let (holder, _holder_tmp) = match TestProfile::create_on_disk("h06-holder") {
+            Ok(pair) => pair,
+            Err(err) => panic!("failed creating holder dir: {err}"),
+        };
+        let real_temp_target = holder.workspace_dir().join("real-temp");
+        if let Err(err) = fs::create_dir_all(&real_temp_target) {
+            panic!("failed creating real temp target: {err}");
+        }
+
+        let linked_temp = holder.workspace_dir().join("linked-temp");
+        create_unprivileged_dir_link(&linked_temp, &real_temp_target);
+
+        let base_ctx = test_ctx();
+        let linked_temp_norm = match canonicalize_existing_dir(&linked_temp, "linked_temp") {
+            Ok(p) => p,
+            Err(err) => panic!("failed canonicalizing linked temp: {err}"),
+        };
+        let ctx = PathValidationContext {
+            temp_dir_raw: linked_temp.clone(),
+            temp_dir_norm: linked_temp_norm,
+            home_dirs_norm: base_ctx.home_dirs_norm,
+            cwd_norm: base_ctx.cwd_norm,
+            repo_root_norm: base_ctx.repo_root_norm,
+        };
+
+        let root_under_linked = linked_temp.join("dennett-test-isolated").join("case-h06");
+        let mut profile = match TestProfile::new_isolated("case-h06") {
+            Ok(p) => p,
+            Err(err) => panic!("profile build failed: {err}"),
+        };
+        profile.root_dir = root_under_linked.clone();
+        profile.data_dir = root_under_linked.join("data");
+        profile.workspace_dir = root_under_linked.join("workspace");
+
+        // Must succeed before directory creation on disk...
+        let pre_guard = match FaultInjectionGuard::acquire_internal(&profile, Some("1"), &ctx) {
+            Ok(g) => g,
+            Err(err) => {
+                panic!("profile under symlinked/junctioned TEMP must validate before mkdir: {err}")
+            }
+        };
+        assert!(
+            pre_guard
+                .validate_subpath(&profile.workspace_dir().join("note.txt"))
+                .is_ok()
+        );
+
+        // ...and after physical directory creation on disk.
+        if let Err(err) = fs::create_dir_all(&profile.data_dir)
+            .and_then(|()| fs::create_dir_all(&profile.workspace_dir))
+        {
+            panic!("failed creating profile subdirs under linked temp: {err}");
+        }
+        let post_guard = match FaultInjectionGuard::acquire_internal(&profile, Some("1"), &ctx) {
+            Ok(g) => g,
+            Err(err) => {
+                panic!("profile under symlinked/junctioned TEMP must validate after mkdir: {err}")
+            }
+        };
+        assert!(
+            post_guard
+                .validate_subpath(&profile.workspace_dir().join("nested").join("file.txt"))
+                .is_ok()
+        );
     }
 }

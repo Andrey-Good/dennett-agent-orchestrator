@@ -249,6 +249,25 @@ async fn assert_shell_command_rejected(
     );
 }
 
+async fn assert_cancel_on_first_update(client: &mut AcpClient, session_id: &str) {
+    let cancel_prompt = "Write a detailed numbered list from 1 to 400 where every item is a full \
+                         two-sentence description of a distinct fictional exoplanet. Do not shorten or omit items.";
+    let cancel_outcome = match client
+        .prompt_and_cancel_on_first_update(session_id, cancel_prompt, TURN_TIMEOUT, |_req| {
+            PermissionDecision::RejectOnce
+        })
+        .await
+    {
+        Ok(o) => o,
+        Err(err) => panic!("session/cancel probe failed: {err}"),
+    };
+    assert_eq!(
+        cancel_outcome.stop_reason, "cancelled",
+        "expected stopReason=`cancelled` after session/cancel; got `{}`",
+        cancel_outcome.stop_reason
+    );
+}
+
 #[tokio::test]
 #[ignore = "live agy acp D0 compatibility probe; run via dennett-check runtime-probe"]
 async fn acp_live_mcp_memory_tool_permission_and_cancel() {
@@ -259,7 +278,20 @@ async fn acp_live_mcp_memory_tool_permission_and_cancel() {
         &Uuid::new_v4().simple().to_string()[..12]
     );
 
-    let cfg = AcpSpawnConfig::new(profile.workspace_dir().to_path_buf());
+    // Isolate the live interactive probe completely from `~/.gemini/antigravity-cli`:
+    // OS keyring OAuth credentials remain available while settings/plugins/logs stay inside `profile.data_dir()`.
+    let acp_log_path = profile.data_dir().join("acp.log");
+    let mut cfg = AcpSpawnConfig::new(profile.workspace_dir().to_path_buf());
+    cfg.extra_args = vec![
+        String::from("--gemini-dir"),
+        profile.data_dir().to_string_lossy().into_owned(),
+        String::from("--app-data-dir"),
+        String::from("dennett-d0-live"),
+        String::from("--include-default-customizations=false"),
+        String::from("--disable-telemetry"),
+        String::from("--log-file"),
+        acp_log_path.to_string_lossy().into_owned(),
+    ];
     let mut client = match AcpClient::spawn(&cfg) {
         Ok(c) => c,
         Err(err) => panic!("failed spawning agy acp: {err}"),
@@ -324,26 +356,12 @@ async fn acp_live_mcp_memory_tool_permission_and_cancel() {
 
     assert_mcp_memory_read_allowed(&mut client, &session.session_id, &expected_token).await;
     assert_shell_command_rejected(&mut client, &session.session_id, profile.workspace_dir()).await;
-
-    let cancel_prompt = "Write a detailed numbered list from 1 to 400 where every item is a full \
-                         two-sentence description of a distinct fictional exoplanet. Do not shorten or omit items.";
-    let cancel_outcome = match client
-        .prompt_and_cancel_on_first_update(
-            &session.session_id,
-            cancel_prompt,
-            TURN_TIMEOUT,
-            |_req| PermissionDecision::RejectOnce,
-        )
-        .await
-    {
-        Ok(o) => o,
-        Err(err) => panic!("session/cancel probe failed: {err}"),
-    };
-    assert_eq!(
-        cancel_outcome.stop_reason, "cancelled",
-        "expected stopReason=`cancelled` after session/cancel; got `{}`",
-        cancel_outcome.stop_reason
-    );
+    assert_cancel_on_first_update(&mut client, &session.session_id).await;
 
     let _ = client.shutdown().await;
+    assert!(
+        acp_log_path.is_file(),
+        "isolated ACP log file must be created inside profile.data_dir() at `{}`",
+        acp_log_path.display()
+    );
 }

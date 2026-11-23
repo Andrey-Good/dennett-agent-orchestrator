@@ -389,3 +389,138 @@ async fn memoryd_serve_returns_503_and_redacts_password_when_pg_unreachable() {
     assert_eq!(shutdown_status, 200);
     let _ = time::timeout(Duration::from_secs(5), child.wait()).await;
 }
+
+#[tokio::test]
+async fn h0_01_memoryd_serve_arg_with_multibyte_escape_exits_cleanly_without_panic() {
+    let _pg_url = require_memory_pg_url();
+    let bin = locate_memoryd_binary();
+
+    let output = match Command::new(&bin)
+        .args(["--serve", "password='\\я'"])
+        .env(TEST_PROFILE_ENV, "1")
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(err) => panic!("failed running memoryd CLI UTF-8 probe: {err}"),
+    };
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "memoryd must never panic on multibyte escaped CLI args: {stderr}"
+    );
+    let err_json: Value = match serde_json::from_str(stderr.trim()) {
+        Ok(v) => v,
+        Err(err) => panic!("expected structured JSON error in stderr `{stderr}`: {err}"),
+    };
+    assert_eq!(
+        err_json["kind"],
+        Value::String(String::from("invalid_input"))
+    );
+}
+
+#[tokio::test]
+async fn h0_02_memoryd_isolated_rejects_dsn_override_exploits_and_prod_env_fallback() {
+    let pg_url = require_memory_pg_url();
+    let bin = locate_memoryd_binary();
+
+    for exploit_dsn in [
+        "postgres://u:p@127.0.0.1:1/fake_test?dbname=production_db",
+        "host=127.0.0.1 port=1 user=u password=p dbname=fake_test dbname=production_db",
+    ] {
+        let output = match Command::new(&bin)
+            .args(["--health-once", "--pg-url", exploit_dsn])
+            .env(TEST_PROFILE_ENV, "1")
+            .env_remove("DENNETT_MEMORY_PG_URL")
+            .env_remove("DENNETT_TEST_MEMORY_PG_URL")
+            .output()
+            .await
+        {
+            Ok(o) => o,
+            Err(err) => panic!("failed running memoryd DSN exploit probe: {err}"),
+        };
+
+        assert!(
+            !output.status.success(),
+            "exploit DSN `{exploit_dsn}` must exit non-zero"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let err_json: Value = match serde_json::from_str(stderr.trim()) {
+            Ok(v) => v,
+            Err(err) => panic!("expected JSON error in stderr `{stderr}`: {err}"),
+        };
+        assert_eq!(
+            err_json["kind"],
+            Value::String(String::from("safety_guard_rejected")),
+            "exploit DSN `{exploit_dsn}` must fail with safety_guard_rejected, got: {err_json}"
+        );
+    }
+
+    // With DENNETT_TEST_PROFILE=1 and only DENNETT_MEMORY_PG_URL set, memoryd must NOT fall back.
+    let no_fallback = match Command::new(&bin)
+        .arg("--health-once")
+        .env(TEST_PROFILE_ENV, "1")
+        .env("DENNETT_MEMORY_PG_URL", &pg_url)
+        .env_remove("DENNETT_TEST_MEMORY_PG_URL")
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(err) => panic!("failed running memoryd no-fallback probe: {err}"),
+    };
+    assert!(
+        !no_fallback.status.success(),
+        "TestIsolated must not fall back to DENNETT_MEMORY_PG_URL"
+    );
+    let nf_stderr = String::from_utf8_lossy(&no_fallback.stderr);
+    let nf_json: Value = match serde_json::from_str(nf_stderr.trim()) {
+        Ok(v) => v,
+        Err(err) => panic!("expected JSON error in stderr `{nf_stderr}`: {err}"),
+    };
+    assert_eq!(
+        nf_json["kind"],
+        Value::String(String::from("database_unavailable"))
+    );
+}
+
+#[tokio::test]
+async fn h0_11_memoryd_rejects_large_body_shutdown_with_403_without_tcp_rst() {
+    let pg_url = require_memory_pg_url();
+    let bin = locate_memoryd_binary();
+
+    let mut child = match Command::new(&bin)
+        .args(["--serve", "127.0.0.1:0"])
+        .env(TEST_PROFILE_ENV, "1")
+        .env("DENNETT_TEST_MEMORY_PG_URL", &pg_url)
+        .env_remove("DENNETT_MEMORY_PG_URL")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(err) => panic!("failed spawning memoryd for H0-11 body-drain probe: {err}"),
+    };
+
+    let addr = read_listening_addr(&mut child).await;
+    let body = "A".repeat(4096);
+    let req = format!(
+        "POST /shutdown HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+
+    for attempt in 0..5 {
+        let (status, resp_body) = send_http_request(&addr, &req).await;
+        assert_eq!(
+            status, 403,
+            "attempt {attempt}: expected clean 403 without Winsock TCP RST, got {status}: {resp_body}"
+        );
+    }
+
+    let (shutdown_status, _) = send_http_request(&addr, &shutdown_request(&addr)).await;
+    assert_eq!(shutdown_status, 200);
+    let _ = time::timeout(Duration::from_secs(5), child.wait()).await;
+}

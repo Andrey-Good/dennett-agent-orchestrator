@@ -4,8 +4,6 @@
 //! connectivity, reports `memory_fabric_implemented: false` honestly, and strips
 //! database credentials from every diagnostic response.
 
-mod sanitize;
-
 use std::env;
 use std::io::{self, Write};
 use std::net::SocketAddr;
@@ -13,6 +11,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use dennett_contracts::redact::{
+    sanitize_cli_arg, sanitize_pg_error, sanitize_pg_error_with_password,
+};
 use dennett_contracts::{CorrelationId, DennettError, ProfileMode, ServiceHealth, ServiceKind};
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,16 +21,18 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 use tokio::time;
-use tokio_postgres::NoTls;
+use tokio_postgres::{Config as PgConfig, NoTls};
 
-use crate::sanitize::{sanitize_cli_arg, sanitize_pg_error};
-
-/// Maximum incoming HTTP request size accepted by the D0 health endpoint.
+/// Maximum incoming HTTP header block size accepted by the D0 health endpoint.
 const MAX_HTTP_REQUEST_BYTES: usize = 16 * 1024;
+/// Maximum HTTP request body bytes drained before replying so Windows Winsock avoids `TCP RST`.
+const MAX_HTTP_DRAIN_BODY_BYTES: usize = 64 * 1024;
 /// Maximum concurrent HTTP connections served simultaneously by the D0 scaffold.
 const MAX_CONCURRENT_CONNECTIONS: usize = 32;
 /// Timeout applied to reading an HTTP header block from a connected client.
 const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// Short timeout applied while draining an incoming request body before replying.
+const HTTP_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 /// Timeout applied to writing an HTTP response back to a client.
 const HTTP_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout applied to establishing and running a PostgreSQL health query.
@@ -78,7 +81,61 @@ struct HttpHead<'a> {
     path: &'a str,
     host: Option<&'a str>,
     shutdown_header_valid: bool,
+    content_length: usize,
     correlation_id: CorrelationId,
+}
+
+/// Validated PostgreSQL configuration parsed once by `tokio_postgres::Config` to avoid
+/// parser differentials between validation and connection establishment.
+#[derive(Clone)]
+struct ValidatedPgTarget {
+    raw_url: String,
+    config: PgConfig,
+}
+
+impl ValidatedPgTarget {
+    fn parse(raw_url: &str, profile_mode: ProfileMode) -> Result<Self, DennettError> {
+        let config: PgConfig = raw_url.parse().map_err(|err| {
+            let safe = sanitize_pg_error(&format!("{err}"), Some(raw_url));
+            if profile_mode == ProfileMode::TestIsolated {
+                DennettError::SafetyGuardRejected {
+                    reason: format!("invalid PostgreSQL connection string: {safe}"),
+                }
+            } else {
+                DennettError::DatabaseUnavailable {
+                    detail: format!("invalid PostgreSQL connection string: {safe}"),
+                }
+            }
+        })?;
+
+        if profile_mode == ProfileMode::TestIsolated {
+            let Some(db_name) = config.get_dbname() else {
+                return Err(DennettError::SafetyGuardRejected {
+                    reason: String::from(
+                        "test_isolated profile requires an explicit `*_test` PostgreSQL database",
+                    ),
+                });
+            };
+            if db_name.len() <= "_test".len() || !db_name.ends_with("_test") {
+                return Err(DennettError::SafetyGuardRejected {
+                    reason: format!(
+                        "test_isolated profile requires a `*_test` PostgreSQL database, got `{db_name}`"
+                    ),
+                });
+            }
+        }
+
+        Ok(Self {
+            raw_url: raw_url.to_owned(),
+            config,
+        })
+    }
+
+    fn parsed_password(&self) -> Option<&str> {
+        self.config
+            .get_password()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+    }
 }
 
 #[tokio::main]
@@ -187,13 +244,13 @@ fn active_profile_mode() -> ProfileMode {
     }
 }
 
-fn resolve_pg_url(
+fn resolve_pg_target(
     cli_override: Option<&str>,
     profile_mode: ProfileMode,
-) -> Result<Option<String>, DennettError> {
+) -> Result<Option<ValidatedPgTarget>, DennettError> {
     let prod_env = env::var("DENNETT_MEMORY_PG_URL").ok();
     let test_env = env::var("DENNETT_TEST_MEMORY_PG_URL").ok();
-    resolve_pg_url_from_sources(
+    resolve_pg_target_from_sources(
         cli_override,
         test_env.as_deref(),
         prod_env.as_deref(),
@@ -201,108 +258,38 @@ fn resolve_pg_url(
     )
 }
 
-fn resolve_pg_url_from_sources(
+fn resolve_pg_target_from_sources(
     cli_override: Option<&str>,
     test_env: Option<&str>,
     prod_env: Option<&str>,
     profile_mode: ProfileMode,
-) -> Result<Option<String>, DennettError> {
+) -> Result<Option<ValidatedPgTarget>, DennettError> {
+    // In `TestIsolated`, never fall back to production `DENNETT_MEMORY_PG_URL`.
     let chosen = match profile_mode {
-        ProfileMode::TestIsolated => non_empty(cli_override)
-            .or_else(|| non_empty(test_env))
-            .or_else(|| non_empty(prod_env)),
+        ProfileMode::TestIsolated => non_empty(cli_override).or_else(|| non_empty(test_env)),
         ProfileMode::Production => non_empty(cli_override).or_else(|| non_empty(prod_env)),
     };
 
-    if profile_mode == ProfileMode::TestIsolated
-        && let Some(url) = chosen
-    {
-        validate_isolated_pg_database(url)?;
-    }
-
-    Ok(chosen.map(str::to_owned))
+    chosen
+        .map(|url| ValidatedPgTarget::parse(url, profile_mode))
+        .transpose()
 }
 
 fn non_empty(val: Option<&str>) -> Option<&str> {
     val.map(str::trim).filter(|s| !s.is_empty())
 }
 
-fn validate_isolated_pg_database(pg_url: &str) -> Result<(), DennettError> {
-    let Some(db_name) = extract_pg_database_name(pg_url) else {
-        return Err(DennettError::SafetyGuardRejected {
-            reason: String::from(
-                "could not determine PostgreSQL database name in test_isolated profile",
-            ),
-        });
-    };
-    if db_name.len() <= "_test".len() || !db_name.ends_with("_test") {
-        return Err(DennettError::SafetyGuardRejected {
-            reason: format!(
-                "test_isolated profile requires a `*_test` PostgreSQL database, got `{db_name}`"
-            ),
-        });
-    }
-    Ok(())
-}
-
-fn extract_pg_database_name(conn_str: &str) -> Option<String> {
-    let trimmed = conn_str.trim();
-    if let Some(scheme_pos) = trimmed.find("://") {
-        let after_scheme = &trimmed[scheme_pos + 3..];
-        let slash_pos = after_scheme.find('/')?;
-        let path_and_query = &after_scheme[slash_pos + 1..];
-        let db = path_and_query
-            .split(['?', '#'])
-            .next()
-            .unwrap_or_default()
-            .trim();
-        if !db.is_empty() {
-            return Some(db.to_owned());
-        }
-        return None;
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    let mut idx = 0;
-    while let Some(rel) = lower[idx..].find("dbname") {
-        let start = idx + rel;
-        let after_key = start + "dbname".len();
-        let left_ok = start == 0
-            || !trimmed.as_bytes()[start - 1].is_ascii_alphanumeric()
-                && trimmed.as_bytes()[start - 1] != b'_';
-        if !left_ok {
-            idx = after_key;
-            continue;
-        }
-        let rest = &trimmed[after_key..];
-        let rest = rest.trim_start_matches([' ', '\t']);
-        if let Some(after_eq) = rest.strip_prefix('=') {
-            let val_rest = after_eq.trim_start_matches([' ', '\t']);
-            let db = if let Some(quoted) = val_rest.strip_prefix('\'') {
-                quoted.split('\'').next().unwrap_or_default()
-            } else {
-                val_rest.split_whitespace().next().unwrap_or_default()
-            };
-            if !db.is_empty() {
-                return Some(db.to_owned());
-            }
-        }
-        idx = after_key;
-    }
-    None
-}
-
 async fn run_health_once(cli_pg_url: Option<String>, profile_mode: ProfileMode) -> ExitCode {
     let correlation_id = CorrelationId::generate();
-    let pg_url = match resolve_pg_url(cli_pg_url.as_deref(), profile_mode) {
-        Ok(url) => url,
+    let target = match resolve_pg_target(cli_pg_url.as_deref(), profile_mode) {
+        Ok(t) => t,
         Err(err) => {
             emit_stderr_error(&err);
             return ExitCode::from(1);
         }
     };
 
-    match probe_postgres(pg_url.as_deref(), profile_mode, correlation_id).await {
+    match probe_postgres(target.as_ref(), profile_mode, correlation_id).await {
         Ok(health) => match serde_json::to_string(&health) {
             Ok(json) => {
                 println!("{json}");
@@ -327,8 +314,8 @@ async fn run_serve(
     cli_pg_url: Option<String>,
     profile_mode: ProfileMode,
 ) -> ExitCode {
-    let pg_url = match resolve_pg_url(cli_pg_url.as_deref(), profile_mode) {
-        Ok(url) => url,
+    let target = match resolve_pg_target(cli_pg_url.as_deref(), profile_mode) {
+        Ok(t) => t,
         Err(err) => {
             emit_stderr_error(&err);
             return ExitCode::from(1);
@@ -396,14 +383,14 @@ async fn run_serve(
                     let _ = write_http_json(&mut stream, "503 Service Unavailable", &busy).await;
                     continue;
                 };
-                let pg_url_clone = pg_url.clone();
+                let target_clone = target.clone();
                 let tx_clone = shutdown_tx.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
                     handle_connection(
                         stream,
                         peer_addr,
-                        pg_url_clone.as_deref(),
+                        target_clone.as_ref(),
                         profile_mode,
                         tx_clone,
                     )
@@ -419,11 +406,12 @@ async fn run_serve(
 async fn handle_connection(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
-    pg_url: Option<&str>,
+    pg_target: Option<&ValidatedPgTarget>,
     profile_mode: ProfileMode,
     shutdown_tx: watch::Sender<bool>,
 ) {
-    let Ok(header_bytes) = read_http_header_block(&mut stream).await else {
+    let Ok((header_bytes, already_read_body_len)) = read_http_header_block(&mut stream).await
+    else {
         let _ = write_http_json(
             &mut stream,
             "400 Bad Request",
@@ -462,11 +450,20 @@ async fn handle_connection(
         return;
     };
 
+    // Drain any bounded incoming request body before replying/closing to prevent Winsock TCP RST.
+    let remaining_body = head
+        .content_length
+        .saturating_sub(already_read_body_len)
+        .min(MAX_HTTP_DRAIN_BODY_BYTES);
+    if remaining_body > 0 {
+        drain_remaining_body(&mut stream, remaining_body).await;
+    }
+
     dispatch_http_request(
         &mut stream,
         head,
         peer_addr,
-        pg_url,
+        pg_target,
         profile_mode,
         shutdown_tx,
     )
@@ -489,6 +486,7 @@ fn parse_http_head(header_block: &str) -> Option<HttpHead<'_>> {
     let mut correlation_id: Option<CorrelationId> = None;
     let mut host: Option<&str> = None;
     let mut shutdown_header_valid = false;
+    let mut content_length: usize = 0;
 
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
@@ -502,6 +500,10 @@ fn parse_http_head(header_block: &str) -> Option<HttpHead<'_>> {
             host = Some(val);
         } else if key.eq_ignore_ascii_case("x-dennett-shutdown") && val == "1" {
             shutdown_header_valid = true;
+        } else if key.eq_ignore_ascii_case("content-length")
+            && let Ok(parsed) = val.parse::<usize>()
+        {
+            content_length = parsed;
         }
     }
 
@@ -510,6 +512,7 @@ fn parse_http_head(header_block: &str) -> Option<HttpHead<'_>> {
         path,
         host,
         shutdown_header_valid,
+        content_length,
         correlation_id: correlation_id.unwrap_or_else(CorrelationId::generate),
     })
 }
@@ -531,7 +534,7 @@ async fn dispatch_http_request(
     stream: &mut TcpStream,
     head: HttpHead<'_>,
     peer_addr: SocketAddr,
-    pg_url: Option<&str>,
+    pg_target: Option<&ValidatedPgTarget>,
     profile_mode: ProfileMode,
     shutdown_tx: watch::Sender<bool>,
 ) {
@@ -540,12 +543,13 @@ async fn dispatch_http_request(
         path,
         host,
         shutdown_header_valid,
+        content_length: _,
         correlation_id,
     } = head;
 
     match (method, path) {
         ("GET", "/healthz") => {
-            match probe_postgres(pg_url, profile_mode, correlation_id.clone()).await {
+            match probe_postgres(pg_target, profile_mode, correlation_id.clone()).await {
                 Ok(health) => {
                     let _ = write_http_json(stream, "200 OK", &health).await;
                 }
@@ -621,7 +625,7 @@ async fn dispatch_http_request(
     }
 }
 
-async fn read_http_header_block(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+async fn read_http_header_block(stream: &mut TcpStream) -> io::Result<(Vec<u8>, usize)> {
     let mut buf = Vec::with_capacity(512);
     let mut chunk = [0_u8; 1024];
 
@@ -629,7 +633,7 @@ async fn read_http_header_block(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
         loop {
             let n = stream.read(&mut chunk).await?;
             if n == 0 {
-                break;
+                return Ok((buf, 0));
             }
             if buf.len() + n > MAX_HTTP_REQUEST_BYTES {
                 return Err(io::Error::new(
@@ -639,16 +643,31 @@ async fn read_http_header_block(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
             }
             buf.extend_from_slice(&chunk[..n]);
             if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                let body_start = header_end + 4;
+                let already_read_body = buf.len().saturating_sub(body_start);
                 buf.truncate(header_end);
-                break;
+                return Ok((buf, already_read_body));
             }
         }
-        Ok(buf)
     };
 
     time::timeout(HTTP_READ_TIMEOUT, read_fut)
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "HTTP request read timed out"))?
+}
+
+async fn drain_remaining_body(stream: &mut TcpStream, mut remaining: usize) {
+    let mut sink = [0_u8; 2048];
+    let _ = time::timeout(HTTP_DRAIN_TIMEOUT, async {
+        while remaining > 0 {
+            let to_read = remaining.min(sink.len());
+            match stream.read(&mut sink[..to_read]).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => remaining = remaining.saturating_sub(n),
+            }
+        }
+    })
+    .await;
 }
 
 async fn write_http_json<T: Serialize>(
@@ -665,7 +684,9 @@ async fn write_http_json<T: Serialize>(
     let write_fut = async {
         stream.write_all(header.as_bytes()).await?;
         stream.write_all(&body).await?;
-        stream.flush().await
+        stream.flush().await?;
+        let _ = stream.shutdown().await;
+        Ok(())
     };
     time::timeout(HTTP_WRITE_TIMEOUT, write_fut)
         .await
@@ -673,22 +694,25 @@ async fn write_http_json<T: Serialize>(
 }
 
 async fn probe_postgres(
-    pg_url: Option<&str>,
+    pg_target: Option<&ValidatedPgTarget>,
     profile_mode: ProfileMode,
     correlation_id: CorrelationId,
 ) -> Result<ServiceHealth, DennettError> {
-    let Some(url) = pg_url else {
+    let Some(target) = pg_target else {
         return Err(DennettError::DatabaseUnavailable {
             detail: String::from(
-                "PostgreSQL URL is not configured (set --pg-url or DENNETT_MEMORY_PG_URL)",
+                "PostgreSQL URL is not configured (set --pg-url, DENNETT_TEST_MEMORY_PG_URL in test_isolated, or DENNETT_MEMORY_PG_URL in production)",
             ),
         });
     };
 
+    let raw_url = target.raw_url.as_str();
+    let parsed_pw = target.parsed_password();
+
     let probe_fut = async {
-        let (client, connection) = tokio_postgres::connect(url, NoTls).await.map_err(|err| {
+        let (client, connection) = target.config.connect(NoTls).await.map_err(|err| {
             DennettError::DatabaseUnavailable {
-                detail: sanitize_pg_error(&err.to_string(), Some(url)),
+                detail: sanitize_pg_error_with_password(&err.to_string(), Some(raw_url), parsed_pw),
             }
         })?;
 
@@ -703,7 +727,7 @@ async fn probe_postgres(
             )
             .await
             .map_err(|err| DennettError::DatabaseUnavailable {
-                detail: sanitize_pg_error(&err.to_string(), Some(url)),
+                detail: sanitize_pg_error_with_password(&err.to_string(), Some(raw_url), parsed_pw),
             })?;
 
         let check: i32 = row.get(0);
@@ -758,8 +782,8 @@ fn print_usage() {
          \x20 dennett-memoryd --health-once [--pg-url <URL>]\n\
          \x20 dennett-memoryd --serve <IP:PORT> [--allow-non-loopback] [--pg-url <URL>]\n\
          Env:\n\
-         \x20 DENNETT_TEST_MEMORY_PG_URL (preferred when DENNETT_TEST_PROFILE=1; requires *_test DB)\n\
-         \x20 DENNETT_MEMORY_PG_URL"
+         \x20 DENNETT_TEST_MEMORY_PG_URL (required in test_isolated unless --pg-url given; requires *_test DB)\n\
+         \x20 DENNETT_MEMORY_PG_URL (production profile only)"
     );
 }
 
@@ -784,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_redacts_secret_in_unknown_flag() {
+    fn parse_args_redacts_secret_and_handles_multibyte_escape_without_panic() {
         let err = parse_args(
             ["--pg-url=postgres://u:SECRET_ARG_99@127.0.0.1/db"]
                 .into_iter()
@@ -797,39 +821,63 @@ mod tests {
             !reason.contains("SECRET_ARG_99"),
             "CLI arg secret leaked into error: {reason}"
         );
+
+        // H0-01 regression: `--serve "password='\\я'"` must return clean InvalidInput, never panic.
+        let utf8_err = parse_args(["--serve", "password='\\я'"].into_iter().map(String::from));
+        assert!(matches!(utf8_err, Err(DennettError::InvalidInput { .. })));
     }
 
     #[test]
-    fn test_isolated_prefers_test_env_and_requires_test_db_suffix() {
-        let chosen = resolve_pg_url_from_sources(
+    fn h0_02_test_isolated_forbids_prod_fallback_and_blocks_dsn_override_exploits() {
+        // TestIsolated must NEVER fall back to DENNETT_MEMORY_PG_URL.
+        let no_fallback = resolve_pg_target_from_sources(
             None,
-            Some("postgres://u:p@127.0.0.1/dennett_memory_test"),
-            Some("postgres://u:p@127.0.0.1/dennett_memory_prod"),
+            None,
+            Some("postgres://u:p@127.0.0.1:1/dennett_memory_test"),
             ProfileMode::TestIsolated,
         );
-        assert_eq!(
-            chosen.ok().flatten().as_deref(),
-            Some("postgres://u:p@127.0.0.1/dennett_memory_test")
+        assert!(
+            matches!(no_fallback, Ok(None)),
+            "TestIsolated must not fall back to DENNETT_MEMORY_PG_URL"
         );
 
-        let rejected = resolve_pg_url_from_sources(
-            None,
-            None,
-            Some("postgres://u:p@127.0.0.1/dennett_memory_prod"),
+        // Exploit 1: URI path looks like `_test`, query `dbname` overrides to production_db.
+        let uri_override = ValidatedPgTarget::parse(
+            "postgres://u:p@127.0.0.1:1/fake_test?dbname=production_db",
             ProfileMode::TestIsolated,
         );
-        assert!(matches!(
-            rejected,
-            Err(DennettError::SafetyGuardRejected { .. })
-        ));
+        assert!(
+            matches!(uri_override, Err(DennettError::SafetyGuardRejected { .. })),
+            "URI query dbname override must be rejected with SafetyGuardRejected"
+        );
+
+        // Exploit 2: duplicate libpq `dbname` keys where second points to production_db.
+        let kv_override = ValidatedPgTarget::parse(
+            "host=127.0.0.1 port=1 user=u password=p dbname=fake_test dbname=production_db",
+            ProfileMode::TestIsolated,
+        );
+        assert!(
+            matches!(kv_override, Err(DennettError::SafetyGuardRejected { .. })),
+            "libpq duplicate dbname override must be rejected with SafetyGuardRejected"
+        );
+
+        // Valid isolated `_test` DSN passes cleanly.
+        let valid = resolve_pg_target_from_sources(
+            None,
+            Some("postgres://u:p@127.0.0.1:55432/dennett_memory_test"),
+            Some("postgres://u:p@127.0.0.1:5432/production_db"),
+            ProfileMode::TestIsolated,
+        );
+        assert!(matches!(valid, Ok(Some(_))));
     }
 
     #[test]
-    fn parse_http_head_ignores_body_headers_and_checks_loopback_host() {
-        let raw = "POST /shutdown HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\nX-Dennett-Shutdown: 1\r\nX-Correlation-Id: from-body";
+    fn parse_http_head_ignores_body_headers_and_parses_content_length() {
+        let raw = "POST /shutdown HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nContent-Length: 4096\r\n\r\nX-Dennett-Shutdown: 1\r\nX-Correlation-Id: from-body";
         let Some(head) = parse_http_head(raw) else {
             panic!("expected valid HTTP head");
         };
+        assert_eq!(head.content_length, 4096);
         assert!(
             !head.shutdown_header_valid,
             "shutdown header inside body must never be honored"

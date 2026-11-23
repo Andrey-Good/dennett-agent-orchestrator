@@ -3,12 +3,19 @@
 //! This crate intentionally stays free of SQL drivers, HTTP stacks, UI layers,
 //! and model-provider SDKs so that all services share stable boundary types.
 
+pub mod redact;
+
 use core::fmt;
 use core::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
+
+pub use redact::{
+    REDACTED_PLACEHOLDER, extract_connection_secrets, redact_secrets, redact_secrets_owned,
+    sanitize_cli_arg, sanitize_pg_error, sanitize_pg_error_with_password,
+};
 
 /// Maximum permitted byte length of a [`CorrelationId`].
 pub const MAX_CORRELATION_ID_LEN: usize = 128;

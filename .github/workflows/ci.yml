@@ -2,8 +2,6 @@ name: Dennett D0 CI
 
 on:
   push:
-    branches:
-      - main
   pull_request:
   workflow_dispatch:
 
@@ -55,30 +53,16 @@ jobs:
       - name: Check locked dependencies and boundaries
         run: uv run --project ops/runner dennett-check deps
 
-      - name: Run formatting, clippy, and fast unit/safety suite
+      - name: Run formatting, clippy, rustdoc, doctests, and fast unit/safety suite
         run: uv run --project ops/runner dennett-check fast
 
       - name: Run test-harness self-check
         run: uv run --project ops/runner dennett-check self-check
 
   postgres-integration:
-    name: PostgreSQL isolation & standalone memoryd
+    name: PostgreSQL isolation & standalone memoryd (--manage-pg)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: dennett_bootstrap
-          POSTGRES_PASSWORD: dennett_bootstrap_test_only
-          POSTGRES_DB: postgres
-        ports:
-          - 55432:5432
-        options: >-
-          --health-cmd "pg_isready -U dennett_bootstrap -d postgres"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,16 +89,5 @@ jobs:
       - name: Sync runner environment
         run: uv sync --project ops/runner --frozen
 
-      - name: Initialize isolated test PostgreSQL roles and databases
-        env:
-          PGPASSWORD: dennett_bootstrap_test_only
-        run: |
-          psql -h 127.0.0.1 -p 55432 -U dennett_bootstrap -d postgres -v ON_ERROR_STOP=1 \
-            -f ops/test-env/init/01_init_roles_and_dbs.sql
-
-      - name: Run PostgreSQL isolation and standalone memoryd integration tests
-        env:
-          DENNETT_TEST_PROFILE: "1"
-          DENNETT_TEST_MEMORY_PG_URL: postgres://dennett_memory_role:dennett_memory_test_pw@127.0.0.1:55432/dennett_memory_test
-          DENNETT_TEST_CONTROL_PG_URL: postgres://dennett_control_role:dennett_control_test_pw@127.0.0.1:55432/dennett_control_test
-        run: uv run --project ops/runner dennett-check integration
+      - name: Run PostgreSQL isolation and standalone memoryd integration tests via Docker Compose
+        run: uv run --project ops/runner dennett-check integration --manage-pg

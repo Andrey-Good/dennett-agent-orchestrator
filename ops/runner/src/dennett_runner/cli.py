@@ -9,22 +9,18 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_PG_ISOLATION_TESTS = 3
-MIN_MEMORYD_PROCESS_TESTS = 5
+MIN_INTEGRATION_TESTS = 8
 
-DEFAULT_TEST_MEMORY_PG_URL = (
-    "postgres://dennett_memory_role:dennett_memory_test_pw@127.0.0.1:55432/dennett_memory_test"
-)
-DEFAULT_TEST_CONTROL_PG_URL = (
-    "postgres://dennett_control_role:dennett_control_test_pw@127.0.0.1:55432/dennett_control_test"
-)
+FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe))"
+INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
 
 REQUIRED_DOCS = (
     "AGENTS.md",
@@ -78,11 +74,13 @@ ALLOWED_CONTRACTS_DIRECT_DEPS = {"serde", "thiserror", "uuid"}
 
 MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 NEXTEST_SUMMARY_RE = re.compile(
-    r"Summary\s+\[[^\]]+\]\s+(?P<run>\d+)\s+tests?\s+run:\s+(?P<rest>.*)"
+    r"Summary\s+\[[^\]]+\]\s+(?P<run>\d+)(?:/\d+)?\s+tests?\s+run:\s+(?P<rest>.*)"
 )
 COUNT_RE = re.compile(r"(?P<num>\d+)\s+(?P<label>passed|failed|skipped|leaky|timed out)")
 SEMVER_RE = re.compile(r"(?<![\d.])v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)\b")
-LIBPQ_DBNAME_RE = re.compile(r"(?i)(?:^|\s)dbname\s*=\s*(?:'([^']+)'|([^\s]+))")
+LIBPQ_DBNAME_RE = re.compile(
+    r"(?i)(?:^|\s)dbname\s*=\s*(?:'((?:\\.|''|[^'])*)'|([^\s]+))"
+)
 
 
 class CheckError(RuntimeError):
@@ -413,7 +411,8 @@ def check_deps(repo_root: Path) -> None:
     packages_by_name = {pkg["name"]: pkg for pkg in meta["packages"]}
     resolve_nodes = {node["id"]: node for node in meta["resolve"]["nodes"]}
 
-    def transitive_dep_names(root_pkg_name: str) -> set[str]:
+    def transitive_prod_dep_names(root_pkg_name: str) -> set[str]:
+        """Walk normal and build dependencies only (excluding dev-only edges)."""
         if root_pkg_name not in packages_by_name:
             raise CheckError(f"Expected workspace package `{root_pkg_name}` in cargo metadata.")
         root_id = packages_by_name[root_pkg_name]["id"]
@@ -429,12 +428,19 @@ def check_deps(repo_root: Path) -> None:
             if not node:
                 continue
             for dep in node.get("deps", []):
+                dep_kinds = dep.get("dep_kinds", [])
+                is_prod_edge = not dep_kinds or any(
+                    dk.get("kind") in (None, "build") for dk in dep_kinds
+                )
+                if not is_prod_edge:
+                    continue
                 dep_id = dep["pkg"]
                 dep_name = packages_by_id[dep_id]["name"]
                 names.add(dep_name)
                 stack.append(dep_id)
         return names
 
+    # Global deferred-provider ban spans the entire Cargo.lock (including dev-dependencies).
     all_crate_names = {pkg["name"].lower() for pkg in meta["packages"]}
     for forbidden in FORBIDDEN_DEFERRED_RUNTIME_CRATES:
         hits = [name for name in all_crate_names if forbidden in name]
@@ -456,7 +462,7 @@ def check_deps(repo_root: Path) -> None:
         raise CheckError(
             f"`dennett-contracts` has unexpected direct dependencies: {', '.join(sorted(unexpected_direct))}"
         )
-    contracts_trans = {n.lower() for n in transitive_dep_names("dennett-contracts")}
+    contracts_trans = {n.lower() for n in transitive_prod_dep_names("dennett-contracts")}
     for forbidden in FORBIDDEN_CONTRACTS_DEPS:
         hits = [name for name in contracts_trans if name == forbidden or forbidden in name]
         if hits:
@@ -464,7 +470,7 @@ def check_deps(repo_root: Path) -> None:
                 f"`dennett-contracts` violates boundary by depending on: {', '.join(sorted(hits))}"
             )
 
-    memoryd_trans = {n.lower() for n in transitive_dep_names("dennett-memoryd")}
+    memoryd_trans = {n.lower() for n in transitive_prod_dep_names("dennett-memoryd")}
     for forbidden in FORBIDDEN_MEMORYD_DEPS:
         hits = [name for name in memoryd_trans if name == forbidden or forbidden in name]
         if hits:
@@ -480,9 +486,13 @@ def check_deps(repo_root: Path) -> None:
 
 
 def check_fast(repo_root: Path) -> None:
-    """Run formatting, strict clippy, and fast unit/safety tests."""
+    """Run formatting, strict clippy, rustdoc, doctests, and all fast unit/safety tests."""
     clean_env = build_tool_env(
         removals=("DENNETT_TEST_PROFILE", "DENNETT_FORCE_INTENTIONAL_FAILURE")
+    )
+    doc_env = build_tool_env(
+        overrides={"RUSTDOCFLAGS": "-D warnings"},
+        removals=("DENNETT_TEST_PROFILE", "DENNETT_FORCE_INTENTIONAL_FAILURE"),
     )
     run_cmd(["cargo", "fmt", "--all", "--", "--check"], cwd=repo_root, env=clean_env)
     run_cmd(
@@ -490,8 +500,10 @@ def check_fast(repo_root: Path) -> None:
         cwd=repo_root,
         env=clean_env,
     )
+    run_cmd(["cargo", "doc", "--workspace", "--no-deps"], cwd=repo_root, env=doc_env)
+    run_cmd(["cargo", "test", "--doc", "--workspace"], cwd=repo_root, env=clean_env)
     run_nextest_checked(
-        ["--workspace", "--lib", "--bins", "--test", "unit_safety"],
+        ["--workspace", "--all-targets", "-E", FAST_NEXTEST_FILTER],
         cwd=repo_root,
         env=clean_env,
         min_passed=1,
@@ -501,13 +513,13 @@ def check_fast(repo_root: Path) -> None:
 
 
 def check_self_check(repo_root: Path) -> None:
-    """Prove the test runner rejects 0-test runs, propagates intentional failures, and enforces guards."""
+    """Prove the test runner rejects 0-test runs, propagates intentional failures, enforces guards, and blocks DSN bypasses."""
     clean_env = build_tool_env(
         removals=("DENNETT_TEST_PROFILE", "DENNETT_FORCE_INTENTIONAL_FAILURE")
     )
 
     # 1. Prove a 0-test filter run is rejected by OUR parser even if nextest exits 0 (--no-tests=pass).
-    print("[dennett-check] self-check (1/3): verifying 0-test run is rejected...", flush=True)
+    print("[dennett-check] self-check (1/4): verifying 0-test run is rejected...", flush=True)
     zero_rejected = False
     try:
         run_nextest_checked(
@@ -527,17 +539,17 @@ def check_self_check(repo_root: Path) -> None:
     except CheckError as exc:
         if "Empty test runs cannot pass" in str(exc):
             zero_rejected = True
-            print(f"[dennett-check] self-check (1/3) confirmed rejection: {exc}", flush=True)
+            print(f"[dennett-check] self-check (1/4) confirmed rejection: {exc}", flush=True)
         else:
             raise CheckError(
-                f"Self-check (1/3) failed for unexpected reason instead of empty-run guard: {exc}"
+                f"Self-check (1/4) failed for unexpected reason instead of empty-run guard: {exc}"
             ) from exc
     if not zero_rejected:
         raise CheckError("Self-check FAILED: runner allowed a 0-test nextest invocation to pass!")
 
     # 2. Prove an intentional test failure fails the overall runner gate.
     print(
-        "[dennett-check] self-check (2/3): verifying intentional failure canary is caught...",
+        "[dennett-check] self-check (2/4): verifying intentional failure canary is caught...",
         flush=True,
     )
     canary_env = build_tool_env(
@@ -577,7 +589,7 @@ def check_self_check(repo_root: Path) -> None:
             f"Self-check FAILED: expected failed>=1 for intentional canary, got {summary}."
         )
     print(
-        f"[dennett-check] self-check (2/3) confirmed intentional failure propagation "
+        f"[dennett-check] self-check (2/4) confirmed intentional failure propagation "
         f"(exit={canary_proc.returncode}, failed={summary.failed}).",
         flush=True,
     )
@@ -585,7 +597,7 @@ def check_self_check(repo_root: Path) -> None:
     # 3. Prove FaultInjectionGuard fails closed when DENNETT_TEST_PROFILE is absent.
     # Filtering to a single test marks the remaining tests in `unit_safety` as filtered/skipped by nextest.
     print(
-        "[dennett-check] self-check (3/3): verifying FaultInjectionGuard rejects missing DENNETT_TEST_PROFILE...",
+        "[dennett-check] self-check (3/4): verifying FaultInjectionGuard rejects missing DENNETT_TEST_PROFILE...",
         flush=True,
     )
     guard_summary, _ = run_nextest_checked(
@@ -603,51 +615,126 @@ def check_self_check(repo_root: Path) -> None:
     )
     if guard_summary.tests_run != 1 or guard_summary.passed != 1:
         raise CheckError(
-            f"Self-check (3/3) expected exactly 1 guard test to run and pass, got {guard_summary}."
+            f"Self-check (3/4) expected exactly 1 guard test to run and pass, got {guard_summary}."
         )
-    print("[dennett-check] self-check OK (all 3 harness invariants verified).", flush=True)
 
+    # 4. Prove validate_test_pg_url rejects H0-02 DSN override exploits and non-_test DBs.
+    print(
+        "[dennett-check] self-check (4/4): verifying DSN `*_test` validator blocks override exploits...",
+        flush=True,
+    )
+    for bad_dsn in (
+        "postgres://u:p@127.0.0.1:55432/fake_test?dbname=production_db",
+        "postgres://u:p@127.0.0.1:55432/dennett_memory_test?dbname=a_test&dbname=b_test",
+        "host=127.0.0.1 user=u password=p dbname=fake_test dbname=production_db",
+        "postgres://u:p@127.0.0.1:55432/production_db",
+    ):
+        try:
+            validate_test_pg_url("SELF_CHECK_PG_URL", bad_dsn)
+        except CheckError:
+            continue
+        raise CheckError(f"Self-check (4/4) FAILED: validate_test_pg_url accepted `{bad_dsn}`!")
+    validate_test_pg_url(
+        "SELF_CHECK_PG_URL",
+        "postgres://u:p@127.0.0.1:55432/dennett_memory_test?sslmode=disable",
+    )
+    validate_test_pg_url(
+        "SELF_CHECK_PG_URL",
+        "host=127.0.0.1 user=u password=p dbname=dennett_memory_test",
+    )
 
-def extract_pg_db_name(pg_url: str) -> str | None:
-    """Extract the target database name from a PostgreSQL URI or libpq key-value string."""
-    trimmed = pg_url.strip()
-    if "://" in trimmed:
-        after_scheme = trimmed.split("://", 1)[1]
-        if "/" not in after_scheme:
-            return None
-        path_part = after_scheme.split("/", 1)[1]
-        db = path_part.split("?", 1)[0].split("#", 1)[0].strip()
-        return db or None
-
-    match = LIBPQ_DBNAME_RE.search(trimmed)
-    if match:
-        return (match.group(1) or match.group(2) or "").strip() or None
-    return None
+    print("[dennett-check] self-check OK (all 4 harness invariants verified).", flush=True)
 
 
 def validate_test_pg_url(var_name: str, pg_url: str) -> None:
-    """Ensure an integration PostgreSQL URL targets a `*_test` database."""
-    db_name = extract_pg_db_name(pg_url)
+    """Validate that a PostgreSQL URI or libpq DSN unambiguously targets a `*_test` database."""
+    trimmed = pg_url.strip()
+    if not trimmed:
+        raise CheckError(f"{var_name} must not be empty.")
+
+    if "://" in trimmed:
+        parsed = urlsplit(trimmed)
+        if parsed.scheme.lower() not in ("postgres", "postgresql"):
+            raise CheckError(
+                f"{var_name} must use postgres:// or postgresql:// scheme, got {parsed.scheme!r}."
+            )
+        path_db = unquote(parsed.path.lstrip("/")).strip()
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        query_dbs = [
+            unquote(val).strip()
+            for key, vals in qs.items()
+            if key.lower() == "dbname"
+            for val in vals
+        ]
+        if len(query_dbs) > 1:
+            raise CheckError(
+                f"{var_name} contains conflicting `dbname` query parameters; refusing ambiguous DSN."
+            )
+        if path_db and query_dbs and path_db != query_dbs[0]:
+            raise CheckError(
+                f"{var_name} has conflicting path database ({path_db!r}) and query dbname ({query_dbs[0]!r})."
+            )
+        db_name = query_dbs[0] if query_dbs else path_db
+    else:
+        matches = list(LIBPQ_DBNAME_RE.finditer(trimmed))
+        if not matches:
+            raise CheckError(f"{var_name} is missing a `dbname=...` entry.")
+        if len(matches) > 1:
+            raise CheckError(
+                f"{var_name} contains multiple `dbname=...` entries; refusing ambiguous libpq DSN."
+            )
+        raw_db = matches[0].group(1) if matches[0].group(1) is not None else matches[0].group(2)
+        db_name = (raw_db or "").replace("\\'", "'").replace("''", "'").strip()
+
     if not db_name or len(db_name) <= len("_test") or not db_name.endswith("_test"):
         raise CheckError(
             f"{var_name} must target an isolated `*_test` PostgreSQL database (parsed db={db_name!r})."
         )
 
 
-def run_integration_suites(repo_root: Path, pg_env: dict[str, str]) -> None:
-    """Execute PG isolation and standalone memoryd integration suites with individual thresholds."""
-    run_nextest_checked(
-        ["--workspace", "--test", "pg_isolation_integration"],
+def resolve_compose_host_port(
+    repo_root: Path, compose_file: Path, project_name: str
+) -> int:
+    """Inspect the actual ephemeral loopback port assigned to `postgres-test:5432`."""
+    proc = run_cmd(
+        [
+            "docker",
+            "compose",
+            "-p",
+            project_name,
+            "-f",
+            str(compose_file),
+            "port",
+            "postgres-test",
+            "5432",
+        ],
         cwd=repo_root,
-        env=pg_env,
-        min_passed=MIN_PG_ISOLATION_TESTS,
-        allow_skipped=False,
+        capture=True,
+        echo_output=False,
+        check=True,
+        timeout_seconds=30,
     )
+    for line in proc.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped or ":" not in stripped:
+            continue
+        port_str = stripped.rsplit(":", 1)[-1]
+        if port_str.isdigit():
+            port = int(port_str)
+            if 1 <= port <= 65535:
+                return port
+    raise CheckError(
+        f"Could not parse host port from `docker compose port postgres-test 5432`: {proc.stdout!r}"
+    )
+
+
+def run_integration_suites(repo_root: Path, pg_env: dict[str, str]) -> None:
+    """Execute all `*integration*` binaries discovered dynamically via cargo-nextest filterset."""
     run_nextest_checked(
-        ["--workspace", "--test", "memoryd_process_integration"],
+        ["--workspace", "--all-targets", "-E", INTEGRATION_NEXTEST_FILTER],
         cwd=repo_root,
         env=pg_env,
-        min_passed=MIN_MEMORYD_PROCESS_TESTS,
+        min_passed=MIN_INTEGRATION_TESTS,
         allow_skipped=False,
     )
 
@@ -673,27 +760,36 @@ def check_integration(repo_root: Path, *, manage_pg: bool) -> None:
     if manage_pg:
         if not compose_file.is_file():
             raise CheckError(f"Missing docker compose file: {compose_file}")
-        validate_test_pg_url("DENNETT_TEST_MEMORY_PG_URL", DEFAULT_TEST_MEMORY_PG_URL)
-        validate_test_pg_url("DENNETT_TEST_CONTROL_PG_URL", DEFAULT_TEST_CONTROL_PG_URL)
-        pg_env = build_tool_env(
-            overrides={
-                "DENNETT_TEST_PROFILE": "1",
-                "DENNETT_TEST_MEMORY_PG_URL": DEFAULT_TEST_MEMORY_PG_URL,
-                "DENNETT_TEST_CONTROL_PG_URL": DEFAULT_TEST_CONTROL_PG_URL,
-            },
-            removals=scrub_prod_pg,
-        )
-        run_cmd(
-            ["docker", "compose", "-f", str(compose_file), "up", "-d", "--wait"],
-            cwd=repo_root,
-        )
+        project_name = f"dennett-test-{uuid.uuid4().hex[:8]}"
+        compose_base = ["docker", "compose", "-p", project_name, "-f", str(compose_file)]
         try:
+            run_cmd([*compose_base, "up", "-d", "--wait"], cwd=repo_root)
+            host_port = resolve_compose_host_port(repo_root, compose_file, project_name)
+            mem_url = (
+                f"postgres://dennett_memory_role:dennett_memory_test_pw"
+                f"@127.0.0.1:{host_port}/dennett_memory_test"
+            )
+            ctrl_url = (
+                f"postgres://dennett_control_role:dennett_control_test_pw"
+                f"@127.0.0.1:{host_port}/dennett_control_test"
+            )
+            validate_test_pg_url("DENNETT_TEST_MEMORY_PG_URL", mem_url)
+            validate_test_pg_url("DENNETT_TEST_CONTROL_PG_URL", ctrl_url)
+            pg_env = build_tool_env(
+                overrides={
+                    "DENNETT_TEST_PROFILE": "1",
+                    "DENNETT_TEST_MEMORY_PG_URL": mem_url,
+                    "DENNETT_TEST_CONTROL_PG_URL": ctrl_url,
+                },
+                removals=scrub_prod_pg,
+            )
             run_integration_suites(repo_root, pg_env)
         finally:
             run_cmd(
-                ["docker", "compose", "-f", str(compose_file), "down", "-v"],
+                [*compose_base, "down", "-v"],
                 cwd=repo_root,
                 check=False,
+                timeout_seconds=60,
             )
     else:
         mem_url = os.environ.get("DENNETT_TEST_MEMORY_PG_URL", "").strip()
@@ -796,10 +892,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("docs", help="Validate required docs, local markdown links, and runtime refs.")
     sub.add_parser("deps", help="Verify Cargo.lock, toolchain pin, and crate dependency boundaries.")
-    sub.add_parser("fast", help="Run rustfmt, strict clippy, and fast unit/safety tests.")
+    sub.add_parser(
+        "fast",
+        help="Run rustfmt, strict clippy, rustdoc, doctests, and fast unit/safety tests.",
+    )
     sub.add_parser(
         "self-check",
-        help="Prove 0-test runs are rejected, intentional failures fail, and guards fail closed.",
+        help="Prove 0-test runs are rejected, intentional failures fail, guards fail closed, and DSN overrides are blocked.",
     )
 
     p_int = sub.add_parser(
@@ -809,7 +908,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_int.add_argument(
         "--manage-pg",
         action="store_true",
-        help="Start and tear down ops/test-env/docker-compose.test.yml automatically.",
+        help="Start and tear down ops/test-env/docker-compose.test.yml on an ephemeral loopback port.",
     )
 
     sub.add_parser(
