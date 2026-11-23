@@ -10,7 +10,7 @@
 
 ## Первый агентный движок
 
-Сначала реализуется **Claude Code через официальный Agent SDK/поддержанный CLI**, включая память и инструменты Dennett. Codex сохраняется как будущий адаптер **R-CODEX**, не входит в D0–D9 и не нужен для первого запуска. Модель кодирующего агента и конкретная Claude-модель не закрепляются. Подробности — [контракт M](docs/specifications/contracts/M_Runtime_Rollout_Contract.md) и [том82 §5](docs/architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#5-claude-code-и-claude-agent-sdk).
+Решением владельца (2026-11-23) сначала реализуется родной движок **Google Antigravity (`agy acp`, Agent Client Protocol v1 over stdio)** с двумя явно разведёнными профилями входа: подписка **Google AI Ultra** (`oauth-personal`) для интерактивной работы и отдельный профиль **Gemini API key** (`gemini-api-key`) для будущих безлюдных фоновых задач. **Claude Code (`R-CLAUDE`)** и **Codex (`R-CODEX`)** сохраняются как отложенные будущие адаптеры, не входят в D0–D9 и не нужны для первого запуска. Модель кодирующего агента и конкретная модель продукта не закрепляются. Подробности — [контракт M (ред. 2.0)](docs/specifications/contracts/M_Runtime_Rollout_Contract.md) и [A01–A12](docs/testing/ANTIGRAVITY_RUNTIME_ACCEPTANCE.md).
 
 ## Как начать работу агентом
 

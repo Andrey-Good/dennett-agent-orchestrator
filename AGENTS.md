@@ -14,7 +14,7 @@
 - CLI/MCP/UI обращаются к одной прикладной реализации. Интерфейс не обходит права, память и состояние агента. Графика сохраняет все пути контракта L.
 - Приоритет и исторические материалы определены в [docs/restart/README.md](docs/restart/README.md). Не подменяй спецификацию задним числом ради удобства кода.
 
-Первым продуктовым runtime реализуй Claude Code по [M](docs/specifications/contracts/M_Runtime_Rollout_Contract.md) и тому82 §5. Codex — только будущий R-CODEX: не добавляй его зависимости, вход и обязательные canary в D0–D9. Не путай это с выбором модели, которая пишет код. Для D1 применяй [C01–C12](docs/testing/CLAUDE_RUNTIME_ACCEPTANCE.md) по их этапам; отсутствие доступа не заменяй Codex или незаявленным платным API.
+Первым продуктовым runtime реализуй родной движок **Google Antigravity (`agy acp`)** по [M](docs/specifications/contracts/M_Runtime_Rollout_Contract.md) с двумя явно разведёнными профилями входа: подписка **Google AI Ultra** (`oauth-personal`) для интерактивной работы и отдельный профиль **Gemini API key** (`gemini-api-key`) для будущих безлюдных фоновых задач. **Claude Code (`R-CLAUDE`)** и **Codex (`R-CODEX`)** переведены решением владельца в отложенные адаптеры на будущее: не добавляй их зависимости, вход и обязательные canary в D0–D9. Не путай это с выбором модели, которая пишет код. Для D0/D1 и последующих этапов применяй [A01–A12](docs/testing/ANTIGRAVITY_RUNTIME_ACCEPTANCE.md) по их этапам; отсутствие доступа не заменяй Claude Code, Codex или молчаливым переключением на платный API.
 
 ## Как работать
 

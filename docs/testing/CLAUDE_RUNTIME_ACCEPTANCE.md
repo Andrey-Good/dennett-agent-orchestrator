@@ -1,6 +1,8 @@
-# Приёмка первого Claude runtime
+# Приёмка Claude runtime (отложено: R-CLAUDE)
 
-Версия 1.0 · 2026-09-27. Применяется по [контракту M](../specifications/contracts/M_Runtime_Rollout_Contract.md), [тому82 §5](../architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#5-claude-code-и-claude-agent-sdk) и [общей стратегии тестов](TEST_CATALOGUE_AND_QUALITY_GATES.md). Это задания будущим тестам, **не отчёт о пройденных canary**. D0–D9 и остановки H0–H9 сохраняются.
+> **Статус (2026-11-23):** Решением владельца первым продуктовым движком Dennett назначен родной **Google Antigravity (`agy acp`)**; см. [контракт M (ред. 2.0)](../specifications/contracts/M_Runtime_Rollout_Contract.md) и актуальный приёмочный чеклист первого движка [ANTIGRAVITY_RUNTIME_ACCEPTANCE.md](ANTIGRAVITY_RUNTIME_ACCEPTANCE.md) (`A01–A12`). Данный чеклист (`C01–C12`) сохранён для будущего отложенного адаптера **R-CLAUDE** и не требуется на этапах D0–D9.
+
+Версия 1.0 · 2026-09-27. Исторически применялся по редакции 1.0 контракта M, [тому82 §5](../architecture/82_Dennett_Agent_Voice_Capability_and_Integration_Architecture.md#5-claude-code-и-claude-agent-sdk) и [общей стратегии тестов](TEST_CATALOGUE_AND_QUALITY_GATES.md). Это задания будущим тестам `R-CLAUDE`, **не отчёт о пройденных canary**. D0–D9 и остановки H0–H9 сохраняются.
 
 Для каждого заявляемого SDK/CLI/auth mode фиксируются версии, реально включённые настройки, изолированный профиль, test/build commit и результаты. Успех SDK не доказывает полноту CLI, вход через API не доказывает подписочный путь. Не обязательно реализовать оба способа сразу; H1 требует один разрешённый полноценный Claude-путь. Дополнительный маршрут считается поддержанным только после его проверок. Недоступные аккаунты не заменяются чужими токенами или ложным успехом.
 
