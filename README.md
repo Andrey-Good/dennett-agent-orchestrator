@@ -35,31 +35,34 @@
 
 Память работает отдельным memoryd и доступна без Head. Каноническое серверное хранение — PostgreSQL, полный резервный ПК имеет серверный комплект. Готовые агентные движки используются без дублирования их исполнения. Смысловые связи агентов описываются текстом. Python-графики, файлы и произвольная веб-графика не ограничены MCP Apps/A2UI.
 
-## Среда разработки и команды проверки (D0)
+## Среда разработки и команды проверки (D0–D1)
 
-Минимальная воспроизводимая основа D0 включает Rust workspace (`crates/dennett-contracts`, `crates/dennett-testkit`, `services/memoryd`), изолированный тестовый профиль PostgreSQL ([`ops/test-env/README.md`](ops/test-env/README.md)) и единый runner проверок [`ops/runner`](ops/runner/pyproject.toml). На этапе D0 `dennett-memoryd` является диагностическим каркасом подключения к PostgreSQL (`memory_fabric_implemented: false`), а не готовой Memory Fabric.
+Текущая реализация охватывает Rust workspace (`crates/dennett-contracts`, `crates/dennett-memory-core`, `crates/dennett-memory-client`, `crates/dennett-head-client`, `crates/dennett-testkit`, `services/memoryd`, `services/head`, `adapters/memory-mcp`, `adapters/antigravity-acp`), нативное Desktop-приложение [`apps/desktop`](apps/desktop/package.json) (Tauri 2 Rust bridge `dennett-desktop` + React 19/TypeScript/Vite с двухслойной Windows 11 Mica-композицией), изолированный тестовый профиль PostgreSQL ([`ops/test-env/README.md`](ops/test-env/README.md)) и единый runner проверок [`ops/runner`](ops/runner/pyproject.toml).
 
 ### Требования к локальной среде
 
 - Rust toolchain по [`rust-toolchain.toml`](rust-toolchain.toml) (`1.100.0`, компоненты `rustfmt`, `clippy`) и `cargo-nextest`.
+- Node.js `>= 22` и `pnpm` (`10.33.0`) для frontend-сборки и тестов `apps/desktop`.
 - Python `>= 3.12` и `uv` для запуска `dennett-check`.
-- Docker (образ `postgres:16-alpine`) — для локальных интеграционных проверок PostgreSQL (`--manage-pg`).
-- Google Antigravity CLI `agy >= 1.5.0` (с подкомандой `agy acp`) — только для живой пробы `runtime-probe`.
+- Docker (образ `postgres:16-alpine`) — для локальных интеграционных проверок PostgreSQL (`--manage-pg`) и изолированного демо `demo-d1`.
+- Google Antigravity CLI `agy >= 1.5.0` (с подкомандой `agy acp`) — для живой пробы `runtime-probe` и живого демо `demo-d1`.
 
-### Подготовка runner
+### Подготовка runner и desktop frontend
 
 ```bash
 uv sync --project ops/runner
+pnpm --dir apps/desktop install --frozen-lockfile
 ```
 
 ### Команды проверки (`dennett-check`)
 
 - `uv run --project ops/runner dennett-check docs` — проверяет обязательные документы, валидирует все локальные Markdown-ссылки в корне и `docs/` (кроме `docs/archive/`) и сверяет ссылки на `agy acp` / `ANTIGRAVITY_RUNTIME_ACCEPTANCE.md`.
-- `uv run --project ops/runner dennett-check deps` — проверяет `rust-toolchain.toml`, синхронизацию `Cargo.lock` (`cargo metadata --locked`) и архитектурные границы (`dennett-contracts` без SQL/HTTP/UI/SDK; `dennett-memoryd` без Head/UI; отсутствие отложенных адаптеров `claude`/`codex`/`openai`/`anthropic`).
-- `uv run --project ops/runner dennett-check fast` — прогоняет `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, `cargo test --doc --workspace` и все быстрые unit/safety тесты (динамический filterset `not (binary(~integration) | binary(acp_live_probe))`) с запретом 0-test, skipped и leaky прогонов.
+- `uv run --project ops/runner dennett-check deps` — проверяет `rust-toolchain.toml`, синхронизацию `Cargo.lock` и `apps/desktop/pnpm-lock.yaml`, а также архитектурные границы (`dennett-contracts` без SQL/HTTP/UI/SDK; `dennett-memoryd` без Head/UI; `dennett-head` без `dennett-memory-core`; `dennett-desktop` строго через `dennett-head-client` без Head/Memory/PG/SDK; отсутствие отложенных адаптеров `claude`/`codex`/`openai`/`anthropic`).
+- `uv run --project ops/runner dennett-check fast` — прогоняет desktop frontend (`typecheck`, Vitest с проверкой `passed >= 11` и `skipped == 0`, production `vite build`), а затем `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, `cargo test --doc --workspace` и все быстрые unit/safety тесты с запретом 0-test, skipped и leaky прогонов.
 - `uv run --project ops/runner dennett-check self-check` — доказывает работоспособность самого тестового контура: (1) отклоняет пустой 0-test прогон, (2) ловит намеренно падающий тест (`DENNETT_FORCE_INTENTIONAL_FAILURE=1`), (3) подтверждает отказ `FaultInjectionGuard` без `DENNETT_TEST_PROFILE=1`, (4) проверяет блокировку DSN-эксплойтов переопределения `dbname`.
-- `uv run --project ops/runner dennett-check integration --manage-pg` — поднимает одноразовый `postgres:16-alpine` на свободном эфемерном loopback-порту (`tmpfs`, уникальный Compose project name для параллельных worktrees), прогоняет все `*integration*` тесты (`pg_isolation_integration`, `memoryd_process_integration`), затем удаляет контейнер (`down -v`). Без `--manage-pg` требует заранее заданные `DENNETT_TEST_MEMORY_PG_URL` и `DENNETT_TEST_CONTROL_PG_URL` с валидными `*_test` БД (иначе явно падает, без тихого пропуска).
-- `uv run --project ops/runner dennett-check runtime-probe` — живая D0-проба совместимости `agy acp` (A01 handshake/версия/изоляция отсутствующего `GEMINI_API_KEY` без fallback на OAuth; A03/A05/A06 вызов тестового MCP-инструмента памяти через `AllowOnce`, отказ `run_command` через `RejectOnce` и отмена `session/cancel`).
+- `uv run --project ops/runner dennett-check integration --manage-pg` — поднимает одноразовый `postgres:16-alpine` на свободном эфемерном loopback-порту (`tmpfs`, уникальный Compose project name для параллельных worktrees), прогоняет все `*integration*` тесты (`pg_isolation_integration`, `memoryd_process_integration`, `memory_fabric_e2e_integration`, `head_control_e2e_integration`, `desktop_bridge_v03_integration`), затем удаляет контейнер (`down -v`). Без `--manage-pg` требует заранее заданные `DENNETT_TEST_MEMORY_PG_URL` и `DENNETT_TEST_CONTROL_PG_URL` с валидными `*_test` БД (иначе явно падает, без тихого пропуска).
+- `uv run --project ops/runner dennett-check runtime-probe` — живая проба совместимости `agy acp` (A01–A06, A09, V04) с проверкой нетронутости `~/.gemini/antigravity-cli/conversations`.
+- `uv run --project ops/runner dennett-check demo-d1` — безопасный изолированный запуск D1 для личной проверки H1: поднимает одноразовый тестовый PostgreSQL, независимый `dennett-memoryd`, `dennett-head` (по умолчанию с живым `agy acp` и профилем `Google AI Ultra` в изолированном временном `--profile-root`), заранее создаёт согласованный демо-проект `Demo D1` (область `project:demo-d1`), агента и стартовый разговор, после чего открывает нативное окно `dennett-desktop`. Закрытие окна UI не останавливает `dennett-head` и `dennett-memoryd` (V03); завершение всего изолированного стенда — по `Ctrl+C`. Поддерживаются `--dry-run` (вывод плана без запуска процессов), `--no-ui` и `--runtime simulated`.
 - `uv run --project ops/runner dennett-check all --manage-pg` — последовательно выполняет `docs`, `deps`, `fast`, `self-check` и `integration --manage-pg`.
 
 Источники, сила свидетельств и реальные проверки различаются. Наличие плана и зелёного CI не доказывает отсутствия всех ошибок. [Статус документов](docs/restart/README.md) определяет приоритет; [SECURITY.md](SECURITY.md) — границы безопасной разработки. Лицензия публичного продукта ещё требует явного решения владельца.

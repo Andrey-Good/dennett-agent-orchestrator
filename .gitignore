@@ -18,3 +18,9 @@ __pycache__/
 .env
 .env.*
 *.local.key
+
+# Desktop frontend & Tauri generated artifacts
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/gen/
+

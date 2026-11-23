@@ -1,0 +1,68 @@
+/* Dennett D1 Design Tokens — WP-M01-003 owner-direction-v5 + sibling card layout.
+ *
+ * CRITICAL MATERIAL RULES:
+ * - Native Tauri window provides Windows 11 Mica directly (`windowEffects.effects = ["mica"]`).
+ * - Root HTML/body/#root stay transparent in native mode; ZERO fake wallpaper projection.
+ * - ZERO CSS `backdrop-filter` anywhere (prevents opaque-slab / displaced compositing artifacts).
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Foreground translucent card layer (#181818 at 38% density over native Mica) */
+  --surface-card: rgba(24, 24, 24, 0.38);
+  --surface-card-hover: rgba(24, 24, 24, 0.46);
+
+  /* Raised borderless surfaces (#2d2d2d at 24% local opacity — composer, user bubble, inset cards) */
+  --surface-raised: rgba(45, 45, 45, 0.24);
+  --surface-raised-hover: rgba(45, 45, 45, 0.34);
+
+  /* Soft translucent white highlight for selected session (lighter than Mica shell, never opaque gray) */
+  --surface-selected: rgba(255, 255, 255, 0.11);
+  --surface-ghost-hover: rgba(255, 255, 255, 0.065);
+  --surface-ghost-active: rgba(255, 255, 255, 0.14);
+
+  /* Hairline dividers (used strictly inside cards, never between Mica titlebar and sidebar) */
+  --divider-subtle: rgba(255, 255, 255, 0.07);
+  --divider-strong: rgba(255, 255, 255, 0.13);
+
+  /* Typography — translucent white primary labels, muted gray metadata */
+  --text-primary: rgba(255, 255, 255, 0.9);
+  --text-strong: rgba(255, 255, 255, 0.96);
+  --text-secondary: rgba(255, 255, 255, 0.58);
+  --text-muted: rgba(255, 255, 255, 0.4);
+
+  /* Restrained semantic status tones (functional alerts only, never decorative noise) */
+  --status-ok: #7bd88f;
+  --status-warn-bg: rgba(217, 152, 54, 0.16);
+  --status-warn-border: rgba(217, 152, 54, 0.42);
+  --status-warn-text: #f3c677;
+  --status-danger-bg: rgba(217, 83, 79, 0.16);
+  --status-danger-border: rgba(217, 83, 79, 0.42);
+  --status-danger-text: #f3a19e;
+
+  /* Radii & layout geometry */
+  --radius-card: 14px;
+  --radius-raised: 14px;
+  --radius-pill: 10px;
+  --radius-sm: 8px;
+
+  --titlebar-height: 44px;
+  --rail-width: 52px;
+  --sidebar-width: 248px;
+  --workspace-gap: 12px;
+  --panel-width: 344px;
+
+  /* Typography scale (v5: +1px conversation/composer, +2px nav/workspace) */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+
+  --text-chat: 15px;
+  --text-nav: 14px;
+  --text-meta: 12px;
+  --text-micro: 11px;
+
+  --focus-ring: 0 0 0 2px rgba(255, 255, 255, 0.42);
+  --motion-fast: 140ms cubic-bezier(0.2, 0, 0, 1);
+  --motion-layout: 220ms cubic-bezier(0.2, 0, 0, 1);
+}
