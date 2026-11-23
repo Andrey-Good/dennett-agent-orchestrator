@@ -13,6 +13,7 @@
 use core::fmt;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -33,14 +34,15 @@ use dennett_contracts::{
     PolicyRule, PolicyRuleId, PrincipalId, ProfileMode, ProjectId, ProjectRecord, RunId, RunRecord,
     RunStatus, RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
     SendMessageRequest, SendMessageResponse, ServiceKind, SessionDetailResponse, SessionId,
-    SessionRecord, SessionStatus, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
-    UpdateSessionRequest, WorkspaceWritePolicy,
+    SessionRecord, SessionStatus, Sha256Hex, TimestampMs, UpdateAgentConfigRequest,
+    UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
     AgentRuntimePort, RuntimeEvent, RuntimeMcpEnvEntry, RuntimeMcpServerSpec, SessionStartRequest,
     TurnRequest,
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, watch};
 use tokio::time;
 use tokio_postgres::NoTls;
@@ -60,7 +62,8 @@ use crate::store::{
     fetch_session_runs, map_pg_err, next_stream_seq, truncate_utf8,
 };
 use crate::workspace_files::{
-    clean_display_path, list_project_workspace_files, validate_safe_workspace_root,
+    clean_display_path, is_symlink_or_reparse_point, list_project_workspace_files,
+    validate_safe_workspace_root,
 };
 
 /// Current implementation milestone label advertised in [`HeadHealth`].
@@ -1218,7 +1221,7 @@ impl HeadService {
     /// [`DennettError::NotFound`], or [`DennettError::DatabaseUnavailable`].
     #[expect(
         clippy::too_many_lines,
-        reason = "artifact creation validates workspace write policy, persists atomic file bytes, records DB metadata, and emits audit event in one cohesive transaction"
+        reason = "artifact creation validates workspace containment, streams SHA-256 off the async executor without holding a DB connection, locks the owning session row, and persists metadata + audit event atomically"
     )]
     pub async fn create_artifact(
         &self,
@@ -1228,12 +1231,18 @@ impl HeadService {
     ) -> Result<ArtifactRecord, DennettError> {
         req.validate()?;
         let _ = self.ensure_migrated().await?;
-        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-        let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
-        let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
 
-        let (normalized_rel_path, hash_bytes) = if let Some(ref rel) = req.relative_path {
-            let Some(ws_path) = project.workspace_path.as_deref() else {
+        // Fetch session + project metadata first and release the pooled connection BEFORE any
+        // blocking filesystem validation or streaming SHA-256 disk I/O.
+        let (project_id, workspace_path) = {
+            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+            let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
+            (project.project_id, project.workspace_path)
+        };
+
+        let (normalized_rel_path, digest) = if let Some(ref rel) = req.relative_path {
+            let Some(ws_path) = workspace_path else {
                 return Err(DennettError::InvalidInput {
                     field: String::from("relative_path"),
                     reason: String::from(
@@ -1241,37 +1250,61 @@ impl HeadService {
                     ),
                 });
             };
-            let safe_rel = resolve_within_workspace(Path::new(ws_path), rel).map_err(|reason| {
-                DennettError::AccessDenied {
-                    scope: format!("project:{}", project.project_id),
-                    reason,
-                }
-            })?;
-            let bytes = if let Some(ref inline) = req.content {
-                inline.as_bytes().to_vec()
-            } else {
-                let full_path = Path::new(ws_path).join(&safe_rel);
-                fs::read(&full_path).map_err(|err| DennettError::NotFound {
-                    resource: String::from("workspace_file"),
-                    id: format!("{safe_rel} ({err})"),
-                })?
-            };
-            (Some(safe_rel), bytes)
+            let rel_owned = rel.clone();
+            let inline_owned = req.content.clone();
+            let scope_label = format!("project:{project_id}");
+            let (safe_rel, file_digest) = tokio::task::spawn_blocking(move || {
+                let ws_root = PathBuf::from(&ws_path);
+                let safe_rel =
+                    resolve_within_workspace(&ws_root, &rel_owned).map_err(|reason| {
+                        DennettError::AccessDenied {
+                            scope: scope_label.clone(),
+                            reason,
+                        }
+                    })?;
+                let computed = if let Some(inline) = inline_owned {
+                    sha256_hex(inline.as_bytes())
+                } else {
+                    let full_path = ws_root.join(&safe_rel);
+                    stream_sha256_regular_file(
+                        &full_path,
+                        MAX_WORKSPACE_ARTIFACT_HASH_BYTES,
+                        &scope_label,
+                        &safe_rel,
+                    )?
+                };
+                Ok::<_, DennettError>((safe_rel, computed))
+            })
+            .await
+            .map_err(|err| DennettError::Internal {
+                detail: format!("artifact hashing task failed: {err}"),
+            })??;
+            (Some(safe_rel), file_digest)
         } else {
-            let bytes = req
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .as_bytes()
-                .to_vec();
-            (None, bytes)
+            let computed = sha256_hex(req.content.as_deref().unwrap_or_default().as_bytes());
+            (None, computed)
         };
 
-        let digest = sha256_hex(&hash_bytes);
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let tx = conn
             .transaction()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        // Serialize concurrent revision allocations for the same session cleanly under READ COMMITTED.
+        let locked_session = tx
+            .query_opt(
+                "SELECT session_id FROM sessions WHERE session_id = $1 FOR UPDATE",
+                &[&session_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        if locked_session.is_none() {
+            return Err(DennettError::NotFound {
+                resource: String::from("session"),
+                id: session_id.to_string(),
+            });
+        }
 
         let prev_rev: i64 = tx
             .query_one(
@@ -1295,7 +1328,7 @@ impl HeadService {
                 &[
                     &artifact_id.as_uuid(),
                     &session_id.as_uuid(),
-                    &project.project_id.as_uuid(),
+                    &project_id.as_uuid(),
                     &req.run_id.map(RunId::as_uuid),
                     &req.name.trim(),
                     &req.mime_type.trim(),
@@ -1330,7 +1363,7 @@ impl HeadService {
         Ok(ArtifactRecord {
             artifact_id,
             session_id,
-            project_id: project.project_id,
+            project_id,
             run_id: req.run_id,
             name: req.name.trim().to_owned(),
             mime_type: req.mime_type.trim().to_owned(),
@@ -2828,6 +2861,76 @@ fn generate_project_memory_scope(
     let uuid_hex = project_id.as_uuid().simple().to_string();
     let short_id = &uuid_hex[..8];
     MemoryScope::try_new(format!("project:{base}-{short_id}"))
+}
+
+/// Maximum workspace-backed file size hashed on-demand during `create_artifact` (128 MiB).
+const MAX_WORKSPACE_ARTIFACT_HASH_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Streams a regular (non-symlink, non-reparse-point) workspace file in O(1) RAM through SHA-256.
+fn stream_sha256_regular_file(
+    full_path: &Path,
+    max_bytes: u64,
+    scope_label: &str,
+    display_rel: &str,
+) -> Result<Sha256Hex, DennettError> {
+    let meta = fs::symlink_metadata(full_path).map_err(|err| DennettError::NotFound {
+        resource: String::from("workspace_file"),
+        id: format!("{display_rel} ({err})"),
+    })?;
+    if is_symlink_or_reparse_point(&meta) {
+        return Err(DennettError::AccessDenied {
+            scope: scope_label.to_owned(),
+            reason: String::from(
+                "workspace artifact target cannot be a symbolic link or NTFS reparse point",
+            ),
+        });
+    }
+    if !meta.file_type().is_file() {
+        return Err(DennettError::InvalidInput {
+            field: String::from("relative_path"),
+            reason: String::from("workspace artifact target must be a regular file"),
+        });
+    }
+    if meta.len() > max_bytes {
+        return Err(DennettError::InvalidInput {
+            field: String::from("relative_path"),
+            reason: format!(
+                "workspace artifact file exceeds maximum hashable size ({max_bytes} bytes)"
+            ),
+        });
+    }
+
+    let file = fs::File::open(full_path).map_err(|err| DennettError::NotFound {
+        resource: String::from("workspace_file"),
+        id: format!("{display_rel} ({err})"),
+    })?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut total_read: u64 = 0;
+
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|err| DennettError::Internal {
+                detail: format!("failed reading workspace artifact `{display_rel}`: {err}"),
+            })?;
+        if n == 0 {
+            break;
+        }
+        total_read = total_read.saturating_add(n as u64);
+        if total_read > max_bytes {
+            return Err(DennettError::InvalidInput {
+                field: String::from("relative_path"),
+                reason: format!(
+                    "workspace artifact file grew beyond maximum hashable size ({max_bytes} bytes)"
+                ),
+            });
+        }
+        hasher.update(&buf[..n]);
+    }
+
+    Ok(Sha256Hex::from_digest_bytes(hasher.finalize().into()))
 }
 
 fn is_default_session_title(title: &str) -> bool {

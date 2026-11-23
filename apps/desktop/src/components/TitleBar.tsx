@@ -100,18 +100,25 @@ export function TitleBar() {
         </button>
 
         <nav className="breadcrumbs" aria-label="Текущий контекст">
-          <span>Проекты</span>
+          <span className={meta.activeSession ? "breadcrumb-prefix" : ""}>Проекты</span>
           {meta.activeProject && (
             <>
-              <span aria-hidden="true">/</span>
-              <span title={meta.activeProject.workspace_path ?? "Пока без папки"}>
+              <span className="breadcrumb-sep" aria-hidden="true">
+                /
+              </span>
+              <span
+                className={meta.activeSession ? "breadcrumb-prefix" : ""}
+                title={meta.activeProject.workspace_path ?? "Пока без папки"}
+              >
                 {meta.activeProject.name}
               </span>
             </>
           )}
           {meta.activeSession && (
             <>
-              <span aria-hidden="true">/</span>
+              <span className="breadcrumb-sep" aria-hidden="true">
+                /
+              </span>
               <strong>{meta.activeSession.title}</strong>
             </>
           )}
@@ -125,7 +132,13 @@ export function TitleBar() {
             ref={meta.searchInputRef}
             type="search"
             value={state.searchQuery}
-            onChange={(e) => actions.setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              const nextValue = e.target.value;
+              actions.setSearchQuery(nextValue);
+              if (!state.isSidebarOpen && nextValue.trim().length > 0) {
+                actions.setSidebarOpen(true);
+              }
+            }}
             placeholder="Поиск по чатам и проектам…"
             aria-label="Поиск по чатам и проектам"
           />

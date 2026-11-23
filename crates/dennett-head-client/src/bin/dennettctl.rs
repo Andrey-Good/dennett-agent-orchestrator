@@ -14,7 +14,8 @@ use dennett_contracts::{
     AgentId, CommitMemoryNoteRequest, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
     CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, DennettError,
     HeadMemorySearchRequest, IdempotencyKey, MemoryScope, PolicyEffect, ProjectId,
-    SendMessageRequest, SessionId, ThinkingLevel, UpdateAgentConfigRequest, WorkspaceWritePolicy,
+    SendMessageRequest, SessionId, ThinkingLevel, UpdateAgentConfigRequest, UpdateProjectRequest,
+    UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_head_client::HeadClient;
 use serde::Serialize;
@@ -34,6 +35,10 @@ enum Action {
     Help,
     Version,
     Health(GlobalOpts),
+    RuntimeCatalog {
+        g: GlobalOpts,
+        refresh: bool,
+    },
     AgentCreate {
         g: GlobalOpts,
         req: CreateAgentRequest,
@@ -53,6 +58,16 @@ enum Action {
         req: CreateProjectRequest,
     },
     ProjectList(GlobalOpts),
+    ProjectUpdate {
+        g: GlobalOpts,
+        project_id: ProjectId,
+        req: UpdateProjectRequest,
+    },
+    ProjectFiles {
+        g: GlobalOpts,
+        project_id: ProjectId,
+        subpath: Option<String>,
+    },
     SessionCreate {
         g: GlobalOpts,
         req: CreateSessionRequest,
@@ -61,6 +76,11 @@ enum Action {
     SessionShow {
         g: GlobalOpts,
         session_id: SessionId,
+    },
+    SessionUpdate {
+        g: GlobalOpts,
+        session_id: SessionId,
+        req: UpdateSessionRequest,
     },
     Send {
         g: GlobalOpts,
@@ -143,15 +163,19 @@ const fn action_json_mode(action: &Action) -> bool {
     match action {
         Action::Help | Action::Version => false,
         Action::Health(g)
+        | Action::RuntimeCatalog { g, .. }
         | Action::AgentCreate { g, .. }
         | Action::AgentList(g)
         | Action::AgentUpdateConfig { g, .. }
         | Action::AgentHistory { g, .. }
         | Action::ProjectCreate { g, .. }
         | Action::ProjectList(g)
+        | Action::ProjectUpdate { g, .. }
+        | Action::ProjectFiles { g, .. }
         | Action::SessionCreate { g, .. }
         | Action::SessionList(g)
         | Action::SessionShow { g, .. }
+        | Action::SessionUpdate { g, .. }
         | Action::Send { g, .. }
         | Action::Cancel { g, .. }
         | Action::ArtifactCreate { g, .. }
@@ -176,6 +200,13 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
         Action::Health(g) => {
             let client = HeadClient::new(&g.url)?;
             let resp = client.healthz(g.correlation_id.as_ref()).await?;
+            print_output(&resp, g.json)
+        }
+        Action::RuntimeCatalog { g, refresh } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .get_runtime_catalog(refresh, g.correlation_id.as_ref())
+                .await?;
             print_output(&resp, g.json)
         }
         Action::AgentCreate { g, req } => {
@@ -214,6 +245,24 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             let resp = client.list_projects(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
+        Action::ProjectUpdate { g, project_id, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .update_project(project_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::ProjectFiles {
+            g,
+            project_id,
+            subpath,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_project_files(project_id, subpath.as_deref(), g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
         Action::SessionCreate { g, req } => {
             let client = HeadClient::new(&g.url)?;
             let resp = client
@@ -230,6 +279,13 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             let client = HeadClient::new(&g.url)?;
             let resp = client
                 .get_session_detail(session_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SessionUpdate { g, session_id, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .update_session(session_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
@@ -344,6 +400,7 @@ where
             ensure_no_extra(&mut pos)?;
             Ok(Action::Health(g))
         }
+        "runtime" => parse_runtime_subcommand(g, &mut pos),
         "agent" => parse_agent_subcommand(g, &mut pos),
         "project" => parse_project_subcommand(g, &mut pos),
         "session" => parse_session_subcommand(g, &mut pos),
@@ -357,6 +414,26 @@ where
             field: String::from("command"),
             reason: format!("unrecognized command `{}`", sanitize_cli_arg(other)),
         }),
+    }
+}
+
+fn parse_runtime_subcommand(
+    g: GlobalOpts,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<Action, DennettError> {
+    let sub = next_val(iter, "runtime <subcommand>")?;
+    match sub.as_str() {
+        "catalog" => {
+            let mut refresh = false;
+            for flag in iter.by_ref() {
+                match flag.as_str() {
+                    "--refresh" => refresh = true,
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::RuntimeCatalog { g, refresh })
+        }
+        other => Err(unknown_flag(other)),
     }
 }
 
@@ -497,6 +574,45 @@ fn parse_project_subcommand(
             req.validate()?;
             Ok(Action::ProjectCreate { g, req })
         }
+        "update" => {
+            let mut id = None;
+            let mut name = None;
+            let mut workspace = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => id = Some(ProjectId::from_str(&next_val(iter, "--id")?)?),
+                    "--name" => name = Some(next_val(iter, "--name")?),
+                    "--workspace" => workspace = Some(next_val(iter, "--workspace")?),
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = UpdateProjectRequest {
+                name,
+                workspace_path: workspace,
+            };
+            req.validate()?;
+            Ok(Action::ProjectUpdate {
+                g,
+                project_id: req_opt(id, "--id")?,
+                req,
+            })
+        }
+        "files" => {
+            let mut id = None;
+            let mut subpath = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => id = Some(ProjectId::from_str(&next_val(iter, "--id")?)?),
+                    "--subpath" => subpath = Some(next_val(iter, "--subpath")?),
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::ProjectFiles {
+                g,
+                project_id: req_opt(id, "--id")?,
+                subpath,
+            })
+        }
         other => Err(unknown_flag(other)),
     }
 }
@@ -544,6 +660,26 @@ fn parse_session_subcommand(
             Ok(Action::SessionShow {
                 g,
                 session_id: req_opt(id, "--id")?,
+            })
+        }
+        "update" => {
+            let mut id = None;
+            let mut title = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => id = Some(SessionId::from_str(&next_val(iter, "--id")?)?),
+                    "--title" => title = Some(next_val(iter, "--title")?),
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = UpdateSessionRequest {
+                title: req_opt(title, "--title")?,
+            };
+            req.validate()?;
+            Ok(Action::SessionUpdate {
+                g,
+                session_id: req_opt(id, "--id")?,
+                req,
             })
         }
         other => Err(unknown_flag(other)),
@@ -916,15 +1052,19 @@ fn print_usage() {
          \n\
          COMMANDS:\n\
            health\n\
+           runtime catalog [--refresh]\n\
            agent create --name <n> --system-prompt <p> [--model <m>] [--thinking <l>] [--scope <s>] [--write-policy <p>]\n\
            agent list\n\
            agent update-config --id <uuid> --system-prompt <p> [--model <m>] [--thinking <l>] [--scope <s>] [--write-policy <p>]\n\
            agent history --id <uuid>\n\
-           project create --name <n> --workspace <dir> --scope <s>\n\
+           project create --name <n> [--workspace <dir>] [--scope <s>]\n\
            project list\n\
+           project update --id <uuid> [--name <n>] [--workspace <dir>]\n\
+           project files --id <uuid> [--subpath <rel>]\n\
            session create --agent <uuid> --project <uuid> --title <t>\n\
            session list\n\
            session show --id <uuid>\n\
+           session update --id <uuid> --title <t>\n\
            send --session <uuid> --message <text> [--timeout-ms <ms>]\n\
            cancel --session <uuid>\n\
            artifact create --session <uuid> --name <n> [--mime-type <m>] (--content <c> | --path <rel>)\n\
@@ -978,6 +1118,68 @@ mod tests {
             }
             other => panic!("unexpected action: {other:?}"),
         }
+
+        let pid = ProjectId::new();
+        let sid = SessionId::new();
+        assert!(matches!(
+            parse_cli(
+                ["runtime", "catalog", "--refresh"].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse runtime catalog"),
+            Action::RuntimeCatalog { refresh: true, .. }
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "project",
+                    "update",
+                    "--id",
+                    &pid.to_string(),
+                    "--name",
+                    "Renamed",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse project update"),
+            Action::ProjectUpdate { .. }
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "project",
+                    "files",
+                    "--id",
+                    &pid.to_string(),
+                    "--subpath",
+                    "src",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse project files"),
+            Action::ProjectFiles {
+                subpath: Some(ref s),
+                ..
+            } if s == "src"
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "session",
+                    "update",
+                    "--id",
+                    &sid.to_string(),
+                    "--title",
+                    "New Title",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse session update"),
+            Action::SessionUpdate { .. }
+        ));
 
         assert!(parse_write_policy("paths:../escape").is_err());
     }

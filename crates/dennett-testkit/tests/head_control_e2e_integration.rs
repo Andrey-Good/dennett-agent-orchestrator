@@ -14,11 +14,12 @@ use std::time::Duration;
 
 use dennett_contracts::{
     AgentRecord, ArtifactRecord, CommitMemoryNoteRequest, CorrelationId, CreateAgentRequest,
-    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, DennettError, HeadHealth,
-    HeadMemorySearchRequest, IdempotencyKey, MemoryCapability, MemoryOutboxStatus, MemoryScope,
-    MemoryStatus, PolicyEffect, PrincipalId, ProjectRecord, RunStatus, SearchNotesRequest,
-    SendMessageRequest, SessionDetailResponse, SessionRecord, ThinkingLevel, TimestampMs,
-    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
+    CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
+    DennettError, HeadHealth, HeadMemorySearchRequest, IdempotencyKey, MemoryCapability,
+    MemoryOutboxStatus, MemoryScope, MemoryStatus, PolicyEffect, PrincipalId, ProjectRecord,
+    RunStatus, SearchNotesRequest, SendMessageRequest, SessionDetailResponse, SessionRecord,
+    ThinkingLevel, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
+    UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_head_client::HeadClient;
 use dennett_memory_client::MemoryClient;
@@ -1248,19 +1249,20 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     let auth_cfg = make_memory_auth(&scope, mem_token);
 
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
-    // Start Head once (applies migrations v1..v2), shut down, start again (must be idempotent!).
+    // Start Head once (applies migrations v1..v3), shut down, start again (must be idempotent!).
     let head1 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c1 = HeadClient::new(&head1.base_url).expect("client1");
     let h1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(h1.schema_version, Some(2));
+    assert_eq!(h1.schema_version, Some(3));
     head1.shutdown().await;
 
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c2 = HeadClient::new(&head2.base_url).expect("client2");
     let h2 = c2.healthz(None).await.expect("health2");
-    assert_eq!(h2.schema_version, Some(2));
+    assert_eq!(h2.schema_version, Some(3));
 
-    // Verify PostgreSQL append-only triggers reject UPDATE/DELETE on audit_events!
+    // Verify PostgreSQL append-only triggers reject UPDATE/DELETE on audit_events
+    // and migration v3 installed the unique artifact revision constraint!
     let (pg_client, connection) = tokio_postgres::connect(&ctrl_pg, NoTls)
         .await
         .expect("connect control PG");
@@ -1273,6 +1275,21 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     assert!(
         update_err.is_err(),
         "append-only trigger on audit_events must reject UPDATE"
+    );
+    let unique_exists: bool = pg_client
+        .query_one(
+            "SELECT EXISTS(
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'artifacts_session_name_revision_unique'
+            )",
+            &[],
+        )
+        .await
+        .expect("check unique constraint")
+        .get(0);
+    assert!(
+        unique_exists,
+        "migration v3 must install artifacts_session_name_revision_unique constraint"
     );
 
     head2.shutdown().await;
@@ -1555,6 +1572,274 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
             "PATCH /v1/projects/{{id}} must reject `{bad_workspace}` with 403 AccessDenied, got: {patch_err:?}"
         );
     }
+
+    head.shutdown().await;
+    memoryd.shutdown().await;
+}
+
+async fn raw_http_request(base_url: &str, raw_request: &str) -> (u16, String) {
+    let addr = base_url
+        .strip_prefix("http://")
+        .expect("loopback http:// base_url");
+    let mut stream = TcpStream::connect(addr).await.expect("connect loopback");
+    stream
+        .write_all(raw_request.as_bytes())
+        .await
+        .expect("write raw http");
+    stream.flush().await.expect("flush raw http");
+
+    let mut raw_resp = Vec::new();
+    stream
+        .read_to_end(&mut raw_resp)
+        .await
+        .expect("read raw http response");
+    let text = String::from_utf8_lossy(&raw_resp).into_owned();
+    let status_code = text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .expect("valid HTTP status line");
+    let body = text
+        .split_once("\r\n\r\n")
+        .map_or_else(String::new, |(_, b)| b.to_owned());
+    (status_code, body)
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies H1-01 Host/Origin/Sec-Fetch-Site guards, H1-05 xhigh JSON wire roundtrip, H1-07 concurrent artifact serialization and streaming hash, and H1-08 dennettctl parity subcommands against live PG + memoryd + Head"
+)]
+async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
+    let (mem_pg, ctrl_pg) = require_pg_urls();
+    let (profile, _tmp) = TestProfile::create_on_disk("head-h1-hardening").expect("temp profile");
+    let ws_dir = profile.workspace_dir().join("parity-repo");
+    fs::create_dir_all(ws_dir.join("src")).expect("create src");
+    fs::write(ws_dir.join("README.md"), "# Parity Repo\n").expect("write readme");
+    fs::write(ws_dir.join("src/lib.rs"), "pub fn ok() {}\n").expect("write lib.rs");
+
+    let scope = unique_scope("head-h1-parity");
+    let mem_token = "tok_h1_parity_556677";
+    let auth_cfg = make_memory_auth(&scope, mem_token);
+
+    let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
+    let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
+    let client = HeadClient::new(&head.base_url).expect("head client");
+    let host_port = head.base_url.strip_prefix("http://").expect("host:port");
+
+    // H1-01: DNS-rebinding Host, cross-site Origin, and Sec-Fetch-Site: cross-site are rejected with 403.
+    let (rebind_status, _) = raw_http_request(
+        &head.base_url,
+        "GET /v1/projects HTTP/1.1\r\nHost: evil.rebind.attacker:41771\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert_eq!(rebind_status, 403);
+
+    let (evil_origin_status, _) = raw_http_request(
+        &head.base_url,
+        &format!(
+            "POST /v1/memory/outbox/flush HTTP/1.1\r\nHost: {host_port}\r\nOrigin: https://evil.example\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+    )
+    .await;
+    assert_eq!(evil_origin_status, 403);
+
+    let (cross_site_status, _) = raw_http_request(
+        &head.base_url,
+        &format!(
+            "POST /v1/memory/outbox/flush HTTP/1.1\r\nHost: {host_port}\r\nSec-Fetch-Site: cross-site\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+    )
+    .await;
+    assert_eq!(cross_site_status, 403);
+
+    let (tauri_origin_status, _) = raw_http_request(
+        &head.base_url,
+        &format!(
+            "GET /v1/projects HTTP/1.1\r\nHost: {host_port}\r\nOrigin: http://tauri.localhost\r\nSec-Fetch-Site: same-origin\r\nConnection: close\r\n\r\n"
+        ),
+    )
+    .await;
+    assert_eq!(tauri_origin_status, 200);
+
+    // H1-05: Raw HTTP JSON uses canonical `"xhigh"` (never `"x_high"`).
+    let (cat_status, cat_json) = raw_http_request(
+        &head.base_url,
+        &format!(
+            "GET /v1/runtime/catalog HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n"
+        ),
+    )
+    .await;
+    assert_eq!(cat_status, 200);
+    assert!(cat_json.contains("\"xhigh\""));
+    assert!(!cat_json.contains("\"x_high\""));
+
+    let xhigh_body = serde_json::json!({
+        "name": "XHigh Agent",
+        "description": "Wire test",
+        "system_prompt": "Test xhigh wire serialization.",
+        "thinking_level": "xhigh",
+        "allowed_memory_scopes": [scope.as_str()],
+        "workspace_write_policy": { "mode": "allow_workspace" }
+    })
+    .to_string();
+    let (xhigh_status, xhigh_json) = raw_http_request(
+        &head.base_url,
+        &format!(
+            "POST /v1/agents HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{xhigh_body}",
+            xhigh_body.len()
+        ),
+    )
+    .await;
+    assert_eq!(xhigh_status, 201, "create xhigh agent body: {xhigh_json}");
+    let xhigh_agent: AgentRecord = serde_json::from_str(&xhigh_json).expect("parse agent");
+    assert_eq!(
+        xhigh_agent.current_config.thinking_level,
+        Some(ThinkingLevel::XHigh)
+    );
+
+    // H1-07: Concurrent create_artifact calls serialize cleanly with sequential revisions [1..=4],
+    // and workspace-backed streaming SHA-256 hashes regular files while rejecting directories.
+    let project = client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Parity Project"),
+                workspace_path: Some(ws_dir.to_string_lossy().into_owned()),
+                memory_scope: Some(scope.clone()),
+            },
+            None,
+        )
+        .await
+        .expect("create project");
+    let session = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: xhigh_agent.agent_id,
+                project_id: project.project_id,
+                title: String::from("Concurrency Session"),
+            },
+            None,
+        )
+        .await
+        .expect("create session");
+
+    let mk_art = |idx: u32| {
+        let c = client.clone();
+        let sid = session.session_id;
+        async move {
+            c.create_artifact(
+                sid,
+                &CreateArtifactRequest {
+                    run_id: None,
+                    name: String::from("concurrent.md"),
+                    mime_type: String::from("text/markdown"),
+                    content: Some(format!("revision body {idx}")),
+                    relative_path: None,
+                },
+                None,
+            )
+            .await
+        }
+    };
+    let (a1, a2, a3, a4) = tokio::try_join!(mk_art(1), mk_art(2), mk_art(3), mk_art(4))
+        .expect("concurrent create_artifact calls must serialize cleanly");
+    let mut revs = vec![a1.revision, a2.revision, a3.revision, a4.revision];
+    revs.sort_unstable();
+    assert_eq!(revs, vec![1, 2, 3, 4]);
+
+    let file_art = client
+        .create_artifact(
+            session.session_id,
+            &CreateArtifactRequest {
+                run_id: None,
+                name: String::from("readme-ref"),
+                mime_type: String::from("text/markdown"),
+                content: None,
+                relative_path: Some(String::from("README.md")),
+            },
+            None,
+        )
+        .await
+        .expect("workspace-backed streaming artifact");
+    assert_eq!(file_art.relative_path.as_deref(), Some("README.md"));
+    assert_eq!(file_art.sha256.as_str().len(), 64);
+
+    let dir_art_err = client
+        .create_artifact(
+            session.session_id,
+            &CreateArtifactRequest {
+                run_id: None,
+                name: String::from("dir-ref"),
+                mime_type: String::from("text/plain"),
+                content: None,
+                relative_path: Some(String::from("src")),
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(dir_art_err, Err(DennettError::InvalidInput { .. })),
+        "directory target must be rejected for workspace artifact, got: {dir_art_err:?}"
+    );
+
+    // H1-08: dennettctl CLI parity for runtime catalog, project update, project files, session update.
+    let (cat_code, cat_out, cat_err) =
+        run_dennettctl(&head.base_url, &["--json", "runtime", "catalog"]).await;
+    assert_eq!(cat_code, 0, "dennettctl runtime catalog failed: {cat_err}");
+    assert!(cat_out.contains("sim-model-alpha"));
+
+    let pid_str = project.project_id.to_string();
+    let (proj_upd_code, proj_upd_out, proj_upd_err) = run_dennettctl(
+        &head.base_url,
+        &[
+            "--json",
+            "project",
+            "update",
+            "--id",
+            &pid_str,
+            "--name",
+            "Renamed Via CLI",
+        ],
+    )
+    .await;
+    assert_eq!(
+        proj_upd_code, 0,
+        "dennettctl project update failed: {proj_upd_err}"
+    );
+    assert!(proj_upd_out.contains("Renamed Via CLI"));
+
+    let (files_code, files_out, files_err) = run_dennettctl(
+        &head.base_url,
+        &["--json", "project", "files", "--id", &pid_str],
+    )
+    .await;
+    assert_eq!(
+        files_code, 0,
+        "dennettctl project files failed: {files_err}"
+    );
+    assert!(files_out.contains("README.md"));
+    assert!(files_out.contains("src/lib.rs"));
+
+    let sid_str = session.session_id.to_string();
+    let (sess_upd_code, sess_upd_out, sess_upd_err) = run_dennettctl(
+        &head.base_url,
+        &[
+            "--json",
+            "session",
+            "update",
+            "--id",
+            &sid_str,
+            "--title",
+            "Renamed Session Via CLI",
+        ],
+    )
+    .await;
+    assert_eq!(
+        sess_upd_code, 0,
+        "dennettctl session update failed: {sess_upd_err}"
+    );
+    assert!(sess_upd_out.contains("Renamed Session Via CLI"));
 
     head.shutdown().await;
     memoryd.shutdown().await;

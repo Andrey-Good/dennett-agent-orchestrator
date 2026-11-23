@@ -54,8 +54,19 @@ export function WorkspacePanel() {
         setMimeOpen(false);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setMimeOpen(false);
+      }
+    };
     document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+    };
   }, [mimeOpen]);
 
   if (!state.isRightPanelOpen) {

@@ -3,14 +3,14 @@ import { ArrowsClockwise, CircleNotch, Stop, WarningCircle, X } from "@phosphor-
 import { useWorkspace } from "../state/WorkspaceProvider";
 
 export function StatusBanners() {
-  const { state, actions } = useWorkspace();
+  const { state, actions, meta } = useWorkspace();
 
   const health = state.healthSnapshot?.health;
   const isMemoryDegraded =
     Boolean(state.healthSnapshot?.connected) && health?.memory_status === "degraded_unreachable";
   const pendingOutbox = health?.pending_outbox_count ?? 0;
-  const isAnyRunActive = state.runningSessionId !== null;
-  const isCancelling = state.cancellingSessionId !== null;
+  const isActiveRunRunning = meta.isRunningActiveSession;
+  const isCancelling = meta.isCancellingActiveSession;
 
   return (
     <div className="status-banners" data-testid="status-banners">
@@ -44,7 +44,7 @@ export function StatusBanners() {
         </div>
       )}
 
-      {isAnyRunActive && (
+      {isActiveRunRunning && (
         <div
           className="status-banner status-banner--running"
           role="status"

@@ -19,6 +19,7 @@ import {
   type DesktopHealthSnapshot,
   type DiagnosticsResponse,
   type ListProjectFilesResponse,
+  type MessageRecord,
   type ProjectRecord,
   type RuntimeCatalogResponse,
   type SessionDetailResponse,
@@ -47,8 +48,9 @@ export interface WorkspaceState {
   activeScopeNoteCount: number | null;
   diagnostics: DiagnosticsResponse | null;
   draftsBySession: Record<string, string>;
-  runningSessionId: string | null;
-  cancellingSessionId: string | null;
+  optimisticMessagesBySession: Record<string, MessageRecord[]>;
+  runningSessionIds: string[];
+  cancellingSessionIds: string[];
   cancelledNotice: string | null;
   errorBanner: BridgeErrorPayload | null;
   isRightPanelOpen: boolean;
@@ -100,6 +102,7 @@ export interface WorkspaceActions {
   toggleRightPanel(): void;
   setRightPanelOpen(open: boolean): void;
   toggleSidebar(): void;
+  setSidebarOpen(open: boolean): void;
   setSettingsOpen(open: boolean): void;
   setStatsOpen(open: boolean): void;
   setCommandOpen(open: boolean): void;
@@ -118,7 +121,9 @@ export interface WorkspaceMeta {
   activeAgent: AgentRecord | null;
   selectedArtifact: ArtifactRecord | null;
   currentDraft: string;
+  optimisticMessagesForActiveSession: MessageRecord[];
   isRunningActiveSession: boolean;
+  isCancellingActiveSession: boolean;
 }
 
 export interface WorkspaceContextValue {
@@ -191,8 +196,11 @@ export function WorkspaceProvider({
   const [activeScopeNoteCount, setActiveScopeNoteCount] = useState<number | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsResponse | null>(null);
   const [draftsBySession, setDraftsBySession] = useState<Record<string, string>>({});
-  const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
-  const [cancellingSessionId, setCancellingSessionId] = useState<string | null>(null);
+  const [optimisticMessagesBySession, setOptimisticMessagesBySession] = useState<
+    Record<string, MessageRecord[]>
+  >({});
+  const [runningSessionIds, setRunningSessionIds] = useState<string[]>([]);
+  const [cancellingSessionIds, setCancellingSessionIds] = useState<string[]>([]);
   const [cancelledNotice, setCancelledNotice] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState<BridgeErrorPayload | null>(null);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(initialRightPanelOpen);
@@ -213,6 +221,8 @@ export function WorkspaceProvider({
   const projectsRef = useRef<ProjectRecord[]>([]);
   const agentsRef = useRef<AgentRecord[]>([]);
   const catalogRef = useRef<RuntimeCatalogResponse | null>(null);
+  const runningSessionIdsRef = useRef<Set<string>>(new Set());
+  const cancellingSessionIdsRef = useRef<Set<string>>(new Set());
   const detailRequestSeqRef = useRef(0);
   const filesRequestSeqRef = useRef(0);
 
@@ -220,6 +230,8 @@ export function WorkspaceProvider({
   projectsRef.current = projects;
   agentsRef.current = agents;
   catalogRef.current = runtimeCatalog;
+  runningSessionIdsRef.current = new Set(runningSessionIds);
+  cancellingSessionIdsRef.current = new Set(cancellingSessionIds);
 
   const focusComposerSoon = useCallback(() => {
     requestAnimationFrame(() => {
@@ -462,7 +474,11 @@ export function WorkspaceProvider({
   );
 
   const ensureScopedAgent = useCallback(
-    async (memoryScope: string, projectName?: string): Promise<AgentRecord> => {
+    async (
+      memoryScope: string,
+      projectName?: string,
+      hasWorkspace = false,
+    ): Promise<AgentRecord> => {
       // Strictly match an existing agent dedicated solely to `[memoryScope]` to preserve
       // cross-project memory isolation.
       const exactMatch = agentsRef.current.find(
@@ -483,7 +499,7 @@ export function WorkspaceProvider({
         model_preference: cat?.default_model_id ?? null,
         thinking_level: cat?.default_thinking_level ?? "medium",
         allowed_memory_scopes: [memoryScope],
-        workspace_write_policy: { mode: "ask_before_write" },
+        workspace_write_policy: hasWorkspace ? { mode: "allow_workspace" } : { mode: "deny_all" },
       });
       agentsRef.current = [created, ...agentsRef.current];
       setAgents((prev) => [created, ...prev]);
@@ -503,7 +519,7 @@ export function WorkspaceProvider({
       });
       projectsRef.current = [project, ...projectsRef.current];
       setProjects((prev) => [project, ...prev]);
-      const agent = await ensureScopedAgent(project.memory_scope, project.name);
+      const agent = await ensureScopedAgent(project.memory_scope, project.name, false);
       const session = await bridge.createSession({
         agent_id: agent.agent_id,
         project_id: project.project_id,
@@ -537,7 +553,7 @@ export function WorkspaceProvider({
         });
         projectsRef.current = [project, ...projectsRef.current];
         setProjects((prev) => [project, ...prev]);
-        const agent = await ensureScopedAgent(project.memory_scope, project.name);
+        const agent = await ensureScopedAgent(project.memory_scope, project.name, true);
         const session = await bridge.createSession({
           agent_id: agent.agent_id,
           project_id: project.project_id,
@@ -577,7 +593,11 @@ export function WorkspaceProvider({
       try {
         const project = projectsRef.current.find((p) => p.project_id === resolvedProjectId);
         const memoryScope = project?.memory_scope ?? "project:default";
-        const agent = await ensureScopedAgent(memoryScope, project?.name);
+        const agent = await ensureScopedAgent(
+          memoryScope,
+          project?.name,
+          Boolean(project?.workspace_path),
+        );
         const created = await bridge.createSession({
           agent_id: agent.agent_id,
           project_id: resolvedProjectId,
@@ -612,12 +632,41 @@ export function WorkspaceProvider({
         return;
       }
       setErrorBanner(null);
+      const wasFolderless = !projectsRef.current.find((p) => p.project_id === projectId)
+        ?.workspace_path;
       try {
         const updated = await bridge.updateProject(projectId, { workspace_path: trimmed });
         projectsRef.current = projectsRef.current.map((p) =>
           p.project_id === projectId ? updated : p,
         );
         setProjects((prev) => prev.map((p) => (p.project_id === projectId ? updated : p)));
+
+        // Upgrade the dedicated folderless `deny_all` agent to `allow_workspace` upon first folder bind
+        // so the user can actually work with workspace files without silent policy denials in D1.
+        if (wasFolderless && updated.workspace_path) {
+          const scopedAgent = agentsRef.current.find(
+            (a) =>
+              a.current_config.allowed_memory_scopes.length === 1 &&
+              a.current_config.allowed_memory_scopes[0] === updated.memory_scope,
+          );
+          if (
+            scopedAgent &&
+            scopedAgent.current_config.workspace_write_policy.mode === "deny_all"
+          ) {
+            const upgraded = await bridge.updateAgentConfig(scopedAgent.agent_id, {
+              system_prompt: scopedAgent.current_config.system_prompt,
+              model_preference: scopedAgent.current_config.model_preference ?? null,
+              thinking_level: scopedAgent.current_config.thinking_level ?? null,
+              allowed_memory_scopes: scopedAgent.current_config.allowed_memory_scopes,
+              workspace_write_policy: { mode: "allow_workspace" },
+            });
+            agentsRef.current = agentsRef.current.map((a) =>
+              a.agent_id === upgraded.agent_id ? upgraded : a,
+            );
+            setAgents((prev) => prev.map((a) => (a.agent_id === upgraded.agent_id ? upgraded : a)));
+          }
+        }
+
         if (activeProject?.project_id === projectId) {
           await loadFilesForProject(projectId);
         }
@@ -717,7 +766,7 @@ export function WorkspaceProvider({
 
   const sendMessage = useCallback(async () => {
     const sessionId = selectedSessionRef.current;
-    if (!sessionId || runningSessionId === sessionId) {
+    if (!sessionId || runningSessionIdsRef.current.has(sessionId)) {
       return;
     }
     const rawDraft = draftsBySession[sessionId] ?? "";
@@ -726,13 +775,46 @@ export function WorkspaceProvider({
       return;
     }
 
+    const optimisticId = `optimistic-${sessionId}-${Date.now()}`;
+    const optimisticMessage: MessageRecord = {
+      message_id: optimisticId,
+      session_id: sessionId,
+      role: "user",
+      content,
+      run_id: null,
+      correlation_id: "pending",
+      created_at: Date.now(),
+    };
+
     setErrorBanner(null);
     setCancelledNotice(null);
-    setRunningSessionId(sessionId);
+    // Immediately clear draft & show optimistic user bubble so live turns never appear stuck.
+    setDraftsBySession((prev) => ({ ...prev, [sessionId]: "" }));
+    setOptimisticMessagesBySession((prev) => ({
+      ...prev,
+      [sessionId]: [...(prev[sessionId] ?? []), optimisticMessage],
+    }));
+    runningSessionIdsRef.current.add(sessionId);
+    setRunningSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+
+    const removeOptimistic = () => {
+      setOptimisticMessagesBySession((prev) => {
+        const list = prev[sessionId];
+        if (!list || list.length === 0) {
+          return prev;
+        }
+        const remaining = list.filter((m) => m.message_id !== optimisticId);
+        if (remaining.length === 0) {
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+        }
+        return { ...prev, [sessionId]: remaining };
+      });
+    };
 
     try {
       const response = await bridge.sendMessage(sessionId, { content });
-      setDraftsBySession((prev) => ({ ...prev, [sessionId]: "" }));
 
       setSessions((prev) =>
         prev.map((s) =>
@@ -773,32 +855,50 @@ export function WorkspaceProvider({
         }
         await loadSessionDetail(sessionId);
       }
+      removeOptimistic();
 
       const diag = await bridge.listDiagnostics(20).catch(() => null);
       if (diag) {
         setDiagnostics(diag);
       }
     } catch (err) {
+      removeOptimistic();
+      // Restore the sent prompt losslessly if the user has not typed a new draft in the meantime.
+      setDraftsBySession((prev) => {
+        const existing = prev[sessionId] ?? "";
+        return existing.length === 0 ? { ...prev, [sessionId]: rawDraft } : prev;
+      });
       setErrorBanner(normalizeBridgeError(err));
     } finally {
-      setRunningSessionId((curr) => (curr === sessionId ? null : curr));
-      setCancellingSessionId((curr) => (curr === sessionId ? null : curr));
+      runningSessionIdsRef.current.delete(sessionId);
+      cancellingSessionIdsRef.current.delete(sessionId);
+      setRunningSessionIds((prev) => prev.filter((id) => id !== sessionId));
+      setCancellingSessionIds((prev) => prev.filter((id) => id !== sessionId));
     }
-  }, [bridge, draftsBySession, loadSessionDetail, runningSessionId]);
+  }, [bridge, draftsBySession, loadSessionDetail]);
 
   const stopActiveRun = useCallback(async () => {
-    const targetSessionId = runningSessionId ?? selectedSessionRef.current;
-    if (!targetSessionId) {
+    const targetSessionId = selectedSessionRef.current;
+    if (
+      !targetSessionId ||
+      !runningSessionIdsRef.current.has(targetSessionId) ||
+      cancellingSessionIdsRef.current.has(targetSessionId)
+    ) {
       return;
     }
-    setCancellingSessionId(targetSessionId);
+    cancellingSessionIdsRef.current.add(targetSessionId);
+    setCancellingSessionIds((prev) =>
+      prev.includes(targetSessionId) ? prev : [...prev, targetSessionId],
+    );
     try {
       const resp = await bridge.cancelRun(targetSessionId);
-      setCancelledNotice(
-        resp.cancelled
-          ? "Запуск остановлен (Cancelled). Новые действия отменены."
-          : "Команда остановки отправлена в dennett-head.",
-      );
+      if (selectedSessionRef.current === targetSessionId) {
+        setCancelledNotice(
+          resp.cancelled
+            ? "Запуск остановлен (Cancelled). Новые действия отменены."
+            : "Команда остановки отправлена в dennett-head.",
+        );
+      }
       setHealthSnapshot((prev) =>
         prev && prev.health
           ? {
@@ -813,9 +913,10 @@ export function WorkspaceProvider({
     } catch (err) {
       setErrorBanner(normalizeBridgeError(err));
     } finally {
-      setCancellingSessionId((curr) => (curr === targetSessionId ? null : curr));
+      cancellingSessionIdsRef.current.delete(targetSessionId);
+      setCancellingSessionIds((prev) => prev.filter((id) => id !== targetSessionId));
     }
-  }, [bridge, runningSessionId]);
+  }, [bridge]);
 
   const updateActiveAgentModel = useCallback(
     async (modelPreference: string | null, thinkingLevel: ThinkingLevel | null) => {
@@ -979,23 +1080,39 @@ export function WorkspaceProvider({
       }
 
       if (event.key === "Escape") {
+        if (event.defaultPrevented) {
+          return;
+        }
         if (folderPickerIntent) {
+          event.preventDefault();
           setFolderPickerIntent(null);
           return;
         }
         if (isCommandOpen) {
+          event.preventDefault();
           setIsCommandOpen(false);
           return;
         }
         if (isSettingsOpen) {
+          event.preventDefault();
           setIsSettingsOpen(false);
           return;
         }
         if (isStatsOpen) {
+          event.preventDefault();
           setIsStatsOpen(false);
           return;
         }
-        if (runningSessionId && !cancellingSessionId) {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest(".inline-rename-input, [role='menu'], [role='dialog']")) {
+          return;
+        }
+        const activeSid = selectedSessionRef.current;
+        if (
+          activeSid &&
+          runningSessionIdsRef.current.has(activeSid) &&
+          !cancellingSessionIdsRef.current.has(activeSid)
+        ) {
           event.preventDefault();
           void stopActiveRun();
         }
@@ -1004,14 +1121,12 @@ export function WorkspaceProvider({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
-    cancellingSessionId,
     createBlankChat,
     folderPickerIntent,
     healthSnapshot?.connected,
     isCommandOpen,
     isSettingsOpen,
     isStatsOpen,
-    runningSessionId,
     stopActiveRun,
   ]);
 
@@ -1023,8 +1138,14 @@ export function WorkspaceProvider({
   }, [activeDetail, selectedArtifactId]);
 
   const currentDraft = selectedSessionId ? (draftsBySession[selectedSessionId] ?? "") : "";
+  const optimisticMessagesForActiveSession = useMemo(
+    () => (selectedSessionId ? (optimisticMessagesBySession[selectedSessionId] ?? []) : []),
+    [optimisticMessagesBySession, selectedSessionId],
+  );
   const isRunningActiveSession =
-    selectedSessionId !== null && runningSessionId === selectedSessionId;
+    selectedSessionId !== null && runningSessionIds.includes(selectedSessionId);
+  const isCancellingActiveSession =
+    selectedSessionId !== null && cancellingSessionIds.includes(selectedSessionId);
 
   const value = useMemo<WorkspaceContextValue>(
     () => ({
@@ -1044,8 +1165,9 @@ export function WorkspaceProvider({
         activeScopeNoteCount,
         diagnostics,
         draftsBySession,
-        runningSessionId,
-        cancellingSessionId,
+        optimisticMessagesBySession,
+        runningSessionIds,
+        cancellingSessionIds,
         cancelledNotice,
         errorBanner,
         isRightPanelOpen,
@@ -1087,6 +1209,7 @@ export function WorkspaceProvider({
         toggleRightPanel: () => setIsRightPanelOpen((prev) => !prev),
         setRightPanelOpen: setIsRightPanelOpen,
         toggleSidebar: () => setIsSidebarOpen((prev) => !prev),
+        setSidebarOpen: setIsSidebarOpen,
         setSettingsOpen: setIsSettingsOpen,
         setStatsOpen: setIsStatsOpen,
         setCommandOpen: setIsCommandOpen,
@@ -1104,7 +1227,9 @@ export function WorkspaceProvider({
         activeAgent,
         selectedArtifact,
         currentDraft,
+        optimisticMessagesForActiveSession,
         isRunningActiveSession,
+        isCancellingActiveSession,
       },
     }),
     [
@@ -1117,7 +1242,7 @@ export function WorkspaceProvider({
       attachProjectFolder,
       bridge,
       cancelledNotice,
-      cancellingSessionId,
+      cancellingSessionIds,
       closeFolderPicker,
       createArtifact,
       createBlankChat,
@@ -1131,6 +1256,7 @@ export function WorkspaceProvider({
       folderPickerIntent,
       healthSnapshot,
       initialized,
+      isCancellingActiveSession,
       isCommandOpen,
       isFlushingOutbox,
       isLoading,
@@ -1143,6 +1269,8 @@ export function WorkspaceProvider({
       isStatsOpen,
       isUpdatingModel,
       lastFlushSummary,
+      optimisticMessagesBySession,
+      optimisticMessagesForActiveSession,
       projectFiles,
       projects,
       reconnectWithUrl,
@@ -1153,7 +1281,7 @@ export function WorkspaceProvider({
       renameProject,
       renameSession,
       requestFolderPicker,
-      runningSessionId,
+      runningSessionIds,
       runtimeCatalog,
       searchQuery,
       selectArtifact,

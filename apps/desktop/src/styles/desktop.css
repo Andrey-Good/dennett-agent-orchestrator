@@ -35,6 +35,26 @@ textarea:focus-visible,
   outline-offset: 2px;
 }
 
+.composer__input:focus,
+.composer__input:focus-visible,
+.command-search input:focus,
+.command-search input:focus-visible,
+.command-dialog__search input:focus,
+.command-dialog__search input:focus-visible,
+.inline-rename-input:focus,
+.inline-rename-input:focus-visible {
+  outline: none;
+  outline-offset: 0;
+}
+
+.composer:focus-within {
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.inline-rename-input:focus-visible {
+  border-color: var(--focus);
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.4;
@@ -673,6 +693,22 @@ html.native-shell .workbench {
   background: transparent;
 }
 
+.chat-row__title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-row__running-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok-dot);
+  box-shadow: 0 0 6px rgba(111, 211, 155, 0.7);
+}
+
 .chat-row__title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -683,6 +719,12 @@ html.native-shell .workbench {
   color: var(--text-faint);
   font-size: 11px;
   white-space: nowrap;
+  transition: opacity 100ms ease;
+}
+
+.chat-row-wrap:hover .chat-row__meta,
+.chat-row-wrap:focus-within .chat-row__meta {
+  opacity: 0;
 }
 
 .chat-row__rename-btn {
@@ -693,12 +735,13 @@ html.native-shell .workbench {
 
 .inline-rename-input {
   flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
   height: 26px;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border: 1px solid var(--line-strong);
   border-radius: 7px;
-  background: rgba(18, 18, 20, 0.92);
+  background: rgba(18, 18, 20, 0.96);
   color: var(--text);
   font-size: 13px;
   outline: 0;
@@ -1140,6 +1183,88 @@ html.native-shell .workbench {
 .message-copy-button:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.08);
+}
+
+.message-turn-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.message--optimistic .message-copy {
+  opacity: 0.88;
+}
+
+.turn-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: -14px 0 22px;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.48;
+}
+
+.turn-notice > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.turn-notice--policy {
+  border-color: var(--warn-border);
+  background: var(--warn-surface);
+  color: #f6ddb0;
+}
+
+.turn-notice--danger {
+  border-color: var(--danger-border);
+  background: var(--danger-surface);
+  color: #ffd5d5;
+}
+
+.turn-notice__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.turn-notice__body strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.turn-notice__body p {
+  margin: 0;
+}
+
+.turn-notice__body ul {
+  margin: 2px 0 0;
+  padding-left: 16px;
+}
+
+.turn-notice__body code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.popover-readonly-note {
+  margin: 0 4px 8px !important;
+  padding: 7px 9px;
+  border: 1px solid var(--warn-border);
+  border-radius: 9px;
+  background: var(--warn-surface);
+  color: #f6ddb0 !important;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 /* ============================================================================
@@ -2225,8 +2350,30 @@ html.native-shell .workbench {
   cursor: pointer;
 }
 
-.command-results button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.075);
+.command-results button:hover:not(:disabled),
+.command-results button.is-highlighted:not(:disabled) {
+  background: rgba(255, 255, 255, 0.095);
+  color: var(--text);
+}
+
+.command-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-item-meta {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.command-empty {
+  margin: 6px 9px 10px;
+  color: var(--text-faint);
+  font-size: 12.5px;
 }
 
 .command-results kbd {
@@ -2359,7 +2506,8 @@ html.native-shell .workbench {
   .workbench {
     grid-template-columns: 52px 220px minmax(0, 1fr);
   }
-  .breadcrumbs span:not(:last-of-type) {
+  .breadcrumbs .breadcrumb-prefix,
+  .breadcrumbs .breadcrumb-sep {
     display: none;
   }
 }

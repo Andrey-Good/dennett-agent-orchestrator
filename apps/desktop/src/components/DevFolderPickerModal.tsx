@@ -17,9 +17,10 @@ export function DevFolderPickerModal() {
   const [listing, setListing] = useState<DevDirsResponse | null>(null);
   const [pathDraft, setPathDraft] = useState("");
   const [loading, setLoading] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadDirectory = useCallback(async (targetPath?: string) => {
+  const loadDirectory = useCallback(async (targetPath?: string): Promise<DevDirsResponse | null> => {
     setLoading(true);
     setError(null);
     try {
@@ -28,12 +29,14 @@ export function DevFolderPickerModal() {
       const data = (await resp.json()) as DevDirsResponse;
       if (!resp.ok || data.error) {
         setError(data.error ?? `Не удалось открыть каталог (HTTP ${resp.status})`);
-      } else {
-        setListing(data);
-        setPathDraft(data.current);
+        return null;
       }
+      setListing(data);
+      setPathDraft(data.current);
+      return data;
     } catch {
       setError("Локальный обозреватель папок доступен только в dev-режиме Vite.");
+      return null;
     } finally {
       setLoading(false);
     }
@@ -41,6 +44,8 @@ export function DevFolderPickerModal() {
 
   useEffect(() => {
     if (state.folderPickerIntent) {
+      setError(null);
+      setConfirming(false);
       void loadDirectory();
     }
   }, [loadDirectory, state.folderPickerIntent]);
@@ -61,7 +66,25 @@ export function DevFolderPickerModal() {
     }
   };
 
-  const selectedPath = listing?.current || pathDraft.trim();
+  const trimmedDraft = pathDraft.trim();
+  const selectedPath = trimmedDraft || listing?.current || "";
+
+  const handleConfirm = async () => {
+    if (!selectedPath || confirming) {
+      return;
+    }
+    if (!listing || trimmedDraft !== listing.current) {
+      setConfirming(true);
+      const resolved = await loadDirectory(selectedPath);
+      setConfirming(false);
+      if (!resolved) {
+        return;
+      }
+      await actions.submitFolderPickerPath(resolved.current);
+      return;
+    }
+    await actions.submitFolderPickerPath(listing.current);
+  };
 
   return (
     <div
@@ -181,12 +204,12 @@ export function DevFolderPickerModal() {
             <button
               type="button"
               className="popover-primary-btn"
-              disabled={!selectedPath}
+              disabled={!selectedPath || confirming}
               data-testid="dev-folder-picker-confirm"
-              onClick={() => void actions.submitFolderPickerPath(selectedPath)}
+              onClick={() => void handleConfirm()}
             >
               <Check size={14} aria-hidden="true" />
-              Выбрать эту папку
+              {confirming ? "Проверка…" : "Выбрать эту папку"}
             </button>
           </div>
         </footer>

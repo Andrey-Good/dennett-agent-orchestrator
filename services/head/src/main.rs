@@ -42,6 +42,7 @@ struct ServeOptions {
     auth_profile: RuntimeAuthProfile,
     profile_root: Option<PathBuf>,
     enable_sandbox: bool,
+    allow_non_loopback: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -229,6 +230,7 @@ where
                 auth_profile,
                 profile_root,
                 enable_sandbox,
+                allow_non_loopback,
             }))
         }
         (false, None) => Err(DennettError::InvalidInput {
@@ -591,6 +593,7 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         profile_mode,
         runtime_adapter_id,
         runtime_is_simulated,
+        allow_non_loopback: opts.allow_non_loopback,
         shutdown_tx,
         request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
     };

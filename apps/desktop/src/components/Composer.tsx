@@ -22,15 +22,10 @@ const THINKING_LABELS: Record<ThinkingLevel, string> = {
 };
 
 const WRITE_POLICY_ITEMS: Array<{
-  mode: "ask_before_write" | "allow_workspace" | "deny_all";
+  mode: "allow_workspace" | "deny_all";
   label: string;
   description: string;
 }> = [
-  {
-    mode: "ask_before_write",
-    label: "Спрашивать запись",
-    description: "Внешний PolicyEngine проверяет каждое изменение файла",
-  },
   {
     mode: "allow_workspace",
     label: "Запись в папку",
@@ -53,9 +48,11 @@ function policyLabel(policy: WorkspaceWritePolicy | undefined, isFolderless: boo
     case "deny_all":
       return "Только чтение";
     case "allow_paths":
-      return "Ограниченная запись";
+      return "Ограниченная запись (CLI)";
+    case "ask_before_write":
+      return "Спрашивать запись (CLI)";
     default:
-      return "Спрашивать запись";
+      return "Запись в папку";
   }
 }
 
@@ -70,7 +67,7 @@ export function Composer() {
   const isFolderless = activeProject ? !activeProject.workspace_path : false;
   const isConnected = Boolean(state.healthSnapshot?.connected);
   const isRunning = meta.isRunningActiveSession;
-  const isCancelling = sessionId !== null && state.cancellingSessionId === sessionId;
+  const isCancelling = meta.isCancellingActiveSession;
   const canSend =
     Boolean(sessionId) && isConnected && !isRunning && meta.currentDraft.trim().length > 0;
 
@@ -141,14 +138,16 @@ export function Composer() {
     };
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         setOpenPopover(null);
       }
     };
     document.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
     };
   }, [openPopover]);
 
@@ -158,7 +157,7 @@ export function Composer() {
       if (canSend) {
         void actions.sendMessage();
       }
-    } else if (event.key === "Escape" && isRunning) {
+    } else if (event.key === "Escape" && isRunning && !openPopover && !event.defaultPrevented) {
       event.preventDefault();
       void actions.stopActiveRun();
     }
@@ -203,6 +202,16 @@ export function Composer() {
           >
             <strong>Доступ к файлам</strong>
             <p>Политика проверяется внешним PolicyEngine до выполнения инструмента.</p>
+            {(activeAgent.current_config.workspace_write_policy.mode === "ask_before_write" ||
+              activeAgent.current_config.workspace_write_policy.mode === "allow_paths") && (
+              <p className="popover-readonly-note" data-testid="cli-write-policy-note">
+                Активна политика из CLI:{" "}
+                <strong>
+                  {policyLabel(activeAgent.current_config.workspace_write_policy, false)}
+                </strong>
+                . В D1 выберите режим ниже, если хотите изменить доступ.
+              </p>
+            )}
             {WRITE_POLICY_ITEMS.map((item) => {
               const isSelected = activeAgent.current_config.workspace_write_policy.mode === item.mode;
               return (

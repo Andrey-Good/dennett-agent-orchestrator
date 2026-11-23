@@ -21,8 +21,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_INTEGRATION_TESTS = 27
-MIN_DESKTOP_FRONTEND_TESTS = 15
+MIN_INTEGRATION_TESTS = 29
+MIN_DESKTOP_FRONTEND_TESTS = 20
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"

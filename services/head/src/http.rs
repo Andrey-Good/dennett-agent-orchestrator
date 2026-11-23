@@ -12,7 +12,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
-use axum::http::header::HOST;
+use axum::http::header::{HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -41,6 +41,7 @@ pub const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
 static HEADER_SHUTDOWN: HeaderName = HeaderName::from_static("x-dennett-shutdown");
+static HEADER_SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
 
 /// Shared `axum` application state for `dennett-head`.
 #[derive(Clone)]
@@ -53,6 +54,8 @@ pub struct HeadAppState {
     pub runtime_adapter_id: String,
     /// Whether the configured runtime is simulated.
     pub runtime_is_simulated: bool,
+    /// Whether operator explicitly opted into `--allow-non-loopback` binding.
+    pub allow_non_loopback: bool,
     /// Graceful shutdown trigger channel.
     pub shutdown_tx: watch::Sender<bool>,
     /// Bounded concurrency permit pool.
@@ -164,6 +167,12 @@ async fn enforce_limits_and_timeout(
 ) -> Response {
     let correlation_id = extract_correlation_id_lossy(request.headers());
 
+    if !state.allow_non_loopback
+        && let Err(err) = validate_loopback_request_headers(request.headers())
+    {
+        return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
+    }
+
     let Ok(_permit) = Arc::clone(&state.request_limit).try_acquire_owned() else {
         let err = DennettError::Internal {
             detail: String::from("concurrent request limit reached"),
@@ -179,6 +188,45 @@ async fn enforce_limits_and_timeout(
         };
         json_api_error(StatusCode::GATEWAY_TIMEOUT, err, &correlation_id)
     }
+}
+
+fn validate_loopback_request_headers(headers: &HeaderMap) -> Result<(), DennettError> {
+    let host_ok = headers
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(is_loopback_host);
+    if !host_ok {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("http.host"),
+            reason: String::from(
+                "missing or non-loopback Host header rejected by loopback DNS-rebinding guard",
+            ),
+        });
+    }
+
+    if let Some(fetch_site) = headers.get(&HEADER_SEC_FETCH_SITE) {
+        let is_cross_site = fetch_site
+            .to_str()
+            .map_or(true, |v| v.trim().eq_ignore_ascii_case("cross-site"));
+        if is_cross_site {
+            return Err(DennettError::AccessDenied {
+                scope: String::from("http.sec_fetch_site"),
+                reason: String::from("cross-site browser request rejected"),
+            });
+        }
+    }
+
+    if let Some(origin) = headers.get(ORIGIN) {
+        let origin_ok = origin.to_str().is_ok_and(is_allowed_loopback_origin);
+        if !origin_ok {
+            return Err(DennettError::AccessDenied {
+                scope: String::from("http.origin"),
+                reason: String::from("non-loopback Origin header rejected by loopback CSRF guard"),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_healthz(State(state): State<HeadAppState>, headers: HeaderMap) -> Response {
@@ -244,7 +292,7 @@ async fn handle_shutdown(
     let host_ok = headers
         .get(HOST)
         .and_then(|v| v.to_str().ok())
-        .is_none_or(is_loopback_host);
+        .is_some_and(is_loopback_host);
 
     if !peer_addr.ip().is_loopback() || !shutdown_header_valid || !host_ok {
         let err = DennettError::AccessDenied {
@@ -846,17 +894,152 @@ fn json_with_correlation<T: Serialize>(
     resp
 }
 
+fn is_valid_port(port: &str) -> bool {
+    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok()
+}
+
 fn is_loopback_host(raw: &str) -> bool {
     let host = raw.trim();
     if host.is_empty() {
         return false;
     }
-    let without_port = if let Some(rest) = host.strip_prefix('[') {
-        rest.split(']').next().unwrap_or_default()
-    } else {
-        host.split(':').next().unwrap_or_default()
+    if let Some(rest) = host.strip_prefix('[') {
+        let Some((addr, after)) = rest.split_once(']') else {
+            return false;
+        };
+        if addr != "::1" {
+            return false;
+        }
+        return after.is_empty() || after.strip_prefix(':').is_some_and(is_valid_port);
+    }
+    let (name, port_opt) = match host.split_once(':') {
+        Some((n, p)) => (n, Some(p)),
+        None => (host, None),
     };
-    without_port.eq_ignore_ascii_case("localhost")
-        || without_port == "127.0.0.1"
-        || without_port == "::1"
+    let name_ok = name.eq_ignore_ascii_case("localhost") || name == "127.0.0.1";
+    name_ok && port_opt.is_none_or(is_valid_port)
+}
+
+fn is_allowed_loopback_origin(raw: &str) -> bool {
+    let origin = raw.trim();
+    if origin.eq_ignore_ascii_case("tauri://localhost")
+        || origin.eq_ignore_ascii_case("http://tauri.localhost")
+        || origin.eq_ignore_ascii_case("https://tauri.localhost")
+    {
+        return true;
+    }
+    if origin.len() <= "http://".len() || !origin[.."http://".len()].eq_ignore_ascii_case("http://")
+    {
+        return false;
+    }
+    let authority = &origin["http://".len()..];
+    if authority
+        .bytes()
+        .any(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'?' | b'#' | b'@' | b'\\'))
+    {
+        return false;
+    }
+    is_loopback_host(authority)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_host_and_origin_guards_accept_local_and_tauri_and_reject_rebinding() {
+        for good_host in [
+            "127.0.0.1",
+            "127.0.0.1:41771",
+            "localhost",
+            "LOCALHOST:1420",
+            "[::1]",
+            "[::1]:41771",
+        ] {
+            assert!(
+                is_loopback_host(good_host),
+                "expected loopback host `{good_host}` to be accepted"
+            );
+        }
+
+        for bad_host in [
+            "",
+            "evil.rebind.attacker:41771",
+            "127.0.0.1.evil.com",
+            "localhost.evil.com:1420",
+            "127.0.0.1:notaport",
+            "127.0.0.1:70000",
+            "127.0.0.1:80:80",
+            "[::1]evil.com",
+            "[::1]:80evil",
+            "[::2]:41771",
+            "0.0.0.0:41771",
+        ] {
+            assert!(
+                !is_loopback_host(bad_host),
+                "expected non-loopback/malformed host `{bad_host}` to be rejected"
+            );
+        }
+
+        for good_origin in [
+            "http://127.0.0.1:1420",
+            "http://127.0.0.1",
+            "http://localhost:1420",
+            "http://[::1]:1420",
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+        ] {
+            assert!(
+                is_allowed_loopback_origin(good_origin),
+                "expected origin `{good_origin}` to be accepted"
+            );
+        }
+
+        for bad_origin in [
+            "",
+            "null",
+            "https://evil.example",
+            "http://evil.example:1420",
+            "https://127.0.0.1:1420",
+            "http://127.0.0.1.evil.com",
+            "http://127.0.0.1:1420/path",
+            "http://localhost@evil.example",
+            "http://tauri.localhost.evil.example",
+        ] {
+            assert!(
+                !is_allowed_loopback_origin(bad_origin),
+                "expected origin `{bad_origin}` to be rejected"
+            );
+        }
+
+        // Missing Host fails closed.
+        let empty = HeaderMap::new();
+        assert!(matches!(
+            validate_loopback_request_headers(&empty),
+            Err(DennettError::AccessDenied { .. })
+        ));
+
+        // Cross-site Sec-Fetch-Site fails closed even with loopback Host.
+        let mut cross_site = HeaderMap::new();
+        cross_site.insert(HOST, HeaderValue::from_static("127.0.0.1:41771"));
+        cross_site.insert(
+            HEADER_SEC_FETCH_SITE.clone(),
+            HeaderValue::from_static("cross-site"),
+        );
+        assert!(matches!(
+            validate_loopback_request_headers(&cross_site),
+            Err(DennettError::AccessDenied { .. })
+        ));
+
+        // Same-origin Vite dev / Tauri request passes.
+        let mut ok_headers = HeaderMap::new();
+        ok_headers.insert(HOST, HeaderValue::from_static("127.0.0.1:1420"));
+        ok_headers.insert(ORIGIN, HeaderValue::from_static("http://127.0.0.1:1420"));
+        ok_headers.insert(
+            HEADER_SEC_FETCH_SITE.clone(),
+            HeaderValue::from_static("same-origin"),
+        );
+        assert!(validate_loopback_request_headers(&ok_headers).is_ok());
+    }
 }

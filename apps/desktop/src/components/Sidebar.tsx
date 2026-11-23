@@ -52,14 +52,16 @@ export function Sidebar() {
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         setCreateMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => {
       document.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
     };
   }, [createMenuOpen]);
 
@@ -199,7 +201,7 @@ export function Sidebar() {
                   data-testid={`project-group-${project.project_id}`}
                 >
                   <div
-                    className="project-heading"
+                    className={`project-heading ${isEditingProj ? "is-editing" : ""}`}
                     tabIndex={0}
                     onDoubleClick={() => startProjectRename(project)}
                     onKeyDown={(e) => {
@@ -223,6 +225,10 @@ export function Sidebar() {
                         autoFocus
                         aria-label="Новое название проекта"
                         data-testid="inline-project-rename-input"
+                        onFocus={(e) => {
+                          e.currentTarget.scrollLeft = 0;
+                          e.currentTarget.select();
+                        }}
                         onChange={(e) => setEditingProjectName(e.target.value)}
                         onBlur={() => commitProjectRename(project)}
                         onKeyDown={(e) => {
@@ -231,6 +237,7 @@ export function Sidebar() {
                             commitProjectRename(project);
                           } else if (e.key === "Escape") {
                             e.preventDefault();
+                            e.stopPropagation();
                             setEditingProjectId(null);
                           }
                         }}
@@ -244,51 +251,53 @@ export function Sidebar() {
                       </span>
                     )}
 
-                    <div className="project-heading__actions">
-                      {isFolderless && (
+                    {!isEditingProj && (
+                      <div className="project-heading__actions">
+                        {isFolderless && (
+                          <button
+                            type="button"
+                            className="row-action-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void actions.requestFolderPicker({
+                                mode: "attach-project",
+                                projectId: project.project_id,
+                              });
+                            }}
+                            aria-label={`Привязать папку к проекту ${project.name}`}
+                            title="Привязать папку…"
+                          >
+                            <FolderOpen size={14} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="row-action-btn"
                           onClick={(e) => {
                             e.stopPropagation();
-                            void actions.requestFolderPicker({
-                              mode: "attach-project",
-                              projectId: project.project_id,
-                            });
+                            startProjectRename(project);
                           }}
-                          aria-label={`Привязать папку к проекту ${project.name}`}
-                          title="Привязать папку…"
+                          aria-label={`Переименовать проект ${project.name}`}
+                          title="Переименовать проект (F2)"
                         >
-                          <FolderOpen size={14} />
+                          <PencilSimple size={13} />
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        className="row-action-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startProjectRename(project);
-                        }}
-                        aria-label={`Переименовать проект ${project.name}`}
-                        title="Переименовать проект (F2)"
-                      >
-                        <PencilSimple size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="new-chat-trigger"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void actions.createBlankChat(project.project_id);
-                        }}
-                        disabled={!isConnected}
-                        aria-label={`Новый чат в проекте ${project.name}`}
-                        data-testid={`new-chat-btn-${project.project_id}`}
-                        title="Новый чат (Ctrl+N)"
-                      >
-                        <Plus size={14} />
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          className="new-chat-trigger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void actions.createBlankChat(project.project_id);
+                          }}
+                          disabled={!isConnected}
+                          aria-label={`Новый чат в проекте ${project.name}`}
+                          data-testid={`new-chat-btn-${project.project_id}`}
+                          title="Новый чат (Ctrl+N)"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="nested-chats" role="list">
@@ -304,13 +313,15 @@ export function Sidebar() {
                     ) : (
                       sessions.map((session) => {
                         const isActive = state.selectedSessionId === session.session_id;
-                        const isRunning = state.runningSessionId === session.session_id;
+                        const isRunning = state.runningSessionIds.includes(session.session_id);
                         const isEditingSess = editingSessionId === session.session_id;
 
                         return (
                           <div
                             key={session.session_id}
-                            className={`chat-row-wrap ${isActive ? "is-active" : ""}`}
+                            className={`chat-row-wrap ${isActive ? "is-active" : ""} ${
+                              isRunning ? "is-running" : ""
+                            }`}
                             role="listitem"
                           >
                             {isEditingSess ? (
@@ -321,6 +332,10 @@ export function Sidebar() {
                                 autoFocus
                                 aria-label="Новое название чата"
                                 data-testid="inline-session-rename-input"
+                                onFocus={(e) => {
+                                  e.currentTarget.scrollLeft = 0;
+                                  e.currentTarget.select();
+                                }}
                                 onChange={(e) => setEditingSessionTitle(e.target.value)}
                                 onBlur={() => commitSessionRename(session)}
                                 onKeyDown={(e) => {
@@ -329,6 +344,7 @@ export function Sidebar() {
                                     commitSessionRename(session);
                                   } else if (e.key === "Escape") {
                                     e.preventDefault();
+                                    e.stopPropagation();
                                     setEditingSessionId(null);
                                   }
                                 }}
@@ -349,7 +365,16 @@ export function Sidebar() {
                                   aria-current={isActive ? "page" : undefined}
                                   data-testid={`session-item-${session.session_id}`}
                                 >
-                                  <span className="chat-row__title">{session.title}</span>
+                                  <span className="chat-row__title-wrap">
+                                    {isRunning && (
+                                      <span
+                                        className="chat-row__running-dot"
+                                        aria-label="Чат выполняется"
+                                        data-testid={`session-running-dot-${session.session_id}`}
+                                      />
+                                    )}
+                                    <span className="chat-row__title">{session.title}</span>
+                                  </span>
                                   <small className="chat-row__meta">
                                     {isRunning
                                       ? "в работе"

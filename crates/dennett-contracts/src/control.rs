@@ -195,6 +195,7 @@ pub enum ThinkingLevel {
     /// High reasoning effort (`high`).
     High,
     /// Extra-high reasoning effort (`xhigh`).
+    #[serde(rename = "xhigh", alias = "x_high")]
     XHigh,
 }
 
@@ -304,7 +305,7 @@ impl FromStr for ThinkingLevel {
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
-            "xhigh" | "extra" => Ok(Self::XHigh),
+            "xhigh" | "x_high" | "extra" => Ok(Self::XHigh),
             other => Err(DennettError::InvalidInput {
                 field: String::from("thinking_level"),
                 reason: format!(
@@ -1749,7 +1750,21 @@ mod tests {
             let parsed = ThinkingLevel::from_str(raw).expect("valid thinking level");
             assert_eq!(parsed, expected);
             assert_eq!(parsed.as_str(), raw);
+            let encoded = serde_json::to_string(&expected).expect("serialize thinking level");
+            assert_eq!(encoded, format!("\"{raw}\""));
+            let decoded: ThinkingLevel =
+                serde_json::from_str(&encoded).expect("deserialize thinking level");
+            assert_eq!(decoded, expected);
         }
+        assert_eq!(
+            ThinkingLevel::from_str("x_high").expect("accept legacy x_high alias"),
+            ThinkingLevel::XHigh
+        );
+        assert_eq!(
+            serde_json::from_str::<ThinkingLevel>("\"x_high\"")
+                .expect("deserialize legacy x_high alias"),
+            ThinkingLevel::XHigh
+        );
         assert!(ThinkingLevel::from_str("turbo").is_err());
 
         let binding = RuntimeBinding {

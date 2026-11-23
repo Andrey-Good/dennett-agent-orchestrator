@@ -21,6 +21,7 @@ import type {
   MemoryNote,
   MemoryStatus,
   MessageRecord,
+  PermissionDecisionRecord,
   ProjectRecord,
   RunRecord,
   RuntimeAuthProfile,
@@ -59,6 +60,7 @@ export interface MockBridgeSeed {
   messagesBySession?: Record<string, MessageRecord[]>;
   artifactsBySession?: Record<string, ArtifactRecord[]>;
   runsBySession?: Record<string, RunRecord[]>;
+  permissionDecisionsBySession?: Record<string, PermissionDecisionRecord[]>;
   filesByProject?: Record<string, WorkspaceFileEntry[]>;
   notesByScope?: Record<string, MemoryNote[]>;
   supportsNativeFolderPicker?: boolean;
@@ -153,6 +155,7 @@ export class MockDesktopBridge implements DesktopBridge {
   public messagesBySession: Record<string, MessageRecord[]>;
   public artifactsBySession: Record<string, ArtifactRecord[]>;
   public runsBySession: Record<string, RunRecord[]>;
+  public permissionDecisionsBySession: Record<string, PermissionDecisionRecord[]>;
   public filesByProject: Record<string, WorkspaceFileEntry[]>;
   public notesByScope: Record<string, MemoryNote[]>;
   public mockPickedFolder: string | null;
@@ -193,6 +196,7 @@ export class MockDesktopBridge implements DesktopBridge {
     this.messagesBySession = { ...(seed.messagesBySession ?? {}) };
     this.artifactsBySession = { ...(seed.artifactsBySession ?? {}) };
     this.runsBySession = { ...(seed.runsBySession ?? {}) };
+    this.permissionDecisionsBySession = { ...(seed.permissionDecisionsBySession ?? {}) };
     this.filesByProject = { ...(seed.filesByProject ?? {}) };
     this.notesByScope = { ...(seed.notesByScope ?? {}) };
     this.mockPickedFolder = seed.mockPickedFolder ?? null;
@@ -230,7 +234,7 @@ export class MockDesktopBridge implements DesktopBridge {
       postgres_connected: true,
       postgres_role: "dennett_control_role",
       postgres_database: "dennett_control_test",
-      schema_version: 2,
+      schema_version: 3,
       memory_status: this.memoryStatus,
       memory_detail: this.memoryDetail,
       runtime_adapter_id: this.runtimeAdapterId,
@@ -494,7 +498,7 @@ export class MockDesktopBridge implements DesktopBridge {
       messages: [...(this.messagesBySession[sessionId] ?? [])],
       artifacts: [...(this.artifactsBySession[sessionId] ?? [])],
       runs: [...(this.runsBySession[sessionId] ?? [])],
-      permission_decisions: [],
+      permission_decisions: [...(this.permissionDecisionsBySession[sessionId] ?? [])],
     };
   }
 
@@ -794,7 +798,7 @@ export function createBrowserPreviewBridge(): DesktopBridge {
           model_preference: "gemini-4-neon",
           thinking_level: defaultThinking,
           allowed_memory_scopes: ["project:dennett-preview"],
-          workspace_write_policy: { mode: "ask_before_write" },
+          workspace_write_policy: { mode: "allow_workspace" },
           created_at: now - 300_000,
         },
         created_at: now - 300_000,

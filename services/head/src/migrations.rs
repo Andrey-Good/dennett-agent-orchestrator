@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 const CONTROL_MIGRATION_ADVISORY_LOCK_KEY: i64 = 842_190_537_612_049_311;
 
 /// Latest Control schema migration version bundled in this build.
-pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 2;
+pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 3;
 
 /// One forward-only PostgreSQL migration owned by `dennett-head`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +35,11 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 2,
         name: "0002_projects_nullable_workspace",
         sql: include_str!("../migrations/0002_projects_nullable_workspace.sql"),
+    },
+    ControlMigration {
+        version: 3,
+        name: "0003_artifacts_unique_revision",
+        sql: include_str!("../migrations/0003_artifacts_unique_revision.sql"),
     },
 ];
 

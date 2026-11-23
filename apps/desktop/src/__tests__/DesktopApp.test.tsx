@@ -696,6 +696,7 @@ describe("Dennett Desktop D1 Rework UI", () => {
     expect(desktopCss).toMatch(/\.chat-card\s*\{[^}]*display:\s*flex;\s*flex-direction:\s*column;/s);
     expect(desktopCss).not.toMatch(/\.chat-card\s*\{[^}]*grid-template-rows:/s);
     expect(desktopCss).toMatch(/\.composer__input\s*\{[^}]*resize:\s*none;/s);
+    expect(desktopCss).toMatch(/\.composer__input:focus-visible[\s\S]*?outline:\s*none;/);
     expect(desktopCss).toMatch(/\.composer-toolbar\s*\{[^}]*flex-wrap:\s*wrap;/s);
     expect(desktopCss).toMatch(/\.popover-scroll-list\s*\{[^}]*max-height:\s*min\(420px,/s);
     expect(tokensCss).toMatch(/--popover-bg:\s*#1e1e20;/);
@@ -828,10 +829,14 @@ describe("Dennett Desktop D1 Rework UI", () => {
     await user.click(screen.getByTestId(`session-item-${sessionB.session_id}`));
     expect(await screen.findByText("Уникальное сообщение Сессии B")).toBeInTheDocument();
     expect(screen.getByTestId("artifact-preview")).toHaveTextContent("artifact-from-b.md");
+    // H1-04: idle Session B must NOT display Session A's running banner, while Sidebar shows Session A's running dot
+    expect(screen.queryByTestId("running-control-bar")).not.toBeInTheDocument();
 
     await waitFor(
       () => {
-        expect(screen.queryByTestId("running-control-bar")).not.toBeInTheDocument();
+        expect(
+          screen.queryByTestId(`session-running-dot-${sessionA.session_id}`),
+        ).not.toBeInTheDocument();
       },
       { timeout: 2_000 },
     );
@@ -844,5 +849,315 @@ describe("Dennett Desktop D1 Rework UI", () => {
     await user.click(screen.getByTestId(`session-item-${sessionA.session_id}`));
     expect(await screen.findByText("Запрос в Сессию A")).toBeInTheDocument();
     expect(await screen.findByText(/Принято .* Запрос в Сессию A/)).toBeInTheDocument();
+  });
+
+  it("H1-02: defaults folder-bound projects to allow_workspace, upgrades folderless agents on attach, removes dead ask_before_write choice, and renders policy denial / empty-reply notices", async () => {
+    const user = userEvent.setup();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      supportsNativeFolderPicker: true,
+      mockPickedFolder: "A:/Dev/upgraded-repo",
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId("empty-onboarding-state");
+
+    // 1. Folderless project starts on deny_all
+    await user.click(screen.getByTestId("onboarding-folderless-btn"));
+    await screen.findByLabelText("Поле ввода сообщения");
+    expect(bridge.agents[0]?.current_config.workspace_write_policy.mode).toBe("deny_all");
+
+    // 2. Attaching a folder upgrades the dedicated folderless agent from deny_all -> allow_workspace
+    const projectId = bridge.projects[0]!.project_id;
+    await user.click(screen.getByRole("button", { name: /Привязать папку к проекту/ }));
+    await waitFor(() => {
+      expect(bridge.projects[0]?.workspace_path).toBe("A:/Dev/upgraded-repo");
+      expect(bridge.agents[0]?.current_config.workspace_write_policy.mode).toBe("allow_workspace");
+    });
+
+    // 3. Access popover offers strictly D1 interactive choices (Запись в папку & Только чтение — never Спрашивать запись)
+    await user.click(screen.getByTestId("access-selector-trigger"));
+    const accessPopover = await screen.findByTestId("access-popover");
+    expect(accessPopover).toHaveTextContent("Запись в папку");
+    expect(accessPopover).toHaveTextContent("Только чтение");
+    expect(accessPopover).not.toHaveTextContent("Спрашивать запись");
+    await user.keyboard("{Escape}");
+
+    // 4. Denied permission_decisions + run with assistant_message_id=null renders explicit visible notices
+    const { project, agent, sessionA } = makeSeedFixture();
+    const runId = "40000000-0000-4000-8000-0000000000d1";
+    const now = Date.now();
+    const deniedBridge = new MockDesktopBridge({
+      connected: true,
+      projects: [project],
+      agents: [
+        {
+          ...agent,
+          current_config: {
+            ...agent.current_config,
+            workspace_write_policy: { mode: "ask_before_write" },
+          },
+        },
+      ],
+      sessions: [sessionA],
+      messagesBySession: {
+        [sessionA.session_id]: [
+          {
+            message_id: "50000000-0000-4000-8000-0000000000d1",
+            session_id: sessionA.session_id,
+            role: "user",
+            content: "Создай hello.txt",
+            run_id: runId,
+            correlation_id: "corr-d1",
+            created_at: now - 2000,
+          },
+        ],
+      },
+      runsBySession: {
+        [sessionA.session_id]: [
+          {
+            run_id: runId,
+            session_id: sessionA.session_id,
+            agent_id: agent.agent_id,
+            agent_config_version_id: agent.current_config_version_id,
+            user_message_id: "50000000-0000-4000-8000-0000000000d1",
+            assistant_message_id: null,
+            status: "succeeded",
+            rehydrated: false,
+            error_code: null,
+            error_summary: null,
+            correlation_id: "corr-d1",
+            created_at: now - 2000,
+            finished_at: now - 1000,
+          },
+        ],
+      },
+      permissionDecisionsBySession: {
+        [sessionA.session_id]: [
+          {
+            decision_id: "90000000-0000-4000-8000-000000000001",
+            session_id: sessionA.session_id,
+            run_id: runId,
+            tool_call_id: "call-1",
+            tool_name: "write_file",
+            target_pattern: "hello.txt",
+            scope: project.memory_scope,
+            effect: "deny",
+            matched_rule_id: null,
+            reason: "default-deny outside model: tool write_file has no matching allow rule",
+            evaluated_outside_model: true,
+            correlation_id: "corr-d1",
+            created_at: now - 1500,
+          },
+        ],
+      },
+    });
+
+    const { unmount } = render(
+      <App bridge={deniedBridge} windowControls={createTestWindowControls()} />,
+    );
+    expect(await screen.findByTestId("policy-denial-notice")).toHaveTextContent("write_file");
+    expect(screen.getByTestId("empty-run-notice")).toHaveTextContent(
+      "Агент завершил ход без текстового ответа",
+    );
+    expect(projectId).toBeTruthy();
+    unmount();
+  });
+
+  it("H1-03: DevFolderPickerModal validates pasted pathDraft authoritatively on confirm and never silently binds $HOME", async () => {
+    const user = userEvent.setup();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      supportsNativeFolderPicker: false,
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const urlStr = String(input);
+      if (urlStr.includes("path=C%3A%2FTemp%2Fmy-real-repo")) {
+        return new Response(
+          JSON.stringify({
+            current: "C:/Temp/my-real-repo",
+            parent: "C:/Temp",
+            home: "C:/Users/urako",
+            temp: "C:/Temp",
+            dirs: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (urlStr.includes("path=C%3A%2Fnonexistent-bad")) {
+        return new Response(
+          JSON.stringify({ error: "Selected path is not a regular directory" }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          current: "C:/Users/urako",
+          parent: "C:/Users",
+          home: "C:/Users/urako",
+          temp: "C:/Temp",
+          dirs: [{ name: "Desktop", path: "C:/Users/urako/Desktop" }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+      await user.click(await screen.findByTestId("onboarding-pick-folder-btn"));
+
+      const pathInput = await screen.findByTestId("dev-folder-picker-path-input");
+      await waitFor(() => {
+        expect(pathInput).toHaveValue("C:/Users/urako");
+      });
+
+      // Invalid typed path shows inline error, keeps modal open, and does NOT bind $HOME
+      await user.clear(pathInput);
+      await user.type(pathInput, "C:/nonexistent-bad");
+      await user.click(screen.getByTestId("dev-folder-picker-confirm"));
+      expect(
+        await screen.findByText("Selected path is not a regular directory"),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("dev-folder-picker-modal")).toBeInTheDocument();
+      expect(bridge.projects).toHaveLength(0);
+
+      // Valid pasted path resolves via /__dennett_dev_dirs and binds exact requested folder without clicking Перейти
+      await user.clear(pathInput);
+      await user.type(pathInput, "C:/Temp/my-real-repo");
+      await user.click(screen.getByTestId("dev-folder-picker-confirm"));
+
+      await waitFor(() => {
+        expect(bridge.projects).toHaveLength(1);
+      });
+      expect(bridge.projects[0]?.workspace_path).toBe("C:/Temp/my-real-repo");
+      expect(bridge.projects[0]?.name).toBe("my-real-repo");
+      expect(bridge.agents[0]?.current_config.workspace_write_policy.mode).toBe("allow_workspace");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("H1-04: shows optimistic user bubble immediately, preserves mid-run typing, scopes running banner per-session, and dismisses popovers on Escape without cancelling run", async () => {
+    const user = userEvent.setup();
+    const { project, agent, sessionA, sessionB } = makeSeedFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [project],
+      agents: [agent],
+      sessions: [sessionA, sessionB],
+      sendDelayMs: 1200,
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    const input = await screen.findByLabelText("Поле ввода сообщения");
+    expect(screen.getByTestId("empty-chat-state")).toBeInTheDocument();
+
+    // Send first prompt -> immediately clears composer, leaves empty-chat-state, and renders optimistic bubble!
+    await user.type(input, "Срочный анализ{enter}");
+    await screen.findByTestId("running-control-bar");
+    expect(input).toHaveValue("");
+    expect(screen.queryByTestId("empty-chat-state")).not.toBeInTheDocument();
+    expect(screen.getByText("Срочный анализ")).toBeInTheDocument();
+
+    // Typing a follow-up draft mid-run survives turn completion
+    await user.type(input, "Следующий вопрос");
+
+    // Opening model popover mid-run and pressing Escape dismisses ONLY the popover (does NOT cancel active run!)
+    await user.click(screen.getByTestId("model-selector-trigger"));
+    expect(await screen.findByTestId("model-popover")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByTestId("model-popover")).not.toBeInTheDocument();
+    });
+    expect(bridge.calls.filter((c) => c.method === "cancelRun")).toHaveLength(0);
+    expect(screen.getByTestId("running-control-bar")).toBeInTheDocument();
+
+    // Switching to idle Session B hides running banner and pressing Escape does NOT cancel Session A
+    await user.click(screen.getByTestId(`session-item-${sessionB.session_id}`));
+    expect(screen.queryByTestId("running-control-bar")).not.toBeInTheDocument();
+    expect(screen.getByTestId(`session-running-dot-${sessionA.session_id}`)).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(bridge.calls.filter((c) => c.method === "cancelRun")).toHaveLength(0);
+
+    // Wait for Session A turn to complete, switch back -> mid-run draft is STILL intact!
+    await waitFor(
+      () => {
+        expect(
+          screen.queryByTestId(`session-running-dot-${sessionA.session_id}`),
+        ).not.toBeInTheDocument();
+      },
+      { timeout: 3_000 },
+    );
+    await user.click(screen.getByTestId(`session-item-${sessionA.session_id}`));
+    expect(screen.getByLabelText("Поле ввода сообщения")).toHaveValue("Следующий вопрос");
+  });
+
+  it("H1-06: CommandPalette matches projects + ArrowDown/Enter navigation, TitleBar search auto-expands collapsed sidebar, and hover/breadcrumb CSS rules prevent overlap", async () => {
+    const user = userEvent.setup();
+    const { project, agent, sessionA, sessionB } = makeSeedFixture();
+    const secondProject: ProjectRecord = {
+      project_id: "10000000-0000-4000-8000-000000000002",
+      name: "Альфа-исследование",
+      workspace_path: null,
+      memory_scope: "project:alpha",
+      created_at: Date.now() - 10_000,
+    };
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [project, secondProject],
+      agents: [agent],
+      sessions: [sessionA, sessionB],
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId("chat-card");
+
+    // 1. CommandPalette matches project names, shows empty state for misses, and navigates via ArrowDown + Enter
+    await user.click(screen.getByRole("button", { name: "Открыть командную палитру" }));
+    const paletteInput = await screen.findByLabelText("Поиск в командной палитре");
+
+    await user.type(paletteInput, "несуществующий-запрос-xyz");
+    expect(await screen.findByTestId("command-palette-empty")).toBeInTheDocument();
+
+    await user.clear(paletteInput);
+    await user.type(paletteInput, "Сессия");
+    // Item 0 = Сессия A, ArrowDown -> Item 1 = Сессия B, Enter selects Сессия B and closes palette
+    await user.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() => {
+      expect(screen.queryByTestId("command-palette")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId(`session-item-${sessionB.session_id}`)).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    // Project search inside CommandPalette surfaces matching project
+    await user.click(screen.getByRole("button", { name: "Открыть командную палитру" }));
+    const paletteInput2 = await screen.findByLabelText("Поиск в командной палитре");
+    await user.type(paletteInput2, "Альфа-исследование");
+    expect(
+      await screen.findByTestId(`palette-item-project:${secondProject.project_id}`),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    // 2. Typing into TitleBar search while sidebar is collapsed auto-expands the sidebar
+    const sidebarToggle = screen.getByRole("button", {
+      name: "Переключить боковую панель проектов",
+    });
+    await user.click(sidebarToggle);
+    expect(sidebarToggle).toHaveAttribute("aria-expanded", "false");
+    const topSearch = screen.getByLabelText("Поиск по чатам и проектам");
+    await user.type(topSearch, "Альфа");
+    expect(sidebarToggle).toHaveAttribute("aria-expanded", "true");
+
+    // 3. CSS invariants preventing hover overlap & stray narrow breadcrumb `/`
+    expect(desktopCss).toMatch(
+      /\.chat-row-wrap:hover\s+\.chat-row__meta,\s*\.chat-row-wrap:focus-within\s+\.chat-row__meta\s*\{\s*opacity:\s*0;\s*\}/s,
+    );
+    expect(desktopCss).toMatch(
+      /\.breadcrumbs\s+\.breadcrumb-prefix,\s*\.breadcrumbs\s+\.breadcrumb-sep\s*\{\s*display:\s*none;\s*\}/s,
+    );
   });
 });
