@@ -100,22 +100,22 @@
   - §33 Artifact generation/approval/publication → **D4/D7**;
   - §34 Mixed-version update, §35 Lost phone, §36 Lost Head and recovery, §37 Critical disk → **D5/D9**.
 
-## 4. V01–V29 — назначение существующих архитектурных сценариев
+## 4. V01–V29 — назначение и текущий статус архитектурных сценариев
 
-Ни один V-сценарий пока не выполнен. После реализации к каждой записи добавляется ссылка на тест, build и фактический результат, а не новая копия его нормативного текста.
+После реализации этапа к каждой затронутой записи добавляется ссылка на реальный тест, коммит и фактический результат. Сценарии этапов D2–D9 остаются «не реализовано, не проверено».
 
-- V01/V02 — standalone `memoryd` и Head при отказе памяти: D1, регрессии D3+.
-- V03 — закрытый UI не завершает систему: D1, device-повтор D5.
-- V04–V06 — агент (`agy acp`) использует память `memoryd`, один native executor, CLI/MCP-права: D1/D3, real canary при обновлении адаптера.
-- V07 — уточнение/отмена общей работы без графа потребителей: D2, agent eval и наблюдаемый эффект.
-- V08–V14 — read-only reserve, lag/files, transfer, partition, возврат primary, sync timeout и WAL pressure: D5, release-regression D9.
-- V15–V18 — committed cursor, per-key order, crash после доставки, snapshot/subscription: D2 на настоящем PostgreSQL; D5 с сетью.
-- V19 — evidence link с optional ordinal и несколькими anchors: D1/D3.
-- V20–V22 — край retention, незавершённый RecoveryCut, restore после revoke/forgetting: D5/D9; базовый restore начинается D1.
-- V23–V26 — файлы/HTML, выделение, совместное редактирование, несколько UI и устройств: D4; D5/D6 расширяют.
-- V27 — прерывание речи и ambient privacy: D6.
-- V28 — плохое самоулучшение не принимается: D8.
-- V29 — смена provider session/terms/version без ложного resume: D1/D3, перед release D9.
+- V01/V02 — standalone `memoryd` и Head при отказе памяти: **проверено для D1** (`dc5e184`/`2c3d1b4`/`85b8f76`; `memory_fabric_e2e_integration`, `head_control_e2e_integration`, `desktop_bridge_v03_integration`; ожидает приёмки H1; регрессии D3+).
+- V03 — закрытый UI не завершает систему: **проверено для D1** (`85b8f76`; `desktop_bridge_v03_integration::v03_closing_desktop_bridge_keeps_daemons_alive_and_restores_conversation_and_artifact`; ожидает приёмки H1; device-повтор D5).
+- V04–V06 — агент (`agy acp`) использует память `memoryd`, один native executor, CLI/MCP-права: **проверено для D1** (`dc5e184`/`2c3d1b4`; `head_live_agy_e2e`, `head_control_e2e_integration`, `memory_fabric_e2e_integration`; ожидает приёмки H1; расширение и real canary D3).
+- V07 — уточнение/отмена общей работы без графа потребителей: D2, не реализовано.
+- V08–V14 — read-only reserve, lag/files, transfer, partition, возврат primary, sync timeout и WAL pressure: D5, не реализовано.
+- V15–V18 — committed cursor, per-key order, crash после доставки, snapshot/subscription: D2/D5, не реализовано.
+- V19 — evidence link с optional ordinal и несколькими anchors: **проверено для D1** (`dc5e184`; `memory_core_pg_integration`, `memory_fabric_e2e_integration`; ожидает приёмки H1; регрессии D3).
+- V20–V22 — край retention, незавершённый RecoveryCut, restore после revoke/forgetting: D5/D9, не реализовано.
+- V23–V26 — файлы/HTML, выделение, совместное редактирование, несколько UI и устройств: D4/D5/D6, не реализовано.
+- V27 — прерывание речи и ambient privacy: D6, не реализовано.
+- V28 — плохое самоулучшение не принимается: D8, не реализовано.
+- V29 — смена provider session/terms/version без ложного resume: **базовый D1 путь проверен** (`2c3d1b4`; `head_control_e2e_integration` + `head_live_agy_e2e` rehydrate/mismatch/isolated auth; ожидает приёмки H1; полное расширение D3/D9).
 
 L.9.1–L.9.10 полностью назначены D4; multi-device/voice части допроверяются D5/D6. Их статус не наследуется из одобрения самого контракта L.
 
