@@ -69,6 +69,7 @@ fn redact_once(input: &str, ordered_extra_secrets: &[&str]) -> String {
     out = redact_prefixed_token(&out, "AIza", 20, is_google_key_char);
     out = redact_prefixed_token(&out, "ya29.", 10, is_oauth_token_char);
     out = redact_prefixed_token(&out, "1//", 10, is_oauth_token_char);
+    out = redact_dennett_signed_tokens(&out);
     out = redact_jwt_tokens(&out);
 
     // 2. Replace explicit caller-supplied secrets strictly outside `[REDACTED]` spans.
@@ -550,6 +551,36 @@ fn redact_prefixed_token(
     result
 }
 
+fn redact_dennett_signed_tokens(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut idx = 0;
+
+    while let Some(rel) = input[idx..].find("dnt1.") {
+        let start = idx + rel;
+        let bytes = &input.as_bytes()[start..];
+        let raw_len = bytes.iter().take_while(|&&b| is_jwt_char(b)).count();
+        let trimmed = input[start..start + raw_len].trim_end_matches('.');
+        let mut parts = trimmed.split('.');
+        let is_dnt1 = matches!(
+            (parts.next(), parts.next(), parts.next(), parts.next()),
+            (Some("dnt1"), Some(payload), Some(sig), None)
+                if payload.len() >= 8 && sig.len() >= 8
+        );
+
+        if is_dnt1 {
+            result.push_str(&input[idx..start]);
+            result.push_str(REDACTED_PLACEHOLDER);
+            idx = start + trimmed.len();
+        } else {
+            result.push_str(&input[idx..start + 5]);
+            idx = start + 5;
+        }
+    }
+
+    result.push_str(&input[idx..]);
+    result
+}
+
 fn redact_jwt_tokens(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut idx = 0;
@@ -739,6 +770,24 @@ mod tests {
         assert!(!bare_err.contains("BARE_SECRET_8"));
     }
 
+    #[test]
+    fn redact_secrets_scrubs_dennett_dnt1_tokens_idempotently() {
+        let token = "dnt1.eyJ0b2tlbl9pZCI6ImhlYWQtMSIsInNjb3BlIjoicHJvamVjdDpkZW1vIn0.AbCdEf0123456789_-xyz9876543210";
+        let raw = format!("memoryd rejected {token}. retry with header token={token}");
+        let once = redact_secrets(&raw, &[]);
+        assert!(!once.contains("dnt1."));
+        assert!(!once.contains("eyJ0b2tlbl9pZCI6"));
+        assert!(!once.contains("AbCdEf0123456789"));
+        assert_eq!(
+            once,
+            "memoryd rejected [REDACTED]. retry with header token=[REDACTED]"
+        );
+        // Strict idempotence (h0_03)
+        assert_eq!(redact_secrets(&once, &[]), once);
+        // Non-token prefix stays intact
+        assert_eq!(redact_secrets("dnt1.short.x", &[]), "dnt1.short.x");
+    }
+
     fn targeted_redaction_strategy() -> impl Strategy<Value = String> {
         prop::collection::vec(
             prop_oneof![
@@ -750,6 +799,7 @@ mod tests {
                 Just(String::from("Bearer ")),
                 Just(String::from("Bearer\t")),
                 Just(String::from("[REDACTED]")),
+                Just(String::from("dnt1.eyJ0ZXN0IjoxfQ.0123456789abcdef")),
                 Just(String::from("GEMINI_API_KEY=")),
                 Just(String::from("?password=")),
                 Just(String::from("&sslmode=disable")),

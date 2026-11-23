@@ -6,9 +6,12 @@ import { App } from "./App";
 import "./styles/tokens.css";
 import "./styles/desktop.css";
 
-// Native Tauri window keeps HTML/body transparent for Windows 11 Mica;
-// plain browser preview gets a dark fallback canvas without fake wallpaper hacks.
-document.documentElement.dataset.surface = isTauriRuntime() ? "mica" : "browser-preview";
+// Native Tauri window keeps HTML/body transparent for Windows 11 Mica with zero backdrop-filter;
+// plain browser dev/review preview gets a dark Mica-toned ambient backdrop.
+const native = isTauriRuntime();
+document.documentElement.classList.toggle("native-shell", native);
+document.documentElement.classList.toggle("browser-mica-preview", !native);
+document.documentElement.dataset.surface = native ? "mica" : "browser-preview";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {

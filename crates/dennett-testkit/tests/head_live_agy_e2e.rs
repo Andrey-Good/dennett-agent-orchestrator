@@ -274,8 +274,8 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
         .create_project(
             &CreateProjectRequest {
                 name: String::from("Live D1 Project"),
-                workspace_path: profile.workspace_dir().to_string_lossy().into_owned(),
-                memory_scope: scope.clone(),
+                workspace_path: Some(profile.workspace_dir().to_string_lossy().into_owned()),
+                memory_scope: Some(scope.clone()),
             },
             None,
         )
@@ -646,8 +646,8 @@ async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
         .create_project(
             &CreateProjectRequest {
                 name: String::from("API Key Fail-Closed Project"),
-                workspace_path: profile.workspace_dir().to_string_lossy().into_owned(),
-                memory_scope: scope.clone(),
+                workspace_path: Some(profile.workspace_dir().to_string_lossy().into_owned()),
+                memory_scope: Some(scope.clone()),
             },
             None,
         )

@@ -22,7 +22,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
 MIN_INTEGRATION_TESTS = 27
-MIN_DESKTOP_FRONTEND_TESTS = 11
+MIN_DESKTOP_FRONTEND_TESTS = 15
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
@@ -1248,17 +1248,32 @@ def _post_loopback_json(base_url: str, path: str, payload: dict[str, Any]) -> di
         return json.loads(raw)
 
 
+def _check_windows_binary_unlocked(binary_path: Path, label: str) -> None:
+    """Detect whether an existing Windows `.exe` is locked by a running process before rebuilding."""
+    if os.name != "nt" or not binary_path.is_file():
+        return
+    try:
+        with binary_path.open("r+b"):
+            pass
+    except OSError as exc:
+        raise CheckError(
+            f"Cannot rebuild `{label}` because `{binary_path}` is locked by a running process "
+            f"({exc}). Close any open Dennett Desktop window (or stop the `{binary_path.name}` "
+            f"process) and retry."
+        ) from exc
+
+
 def _preseed_demo_d1_workspace(
     head_http_url: str,
     workspace_dir: Path,
     memory_scope: str,
 ) -> dict[str, str]:
-    """Pre-seed a scope-matched project, agent, and initial session so H1 memory tools work immediately."""
+    """Pre-seed a clean starter workspace, agent, and blank chat ready for immediate typing."""
     project = _post_loopback_json(
         head_http_url,
         "/v1/projects",
         {
-            "name": "Demo D1",
+            "name": "Рабочее пространство",
             "workspace_path": str(workspace_dir),
             "memory_scope": memory_scope,
         },
@@ -1267,10 +1282,10 @@ def _preseed_demo_d1_workspace(
         head_http_url,
         "/v1/agents",
         {
-            "name": "Агент Demo D1",
-            "description": f"Демо-агент D1 с доступом к области памяти {memory_scope}",
+            "name": "Проектный агент",
+            "description": "Проектный агент Dennett",
             "system_prompt": (
-                f"Ты агент Dennett D1. Используй MCP-инструменты `dennett-memory` с областью "
+                f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
                 f"`{memory_scope}` для чтения и записи проектных решений и сохраняй результаты "
                 f"в рабочей папке проекта."
             ),
@@ -1285,7 +1300,7 @@ def _preseed_demo_d1_workspace(
         {
             "agent_id": agent["agent_id"],
             "project_id": project["project_id"],
-            "title": "Демо-разговор D1",
+            "title": "Новый чат",
         },
     )
     return {
@@ -1313,7 +1328,7 @@ def run_demo_d1(
     temp_root = Path(tempfile.gettempdir()) / f"dennett-demo-d1-{session_tag}"
     profile_root = temp_root / "agy-profile"
     workspace_dir = temp_root / "workspace"
-    memory_scope = "project:demo-d1"
+    memory_scope = "project:workspace"
 
     exe_suffix = ".exe" if os.name == "nt" else ""
     target_debug = repo_root / "target" / "debug"
@@ -1334,11 +1349,12 @@ def run_demo_d1(
             "temp_agy_profile_root": str(profile_root),
             "demo_workspace_dir": str(workspace_dir),
             "default_memory_scope": memory_scope,
-            "preseeded_demo": {
-                "project_name": "Demo D1",
+            "dynamic_memory_hmac_enabled": True,
+            "preseeded_workspace": {
+                "project_name": "Рабочее пространство",
                 "memory_scope": memory_scope,
-                "agent_name": "Агент Demo D1",
-                "session_title": "Демо-разговор D1",
+                "agent_name": "Проектный агент",
+                "session_title": "Новый чат",
             },
             "binaries": {
                 "memoryd": str(memoryd_bin),
@@ -1382,6 +1398,7 @@ def run_demo_d1(
         env=clean_env,
     )
     if not no_ui:
+        _check_windows_binary_unlocked(desktop_bin, "dennett-desktop")
         run_cmd(["pnpm", "--dir", "apps/desktop", "run", "build"], cwd=repo_root, env=clean_env)
         run_cmd(
             ["cargo", "build", "-p", "dennett-desktop", "--features", "custom-protocol"],
@@ -1392,10 +1409,12 @@ def run_demo_d1(
     profile_root.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     demo_token = f"dennett-demo-{secrets.token_hex(16)}"
+    memory_hmac_secret = secrets.token_hex(32)
     auth_config_json = json.dumps(
         {
             "audience": "dennett-memoryd",
-            "allowed_issuers": ["dennett-standalone"],
+            "allowed_issuers": ["dennett-standalone", "dennett-head"],
+            "hmac_secret": memory_hmac_secret,
             "tokens": [
                 {
                     "token_id": f"tok-demo-{session_tag}",
@@ -1457,6 +1476,7 @@ def run_demo_d1(
                 "DENNETT_TEST_PROFILE": "1",
                 "DENNETT_TEST_CONTROL_PG_URL": ctrl_url,
                 "DENNETT_MEMORY_TOKEN": demo_token,
+                "DENNETT_MEMORY_HMAC_SECRET": memory_hmac_secret,
             },
             removals=("DENNETT_CONTROL_PG_URL",),
         )
@@ -1489,14 +1509,14 @@ def run_demo_d1(
         head_http_url = f"http://{head_addr}"
         seeded = _preseed_demo_d1_workspace(head_http_url, workspace_dir, memory_scope)
 
-        print("\n=== Dennett D1 Isolated Demo Environment Ready ===", flush=True)
+        print("\n=== Dennett D1 Isolated Environment Ready ===", flush=True)
         print(f"  DENNETT_HEAD_URL      : {head_http_url}", flush=True)
         print(f"  DENNETT_MEMORY_URL    : {memoryd_http_url}", flush=True)
         print(f"  Runtime / Auth Profile: {runtime} / {auth_profile}", flush=True)
-        print(f"  Demo Workspace Path   : {workspace_dir}", flush=True)
-        print(f"  Pre-seeded Project    : Demo D1 ({seeded['project_id']})", flush=True)
-        print(f"  Pre-seeded Session    : Демо-разговор D1 ({seeded['session_id']})", flush=True)
-        print(f"  Allowed Memory Scope  : {memory_scope}", flush=True)
+        print(f"  Workspace Path        : {workspace_dir}", flush=True)
+        print(f"  Starter Project       : Рабочее пространство ({seeded['project_id']})", flush=True)
+        print(f"  Starter Session       : Новый чат ({seeded['session_id']})", flush=True)
+        print(f"  Memory Scope (HMAC)   : {memory_scope} (+ dynamic per-project scopes)", flush=True)
         print(f"  Isolated agy Profile  : {profile_root}", flush=True)
         print(
             "  V03 Note: Closing the Dennett window leaves Head & memoryd alive; "

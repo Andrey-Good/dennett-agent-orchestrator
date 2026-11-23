@@ -1,250 +1,339 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  ArrowsClockwise,
+  CaretDown,
+  Check,
+  FileCode,
+  FileText,
+  FolderOpen,
+  FolderSimple,
+  Plus,
+  Sidebar,
+} from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
-import { CloseIcon, PlusIcon } from "./Icons";
-import { formatRuntimeLabel } from "./RuntimeBadge";
+
+const MIME_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "text/markdown", label: "Markdown (text/markdown)" },
+  { value: "text/plain", label: "Текст (text/plain)" },
+  { value: "application/json", label: "JSON (application/json)" },
+];
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) {
+    return "";
+  }
+  if (bytes < 1024) {
+    return `${bytes} Б`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} КБ`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function isCodeFile(name: string): boolean {
+  return /\.(ts|tsx|js|jsx|rs|py|json|toml|sql|css|html|yml|yaml|sh|ps1)$/i.test(name);
+}
 
 export function WorkspacePanel() {
   const { state, actions, meta } = useWorkspace();
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [artifactName, setArtifactName] = useState("");
-  const [artifactMime, setArtifactMime] = useState("text/markdown");
-  const [artifactContent, setArtifactContent] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
+  const [creatingArtifact, setCreatingArtifact] = useState(false);
+  const [artName, setArtName] = useState("");
+  const [artMime, setArtMime] = useState("text/markdown");
+  const [artContent, setArtContent] = useState("");
+  const [mimeOpen, setMimeOpen] = useState(false);
+  const mimeAnchorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!mimeOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (mimeAnchorRef.current && !mimeAnchorRef.current.contains(event.target as Node)) {
+        setMimeOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [mimeOpen]);
 
   if (!state.isRightPanelOpen) {
     return null;
   }
 
-  const health = state.healthSnapshot?.health ?? null;
-  const runtimeInfo = formatRuntimeLabel(
-    state.healthSnapshot,
-    meta.activeSession?.runtime_binding ?? null,
-  );
-  const normalizedQuery = state.searchQuery.trim().toLowerCase();
-  const artifacts = (state.activeDetail?.artifacts ?? []).filter((art) => {
-    if (!normalizedQuery) {
-      return true;
-    }
-    return (
-      art.name.toLowerCase().includes(normalizedQuery) ||
-      art.mime_type.toLowerCase().includes(normalizedQuery)
-    );
-  });
+  const artifacts = state.activeDetail?.artifacts ?? [];
+  const activeProject = meta.activeProject;
+  const filesData = state.projectFiles;
+  const isBound = Boolean(activeProject?.workspace_path);
 
   const handleCreateArtifact = async (event: FormEvent) => {
     event.preventDefault();
-    if (!artifactName.trim() || !artifactContent.trim()) {
+    if (!artName.trim() || !artContent.trim()) {
       return;
     }
-    setIsCreating(true);
-    try {
-      const created = await actions.createArtifact({
-        name: artifactName.trim(),
-        mimeType: artifactMime,
-        content: artifactContent,
-      });
-      if (created) {
-        setArtifactName("");
-        setArtifactContent("");
-        setShowCreateForm(false);
-      }
-    } finally {
-      setIsCreating(false);
+    const created = await actions.createArtifact({
+      name: artName,
+      mimeType: artMime,
+      content: artContent,
+    });
+    if (created) {
+      setArtName("");
+      setArtContent("");
+      setCreatingArtifact(false);
     }
   };
 
+  const currentMimeLabel =
+    MIME_OPTIONS.find((item) => item.value === artMime)?.label ?? artMime;
+
   return (
     <aside
-      className="surface-card workspace-panel-card"
+      className="workspace-panel"
       aria-label="Рабочее пространство и артефакты"
       data-testid="workspace-sibling-panel"
     >
-      <div className="panel-header">
-        <h2 className="panel-header__title">Рабочее пространство</h2>
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={() => actions.setRightPanelOpen(false)}
-          aria-label="Скрыть панель рабочего пространства"
-        >
-          <CloseIcon />
-        </button>
-      </div>
+      <header className="resource-header">
+        <h2>Workspace</h2>
+        <div className="resource-header__actions">
+          {isBound && (
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void actions.refreshProjectFiles()}
+              disabled={state.isLoadingFiles}
+              aria-label="Обновить список файлов"
+              title="Обновить список файлов"
+            >
+              <ArrowsClockwise size={15} className={state.isLoadingFiles ? "spin" : ""} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-button resource-panel-toggle is-open"
+            onClick={() => actions.setRightPanelOpen(false)}
+            aria-label="Скрыть панель рабочего пространства"
+            title="Скрыть Workspace (Ctrl+\)"
+          >
+            <Sidebar size={16} />
+          </button>
+        </div>
+      </header>
 
-      <div className="panel-scroll">
-        <section className="panel-section" aria-label="Состояние среды">
-          <h3 className="panel-section__title">Среда и движок</h3>
-          <div className="info-card">
-            <div className="info-row">
-              <span className="info-row__label">Движок</span>
-              <span className="info-row__value">{runtimeInfo.label}</span>
-            </div>
-            {runtimeInfo.isSimulated && (
-              <div className="info-row">
-                <span className="info-row__label">Режим</span>
-                <span className="info-row__value">SIMULATED (тестовый двойник)</span>
-              </div>
-            )}
-            <div className="info-row">
-              <span className="info-row__label">PostgreSQL</span>
-              <span className="info-row__value">
-                {health?.postgres_connected ? "подключён" : "недоступен"}
-              </span>
-            </div>
-            <div className="info-row">
-              <span className="info-row__label">Память memoryd</span>
-              <span className="info-row__value">
-                {!health
-                  ? "неизвестно"
-                  : health.memory_status === "healthy"
-                    ? "доступна"
-                    : `недоступна (outbox: ${health.pending_outbox_count})`}
-              </span>
-            </div>
-            {meta.activeAgent && (
-              <div className="info-row">
-                <span className="info-row__label">Конфигурация агента</span>
-                <span className="info-row__value">
-                  v{meta.activeAgent.current_config.version_number} ·{" "}
-                  {meta.activeAgent.current_config.model_preference ?? "default"}
-                </span>
-              </div>
-            )}
+      <div className="resource-scroll">
+        <section className="resource-section" data-testid="workspace-files-section">
+          <div className="resource-section__head">
+            <h3>
+              Файлы проекта{" "}
+              {filesData && filesData.workspace_bound && <span>{filesData.entries.length}</span>}
+            </h3>
           </div>
-        </section>
 
-        <section className="panel-section" aria-label="Артефакты сессии">
-          <div className="panel-section__head">
-            <h3 className="panel-section__title">Артефакты ({artifacts.length})</h3>
-            {state.selectedSessionId && (
+          {!activeProject ? (
+            <p className="resource-empty">Нет активного проекта.</p>
+          ) : !isBound ? (
+            <div className="workspace-unbound-card" data-testid="workspace-unbound-notice">
+              <p>Папка не привязана. Проект работает в изолированном режиме чтения.</p>
               <button
                 type="button"
-                className="sidebar__action"
-                onClick={() => setShowCreateForm((v) => !v)}
-                aria-label="Создать текстовый артефакт"
-                data-testid="toggle-create-artifact-button"
+                className="popover-secondary-btn"
+                data-testid="workspace-attach-folder-btn"
+                onClick={() =>
+                  void actions.requestFolderPicker({
+                    mode: "attach-project",
+                    projectId: activeProject.project_id,
+                  })
+                }
               >
-                <PlusIcon />
-                Новый
+                <FolderOpen size={15} aria-hidden="true" />
+                Привязать папку…
               </button>
-            )}
+            </div>
+          ) : state.isLoadingFiles && !filesData ? (
+            <p className="resource-empty">Сканирование файлов…</p>
+          ) : (
+            <>
+              <div
+                className="workspace-path-caption"
+                title={filesData?.workspace_path ?? activeProject.workspace_path ?? undefined}
+              >
+                {filesData?.workspace_path ?? activeProject.workspace_path}
+              </div>
+
+              {!filesData || filesData.entries.length === 0 ? (
+                <p className="resource-empty">Папка пуста.</p>
+              ) : (
+                <div className="workspace-file-list" data-testid="workspace-file-list">
+                  {filesData.entries.map((entry) => (
+                    <div
+                      key={entry.relative_path}
+                      className="resource-row is-static workspace-file-row"
+                      style={{ paddingLeft: `${8 + (entry.depth - 1) * 12}px` }}
+                      title={entry.relative_path}
+                    >
+                      {entry.kind === "directory" ? (
+                        <FolderSimple size={15} aria-hidden="true" />
+                      ) : isCodeFile(entry.name) ? (
+                        <FileCode size={15} aria-hidden="true" />
+                      ) : (
+                        <FileText size={15} aria-hidden="true" />
+                      )}
+                      <span>
+                        <strong>{entry.name}</strong>
+                        {entry.depth > 1 && <small>{entry.relative_path}</small>}
+                      </span>
+                      {entry.size_bytes !== null && entry.size_bytes !== undefined && (
+                        <em>{formatBytes(entry.size_bytes)}</em>
+                      )}
+                    </div>
+                  ))}
+                  {filesData.truncated && (
+                    <p className="resource-truncated">
+                      Показаны первые {filesData.entries.length} элементов (лимит безопасности).
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        <section className="resource-section" data-testid="workspace-artifacts-section">
+          <div className="resource-section__head">
+            <h3>
+              Артефакты сессии <span>{artifacts.length}</span>
+            </h3>
+            <button
+              type="button"
+              className="icon-button icon-button--sm"
+              onClick={() => setCreatingArtifact((prev) => !prev)}
+              disabled={!state.selectedSessionId || !state.healthSnapshot?.connected}
+              aria-label="Добавить артефакт"
+              data-testid="toggle-create-artifact-button"
+              title="Добавить артефакт"
+            >
+              <Plus size={14} />
+            </button>
           </div>
 
-          {showCreateForm && (
+          {creatingArtifact && (
             <form
-              className="inline-form"
+              className="artifact-form"
               onSubmit={(e) => void handleCreateArtifact(e)}
               data-testid="create-artifact-form"
             >
-              <span className="inline-form__title">Создать артефакт</span>
               <input
                 type="text"
-                className="field-input"
-                placeholder="Имя файла (например, notes.md)"
+                placeholder="Имя файла, например notes.md"
                 aria-label="Имя артефакта"
-                value={artifactName}
-                onChange={(e) => setArtifactName(e.target.value)}
+                value={artName}
+                onChange={(e) => setArtName(e.target.value)}
                 required
               />
-              <select
-                className="field-select"
-                aria-label="MIME-тип артефакта"
-                value={artifactMime}
-                onChange={(e) => setArtifactMime(e.target.value)}
-              >
-                <option value="text/markdown">text/markdown</option>
-                <option value="text/plain">text/plain</option>
-                <option value="application/json">application/json</option>
-              </select>
-              <textarea
-                className="field-input"
-                rows={4}
-                placeholder="Текстовое содержимое артефакта..."
-                aria-label="Содержимое артефакта"
-                value={artifactContent}
-                onChange={(e) => setArtifactContent(e.target.value)}
-                required
-              />
-              <div className="inline-form__actions">
+
+              <div className="mime-picker" ref={mimeAnchorRef}>
                 <button
                   type="button"
-                  className="btn btn--ghost"
-                  onClick={() => setShowCreateForm(false)}
+                  className="mime-picker__trigger"
+                  aria-label="Тип содержимого артефакта"
+                  aria-expanded={mimeOpen}
+                  aria-haspopup="menu"
+                  data-testid="artifact-mime-trigger"
+                  onClick={() => setMimeOpen((prev) => !prev)}
+                >
+                  <span>{currentMimeLabel}</span>
+                  <CaretDown size={12} aria-hidden="true" />
+                </button>
+                {mimeOpen && (
+                  <div
+                    className="floating-popover mime-picker__popover"
+                    role="menu"
+                    aria-label="MIME-тип артефакта"
+                  >
+                    {MIME_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={opt.value === artMime}
+                        className={opt.value === artMime ? "is-selected" : ""}
+                        onClick={() => {
+                          setArtMime(opt.value);
+                          setMimeOpen(false);
+                        }}
+                      >
+                        <span>{opt.label}</span>
+                        {opt.value === artMime && <Check size={13} aria-hidden="true" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <textarea
+                rows={4}
+                placeholder="Содержимое артефакта…"
+                aria-label="Содержимое артефакта"
+                value={artContent}
+                onChange={(e) => setArtContent(e.target.value)}
+                required
+              />
+              <div className="artifact-form__actions">
+                <button type="submit" className="popover-primary-btn">
+                  Сохранить
+                </button>
+                <button
+                  type="button"
+                  className="popover-secondary-btn"
+                  onClick={() => setCreatingArtifact(false)}
                 >
                   Отмена
-                </button>
-                <button type="submit" className="btn btn--primary" disabled={isCreating}>
-                  {isCreating ? "Сохранение..." : "Сохранить"}
                 </button>
               </div>
             </form>
           )}
 
           {artifacts.length === 0 ? (
-            <p className="sidebar__empty">В этой сессии артефактов пока нет.</p>
+            <p className="resource-empty">Артефактов в этой сессии пока нет.</p>
           ) : (
-            <ul className="artifact-list" data-testid="artifact-list">
+            <div className="artifact-list" data-testid="artifact-list">
               {artifacts.map((art) => {
                 const isSelected = meta.selectedArtifact?.artifact_id === art.artifact_id;
                 return (
-                  <li key={art.artifact_id}>
-                    <button
-                      type="button"
-                      className={
-                        isSelected ? "artifact-item artifact-item--selected" : "artifact-item"
-                      }
-                      onClick={() => void actions.selectArtifact(art.artifact_id)}
-                    >
-                      <span className="artifact-item__name">{art.name}</span>
-                      <span className="artifact-item__meta">
-                        rev {art.revision} · {art.mime_type}
-                      </span>
-                    </button>
-                  </li>
+                  <button
+                    key={art.artifact_id}
+                    type="button"
+                    className={`resource-row ${isSelected ? "is-selected" : ""}`}
+                    onClick={() => void actions.selectArtifact(art.artifact_id)}
+                    data-testid={`artifact-item-${art.artifact_id}`}
+                  >
+                    <FileText size={16} aria-hidden="true" />
+                    <span>
+                      <strong>{art.name}</strong>
+                      <small>
+                        {art.mime_type} · rev {art.revision}
+                      </small>
+                    </span>
+                  </button>
                 );
               })}
-            </ul>
+            </div>
           )}
 
           {meta.selectedArtifact && (
             <div className="artifact-preview" data-testid="artifact-preview">
-              <div className="artifact-preview__header">
-                <span className="artifact-preview__title">{meta.selectedArtifact.name}</span>
-                <span className="artifact-preview__meta">
-                  rev {meta.selectedArtifact.revision} · {meta.selectedArtifact.sha256.slice(0, 12)}
-                </span>
+              <div className="artifact-preview__meta">
+                <strong>{meta.selectedArtifact.name}</strong>
+                <span>rev {meta.selectedArtifact.revision}</span>
               </div>
-              {meta.selectedArtifact.relative_path && (
-                <span className="artifact-preview__meta">
-                  Путь: {meta.selectedArtifact.relative_path}
-                </span>
-              )}
-              {/* Pure safe React text rendering — NEVER dangerouslySetInnerHTML */}
-              <pre className="artifact-preview__code">
-                <code>
-                  {meta.selectedArtifact.content ?? "(содержимое хранится по относительному пути)"}
-                </code>
+              {/* Strictly plain text child — zero innerHTML/XSS */}
+              <pre className="artifact-preview__body">
+                {meta.selectedArtifact.content ??
+                  (meta.selectedArtifact.relative_path
+                    ? `Файл рабочей области: ${meta.selectedArtifact.relative_path}`
+                    : "(пустой артефакт)")}
               </pre>
             </div>
-          )}
-        </section>
-
-        <section className="panel-section" aria-label="Диагностика">
-          <h3 className="panel-section__title">Диагностика</h3>
-          {state.diagnostics && state.diagnostics.events.length > 0 ? (
-            <ul className="diag-list">
-              {state.diagnostics.events.slice(0, 6).map((evt) => (
-                <li key={evt.event_id} className="diag-item">
-                  <span className="diag-item__kind">
-                    {evt.component} · {evt.event_kind}
-                  </span>
-                  <span className="diag-item__summary">{evt.safe_summary}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="sidebar__empty">Событий диагностики пока нет.</p>
           )}
         </section>
       </div>

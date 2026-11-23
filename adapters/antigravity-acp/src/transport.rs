@@ -4,14 +4,17 @@
 //! rejection, non-escalating `AllowOnce` permission selection, and race-free `session/cancel`
 //! handling that rejects late permission approvals after cancellation.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as StdInstant};
 
 use dennett_contracts::redact::redact_secrets_owned;
 use dennett_contracts::{
-    DennettError, PolicyEffect, RunId, RunStatus, RuntimeAuthProfile, SessionId,
+    DennettError, PolicyEffect, RunId, RunStatus, RuntimeAuthProfile, RuntimeModelOption,
+    RuntimeQuotaWindow, RuntimeThinkingOption, SessionId, ThinkingLevel,
 };
 use serde_json::{Value, json};
 use tokio::io::{
@@ -97,6 +100,18 @@ pub struct AcpSessionInfo {
     pub tier: Option<String>,
     /// Available model identifiers advertised in `configOptions[id=="model"]` or `models`.
     pub available_models: Vec<String>,
+    /// Structured model families with per-model `supported_thinking_levels`.
+    pub models: Vec<RuntimeModelOption>,
+    /// Global thinking-level options advertised in `configOptions[id=="thought_level"]`.
+    pub thinking_options: Vec<RuntimeThinkingOption>,
+    /// Default model family identifier (`configOptions[id=="model"].currentValue`).
+    pub default_model_id: Option<String>,
+    /// Default thinking level (`configOptions[id=="thought_level"].currentValue`).
+    pub default_thinking_level: Option<ThinkingLevel>,
+    /// Optional machine-readable quota windows from `_meta.antigravity.quotas`.
+    pub quotas: Vec<RuntimeQuotaWindow>,
+    /// Currently active `thought_level` values reported in this session response (`None` if `configOptions` was omitted).
+    pub active_thinking_levels: Option<Vec<ThinkingLevel>>,
 }
 
 /// One permission option advertised in ACP `session/request_permission`.
@@ -1447,6 +1462,94 @@ fn extract_permission_target(
     None
 }
 
+/// Extracts `thought_level` options and current value from an ACP response containing `configOptions`.
+///
+/// Returns `None` if the JSON payload does not include a `configOptions` array at all.
+/// Returns `Some((vec![], None))` when `configOptions` IS present but omits `thought_level`
+/// (which `agy acp 1.5.15` does for models with built-in reasoning such as Claude Opus 4.6 Thinking).
+#[must_use]
+pub fn extract_thinking_options_from_config(
+    raw: &Value,
+) -> Option<(Vec<RuntimeThinkingOption>, Option<ThinkingLevel>)> {
+    let config_options = raw.get("configOptions").and_then(Value::as_array)?;
+    for opt in config_options {
+        if opt.get("id").and_then(Value::as_str) == Some("thought_level") {
+            let current = opt
+                .get("currentValue")
+                .and_then(Value::as_str)
+                .and_then(|s| ThinkingLevel::from_str(s).ok());
+            let mut parsed = Vec::new();
+            if let Some(values) = opt.get("options").and_then(Value::as_array) {
+                for item in values {
+                    let Some(val_str) = item.get("value").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Ok(level) = ThinkingLevel::from_str(val_str) else {
+                        continue;
+                    };
+                    if parsed
+                        .iter()
+                        .any(|existing: &RuntimeThinkingOption| existing.value == level)
+                    {
+                        continue;
+                    }
+                    let label = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map_or_else(|| level.label().to_owned(), str::to_owned);
+                    parsed.push(RuntimeThinkingOption {
+                        value: level,
+                        label,
+                    });
+                }
+            }
+            return Some((parsed, current));
+        }
+    }
+    Some((Vec::new(), None))
+}
+
+fn parse_quotas_meta(raw: &Value) -> Vec<RuntimeQuotaWindow> {
+    let Some(arr) = raw
+        .get("_meta")
+        .and_then(|m| m.get("antigravity"))
+        .and_then(|a| a.get("quotas"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut quotas = Vec::new();
+    for item in arr {
+        let Some(label) = item
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let Some(raw_pct) = item
+            .get("remainingPercent")
+            .or_else(|| item.get("remaining_percent"))
+            .and_then(Value::as_u64)
+        else {
+            continue;
+        };
+        let pct = u8::try_from(raw_pct.min(100)).unwrap_or(100);
+        quotas.push(RuntimeQuotaWindow {
+            label: label.to_owned(),
+            remaining_percent: pct,
+        });
+    }
+    quotas
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "parses ACP session/new and session/load payload into unified AcpSessionInfo including models, thinking levels, and optional quotas"
+)]
 fn parse_session_info(
     raw: &Value,
     fallback_session_id: Option<&str>,
@@ -1481,26 +1584,114 @@ fn parse_session_info(
             _ => None,
         });
 
+    let quotas = parse_quotas_meta(raw);
+
+    let extracted_thinking = extract_thinking_options_from_config(raw);
+    let (thinking_options, default_thinking_level) = match &extracted_thinking {
+        Some((opts, cur)) => (opts.clone(), *cur),
+        None => (Vec::new(), None),
+    };
+    let active_thinking_levels = extracted_thinking
+        .map(|(opts, _)| opts.into_iter().map(|opt| opt.value).collect::<Vec<_>>());
+
     let mut available_models = Vec::new();
+    let mut raw_available_ids: BTreeSet<String> = BTreeSet::new();
     let mut push_unique = |candidate: &str| {
         if !candidate.is_empty() && !available_models.iter().any(|m| m == candidate) {
             available_models.push(candidate.to_owned());
         }
     };
 
+    if let Some(models_arr) = raw
+        .get("models")
+        .and_then(|m| m.get("availableModels"))
+        .and_then(Value::as_array)
+    {
+        for entry in models_arr {
+            if let Some(id) = entry
+                .get("modelId")
+                .or_else(|| entry.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                raw_available_ids.insert(id.to_owned());
+            }
+        }
+    }
+
+    let mut default_model_id: Option<String> = None;
+    let mut models: Vec<RuntimeModelOption> = Vec::new();
+
     if let Some(config_options) = raw.get("configOptions").and_then(Value::as_array) {
         for opt in config_options {
-            if opt.get("id").and_then(Value::as_str) == Some("model")
-                && let Some(values) = opt.get("options").and_then(Value::as_array)
-            {
-                for item in values {
-                    if let Some(val) = item.get("value").and_then(Value::as_str) {
+            if opt.get("id").and_then(Value::as_str) == Some("model") {
+                default_model_id = opt
+                    .get("currentValue")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                if let Some(values) = opt.get("options").and_then(Value::as_array) {
+                    for item in values {
+                        let Some(val) = item
+                            .get("value")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        else {
+                            continue;
+                        };
                         push_unique(val);
+                        if models.iter().any(|m| m.model_id == val) {
+                            continue;
+                        }
+                        let label = item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(val)
+                            .to_owned();
+                        let mut supported: Vec<ThinkingLevel> = [
+                            ThinkingLevel::Low,
+                            ThinkingLevel::Medium,
+                            ThinkingLevel::High,
+                            ThinkingLevel::XHigh,
+                        ]
+                        .into_iter()
+                        .filter(|lvl| {
+                            raw_available_ids.contains(&format!("{val}-{}", lvl.as_str()))
+                        })
+                        .collect();
+                        if supported.is_empty()
+                            && raw_available_ids.is_empty()
+                            && default_model_id.as_deref() == Some(val)
+                            && let Some(ref active_lvls) = active_thinking_levels
+                        {
+                            supported.clone_from(active_lvls);
+                        }
+                        let model_default_thinking = default_thinking_level
+                            .filter(|lvl| supported.contains(lvl))
+                            .or_else(|| {
+                                if supported.contains(&ThinkingLevel::Medium) {
+                                    Some(ThinkingLevel::Medium)
+                                } else {
+                                    supported.first().copied()
+                                }
+                            });
+                        models.push(RuntimeModelOption {
+                            model_id: val.to_owned(),
+                            label,
+                            supported_thinking_levels: supported,
+                            default_thinking_level: model_default_thinking,
+                        });
                     }
                 }
             }
         }
     }
+
     if let Some(models_arr) = raw
         .get("models")
         .and_then(|m| m.get("availableModels"))
@@ -1517,10 +1708,30 @@ fn parse_session_info(
         }
     }
 
+    if models.is_empty() {
+        for model_id in &available_models {
+            models.push(RuntimeModelOption {
+                model_id: model_id.clone(),
+                label: model_id.clone(),
+                supported_thinking_levels: active_thinking_levels.clone().unwrap_or_default(),
+                default_thinking_level,
+            });
+        }
+        if default_model_id.is_none() {
+            default_model_id = models.first().map(|m| m.model_id.clone());
+        }
+    }
+
     Ok(AcpSessionInfo {
         session_id,
         tier,
         available_models,
+        models,
+        thinking_options,
+        default_model_id,
+        default_thinking_level,
+        quotas,
+        active_thinking_levels,
     })
 }
 
@@ -2051,5 +2262,104 @@ mod tests {
                 String::from("file:///root/.ssh/id_rsa"),
             ]
         );
+    }
+
+    #[test]
+    fn parse_session_info_derives_per_model_thinking_levels_and_optional_quotas() {
+        let raw = json!({
+            "sessionId": "sess-live-1",
+            "_meta": {
+                "antigravity": {
+                    "tier": { "name": "Google AI Ultra", "id": "g1-ultra-tier" }
+                }
+            },
+            "configOptions": [
+                {
+                    "id": "model",
+                    "currentValue": "gemini-4-neon",
+                    "options": [
+                        { "value": "gemini-4-neon", "name": "Gemini 4 Neon" },
+                        { "value": "gemini-4-carbon", "name": "Gemini 4 Carbon" },
+                        { "value": "claude-opus-4-6-thinking", "name": "Claude Opus 4.6 (Thinking)" }
+                    ]
+                },
+                {
+                    "id": "thought_level",
+                    "currentValue": "medium",
+                    "options": [
+                        { "value": "low", "name": "Low" },
+                        { "value": "medium", "name": "Medium" },
+                        { "value": "high", "name": "High" },
+                        { "value": "xhigh", "name": "Extra" }
+                    ]
+                }
+            ],
+            "models": {
+                "availableModels": [
+                    { "modelId": "gemini-4-neon-low" },
+                    { "modelId": "gemini-4-neon-medium" },
+                    { "modelId": "gemini-4-neon-high" },
+                    { "modelId": "gemini-4-neon-xhigh" },
+                    { "modelId": "gemini-4-carbon-low" },
+                    { "modelId": "gemini-4-carbon-medium" },
+                    { "modelId": "gemini-4-carbon-high" },
+                    { "modelId": "claude-opus-4-6-thinking" }
+                ]
+            }
+        });
+
+        let info = parse_session_info(&raw, None).expect("parse session info");
+        assert_eq!(info.tier.as_deref(), Some("Google AI Ultra"));
+        assert_eq!(info.default_model_id.as_deref(), Some("gemini-4-neon"));
+        assert_eq!(info.default_thinking_level, Some(ThinkingLevel::Medium));
+        assert!(info.quotas.is_empty(), "no quotas reported -> empty vec");
+        assert_eq!(info.models.len(), 3);
+        assert_eq!(
+            info.models[0].supported_thinking_levels,
+            vec![
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+                ThinkingLevel::XHigh
+            ]
+        );
+        assert_eq!(
+            info.models[1].supported_thinking_levels,
+            vec![
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High
+            ]
+        );
+        assert_eq!(info.models[2].supported_thinking_levels, Vec::new());
+
+        // Switching to Claude drops `thought_level` from configOptions entirely.
+        let claude_set_resp = json!({
+            "configOptions": [
+                { "id": "model", "currentValue": "claude-opus-4-6-thinking", "options": [] }
+            ]
+        });
+        let (claude_opts, claude_cur) =
+            extract_thinking_options_from_config(&claude_set_resp).expect("configOptions present");
+        assert_eq!(claude_opts, Vec::new());
+        assert_eq!(claude_cur, None);
+
+        // Optional future `_meta.antigravity.quotas` parses and clamps cleanly.
+        let with_quotas = json!({
+            "sessionId": "sess-q",
+            "_meta": {
+                "antigravity": {
+                    "quotas": [
+                        { "label": "5ч", "remainingPercent": 87 },
+                        { "label": "нед", "remaining_percent": 140 }
+                    ]
+                }
+            }
+        });
+        let q_info = parse_session_info(&with_quotas, None).expect("parse quotas");
+        assert_eq!(q_info.quotas.len(), 2);
+        assert_eq!(q_info.quotas[0].label, "5ч");
+        assert_eq!(q_info.quotas[0].remaining_percent, 87);
+        assert_eq!(q_info.quotas[1].remaining_percent, 100);
     }
 }

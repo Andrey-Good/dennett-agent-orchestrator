@@ -18,7 +18,7 @@ use dennett_contracts::{
     HeadMemorySearchRequest, IdempotencyKey, MemoryCapability, MemoryOutboxStatus, MemoryScope,
     MemoryStatus, PolicyEffect, PrincipalId, ProjectRecord, RunStatus, SearchNotesRequest,
     SendMessageRequest, SessionDetailResponse, SessionRecord, ThinkingLevel, TimestampMs,
-    UpdateAgentConfigRequest, WorkspaceWritePolicy,
+    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_head_client::HeadClient;
 use dennett_memory_client::MemoryClient;
@@ -126,6 +126,39 @@ impl RunningDaemon {
             .env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
             .env("DENNETT_MEMORY_TOKEN", memory_token)
+            .env_remove("DENNETT_CONTROL_PG_URL")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn dennett-head");
+        Self::await_listening(child, "dennett-head").await
+    }
+
+    async fn spawn_head_simulated_with_hmac(
+        control_pg_url: &str,
+        memory_url: &str,
+        memory_token: &str,
+        hmac_secret: &str,
+    ) -> Self {
+        let bin = locate_binary("dennett-head", "dennett-head");
+        let mcp_bin = locate_binary("dennett-memory-mcp", "dennett-memory-mcp");
+        let child = Command::new(&bin)
+            .args([
+                "--serve",
+                "127.0.0.1:0",
+                "--runtime",
+                "simulated",
+                "--memory-url",
+                memory_url,
+                "--memory-mcp-bin",
+                &mcp_bin.to_string_lossy(),
+            ])
+            .env(TEST_PROFILE_ENV, "1")
+            .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
+            .env("DENNETT_MEMORY_TOKEN", memory_token)
+            .env("DENNETT_MEMORY_HMAC_SECRET", hmac_secret)
             .env_remove("DENNETT_CONTROL_PG_URL")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -420,8 +453,8 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
         .create_project(
             &CreateProjectRequest {
                 name: String::from("V02 Resilience"),
-                workspace_path: profile.workspace_dir().to_string_lossy().into_owned(),
-                memory_scope: scope.clone(),
+                workspace_path: Some(profile.workspace_dir().to_string_lossy().into_owned()),
+                memory_scope: Some(scope.clone()),
             },
             None,
         )
@@ -727,8 +760,8 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
         .create_project(
             &CreateProjectRequest {
                 name: String::from("Policy Sandbox"),
-                workspace_path: profile.workspace_dir().to_string_lossy().into_owned(),
-                memory_scope: scope.clone(),
+                workspace_path: Some(profile.workspace_dir().to_string_lossy().into_owned()),
+                memory_scope: Some(scope.clone()),
             },
             None,
         )
@@ -1040,8 +1073,8 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
         .create_project(
             &CreateProjectRequest {
                 name: String::from("Shared Workspace"),
-                workspace_path: profile.workspace_dir().to_string_lossy().into_owned(),
-                memory_scope: scope.clone(),
+                workspace_path: Some(profile.workspace_dir().to_string_lossy().into_owned()),
+                memory_scope: Some(scope.clone()),
             },
             None,
         )
@@ -1215,17 +1248,17 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     let auth_cfg = make_memory_auth(&scope, mem_token);
 
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
-    // Start Head once (applies migration v1), shut down, start again (must be idempotent!).
+    // Start Head once (applies migrations v1..v2), shut down, start again (must be idempotent!).
     let head1 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c1 = HeadClient::new(&head1.base_url).expect("client1");
     let h1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(h1.schema_version, Some(1));
+    assert_eq!(h1.schema_version, Some(2));
     head1.shutdown().await;
 
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c2 = HeadClient::new(&head2.base_url).expect("client2");
     let h2 = c2.healthz(None).await.expect("health2");
-    assert_eq!(h2.schema_version, Some(1));
+    assert_eq!(h2.schema_version, Some(2));
 
     // Verify PostgreSQL append-only triggers reject UPDATE/DELETE on audit_events!
     let (pg_client, connection) = tokio_postgres::connect(&ctrl_pg, NoTls)
@@ -1243,5 +1276,286 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     );
 
     head2.shutdown().await;
+    memoryd.shutdown().await;
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end integration test verifies catalog, folderless project, HMAC dynamic scope auth, inline rename, folder attach, and workspace file listing across real PG + memoryd + Head"
+)]
+async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scopes() {
+    let (mem_pg, ctrl_pg) = require_pg_urls();
+    let (profile, _tmp) = TestProfile::create_on_disk("head-d1-rework").expect("test profile");
+    let ws_dir = profile.workspace_dir().join("attached-repo");
+    let outside_dir = profile.workspace_dir().join("outside-target");
+    fs::create_dir_all(ws_dir.join("src")).expect("create attached repo src");
+    fs::create_dir_all(&outside_dir).expect("create outside dir");
+    fs::write(ws_dir.join("README.md"), "# Attached Repo\n").expect("write readme");
+    fs::write(ws_dir.join("src/app.rs"), "pub fn run() {}\n").expect("write app.rs");
+
+    let link_root = profile.workspace_dir().join("evil-link-root");
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link_root.to_string_lossy(),
+                &outside_dir.to_string_lossy(),
+            ])
+            .status()
+            .expect("spawn mklink /J");
+        assert!(status.success(), "mklink /J should create NTFS junction");
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&outside_dir, &link_root).expect("create symlink root");
+    }
+
+    let hmac_secret = "dennett-test-hmac-secret-0123456789abcdef";
+    let static_token = "tok_rework_static_999";
+    let auth_cfg = AuthConfig {
+        audience: String::from(DEFAULT_AUDIENCE),
+        allowed_issuers: vec![String::from(DEFAULT_ISSUER)],
+        hmac_secret: Some(String::from(hmac_secret)),
+        tokens: vec![StaticTokenEntryConfig {
+            token_id: String::from("tok-static-only-default"),
+            token: Some(String::from(static_token)),
+            token_sha256: None,
+            principal_id: PrincipalId::try_new("head-static").expect("principal"),
+            issuer: String::from(DEFAULT_ISSUER),
+            allowed_scopes: BTreeSet::from([
+                MemoryScope::try_new("project:default").expect("scope")
+            ]),
+            capabilities: BTreeSet::from([MemoryCapability::Read, MemoryCapability::Write]),
+            expires_at: None,
+            revoked: false,
+        }],
+        revoked_token_ids: BTreeSet::new(),
+    };
+
+    let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
+    let head = RunningDaemon::spawn_head_simulated_with_hmac(
+        &ctrl_pg,
+        &memoryd.base_url,
+        static_token,
+        hmac_secret,
+    )
+    .await;
+    let client = HeadClient::new(&head.base_url).expect("head client");
+
+    // 1. Dynamic runtime catalog returns honest SIMULATED models & thinking options (zero fake Gemini 3.8 Pro).
+    let catalog = client
+        .get_runtime_catalog(false, None)
+        .await
+        .expect("catalog");
+    assert!(catalog.is_simulated);
+    assert_eq!(catalog.tier.as_deref(), Some("SIMULATED_CI_ONLY"));
+    assert!(
+        catalog
+            .models
+            .iter()
+            .any(|m| m.model_id == "sim-model-alpha")
+    );
+    assert_ne!(catalog.thinking_options.len(), 0);
+    assert_eq!(catalog.quotas, Vec::new());
+
+    // 2. Folderless project creation ("Пока без папки") with auto-generated unique memory_scope.
+    let project = client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Новый проект"),
+                workspace_path: None,
+                memory_scope: None,
+            },
+            None,
+        )
+        .await
+        .expect("create folderless project");
+    assert!(project.workspace_path.is_none());
+    assert!(project.memory_scope.as_str().starts_with("project:"));
+
+    // Unbound project files listing reports workspace_bound=false cleanly.
+    let unbound_files = client
+        .list_project_files(project.project_id, None, None)
+        .await
+        .expect("unbound files");
+    assert!(!unbound_files.workspace_bound);
+    assert_eq!(unbound_files.entries, Vec::new());
+
+    // 3. Dynamic HMAC `dnt1.` scope auth: committing & searching in the freshly auto-generated
+    //    project scope succeeds immediately WITHOUT `403 ForbiddenScope`!
+    let commit = client
+        .commit_memory_note(
+            &CommitMemoryNoteRequest {
+                session_id: None,
+                run_id: None,
+                scope: project.memory_scope.clone(),
+                title: String::from("Dynamic scope note"),
+                body: String::from("Signed dnt1 token works for newly created project."),
+                tags: vec![String::from("rework")],
+                idempotency_key: Some(IdempotencyKey::generate()),
+            },
+            None,
+        )
+        .await
+        .expect("commit dynamic scope note");
+    assert!(commit.delivered_immediately);
+    assert_eq!(commit.outbox_item.status, MemoryOutboxStatus::Delivered);
+
+    let search = client
+        .search_memory(
+            &HeadMemorySearchRequest {
+                scope: Some(project.memory_scope.clone()),
+                query: Some(String::from("Dynamic scope")),
+                limit: Some(5),
+            },
+            None,
+        )
+        .await
+        .expect("search dynamic scope");
+    assert_eq!(search.memory_status, MemoryStatus::Healthy);
+    assert_eq!(search.notes.len(), 1);
+
+    // 4. Create agent + blank "Новый чат", send first message -> auto-titles session & enforces DenyAll while folderless.
+    let agent = client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("Проектный агент"),
+                description: String::from("Dynamic scope agent"),
+                system_prompt: String::from("Be helpful."),
+                model_preference: Some(String::from("sim-model-alpha")),
+                thinking_level: Some(ThinkingLevel::High),
+                allowed_memory_scopes: BTreeSet::from([project.memory_scope.clone()]),
+                workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+            },
+            None,
+        )
+        .await
+        .expect("create agent");
+
+    let session = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: agent.agent_id,
+                project_id: project.project_id,
+                title: String::from("Новый чат"),
+            },
+            None,
+        )
+        .await
+        .expect("create session");
+
+    let turn = client
+        .send_message(
+            session.session_id,
+            &SendMessageRequest {
+                content: String::from("## План рефакторинга фронтенда\nПодробности"),
+                timeout_ms: Some(15_000),
+            },
+            None,
+        )
+        .await
+        .expect("first turn");
+    assert_eq!(turn.session_title, "План рефакторинга фронтенда");
+    assert!(
+        turn.assistant_message
+            .as_ref()
+            .is_some_and(|m| m.content.contains("write_policy=DenyAll")),
+        "folderless project must force DenyAll write policy, got: {:?}",
+        turn.assistant_message
+    );
+
+    // 5. Manual inline session rename via PATCH /v1/sessions/{id}.
+    let renamed_session = client
+        .update_session(
+            session.session_id,
+            &UpdateSessionRequest {
+                title: String::from("Переименованный чат"),
+            },
+            None,
+        )
+        .await
+        .expect("rename session");
+    assert_eq!(renamed_session.title, "Переименованный чат");
+
+    // 6. Attach folder + inline rename project via PATCH /v1/projects/{id}, then list real files & verify traversal rejection.
+    let updated_project = client
+        .update_project(
+            project.project_id,
+            &UpdateProjectRequest {
+                name: Some(String::from("Мой репозиторий")),
+                workspace_path: Some(ws_dir.to_string_lossy().into_owned()),
+            },
+            None,
+        )
+        .await
+        .expect("update project");
+    assert_eq!(updated_project.name, "Мой репозиторий");
+    assert!(updated_project.workspace_path.is_some());
+
+    let files = client
+        .list_project_files(project.project_id, None, None)
+        .await
+        .expect("list bound project files");
+    assert!(files.workspace_bound);
+    assert!(files.entries.iter().any(|e| e.relative_path == "README.md"));
+    assert!(
+        files
+            .entries
+            .iter()
+            .any(|e| e.relative_path == "src/app.rs")
+    );
+
+    let traversal_err = client
+        .list_project_files(project.project_id, Some("../outside"), None)
+        .await;
+    assert!(
+        matches!(traversal_err, Err(DennettError::AccessDenied { .. })),
+        "path traversal must return 403 AccessDenied, got: {traversal_err:?}"
+    );
+
+    // 7. BOTH POST /v1/projects and PATCH /v1/projects/{id} reject relative, `..`, UNC, and symlink/junction roots with 403 AccessDenied.
+    let link_root_str = link_root.to_string_lossy().into_owned();
+    for bad_workspace in [
+        ".",
+        "../outside",
+        r"\\attacker\share",
+        link_root_str.as_str(),
+    ] {
+        let create_err = client
+            .create_project(
+                &CreateProjectRequest {
+                    name: String::from("Unsafe Create"),
+                    workspace_path: Some(bad_workspace.to_owned()),
+                    memory_scope: None,
+                },
+                None,
+            )
+            .await;
+        assert!(
+            matches!(create_err, Err(DennettError::AccessDenied { .. })),
+            "POST /v1/projects must reject `{bad_workspace}` with 403 AccessDenied, got: {create_err:?}"
+        );
+
+        let patch_err = client
+            .update_project(
+                project.project_id,
+                &UpdateProjectRequest {
+                    name: None,
+                    workspace_path: Some(bad_workspace.to_owned()),
+                },
+                None,
+            )
+            .await;
+        assert!(
+            matches!(patch_err, Err(DennettError::AccessDenied { .. })),
+            "PATCH /v1/projects/{{id}} must reject `{bad_workspace}` with 403 AccessDenied, got: {patch_err:?}"
+        );
+    }
+
+    head.shutdown().await;
     memoryd.shutdown().await;
 }

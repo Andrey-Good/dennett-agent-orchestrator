@@ -23,7 +23,8 @@ use dennett_contracts::{
     AgentId, ApiErrorResponse, CommitMemoryNoteRequest, CorrelationId, CreateAgentRequest,
     CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
     DennettError, HeadHealth, HeadMemorySearchRequest, MemoryStatus, ProfileMode, ProjectId,
-    SendMessageRequest, ServiceKind, SessionId, UpdateAgentConfigRequest,
+    SendMessageRequest, ServiceKind, SessionId, UpdateAgentConfigRequest, UpdateProjectRequest,
+    UpdateSessionRequest,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, watch};
@@ -77,10 +78,23 @@ struct DiagnosticsQuery {
     limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RuntimeCatalogQuery {
+    #[serde(default)]
+    refresh: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectFilesQuery {
+    #[serde(default)]
+    subpath: Option<String>,
+}
+
 /// Builds the complete `axum` HTTP [`Router`] for `dennett-head`.
 pub fn build_head_router(state: HeadAppState) -> Router {
     let mut router = Router::new()
         .route("/healthz", get(handle_healthz))
+        .route("/v1/runtime/catalog", get(handle_get_runtime_catalog))
         .route(
             "/v1/agents",
             post(handle_create_agent).get(handle_list_agents),
@@ -94,12 +108,22 @@ pub fn build_head_router(state: HeadAppState) -> Router {
             "/v1/projects",
             post(handle_create_project).get(handle_list_projects),
         )
-        .route("/v1/projects/{project_id}", get(handle_get_project))
+        .route(
+            "/v1/projects/{project_id}",
+            get(handle_get_project).patch(handle_update_project),
+        )
+        .route(
+            "/v1/projects/{project_id}/files",
+            get(handle_list_project_files),
+        )
         .route(
             "/v1/sessions",
             post(handle_create_session).get(handle_list_sessions),
         )
-        .route("/v1/sessions/{session_id}", get(handle_get_session_detail))
+        .route(
+            "/v1/sessions/{session_id}",
+            get(handle_get_session_detail).patch(handle_update_session),
+        )
         .route(
             "/v1/sessions/{session_id}/messages",
             post(handle_send_message),
@@ -362,6 +386,22 @@ async fn handle_list_projects(State(state): State<HeadAppState>, headers: Header
     }
 }
 
+async fn handle_get_runtime_catalog(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<RuntimeCatalogQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let refresh = query.refresh.unwrap_or(false);
+    match svc.get_runtime_catalog(refresh).await {
+        Ok(catalog) => json_with_correlation(StatusCode::OK, &catalog, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
 async fn handle_get_project(
     State(state): State<HeadAppState>,
     headers: HeaderMap,
@@ -377,6 +417,74 @@ async fn handle_get_project(
     };
     match svc.get_project(project_id).await {
         Ok(project) => json_with_correlation(StatusCode::OK, &project, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_update_project(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<UpdateProjectRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let project_id = match ProjectId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.update_project(project_id, req, &cid).await {
+        Ok(project) => json_with_correlation(StatusCode::OK, &project, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_project_files(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    Query(query): Query<ProjectFilesQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let project_id = match ProjectId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.list_project_files(project_id, query.subpath).await {
+        Ok(files) => json_with_correlation(StatusCode::OK, &files, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_update_session(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<UpdateSessionRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let session_id = match SessionId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.update_session(session_id, req, &cid).await {
+        Ok(session) => json_with_correlation(StatusCode::OK, &session, &cid),
         Err(err) => domain_error_response(err, &cid),
     }
 }

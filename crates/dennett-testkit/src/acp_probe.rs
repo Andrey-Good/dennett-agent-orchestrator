@@ -1524,7 +1524,7 @@ mod tests {
             "_meta": { "antigravity": { "tier": "Google AI Ultra" } },
             "models": {
                 "availableModels": [
-                    { "modelId": "gemini-3.8-pro" },
+                    { "modelId": "gemini-4-neon" },
                     { "modelId": "gemini-3.8-flash" }
                 ]
             },
@@ -1533,7 +1533,7 @@ mod tests {
                     "id": "model",
                     "options": [
                         { "value": "gemini-3.8-flash" },
-                        { "value": "gemini-3.9-flash-lite" }
+                        { "value": "gemini-4-carbon" }
                     ]
                 }
             ]
@@ -1549,8 +1549,8 @@ mod tests {
             parsed.available_models,
             vec![
                 String::from("gemini-3.8-flash"),
-                String::from("gemini-3.9-flash-lite"),
-                String::from("gemini-3.8-pro"),
+                String::from("gemini-4-carbon"),
+                String::from("gemini-4-neon"),
             ]
         );
     }

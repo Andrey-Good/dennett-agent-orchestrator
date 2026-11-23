@@ -1,97 +1,151 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { BracketsCurly, Check, Copy } from "@phosphor-icons/react";
 
-import type { MessageRecord, RunRecord } from "../api/contracts";
+import type { RunRecord } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
 
-function formatTime(tsMs: number): string {
-  try {
-    return new Intl.DateTimeFormat("ru-RU", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(tsMs));
-  } catch {
-    return "";
-  }
+function formatClock(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 }
 
-function findRunForMessage(message: MessageRecord, runs: RunRecord[]): RunRecord | undefined {
-  if (!message.run_id) {
-    return undefined;
-  }
-  return runs.find((run) => run.run_id === message.run_id);
-}
+const SUGGESTED_PROMPTS = [
+  "Разбери структуру проекта и предложи план работы",
+  "Зафиксируй ключевые архитектурные решения в памяти",
+  "Проверь слабые места и риски текущего подхода",
+];
 
 export function MessageTimeline() {
-  const { state } = useWorkspace();
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const { state, actions, meta } = useWorkspace();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const messages = state.activeDetail?.messages ?? [];
   const runs = state.activeDetail?.runs ?? [];
 
+  const runsById = useMemo(() => {
+    const map = new Map<string, RunRecord>();
+    for (const run of runs) {
+      map.set(run.run_id, run);
+    }
+    return map;
+  }, [runs]);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
-  }, [messages.length, state.selectedSessionId]);
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages.length, state.selectedSessionId, meta.isRunningActiveSession]);
+
+  const handleCopy = (messageId: string, content: string) => {
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(content).catch(() => {});
+    }
+    setCopiedId(messageId);
+    setTimeout(() => {
+      setCopiedId((curr) => (curr === messageId ? null : curr));
+    }, 1500);
+  };
 
   return (
-    <div
-      className="timeline-viewport"
-      role="log"
-      aria-label="История разговора"
-      aria-live="polite"
-      data-testid="message-timeline"
-    >
-      <div className="timeline-inner">
+    <div className="conversation" ref={scrollRef} data-testid="message-timeline">
+      <div className="conversation-inner">
         {messages.length === 0 ? (
-          <div className="message-row message-row--system">
-            <div className="message-bubble--system">
-              Сообщений пока нет. Опишите задачу для агента — история и память сохраняются в dennett-head.
+          <div className="empty-state" data-testid="empty-chat-state">
+            <BracketsCurly size={36} weight="light" aria-hidden="true" />
+            <h2>{meta.activeProject?.name ?? "Новый разговор"}</h2>
+            <p>
+              Напишите поручение внизу — название чата подставится автоматически по вашему первому
+              сообщению.
+            </p>
+            <div className="prompt-suggestions">
+              {SUGGESTED_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => {
+                    if (state.selectedSessionId) {
+                      actions.updateDraft(state.selectedSessionId, prompt);
+                      meta.composerInputRef.current?.focus();
+                    }
+                  }}
+                >
+                  {prompt}
+                </button>
+              ))}
             </div>
           </div>
         ) : (
-          messages.map((message) => {
-            const run = findRunForMessage(message, runs);
-            const showCancelledBadge =
-              run?.status === "cancelled" &&
-              (message.role === "user" || message.role === "assistant");
-            const showFailedBadge =
-              run?.status === "failed" && message.role === "user";
-            const showDegradedBadge =
-              run?.status === "degraded" && message.role === "assistant";
+          messages.map((msg) => {
+            const run = msg.run_id ? runsById.get(msg.run_id) : undefined;
+            const isUser = msg.role === "user";
+            const isCopied = copiedId === msg.message_id;
 
             return (
               <article
-                key={message.message_id}
-                className={`message-row message-row--${message.role}`}
-                data-role={message.role}
+                key={msg.message_id}
+                className={`message ${isUser ? "message--user" : "message--assistant"}`}
+                data-testid={`message-${msg.role}`}
               >
-                <div className={`message-bubble--${message.role}`}>
-                  {message.content}
-                </div>
-                <div className="message-meta">
-                  <time dateTime={new Date(message.created_at).toISOString()}>
-                    {formatTime(message.created_at)}
-                  </time>
-                  {showCancelledBadge && (
-                    <span className="run-chip run-chip--cancelled" data-testid="run-status-cancelled">
-                      Остановлено (Cancelled)
-                    </span>
-                  )}
-                  {showFailedBadge && (
-                    <span className="run-chip run-chip--failed">
-                      Ошибка запуска
-                    </span>
-                  )}
-                  {showDegradedBadge && (
-                    <span className="run-chip run-chip--degraded">
-                      Без memoryd
-                    </span>
-                  )}
+                <div className="message-block">
+                  <div className="message-copy">
+                    {isUser ? (
+                      <p className="message-user-text">{msg.content}</p>
+                    ) : (
+                      <div className="message-markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="message-footer">
+                    <span className="message-time">{formatClock(msg.created_at)}</span>
+
+                    {run && isUser && run.status === "cancelled" && (
+                      <span
+                        className="run-tag run-tag--cancelled"
+                        data-testid="run-status-cancelled"
+                      >
+                        Остановлено (Cancelled)
+                      </span>
+                    )}
+                    {run && isUser && run.status === "failed" && (
+                      <span className="run-tag run-tag--failed">
+                        Ошибка{run.error_code ? ` · ${run.error_code}` : ""}
+                      </span>
+                    )}
+                    {run && !isUser && run.rehydrated && (
+                      <span className="run-tag">Контекст восстановлен</span>
+                    )}
+
+                    <button
+                      type="button"
+                      className="message-copy-button"
+                      onClick={() => handleCopy(msg.message_id, msg.content)}
+                      aria-label="Скопировать сообщение"
+                      title={isCopied ? "Скопировано" : "Скопировать"}
+                    >
+                      {isCopied ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
                 </div>
               </article>
             );
           })
         )}
-        <div ref={bottomRef} />
+
+        {meta.isRunningActiveSession && (
+          <div className="loading-lines" aria-live="polite" data-testid="thinking-indicator">
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
       </div>
     </div>
   );

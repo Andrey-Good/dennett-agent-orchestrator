@@ -262,8 +262,8 @@ async fn run_v03_session_and_drop_bridge(
     let project = bridge
         .create_project(&CreateProjectRequest {
             name: format!("V03 Project {}", &suffix[..6]),
-            workspace_path: workspace_dir.to_string_lossy().into_owned(),
-            memory_scope: scope.clone(),
+            workspace_path: Some(workspace_dir.to_string_lossy().into_owned()),
+            memory_scope: Some(scope.clone()),
         })
         .await
         .expect("create_project");
@@ -275,7 +275,7 @@ async fn run_v03_session_and_drop_bridge(
             name: format!("V03 Agent {}", &suffix[..6]),
             description: String::from("Desktop bridge V03 verification agent"),
             system_prompt: String::from("Be concise and factual."),
-            model_preference: Some(String::from("gemini-2.5-pro")),
+            model_preference: Some(String::from("sim-model-alpha")),
             thinking_level: Some(ThinkingLevel::Medium),
             allowed_memory_scopes: allowed.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
@@ -288,7 +288,7 @@ async fn run_v03_session_and_drop_bridge(
             agent.agent_id,
             &UpdateAgentConfigRequest {
                 system_prompt: String::from("Be concise and factual."),
-                model_preference: Some(String::from("gemini-3.8-pro")),
+                model_preference: Some(String::from("sim-model-beta")),
                 thinking_level: Some(ThinkingLevel::High),
                 allowed_memory_scopes: allowed,
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
@@ -394,7 +394,7 @@ async fn v03_closing_desktop_bridge_keeps_daemons_alive_and_restores_conversatio
     assert_eq!(restored_agent.current_config.version_number, 2);
     assert_eq!(
         restored_agent.current_config.model_preference.as_deref(),
-        Some("gemini-3.8-pro")
+        Some("sim-model-beta")
     );
 
     let detail = reopened
@@ -454,8 +454,8 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
     let project = bridge
         .create_project(&CreateProjectRequest {
             name: format!("V02 Project {}", &suffix[..6]),
-            workspace_path: workspace_dir.to_string_lossy().into_owned(),
-            memory_scope: scope.clone(),
+            workspace_path: Some(workspace_dir.to_string_lossy().into_owned()),
+            memory_scope: Some(scope.clone()),
         })
         .await
         .expect("create_project");

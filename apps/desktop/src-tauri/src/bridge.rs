@@ -16,10 +16,11 @@ use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
     AgentId, AgentRecord, ArtifactId, ArtifactRecord, CancelRunResponse, CorrelationId,
     CreateAgentRequest, CreateArtifactRequest, CreateProjectRequest, CreateSessionRequest,
-    DennettError, DiagnosticsResponse, FlushOutboxResponse, HeadHealth, ListAgentsResponse,
-    ListArtifactsResponse, ListProjectsResponse, ListSessionsResponse, ProjectRecord,
+    DennettError, DiagnosticsResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
+    HeadMemorySearchResponse, ListAgentsResponse, ListArtifactsResponse, ListProjectFilesResponse,
+    ListProjectsResponse, ListSessionsResponse, ProjectId, ProjectRecord, RuntimeCatalogResponse,
     SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
-    UpdateAgentConfigRequest,
+    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest,
 };
 use dennett_head_client::HeadClient;
 use serde::{Deserialize, Serialize};
@@ -315,6 +316,22 @@ impl HeadBridge {
         }
     }
 
+    /// Fetches the dynamic runtime model, thinking-level, account, and quota catalog (`GET /v1/runtime/catalog`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or runtime probing fails.
+    pub async fn get_runtime_catalog(
+        &self,
+        refresh: bool,
+    ) -> Result<RuntimeCatalogResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_runtime_catalog(refresh, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
     /// Lists registered workspace projects (`GET /v1/projects`).
     ///
     /// # Errors
@@ -341,6 +358,41 @@ impl HeadBridge {
         let cid = CorrelationId::generate();
         self.client
             .create_project(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Renames a project and/or attaches/rebinds its workspace folder (`PATCH /v1/projects/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation/boundary failure or unreachable Head.
+    pub async fn update_project(
+        &self,
+        project_id: ProjectId,
+        req: &UpdateProjectRequest,
+    ) -> Result<ProjectRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_project(project_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists real workspace files for a project (`GET /v1/projects/{id}/files`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on access denial, missing project, or unreachable Head.
+    pub async fn list_project_files(
+        &self,
+        project_id: ProjectId,
+        subpath: Option<&str>,
+    ) -> Result<ListProjectFilesResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_project_files(project_id, subpath, Some(&cid))
             .await
             .map_err(BridgeError::from)
     }
@@ -416,6 +468,24 @@ impl HeadBridge {
         let cid = CorrelationId::generate();
         self.client
             .create_session(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Renames a conversation session inline (`PATCH /v1/sessions/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing session, or unreachable Head.
+    pub async fn update_session(
+        &self,
+        session_id: SessionId,
+        req: &UpdateSessionRequest,
+    ) -> Result<SessionRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_session(session_id, req, Some(&cid))
             .await
             .map_err(BridgeError::from)
     }
@@ -552,6 +622,22 @@ impl HeadBridge {
         let cid = CorrelationId::generate();
         self.client
             .flush_memory_outbox(Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Queries scoped notes from standalone `dennett-memoryd` through `dennett-head` (`POST /v1/memory/search`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn search_memory(
+        &self,
+        req: &HeadMemorySearchRequest,
+    ) -> Result<HeadMemorySearchResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .search_memory(req, Some(&cid))
             .await
             .map_err(BridgeError::from)
     }

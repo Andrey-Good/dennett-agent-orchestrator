@@ -8,12 +8,45 @@ export type SessionStatus = "active" | "archived" | "closed";
 export type MessageRole = "user" | "assistant" | "system";
 export type RunStatus = "running" | "succeeded" | "cancelled" | "failed" | "degraded";
 export type PolicyEffect = "allow" | "deny";
+export type WorkspaceFileKind = "file" | "directory";
 
 export type WorkspaceWritePolicy =
   | { mode: "deny_all" }
   | { mode: "ask_before_write" }
   | { mode: "allow_workspace" }
   | { mode: "allow_paths"; allowed_prefixes: string[] };
+
+export interface RuntimeThinkingOption {
+  value: ThinkingLevel;
+  label: string;
+}
+
+export interface RuntimeModelOption {
+  model_id: string;
+  label: string;
+  supported_thinking_levels: ThinkingLevel[];
+  default_thinking_level?: ThinkingLevel | null;
+}
+
+export interface RuntimeQuotaWindow {
+  label: string;
+  remaining_percent: number;
+}
+
+export interface RuntimeCatalogResponse {
+  adapter_id: string;
+  auth_profile: RuntimeAuthProfile;
+  is_simulated: boolean;
+  agy_version?: string | null;
+  tier?: string | null;
+  account_label?: string | null;
+  default_model_id?: string | null;
+  default_thinking_level?: ThinkingLevel | null;
+  models: RuntimeModelOption[];
+  thinking_options: RuntimeThinkingOption[];
+  quotas: RuntimeQuotaWindow[];
+  probed_at: number;
+}
 
 export interface AgentConfigVersion {
   config_version_id: string;
@@ -40,7 +73,7 @@ export interface AgentRecord {
 export interface ProjectRecord {
   project_id: string;
   name: string;
-  workspace_path: string;
+  workspace_path: string | null;
   memory_scope: string;
   created_at: number;
 }
@@ -188,8 +221,29 @@ export interface ListProjectsResponse {
 
 export interface CreateProjectRequest {
   name: string;
-  workspace_path: string;
-  memory_scope: string;
+  workspace_path?: string | null;
+  memory_scope?: string | null;
+}
+
+export interface UpdateProjectRequest {
+  name?: string | null;
+  workspace_path?: string | null;
+}
+
+export interface WorkspaceFileEntry {
+  relative_path: string;
+  name: string;
+  kind: WorkspaceFileKind;
+  size_bytes?: number | null;
+  depth: number;
+}
+
+export interface ListProjectFilesResponse {
+  project_id: string;
+  workspace_bound: boolean;
+  workspace_path: string | null;
+  entries: WorkspaceFileEntry[];
+  truncated: boolean;
 }
 
 export interface ListAgentsResponse {
@@ -224,6 +278,10 @@ export interface CreateSessionRequest {
   title: string;
 }
 
+export interface UpdateSessionRequest {
+  title: string;
+}
+
 export interface SessionDetailResponse {
   session: SessionRecord;
   messages: MessageRecord[];
@@ -245,6 +303,7 @@ export interface SendMessageResponse {
   artifacts: ArtifactRecord[];
   permission_decisions: PermissionDecisionRecord[];
   memory_status: MemoryStatus;
+  session_title?: string;
 }
 
 export interface CancelRunResponse {
@@ -255,10 +314,6 @@ export interface CancelRunResponse {
   memory_status: MemoryStatus;
 }
 
-export interface ListArtifactsResponse {
-  artifacts: ArtifactRecord[];
-}
-
 export interface CreateArtifactRequest {
   run_id?: string | null;
   name: string;
@@ -267,10 +322,8 @@ export interface CreateArtifactRequest {
   relative_path?: string | null;
 }
 
-export interface DiagnosticsResponse {
-  events: DiagnosticEvent[];
-  permission_decisions: PermissionDecisionRecord[];
-  outbox_items: MemoryOutboxItem[];
+export interface ListArtifactsResponse {
+  artifacts: ArtifactRecord[];
 }
 
 export interface FlushOutboxResponse {
@@ -282,6 +335,35 @@ export interface FlushOutboxResponse {
   items: MemoryOutboxItem[];
 }
 
+export interface DiagnosticsResponse {
+  events: DiagnosticEvent[];
+  permission_decisions: PermissionDecisionRecord[];
+  outbox_items: MemoryOutboxItem[];
+}
+
+export interface MemoryNote {
+  note_id: string;
+  scope: string;
+  title: string;
+  body: string;
+  tags: string[];
+  revision: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface HeadMemorySearchRequest {
+  scope?: string | null;
+  query?: string | null;
+  limit?: number | null;
+}
+
+export interface HeadMemorySearchResponse {
+  memory_status: MemoryStatus;
+  degraded_reason?: string | null;
+  notes: MemoryNote[];
+}
+
 export interface BridgeErrorPayload {
   code: string;
   message: string;
@@ -290,15 +372,32 @@ export interface BridgeErrorPayload {
 export function normalizeBridgeError(err: unknown): BridgeErrorPayload {
   if (typeof err === "object" && err !== null) {
     const record = err as Record<string, unknown>;
-    if (typeof record.code === "string" && typeof record.message === "string") {
-      return { code: record.code, message: record.message };
-    }
     if (typeof record.message === "string") {
-      return { code: "BRIDGE_ERROR", message: record.message };
+      return {
+        code: typeof record.code === "string" ? record.code : "BRIDGE_ERROR",
+        message: record.message,
+      };
+    }
+    if (record.error && typeof record.error === "object") {
+      const inner = record.error as Record<string, unknown>;
+      if (typeof inner.message === "string" || typeof inner.detail === "string") {
+        return {
+          code: typeof inner.code === "string" ? inner.code : "HEAD_API",
+          message:
+            typeof inner.message === "string"
+              ? inner.message
+              : typeof inner.detail === "string"
+                ? inner.detail
+                : "Ошибка dennett-head",
+        };
+      }
     }
   }
-  if (typeof err === "string" && err.trim().length > 0) {
+  if (err instanceof Error) {
+    return { code: "CLIENT_ERROR", message: err.message };
+  }
+  if (typeof err === "string") {
     return { code: "BRIDGE_ERROR", message: err };
   }
-  return { code: "BRIDGE_ERROR", message: "Неизвестная ошибка связи с dennett-head" };
+  return { code: "UNKNOWN_ERROR", message: "Непредвиденная ошибка взаимодействия с dennett-head." };
 }

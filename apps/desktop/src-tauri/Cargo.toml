@@ -25,6 +25,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 dennett-contracts.workspace = true
 dennett-head-client.workspace = true
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

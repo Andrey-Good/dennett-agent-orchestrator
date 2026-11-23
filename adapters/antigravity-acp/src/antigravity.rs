@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets_owned};
-use dennett_contracts::{DennettError, RuntimeAuthProfile, SessionId};
+use dennett_contracts::{
+    DennettError, RuntimeAuthProfile, RuntimeModelOption, SessionId, ThinkingLevel,
+};
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::port::{
@@ -28,7 +30,9 @@ use crate::profile::{
     Semver, build_effective_system_prompt, detect_agy_version, normalize_workspace_path,
     prepare_isolated_profile, resolve_agy_binary, workspace_paths_match,
 };
-use crate::transport::{AcpProcess, AcpProcessConfig, AcpTurnParams};
+use crate::transport::{
+    AcpProcess, AcpProcessConfig, AcpTurnParams, extract_thinking_options_from_config,
+};
 
 /// Canonical adapter identifier for production Google Antigravity ACP runtime.
 pub const ANTIGRAVITY_ADAPTER_ID: &str = "antigravity-acp";
@@ -106,10 +110,12 @@ struct ActiveSessionSlot {
     tier: Option<String>,
     agy_version: String,
     available_models: Vec<String>,
+    models: Vec<RuntimeModelOption>,
     applied_write_policy: dennett_contracts::WorkspaceWritePolicy,
     applied_system_prompt: String,
     applied_model: Mutex<Option<String>>,
-    applied_thinking: Mutex<Option<String>>,
+    applied_thinking: Mutex<Option<ThinkingLevel>>,
+    active_thinking_levels: Mutex<Vec<ThinkingLevel>>,
     active_cancel_tx: Mutex<Option<watch::Sender<bool>>>,
 }
 
@@ -261,41 +267,64 @@ impl AntigravityAcpRuntime {
         Ok((init, version))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "coordinates model normalization, per-model configOptions inspection, and thought_level clamping"
+    )]
     async fn apply_model_and_thinking(
         &self,
         proc: &mut AcpProcess,
         provider_session_id: &str,
         available_models: &[String],
+        models: &[RuntimeModelOption],
+        initial_thinking_levels: &[ThinkingLevel],
         model_preference: Option<&str>,
-        thinking_level: Option<dennett_contracts::ThinkingLevel>,
-    ) -> Result<(Option<String>, Option<String>), DennettError> {
+        thinking_level: Option<ThinkingLevel>,
+    ) -> Result<(Option<String>, Option<ThinkingLevel>, Vec<ThinkingLevel>), DennettError> {
+        let (normalized_model, effective_requested_thinking) =
+            match model_preference.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(pref) => {
+                    let (chosen, inferred_tl) =
+                        split_model_and_thinking(pref, thinking_level, available_models, models);
+                    (Some(chosen), inferred_tl)
+                }
+                None => (None, thinking_level),
+            };
+
+        let mut supported_thinking = initial_thinking_levels.to_vec();
         let mut applied_model = None;
-        if let Some(pref) = model_preference.map(str::trim).filter(|s| !s.is_empty()) {
-            let chosen = resolve_preferred_model(pref, available_models);
-            proc.set_config_option(
-                provider_session_id,
-                "model",
-                &chosen,
-                self.config.handshake_timeout,
-            )
-            .await?;
+        if let Some(chosen) = normalized_model {
+            let resp = proc
+                .set_config_option(
+                    provider_session_id,
+                    "model",
+                    &chosen,
+                    self.config.handshake_timeout,
+                )
+                .await?;
+            if let Some((updated_opts, _)) = extract_thinking_options_from_config(&resp) {
+                supported_thinking = updated_opts.into_iter().map(|opt| opt.value).collect();
+            } else if let Some(model_meta) = models.iter().find(|m| m.model_id == chosen) {
+                supported_thinking.clone_from(&model_meta.supported_thinking_levels);
+            }
             applied_model = Some(chosen);
         }
 
         let mut applied_thinking = None;
-        if let Some(level) = thinking_level {
-            let val = level.as_str();
+        if let Some(requested_level) = effective_requested_thinking
+            && let Some(clamped) = clamp_thinking_level(requested_level, &supported_thinking)
+        {
             proc.set_config_option(
                 provider_session_id,
                 "thought_level",
-                val,
+                clamped.as_str(),
                 self.config.handshake_timeout,
             )
             .await?;
-            applied_thinking = Some(val.to_owned());
+            applied_thinking = Some(clamped);
         }
 
-        Ok((applied_model, applied_thinking))
+        Ok((applied_model, applied_thinking, supported_thinking))
     }
 }
 
@@ -391,6 +420,11 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 supports_resume: init.supports_load_session,
                 supports_system_prompt_append: init.supports_system_prompt_append,
                 available_models: sess.available_models,
+                models: sess.models,
+                thinking_options: sess.thinking_options,
+                default_model_id: sess.default_model_id,
+                default_thinking_level: sess.default_thinking_level,
+                quotas: sess.quotas,
                 capabilities: vec![
                     String::from("acp_v1_stdio"),
                     String::from("isolated_profile"),
@@ -439,41 +473,71 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                     proc.add_secrets(secrets.clone());
 
                     // Apply live model/thinking changes on the existing session (A04: same AgentId & session).
-                    let wanted_model = req
+                    let (wanted_model, effective_thinking) = match req
                         .model_preference
                         .as_deref()
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
-                        .map(|m| resolve_preferred_model(m, &slot.available_models));
+                    {
+                        Some(pref) => {
+                            let (chosen, inferred_tl) = split_model_and_thinking(
+                                pref,
+                                req.thinking_level,
+                                &slot.available_models,
+                                &slot.models,
+                            );
+                            (Some(chosen), inferred_tl)
+                        }
+                        None => (None, req.thinking_level),
+                    };
+
                     let mut applied_model_guard = slot.applied_model.lock().await;
+                    let mut supported_guard = slot.active_thinking_levels.lock().await;
+                    let mut applied_thinking_guard = slot.applied_thinking.lock().await;
+
+                    let mut model_switched = false;
                     if wanted_model.is_some()
                         && *applied_model_guard != wanted_model
                         && let Some(ref model_val) = wanted_model
                     {
-                        proc.set_config_option(
-                            &slot.provider_session_id,
-                            "model",
-                            model_val,
-                            self.config.handshake_timeout,
-                        )
-                        .await?;
+                        let resp = proc
+                            .set_config_option(
+                                &slot.provider_session_id,
+                                "model",
+                                model_val,
+                                self.config.handshake_timeout,
+                            )
+                            .await?;
+                        if let Some((updated_opts, _)) = extract_thinking_options_from_config(&resp)
+                        {
+                            *supported_guard =
+                                updated_opts.into_iter().map(|opt| opt.value).collect();
+                        } else if let Some(model_meta) =
+                            slot.models.iter().find(|m| m.model_id == *model_val)
+                        {
+                            supported_guard.clone_from(&model_meta.supported_thinking_levels);
+                        }
                         *applied_model_guard = Some(model_val.clone());
+                        *applied_thinking_guard = None;
+                        model_switched = true;
                     }
 
-                    let wanted_thinking = req.thinking_level.map(|t| t.as_str().to_owned());
-                    let mut applied_thinking_guard = slot.applied_thinking.lock().await;
-                    if wanted_thinking.is_some()
-                        && *applied_thinking_guard != wanted_thinking
-                        && let Some(ref tl_val) = wanted_thinking
-                    {
-                        proc.set_config_option(
-                            &slot.provider_session_id,
-                            "thought_level",
-                            tl_val,
-                            self.config.handshake_timeout,
-                        )
-                        .await?;
-                        *applied_thinking_guard = Some(tl_val.clone());
+                    if let Some(requested_tl) = effective_thinking {
+                        let clamped = clamp_thinking_level(requested_tl, &supported_guard);
+                        if let Some(target_tl) = clamped
+                            && (model_switched || *applied_thinking_guard != Some(target_tl))
+                        {
+                            proc.set_config_option(
+                                &slot.provider_session_id,
+                                "thought_level",
+                                target_tl.as_str(),
+                                self.config.handshake_timeout,
+                            )
+                            .await?;
+                            *applied_thinking_guard = Some(target_tl);
+                        } else if clamped.is_none() {
+                            *applied_thinking_guard = None;
+                        }
                     }
 
                     return Ok(SessionStartOutcome {
@@ -658,11 +722,21 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 });
             }
 
-            let (applied_model, applied_thinking) = self
+            let initial_thinking_levels =
+                info.active_thinking_levels.clone().unwrap_or_else(|| {
+                    info.default_model_id
+                        .as_deref()
+                        .and_then(|mid| info.models.iter().find(|m| m.model_id == mid))
+                        .map_or_default(|m| m.supported_thinking_levels.clone())
+                });
+
+            let (applied_model, applied_thinking, active_thinking_levels) = self
                 .apply_model_and_thinking(
                     &mut proc,
                     &info.session_id,
                     &info.available_models,
+                    &info.models,
+                    &initial_thinking_levels,
                     req.model_preference.as_deref(),
                     req.thinking_level,
                 )
@@ -671,6 +745,7 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
             let provider_session_id = info.session_id.clone();
             let tier = info.tier.clone();
             let available_models = info.available_models.clone();
+            let models = info.models.clone();
             let agy_version = version.to_string();
 
             let slot = Arc::new(ActiveSessionSlot {
@@ -680,10 +755,12 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 tier: tier.clone(),
                 agy_version: agy_version.clone(),
                 available_models: available_models.clone(),
+                models,
                 applied_write_policy: req.workspace_write_policy,
                 applied_system_prompt: req.system_prompt,
                 applied_model: Mutex::new(applied_model),
                 applied_thinking: Mutex::new(applied_thinking),
+                active_thinking_levels: Mutex::new(active_thinking_levels),
                 active_cancel_tx: Mutex::new(None),
             });
 
@@ -823,18 +900,73 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
     }
 }
 
-fn resolve_preferred_model(preference: &str, available_models: &[String]) -> String {
-    if available_models.iter().any(|m| m == preference) {
+fn resolve_preferred_model(
+    preference: &str,
+    available_models: &[String],
+    models: &[RuntimeModelOption],
+) -> String {
+    if models.iter().any(|m| m.model_id == preference)
+        || available_models.iter().any(|m| m == preference)
+    {
         return preference.to_owned();
     }
     if preference.eq_ignore_ascii_case("flash")
-        && let Some(found) = available_models
+        && let Some(found) = models
             .iter()
+            .map(|m| &m.model_id)
+            .chain(available_models.iter())
             .find(|m| m.to_ascii_lowercase().contains("flash"))
     {
         return found.clone();
     }
     preference.to_owned()
+}
+
+fn split_model_and_thinking(
+    preference: &str,
+    explicit_thinking: Option<ThinkingLevel>,
+    available_models: &[String],
+    models: &[RuntimeModelOption],
+) -> (String, Option<ThinkingLevel>) {
+    if models.iter().any(|m| m.model_id == preference) {
+        return (preference.to_owned(), explicit_thinking);
+    }
+    for (suffix, level) in [
+        ("-xhigh", ThinkingLevel::XHigh),
+        ("-high", ThinkingLevel::High),
+        ("-medium", ThinkingLevel::Medium),
+        ("-low", ThinkingLevel::Low),
+    ] {
+        if let Some(base) = preference.strip_suffix(suffix)
+            && !base.is_empty()
+            && (models.iter().any(|m| m.model_id == base)
+                || available_models.iter().any(|m| m == base))
+        {
+            return (base.to_owned(), explicit_thinking.or(Some(level)));
+        }
+    }
+    (
+        resolve_preferred_model(preference, available_models, models),
+        explicit_thinking,
+    )
+}
+
+fn clamp_thinking_level(
+    requested: ThinkingLevel,
+    supported: &[ThinkingLevel],
+) -> Option<ThinkingLevel> {
+    if supported.is_empty() {
+        return None;
+    }
+    if supported.contains(&requested) {
+        return Some(requested);
+    }
+    supported
+        .iter()
+        .copied()
+        .filter(|lvl| *lvl <= requested)
+        .max()
+        .or_else(|| supported.iter().copied().min())
 }
 
 fn map_auth_error(profile: RuntimeAuthProfile, err: DennettError) -> DennettError {
@@ -858,9 +990,67 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
-    use dennett_contracts::WorkspaceWritePolicy;
+    use dennett_contracts::{RuntimeModelOption, ThinkingLevel, WorkspaceWritePolicy};
 
-    use super::{SlotReuseAction, decide_slot_reuse};
+    use super::{
+        SlotReuseAction, clamp_thinking_level, decide_slot_reuse, split_model_and_thinking,
+    };
+
+    #[test]
+    fn split_and_clamp_handles_carbon_xhigh_and_claude_builtin_thinking() {
+        let models = vec![
+            RuntimeModelOption {
+                model_id: String::from("gemini-4-neon"),
+                label: String::from("Gemini 4 Neon"),
+                supported_thinking_levels: vec![
+                    ThinkingLevel::Low,
+                    ThinkingLevel::Medium,
+                    ThinkingLevel::High,
+                    ThinkingLevel::XHigh,
+                ],
+                default_thinking_level: Some(ThinkingLevel::Medium),
+            },
+            RuntimeModelOption {
+                model_id: String::from("gemini-4-carbon"),
+                label: String::from("Gemini 4 Carbon"),
+                supported_thinking_levels: vec![
+                    ThinkingLevel::Low,
+                    ThinkingLevel::Medium,
+                    ThinkingLevel::High,
+                ],
+                default_thinking_level: Some(ThinkingLevel::Medium),
+            },
+            RuntimeModelOption {
+                model_id: String::from("claude-opus-4-6-thinking"),
+                label: String::from("Claude Opus 4.6 (Thinking)"),
+                supported_thinking_levels: Vec::new(),
+                default_thinking_level: None,
+            },
+        ];
+        let avail: Vec<String> = models.iter().map(|m| m.model_id.clone()).collect();
+
+        assert_eq!(
+            split_model_and_thinking("gemini-4-carbon-high", None, &avail, &models),
+            (String::from("gemini-4-carbon"), Some(ThinkingLevel::High))
+        );
+        assert_eq!(
+            split_model_and_thinking(
+                "gemini-4-carbon-high",
+                Some(ThinkingLevel::Low),
+                &avail,
+                &models
+            ),
+            (String::from("gemini-4-carbon"), Some(ThinkingLevel::Low))
+        );
+        assert_eq!(
+            clamp_thinking_level(ThinkingLevel::XHigh, &models[1].supported_thinking_levels),
+            Some(ThinkingLevel::High)
+        );
+        assert_eq!(
+            clamp_thinking_level(ThinkingLevel::High, &models[2].supported_thinking_levels),
+            None
+        );
+    }
 
     #[test]
     fn slot_reuse_restarts_on_write_policy_change_and_rehydrates_on_system_prompt_change() {

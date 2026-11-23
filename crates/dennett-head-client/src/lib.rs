@@ -13,9 +13,10 @@ use dennett_contracts::{
     CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest,
     CreateSessionRequest, DennettError, DiagnosticsResponse, FlushOutboxResponse, HeadHealth,
     HeadMemorySearchRequest, HeadMemorySearchResponse, ListAgentsResponse, ListArtifactsResponse,
-    ListOutboxResponse, ListPolicyRulesResponse, ListProjectsResponse, ListSessionsResponse,
-    PolicyRule, ProjectId, ProjectRecord, SendMessageRequest, SendMessageResponse,
-    SessionDetailResponse, SessionId, SessionRecord, UpdateAgentConfigRequest,
+    ListOutboxResponse, ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
+    ListSessionsResponse, PolicyRule, ProjectId, ProjectRecord, RuntimeCatalogResponse,
+    SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
+    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
@@ -103,6 +104,26 @@ impl HeadClient {
         correlation_id: Option<&CorrelationId>,
     ) -> Result<HeadHealth, DennettError> {
         self.request_no_body(Method::GET, "/healthz", correlation_id)
+            .await
+    }
+
+    /// Queries `GET /v1/runtime/catalog` (with optional `?refresh=true`) for live runtime models,
+    /// thinking-level choices, account label, and optional quota windows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_runtime_catalog(
+        &self,
+        refresh: bool,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<RuntimeCatalogResponse, DennettError> {
+        let path = if refresh {
+            "/v1/runtime/catalog?refresh=true"
+        } else {
+            "/v1/runtime/catalog"
+        };
+        self.request_no_body(Method::GET, path, correlation_id)
             .await
     }
 
@@ -234,6 +255,48 @@ impl HeadClient {
         .await
     }
 
+    /// Calls `PATCH /v1/projects/{project_id}` to rename a project or attach/rebind its folder.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_project(
+        &self,
+        project_id: ProjectId,
+        req: &UpdateProjectRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectRecord, DennettError> {
+        self.request_json(
+            Method::PATCH,
+            &format!("/v1/projects/{project_id}"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/projects/{project_id}/files` (with optional `?subpath=...`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_project_files(
+        &self,
+        project_id: ProjectId,
+        subpath: Option<&str>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListProjectFilesResponse, DennettError> {
+        let path = match subpath.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(sub) => format!(
+                "/v1/projects/{project_id}/files?subpath={}",
+                encode_query_component(sub)
+            ),
+            None => format!("/v1/projects/{project_id}/files"),
+        };
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
     /// Calls `POST /v1/sessions`.
     ///
     /// # Errors
@@ -246,6 +309,26 @@ impl HeadClient {
     ) -> Result<SessionRecord, DennettError> {
         self.request_json(Method::POST, "/v1/sessions", req, correlation_id)
             .await
+    }
+
+    /// Calls `PATCH /v1/sessions/{session_id}` to rename a session inline.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_session(
+        &self,
+        session_id: SessionId,
+        req: &UpdateSessionRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SessionRecord, DennettError> {
+        self.request_json(
+            Method::PATCH,
+            &format!("/v1/sessions/{session_id}"),
+            req,
+            correlation_id,
+        )
+        .await
     }
 
     /// Calls `GET /v1/sessions`.
@@ -491,6 +574,19 @@ impl HeadClient {
             .map_err(|err| map_transport_error(&err))?;
         decode_response_with_limit(resp, MAX_RESPONSE_BODY_BYTES).await
     }
+}
+
+fn encode_query_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            out.push(char::from(byte));
+        } else {
+            use core::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 fn build_headers(correlation_id: Option<&CorrelationId>) -> Result<HeaderMap, DennettError> {

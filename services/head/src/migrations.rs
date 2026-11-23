@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 const CONTROL_MIGRATION_ADVISORY_LOCK_KEY: i64 = 842_190_537_612_049_311;
 
 /// Latest Control schema migration version bundled in this build.
-pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 1;
+pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 2;
 
 /// One forward-only PostgreSQL migration owned by `dennett-head`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,11 +25,18 @@ pub struct ControlMigration {
 }
 
 /// Ordered list of all Control schema migrations owned by `dennett-head`.
-pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[ControlMigration {
-    version: 1,
-    name: "0001_control_core_v1",
-    sql: include_str!("../migrations/0001_control_core_v1.sql"),
-}];
+pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
+    ControlMigration {
+        version: 1,
+        name: "0001_control_core_v1",
+        sql: include_str!("../migrations/0001_control_core_v1.sql"),
+    },
+    ControlMigration {
+        version: 2,
+        name: "0002_projects_nullable_workspace",
+        sql: include_str!("../migrations/0002_projects_nullable_workspace.sql"),
+    },
+];
 
 /// Computes lowercase SHA-256 hex digest of `bytes`.
 #[must_use]

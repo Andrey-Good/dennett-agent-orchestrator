@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use dennett_contracts::{
-    DennettError, PolicyEffect, RunStatus, RuntimeAuthProfile, SessionId, ThinkingLevel,
-    WorkspaceWritePolicy,
+    DennettError, PolicyEffect, RunStatus, RuntimeAuthProfile, RuntimeModelOption,
+    RuntimeThinkingOption, SessionId, ThinkingLevel, WorkspaceWritePolicy,
 };
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc, watch};
@@ -110,6 +110,50 @@ impl AgentRuntimePort for SimulatedRuntime {
                     String::from("sim-model-alpha"),
                     String::from("sim-model-beta"),
                 ],
+                models: vec![
+                    RuntimeModelOption {
+                        model_id: String::from("sim-model-alpha"),
+                        label: String::from("Simulated Alpha"),
+                        supported_thinking_levels: vec![
+                            ThinkingLevel::Low,
+                            ThinkingLevel::Medium,
+                            ThinkingLevel::High,
+                            ThinkingLevel::XHigh,
+                        ],
+                        default_thinking_level: Some(ThinkingLevel::Medium),
+                    },
+                    RuntimeModelOption {
+                        model_id: String::from("sim-model-beta"),
+                        label: String::from("Simulated Beta"),
+                        supported_thinking_levels: vec![
+                            ThinkingLevel::Low,
+                            ThinkingLevel::Medium,
+                            ThinkingLevel::High,
+                        ],
+                        default_thinking_level: Some(ThinkingLevel::Medium),
+                    },
+                ],
+                thinking_options: vec![
+                    RuntimeThinkingOption {
+                        value: ThinkingLevel::Low,
+                        label: String::from("Low"),
+                    },
+                    RuntimeThinkingOption {
+                        value: ThinkingLevel::Medium,
+                        label: String::from("Medium"),
+                    },
+                    RuntimeThinkingOption {
+                        value: ThinkingLevel::High,
+                        label: String::from("High"),
+                    },
+                    RuntimeThinkingOption {
+                        value: ThinkingLevel::XHigh,
+                        label: String::from("Extra"),
+                    },
+                ],
+                default_model_id: Some(String::from("sim-model-alpha")),
+                default_thinking_level: Some(ThinkingLevel::Medium),
+                quotas: Vec::new(),
                 capabilities: vec![
                     String::from("simulated_ci_double"),
                     String::from("external_permissions"),

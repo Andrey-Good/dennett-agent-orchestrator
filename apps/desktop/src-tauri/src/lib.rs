@@ -45,13 +45,18 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_head_health,
             commands::set_head_url,
+            commands::get_runtime_catalog,
+            commands::pick_workspace_folder,
             commands::list_projects,
             commands::create_project,
+            commands::update_project,
+            commands::list_project_files,
             commands::list_agents,
             commands::create_agent,
             commands::update_agent_config,
             commands::list_sessions,
             commands::create_session,
+            commands::update_session,
             commands::get_session_detail,
             commands::send_message,
             commands::cancel_run,
@@ -60,6 +65,7 @@ pub fn run() {
             commands::get_artifact,
             commands::list_diagnostics,
             commands::flush_memory_outbox,
+            commands::search_memory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dennett desktop application");

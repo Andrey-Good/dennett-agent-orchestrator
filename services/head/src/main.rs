@@ -15,8 +15,8 @@ use std::sync::Arc;
 use dennett_contracts::redact::{redact_secrets, sanitize_cli_arg, sanitize_pg_error};
 use dennett_contracts::{CorrelationId, DennettError, ProfileMode, RuntimeAuthProfile};
 use dennett_head::{
-    HEAD_STAGE_LABEL, HeadAppState, HeadService, MAX_CONCURRENT_REQUESTS, MemoryMcpWiring,
-    ValidatedControlPgTarget, build_head_router,
+    HEAD_STAGE_LABEL, HeadAppState, HeadService, HeadServiceExtras, MAX_CONCURRENT_REQUESTS,
+    MemoryMcpWiring, MemoryTokenSigner, ValidatedControlPgTarget, build_head_router,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
@@ -37,6 +37,7 @@ struct ServeOptions {
     pg_url: Option<String>,
     memory_url: Option<String>,
     memory_mcp_bin: Option<PathBuf>,
+    memory_hmac_secret: Option<String>,
     runtime_kind: RuntimeKind,
     auth_profile: RuntimeAuthProfile,
     profile_root: Option<PathBuf>,
@@ -116,6 +117,7 @@ where
     let mut pg_url: Option<String> = None;
     let mut memory_url: Option<String> = None;
     let mut memory_mcp_bin: Option<PathBuf> = None;
+    let mut memory_hmac_secret: Option<String> = None;
     let mut runtime_kind = RuntimeKind::Antigravity;
     let mut auth_profile = RuntimeAuthProfile::OAuthPersonal;
     let mut profile_root: Option<PathBuf> = None;
@@ -143,6 +145,9 @@ where
                     &mut iter,
                     "--memory-mcp-bin",
                 )?));
+            }
+            "--memory-hmac-secret" => {
+                memory_hmac_secret = Some(next_flag_value(&mut iter, "--memory-hmac-secret")?);
             }
             "--profile-root" => {
                 profile_root = Some(PathBuf::from(next_flag_value(&mut iter, "--profile-root")?));
@@ -219,6 +224,7 @@ where
                 pg_url,
                 memory_url,
                 memory_mcp_bin,
+                memory_hmac_secret,
                 runtime_kind,
                 auth_profile,
                 profile_root,
@@ -266,12 +272,14 @@ fn resolve_control_pg_target(
 struct MemoryComponents {
     client: Option<MemoryClient>,
     mcp: Option<MemoryMcpWiring>,
+    hmac_signer: Option<MemoryTokenSigner>,
     secrets: Vec<String>,
 }
 
 fn build_memory_components(
     cli_memory_url: Option<&str>,
     cli_mcp_bin: Option<&PathBuf>,
+    cli_hmac_secret: Option<&str>,
 ) -> Result<MemoryComponents, DennettError> {
     let env_url = env::var("DENNETT_MEMORY_URL").ok();
     let memory_url = cli_memory_url
@@ -291,10 +299,30 @@ fn build_memory_components(
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
 
+    let env_hmac = env::var("DENNETT_MEMORY_HMAC_SECRET").ok();
+    let hmac_secret = cli_hmac_secret
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            env_hmac
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+        });
+
     let mut secrets = Vec::new();
     if let Some(ref tok) = memory_token {
         secrets.push(tok.clone());
     }
+    let hmac_signer = match hmac_secret {
+        Some(secret) => {
+            secrets.push(secret.clone());
+            Some(MemoryTokenSigner::new(secret.into_bytes())?)
+        }
+        None => None,
+    };
 
     let client = match (&memory_url, &memory_token) {
         (Some(url), Some(tok)) => Some(MemoryClient::new(url, tok)?),
@@ -311,11 +339,16 @@ fn build_memory_components(
         })
         .or_else(find_sibling_memory_mcp_bin);
 
-    let mcp_wiring = match (mcp_bin, memory_url, memory_token) {
-        (Some(binary_path), Some(url), Some(token)) => Some(MemoryMcpWiring {
+    let mcp_wiring = match (mcp_bin, memory_url, memory_token, hmac_signer.is_some()) {
+        (Some(binary_path), Some(url), Some(token), _) => Some(MemoryMcpWiring {
             binary_path,
             memory_url: url,
             memory_token: token,
+        }),
+        (Some(binary_path), Some(url), None, true) => Some(MemoryMcpWiring {
+            binary_path,
+            memory_url: url,
+            memory_token: String::new(),
         }),
         _ => None,
     };
@@ -323,6 +356,7 @@ fn build_memory_components(
     Ok(MemoryComponents {
         client,
         mcp: mcp_wiring,
+        hmac_signer,
         secrets,
     })
 }
@@ -397,24 +431,30 @@ async fn run_health_once(
     let MemoryComponents {
         client: memory_client,
         mcp: memory_mcp,
+        hmac_signer: memory_hmac_signer,
         mut secrets,
-    } = match build_memory_components(memory_url.as_deref(), None) {
+    } = match build_memory_components(memory_url.as_deref(), None, None) {
         Ok(parts) => parts,
         Err(err) => {
             emit_stderr_error(&err);
             return ExitCode::from(1);
         }
     };
+    let detached_projects_root = profile_root.clone();
     let (runtime, rt_secrets) = build_runtime(runtime_kind, auth_profile, profile_root, false);
     secrets.extend(rt_secrets);
 
-    let service = match HeadService::new(
+    let service = match HeadService::new_with_extras(
         target,
         runtime,
         memory_client,
         memory_mcp,
         profile_mode,
         secrets,
+        HeadServiceExtras {
+            memory_hmac_signer,
+            detached_projects_root,
+        },
     ) {
         Ok(s) => s,
         Err(err) => {
@@ -459,8 +499,13 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
     let MemoryComponents {
         client: memory_client,
         mcp: memory_mcp,
+        hmac_signer: memory_hmac_signer,
         mut secrets,
-    } = match build_memory_components(opts.memory_url.as_deref(), opts.memory_mcp_bin.as_ref()) {
+    } = match build_memory_components(
+        opts.memory_url.as_deref(),
+        opts.memory_mcp_bin.as_ref(),
+        opts.memory_hmac_secret.as_deref(),
+    ) {
         Ok(parts) => parts,
         Err(err) => {
             emit_stderr_error(&err);
@@ -468,6 +513,7 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         }
     };
 
+    let detached_projects_root = opts.profile_root.clone();
     let (runtime, rt_secrets) = build_runtime(
         opts.runtime_kind,
         opts.auth_profile,
@@ -479,13 +525,17 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
     let runtime_is_simulated = runtime.is_simulated();
 
     let service = match target {
-        Some(pg_target) => match HeadService::new(
+        Some(pg_target) => match HeadService::new_with_extras(
             pg_target,
             runtime,
             memory_client,
             memory_mcp,
             profile_mode,
             secrets,
+            HeadServiceExtras {
+                memory_hmac_signer,
+                detached_projects_root,
+            },
         ) {
             Ok(svc) => {
                 match svc.ensure_migrated().await {
@@ -600,6 +650,7 @@ fn print_usage() {
            --pg-url <dsn>                      Override control PostgreSQL DSN\n\
            --memory-url <url>                  Base URL of standalone dennett-memoryd\n\
            --memory-mcp-bin <path>             Path to dennett-memory-mcp binary\n\
+           --memory-hmac-secret <secret>       HMAC-SHA256 secret for minting per-project scoped memoryd tokens\n\
            --runtime <antigravity|simulated>   Runtime adapter (default: antigravity)\n\
            --auth-profile <oauth-personal|gemini-api-key>\n\
                                                Runtime auth profile (default: oauth-personal)\n\
@@ -614,6 +665,7 @@ fn print_usage() {
            DENNETT_TEST_PROFILE=1              Enable test_isolated mode (blocks prod PG fallback)\n\
            DENNETT_MEMORY_URL                  Standalone dennett-memoryd HTTP URL\n\
            DENNETT_MEMORY_TOKEN                Scoped bearer token for memoryd and dennett-memory-mcp\n\
+           DENNETT_MEMORY_HMAC_SECRET          Shared HMAC-SHA256 secret for minting dynamic project tokens\n\
            DENNETT_GEMINI_API_KEY              API key used ONLY when --auth-profile gemini-api-key",
         env!("CARGO_PKG_VERSION")
     );

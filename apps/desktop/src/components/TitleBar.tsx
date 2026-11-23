@@ -1,128 +1,216 @@
-import { useWorkspace } from "../state/WorkspaceProvider";
+import { useEffect, useRef } from "react";
 import {
-  CloseIcon,
-  DennettMarkIcon,
-  MaximizeIcon,
-  MinimizeIcon,
-  PanelRightIcon,
-  SearchIcon,
-} from "./Icons";
-import { RuntimeBadge } from "./RuntimeBadge";
+  MagnifyingGlass,
+  Minus,
+  Sidebar,
+  SidebarSimple,
+  Square,
+  X,
+} from "@phosphor-icons/react";
+
+import { useWorkspace } from "../state/WorkspaceProvider";
+import { StatsPopover } from "./StatsPopover";
+
+function resolveStatusLabel(
+  connected: boolean,
+  isSimulated: boolean,
+  tier: string | null | undefined,
+  authProfile: string | undefined,
+): { text: string; tone: "ok" | "warn" | "offline" } {
+  if (!connected) {
+    return { text: "Head офлайн", tone: "offline" };
+  }
+  if (isSimulated) {
+    return { text: "Simulated", tone: "warn" };
+  }
+  if (authProfile === "gemini-api-key") {
+    return { text: "Antigravity ACP · Gemini API key", tone: "ok" };
+  }
+  if (tier && tier.trim().length > 0) {
+    return { text: `Antigravity ACP · ${tier.trim()}`, tone: "ok" };
+  }
+  return { text: "Antigravity ACP · Google AI Ultra", tone: "ok" };
+}
 
 export function TitleBar() {
   const { state, actions, meta } = useWorkspace();
+  const statsAnchorRef = useRef<HTMLDivElement | null>(null);
 
-  const handleDragStart = (event: React.MouseEvent<HTMLElement>) => {
-    const target = event.target as HTMLElement;
-    if (target.closest("button, input, select, textarea, a")) {
+  const health = state.healthSnapshot?.health;
+  const connected = Boolean(state.healthSnapshot?.connected && health);
+  const catalog = state.runtimeCatalog;
+  const binding = state.activeDetail?.session.runtime_binding;
+
+  const isSimulated = Boolean(
+    health?.runtime_is_simulated ?? catalog?.is_simulated ?? binding?.is_simulated,
+  );
+  const authProfile = binding?.auth_profile ?? catalog?.auth_profile;
+  const tier = binding?.tier ?? catalog?.tier;
+  const isMemoryDegraded = connected && health?.memory_status === "degraded_unreachable";
+
+  const statusInfo = resolveStatusLabel(connected, isSimulated, tier, authProfile);
+  const dotTone = !connected ? "offline" : isMemoryDegraded ? "warn" : statusInfo.tone;
+
+  useEffect(() => {
+    if (!state.isStatsOpen) {
       return;
     }
-    if (event.buttons === 1) {
-      void meta.windowControls.startDragging();
+    const handlePointerDown = (event: MouseEvent) => {
+      if (statsAnchorRef.current && !statsAnchorRef.current.contains(event.target as Node)) {
+        actions.setStatsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [actions, state.isStatsOpen]);
+
+  const handleDragStart = (event: React.MouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || !meta.windowControls.supported) {
+      return;
     }
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, input, textarea, [role='dialog']")) {
+      return;
+    }
+    void meta.windowControls.startDragging();
   };
 
   return (
     <header
       className="titlebar"
-      data-tauri-drag-region=""
       onMouseDown={handleDragStart}
-      aria-label="Заголовок окна Dennett"
+      onDoubleClick={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (meta.windowControls.supported && !target?.closest("button, input")) {
+          void meta.windowControls.toggleMaximize();
+        }
+      }}
+      data-testid="desktop-titlebar"
     >
       <div className="titlebar__left">
         <button
           type="button"
-          className="brand-mark"
+          className={`icon-button ${state.isSidebarOpen ? "is-active" : ""}`}
           onClick={actions.toggleSidebar}
-          aria-label="Свернуть или развернуть боковую панель"
-          title="Боковая панель"
+          aria-label="Переключить боковую панель проектов"
+          aria-expanded={state.isSidebarOpen}
+          title="Проекты и чаты (Ctrl+B)"
         >
-          <DennettMarkIcon />
+          <SidebarSimple size={17} />
         </button>
 
-        <nav className="breadcrumbs" aria-label="Навигация">
+        <nav className="breadcrumbs" aria-label="Текущий контекст">
           <span>Проекты</span>
           {meta.activeProject && (
             <>
-              <span className="breadcrumbs__sep" aria-hidden="true">
-                /
+              <span aria-hidden="true">/</span>
+              <span title={meta.activeProject.workspace_path ?? "Пока без папки"}>
+                {meta.activeProject.name}
               </span>
-              <span>{meta.activeProject.name}</span>
             </>
           )}
           {meta.activeSession && (
             <>
-              <span className="breadcrumbs__sep" aria-hidden="true">
-                /
-              </span>
-              <span className="breadcrumbs__active">{meta.activeSession.title}</span>
+              <span aria-hidden="true">/</span>
+              <strong>{meta.activeSession.title}</strong>
             </>
           )}
         </nav>
       </div>
 
-      <label className="titlebar__search" aria-label="Поиск чатов и артефактов">
-        <SearchIcon />
-        <input
-          ref={meta.searchInputRef}
-          type="search"
-          className="titlebar__search-input"
-          placeholder="Поиск чатов и артефактов..."
-          value={state.searchQuery}
-          onChange={(e) => actions.setSearchQuery(e.target.value)}
-        />
-        <span className="titlebar__kbd" aria-hidden="true">
-          Ctrl K
-        </span>
-      </label>
+      <div className="titlebar__center">
+        <div className="command-search">
+          <MagnifyingGlass size={14} aria-hidden="true" />
+          <input
+            ref={meta.searchInputRef}
+            type="search"
+            value={state.searchQuery}
+            onChange={(e) => actions.setSearchQuery(e.target.value)}
+            placeholder="Поиск по чатам и проектам…"
+            aria-label="Поиск по чатам и проектам"
+          />
+          <button
+            type="button"
+            className="command-kbd-btn"
+            onClick={() => actions.setCommandOpen(true)}
+            aria-label="Открыть командную палитру"
+            title="Командная палитра (Ctrl+K)"
+          >
+            <kbd>Ctrl K</kbd>
+          </button>
+        </div>
+      </div>
 
       <div className="titlebar__right">
-        <RuntimeBadge
-          initialized={state.initialized}
-          healthSnapshot={state.healthSnapshot}
-          binding={meta.activeSession?.runtime_binding ?? null}
-        />
+        <div className="stats-anchor" ref={statsAnchorRef}>
+          <button
+            type="button"
+            className={`status-pill status-pill--${dotTone} ${state.isStatsOpen ? "is-open" : ""}`}
+            onClick={() => actions.setStatsOpen(!state.isStatsOpen)}
+            aria-expanded={state.isStatsOpen}
+            aria-haspopup="dialog"
+            data-testid="system-status-pill"
+            title="Состояние системы, движка и памяти"
+          >
+            <span className={`status-dot status-dot--${dotTone}`} aria-hidden="true" />
+            <span className="status-pill__text" data-testid="runtime-status-pill">
+              {statusInfo.text}
+            </span>
+          </button>
+
+          {connected && isSimulated && (
+            <span
+              className="simulated-pill"
+              data-testid="simulated-runtime-badge"
+              title="Тестовый двойник (SimulatedRuntime), не живой agy acp"
+            >
+              SIMULATED
+            </span>
+          )}
+
+          {state.isStatsOpen && <StatsPopover onClose={() => actions.setStatsOpen(false)} />}
+        </div>
 
         <button
           type="button"
-          className={
-            state.isRightPanelOpen ? "icon-btn icon-btn--active" : "icon-btn"
-          }
+          className={`icon-button ${state.isRightPanelOpen ? "is-active" : ""}`}
           onClick={actions.toggleRightPanel}
           aria-label="Переключить панель рабочего пространства и артефактов"
           aria-expanded={state.isRightPanelOpen}
-          title="Рабочее пространство и артефакты"
+          title="Рабочее пространство (Ctrl+\)"
         >
-          <PanelRightIcon />
+          <Sidebar size={17} />
         </button>
 
-        <div className="window-controls" aria-label="Управление окном">
-          <button
-            type="button"
-            className="window-btn"
-            onClick={() => void meta.windowControls.minimize()}
-            aria-label="Свернуть окно"
-          >
-            <MinimizeIcon />
-          </button>
-          <button
-            type="button"
-            className="window-btn"
-            onClick={() => void meta.windowControls.toggleMaximize()}
-            aria-label="Развернуть или восстановить окно"
-          >
-            <MaximizeIcon />
-          </button>
-          <button
-            type="button"
-            className="window-btn window-btn--close"
-            onClick={() => void meta.windowControls.close()}
-            aria-label="Закрыть окно"
-            title="Закрыть окно (демоны Head и memoryd продолжат работу)"
-          >
-            <CloseIcon />
-          </button>
-        </div>
+        {meta.windowControls.supported && (
+          <div className="window-controls" aria-label="Управление окном">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void meta.windowControls.minimize()}
+              aria-label="Свернуть окно"
+            >
+              <Minus size={14} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void meta.windowControls.toggleMaximize()}
+              aria-label="Развернуть или восстановить окно"
+            >
+              <Square size={12} />
+            </button>
+            <button
+              type="button"
+              className="icon-button window-close"
+              onClick={() => void meta.windowControls.close()}
+              aria-label="Закрыть окно"
+              title="Закрыть окно (dennett-head и memoryd продолжат работу)"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );

@@ -491,8 +491,8 @@ fn parse_project_subcommand(
             }
             let req = CreateProjectRequest {
                 name: req_opt(name, "--name")?,
-                workspace_path: req_opt(workspace, "--workspace")?,
-                memory_scope: req_opt(scope, "--scope")?,
+                workspace_path: workspace,
+                memory_scope: scope,
             };
             req.validate()?;
             Ok(Action::ProjectCreate { g, req })

@@ -1,68 +1,66 @@
-/* Dennett D1 Design Tokens — WP-M01-003 owner-direction-v5 + sibling card layout.
- *
- * CRITICAL MATERIAL RULES:
- * - Native Tauri window provides Windows 11 Mica directly (`windowEffects.effects = ["mica"]`).
- * - Root HTML/body/#root stay transparent in native mode; ZERO fake wallpaper projection.
- * - ZERO CSS `backdrop-filter` anywhere (prevents opaque-slab / displaced compositing artifacts).
- */
-
 :root {
   color-scheme: dark;
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 
-  /* Foreground translucent card layer (#181818 at 38% density over native Mica) */
-  --surface-card: rgba(24, 24, 24, 0.38);
-  --surface-card-hover: rgba(24, 24, 24, 0.46);
+  --font-sans: Inter, "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
 
-  /* Raised borderless surfaces (#2d2d2d at 24% local opacity — composer, user bubble, inset cards) */
-  --surface-raised: rgba(45, 45, 45, 0.24);
-  --surface-raised-hover: rgba(45, 45, 45, 0.34);
+  --line: rgba(255, 255, 255, 0.105);
+  --line-soft: rgba(255, 255, 255, 0.085);
+  --line-strong: rgba(255, 255, 255, 0.18);
 
-  /* Soft translucent white highlight for selected session (lighter than Mica shell, never opaque gray) */
-  --surface-selected: rgba(255, 255, 255, 0.11);
-  --surface-ghost-hover: rgba(255, 255, 255, 0.065);
-  --surface-ghost-active: rgba(255, 255, 255, 0.14);
+  --text: #f1f1f1;
+  --text-primary-glass: rgba(255, 255, 255, 0.92);
+  --icon-primary-glass: rgba(255, 255, 255, 0.84);
+  --text-muted: #adadad;
+  --text-faint: #9a9a9a;
+  --text-inverse: #181818;
+  --surface-inverse: #ededed;
+  --focus: #dedede;
 
-  /* Hairline dividers (used strictly inside cards, never between Mica titlebar and sidebar) */
-  --divider-subtle: rgba(255, 255, 255, 0.07);
-  --divider-strong: rgba(255, 255, 255, 0.13);
+  /* Default (browser preview) Mica-toned surfaces */
+  --shell-backdrop: radial-gradient(120% 90% at 12% 8%, #1d1f24 0%, #121316 52%, #0d0e10 100%);
+  --chat-card-bg: rgba(22, 22, 24, 0.72);
+  --chat-card-border: rgba(255, 255, 255, 0.12);
+  --raised-bg: rgba(45, 45, 45, 0.56);
+  --chat-active-bg: rgba(255, 255, 255, 0.14);
+  --popover-bg: #1e1e20;
+  --dialog-bg: #1b1b1d;
+  --hover-subtle: rgba(255, 255, 255, 0.055);
+  --hover-strong: rgba(255, 255, 255, 0.095);
 
-  /* Typography — translucent white primary labels, muted gray metadata */
-  --text-primary: rgba(255, 255, 255, 0.9);
-  --text-strong: rgba(255, 255, 255, 0.96);
-  --text-secondary: rgba(255, 255, 255, 0.58);
-  --text-muted: rgba(255, 255, 255, 0.4);
+  /* Functional semantic indicators ONLY */
+  --ok-dot: #6fd39b;
+  --warn-dot: #f3c677;
+  --danger-dot: #f08a8a;
+  --warn-surface: rgba(243, 198, 119, 0.12);
+  --warn-border: rgba(243, 198, 119, 0.34);
+  --danger-surface: rgba(240, 138, 138, 0.13);
+  --danger-border: rgba(240, 138, 138, 0.35);
 
-  /* Restrained semantic status tones (functional alerts only, never decorative noise) */
-  --status-ok: #7bd88f;
-  --status-warn-bg: rgba(217, 152, 54, 0.16);
-  --status-warn-border: rgba(217, 152, 54, 0.42);
-  --status-warn-text: #f3c677;
-  --status-danger-bg: rgba(217, 83, 79, 0.16);
-  --status-danger-border: rgba(217, 83, 79, 0.42);
-  --status-danger-text: #f3a19e;
+  --radius-card: 20px;
+  --radius-composer: 24px;
+  --radius-bubble: 19px;
+  --radius-popover: 15px;
+  --radius-row: 11px;
+}
 
-  /* Radii & layout geometry */
-  --radius-card: 14px;
-  --radius-raised: 14px;
-  --radius-pill: 10px;
-  --radius-sm: 8px;
+/* Native Windows 11 Mica shell: roots remain transparent with exact WP-M01-003 density tints. */
+html.native-shell {
+  --shell-backdrop: transparent;
+  --chat-card-bg: rgba(24, 24, 24, 0.36);
+  --chat-card-border: rgba(255, 255, 255, 0.12);
+  --raised-bg: rgba(45, 45, 45, 0.24);
+  --chat-active-bg: rgba(255, 255, 255, 0.14);
+}
 
-  --titlebar-height: 44px;
-  --rail-width: 52px;
-  --sidebar-width: 248px;
-  --workspace-gap: 12px;
-  --panel-width: 344px;
-
-  /* Typography scale (v5: +1px conversation/composer, +2px nav/workspace) */
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
-
-  --text-chat: 15px;
-  --text-nav: 14px;
-  --text-meta: 12px;
-  --text-micro: 11px;
-
-  --focus-ring: 0 0 0 2px rgba(255, 255, 255, 0.42);
-  --motion-fast: 140ms cubic-bezier(0.2, 0, 0, 1);
-  --motion-layout: 220ms cubic-bezier(0.2, 0, 0, 1);
+html.browser-mica-preview {
+  --shell-backdrop: radial-gradient(120% 90% at 12% 8%, #1d1f24 0%, #121316 52%, #0d0e10 100%);
+  --chat-card-bg: rgba(22, 22, 24, 0.72);
+  --chat-card-border: rgba(255, 255, 255, 0.12);
+  --raised-bg: rgba(45, 45, 45, 0.56);
+  --chat-active-bg: rgba(255, 255, 255, 0.14);
 }

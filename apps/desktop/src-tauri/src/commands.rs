@@ -9,9 +9,11 @@ use std::str::FromStr;
 use dennett_contracts::{
     AgentId, AgentRecord, ArtifactId, ArtifactRecord, CancelRunResponse, CreateAgentRequest,
     CreateArtifactRequest, CreateProjectRequest, CreateSessionRequest, DiagnosticsResponse,
-    FlushOutboxResponse, ListAgentsResponse, ListArtifactsResponse, ListProjectsResponse,
-    ListSessionsResponse, ProjectRecord, SendMessageRequest, SendMessageResponse,
+    FlushOutboxResponse, HeadMemorySearchRequest, HeadMemorySearchResponse, ListAgentsResponse,
+    ListArtifactsResponse, ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse,
+    ProjectId, ProjectRecord, RuntimeCatalogResponse, SendMessageRequest, SendMessageResponse,
     SessionDetailResponse, SessionId, SessionRecord, UpdateAgentConfigRequest,
+    UpdateProjectRequest, UpdateSessionRequest,
 };
 use tauri::State;
 use tokio::sync::RwLock;
@@ -44,6 +46,10 @@ impl SharedBridge {
         *guard = next.clone();
         Ok(next)
     }
+}
+
+fn parse_project_id(raw: &str) -> Result<ProjectId, BridgeError> {
+    ProjectId::from_str(raw.trim()).map_err(BridgeError::from)
 }
 
 fn parse_agent_id(raw: &str) -> Result<AgentId, BridgeError> {
@@ -224,6 +230,80 @@ pub async fn list_diagnostics(
 ) -> Result<DiagnosticsResponse, BridgeError> {
     let bridge = state.snapshot_bridge().await;
     bridge.list_diagnostics(limit).await
+}
+
+/// Opens the native OS folder chooser without widening `WebView` filesystem or shell capabilities.
+#[tauri::command]
+pub async fn pick_workspace_folder() -> Result<Option<String>, BridgeError> {
+    tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Выберите рабочую папку проекта")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|err| BridgeError::HeadApi {
+        code: String::from("INTERNAL"),
+        message: format!("native folder dialog task failed: {err}"),
+    })
+}
+
+/// Fetches the dynamic runtime model, thinking-level, account, and quota catalog from `dennett-head`.
+#[tauri::command]
+pub async fn get_runtime_catalog(
+    state: State<'_, SharedBridge>,
+    refresh: Option<bool>,
+) -> Result<RuntimeCatalogResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_runtime_catalog(refresh.unwrap_or(false)).await
+}
+
+/// Renames a project or attaches/rebinds its workspace folder (`PATCH /v1/projects/{project_id}`).
+#[tauri::command]
+pub async fn update_project(
+    state: State<'_, SharedBridge>,
+    project_id: String,
+    request: UpdateProjectRequest,
+) -> Result<ProjectRecord, BridgeError> {
+    let parsed_id = parse_project_id(&project_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.update_project(parsed_id, &request).await
+}
+
+/// Lists real files inside a project's bound workspace folder (`GET /v1/projects/{project_id}/files`).
+#[tauri::command]
+pub async fn list_project_files(
+    state: State<'_, SharedBridge>,
+    project_id: String,
+    subpath: Option<String>,
+) -> Result<ListProjectFilesResponse, BridgeError> {
+    let parsed_id = parse_project_id(&project_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .list_project_files(parsed_id, subpath.as_deref())
+        .await
+}
+
+/// Renames an existing conversation session inline (`PATCH /v1/sessions/{session_id}`).
+#[tauri::command]
+pub async fn update_session(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+    request: UpdateSessionRequest,
+) -> Result<SessionRecord, BridgeError> {
+    let parsed_id = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.update_session(parsed_id, &request).await
+}
+
+/// Queries memory notes in a scope via `dennett-head` (`POST /v1/memory/search`).
+#[tauri::command]
+pub async fn search_memory(
+    state: State<'_, SharedBridge>,
+    request: HeadMemorySearchRequest,
+) -> Result<HeadMemorySearchResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.search_memory(&request).await
 }
 
 /// Manually triggers an idempotent flush of pending `memory_commit_outbox` items.

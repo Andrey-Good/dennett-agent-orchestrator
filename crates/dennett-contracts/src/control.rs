@@ -209,6 +209,85 @@ impl ThinkingLevel {
             Self::XHigh => "xhigh",
         }
     }
+
+    /// Returns the human-readable UI display label matching `agy acp` `thought_level`.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::XHigh => "Extra",
+        }
+    }
+}
+
+/// One reasoning-effort choice advertised dynamically by the active runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeThinkingOption {
+    /// Canonical reasoning level identifier.
+    pub value: ThinkingLevel,
+    /// Human-readable label returned by the runtime (e.g. `"Low"`, `"Medium"`, `"High"`, `"Extra"`).
+    pub label: String,
+}
+
+/// One model family advertised dynamically by the active runtime (`GET /v1/runtime/catalog`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeModelOption {
+    /// Runtime model family identifier (e.g. `"gemini-4-neon"`, `"claude-opus-4-6-thinking"`).
+    pub model_id: String,
+    /// Human-readable display label (e.g. `"Gemini 4 Neon"`, `"Claude Opus 4.6 (Thinking)"`).
+    pub label: String,
+    /// Reasoning levels supported for this specific model (`empty` when thinking is built in).
+    #[serde(default)]
+    pub supported_thinking_levels: Vec<ThinkingLevel>,
+    /// Optional default reasoning level for this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_thinking_level: Option<ThinkingLevel>,
+}
+
+/// Compact quota remaining window reported by a runtime when machine-readable quotas exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeQuotaWindow {
+    /// Ultra-short window label (e.g. `"5ч"`, `"нед"`).
+    pub label: String,
+    /// Remaining capacity percentage clamped to `0..=100`.
+    pub remaining_percent: u8,
+}
+
+/// Dynamic runtime model, thinking-level, account, and quota catalog (`GET /v1/runtime/catalog`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeCatalogResponse {
+    /// Active runtime adapter identifier (`"antigravity-acp"` or `"simulated-ci-runtime"`).
+    pub adapter_id: String,
+    /// Configured authentication profile (`oauth-personal` vs `gemini-api-key`).
+    pub auth_profile: RuntimeAuthProfile,
+    /// `true` strictly for deterministic CI test doubles; `false` only for real `agy acp`.
+    pub is_simulated: bool,
+    /// Detected `agy` CLI version when live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agy_version: Option<String>,
+    /// Subscription tier reported by `agy acp` (e.g. `"Google AI Ultra"`), when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Real OS/profile account display label (e.g. host username), when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_label: Option<String>,
+    /// Default model identifier selected by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model_id: Option<String>,
+    /// Default reasoning level selected by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_thinking_level: Option<ThinkingLevel>,
+    /// Dynamically probed models currently available to this runtime/account.
+    pub models: Vec<RuntimeModelOption>,
+    /// Dynamically probed global thinking-level choices.
+    pub thinking_options: Vec<RuntimeThinkingOption>,
+    /// Optional machine-readable quota windows (empty when the runtime does not publish quotas).
+    #[serde(default)]
+    pub quotas: Vec<RuntimeQuotaWindow>,
+    /// UTC timestamp when this catalog snapshot was probed.
+    pub probed_at: TimestampMs,
 }
 
 impl fmt::Display for ThinkingLevel {
@@ -362,8 +441,9 @@ pub struct ProjectRecord {
     pub project_id: ProjectId,
     /// Human-readable project name.
     pub name: String,
-    /// Canonical filesystem directory path for this project's workspace.
-    pub workspace_path: String,
+    /// Optional canonical filesystem directory path (`None` when created without a bound folder).
+    #[serde(default)]
+    pub workspace_path: Option<String>,
     /// Default memory scope associated with this project.
     pub memory_scope: MemoryScope,
     /// UTC creation timestamp in epoch milliseconds.
@@ -1010,10 +1090,12 @@ pub struct AgentConfigHistoryResponse {
 pub struct CreateProjectRequest {
     /// Human-readable project name.
     pub name: String,
-    /// Filesystem path to the project's workspace directory.
-    pub workspace_path: String,
-    /// Default memory scope bound to this project.
-    pub memory_scope: MemoryScope,
+    /// Optional filesystem path to the project's workspace directory (`None` for folderless start).
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    /// Optional explicit memory scope; auto-generated as `project:<slug>-<short8>` when omitted.
+    #[serde(default)]
+    pub memory_scope: Option<MemoryScope>,
 }
 
 impl CreateProjectRequest {
@@ -1021,16 +1103,90 @@ impl CreateProjectRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`] if `name` or `workspace_path` is empty/oversized/contains NUL.
+    /// Returns [`DennettError::InvalidInput`] if `name` or provided `workspace_path` is empty/oversized/contains NUL.
     pub fn validate(&self) -> Result<(), DennettError> {
         validate_non_empty_text(&self.name, "name", MAX_PROJECT_NAME_LEN)?;
-        validate_non_empty_text(
-            &self.workspace_path,
-            "workspace_path",
-            MAX_WORKSPACE_PATH_LEN,
-        )?;
+        if let Some(ref path) = self.workspace_path {
+            validate_non_empty_text(path, "workspace_path", MAX_WORKSPACE_PATH_LEN)?;
+        }
         Ok(())
     }
+}
+
+/// Request payload for `PATCH /v1/projects/{project_id}` (inline rename and attach/rebind folder).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateProjectRequest {
+    /// Optional updated human-readable project name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Optional bound workspace folder path (attach or rebind folder).
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+impl UpdateProjectRequest {
+    /// Validates project update input fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if neither field is set or any provided value is invalid.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        if self.name.is_none() && self.workspace_path.is_none() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("body"),
+                reason: String::from("must specify at least one of `name` or `workspace_path`"),
+            });
+        }
+        if let Some(ref name) = self.name {
+            validate_non_empty_text(name, "name", MAX_PROJECT_NAME_LEN)?;
+        }
+        if let Some(ref path) = self.workspace_path {
+            validate_non_empty_text(path, "workspace_path", MAX_WORKSPACE_PATH_LEN)?;
+        }
+        Ok(())
+    }
+}
+
+/// Entry kind returned by `GET /v1/projects/{project_id}/files`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceFileKind {
+    /// Regular file inside the project workspace.
+    File,
+    /// Subdirectory inside the project workspace.
+    Directory,
+}
+
+/// One real, boundary-verified filesystem entry returned by `GET /v1/projects/{project_id}/files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceFileEntry {
+    /// Workspace-relative POSIX path (`/`-separated).
+    pub relative_path: String,
+    /// Entry basename.
+    pub name: String,
+    /// Regular file or directory.
+    pub kind: WorkspaceFileKind,
+    /// Byte length for regular files (`None` for directories).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// Traversal depth relative to the listed root (`1..=MAX_DEPTH`).
+    pub depth: u32,
+}
+
+/// Response payload for `GET /v1/projects/{project_id}/files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListProjectFilesResponse {
+    /// Project identifier.
+    pub project_id: ProjectId,
+    /// `true` when the project currently has a bound workspace directory.
+    pub workspace_bound: bool,
+    /// Bound workspace directory path when `workspace_bound == true`.
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    /// Bounded, symlink-safe list of real entries inside the workspace.
+    pub entries: Vec<WorkspaceFileEntry>,
+    /// `true` when bounded entry count or node-visit cap truncated the listing.
+    pub truncated: bool,
 }
 
 /// Response payload for `GET /v1/projects`.
@@ -1053,6 +1209,24 @@ pub struct CreateSessionRequest {
 
 impl CreateSessionRequest {
     /// Validates session creation input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `title` is empty, oversized, or contains NUL.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        validate_non_empty_text(&self.title, "title", MAX_SESSION_TITLE_LEN)
+    }
+}
+
+/// Request payload for `PATCH /v1/sessions/{session_id}` (inline session rename).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateSessionRequest {
+    /// Updated human-readable session title.
+    pub title: String,
+}
+
+impl UpdateSessionRequest {
+    /// Validates session rename input.
     ///
     /// # Errors
     ///
@@ -1132,6 +1306,9 @@ pub struct SendMessageResponse {
     pub permission_decisions: Vec<PermissionDecisionRecord>,
     /// Observed reachability of standalone `dennett-memoryd`.
     pub memory_status: MemoryStatus,
+    /// Effective session title after any first-message auto-titling.
+    #[serde(default)]
+    pub session_title: String,
 }
 
 /// Response payload for `POST /v1/sessions/{session_id}/cancel`.
@@ -1500,6 +1677,15 @@ const _: () = {
     assert_send_sync::<MemoryOutboxItem>();
     assert_send_sync::<DiagnosticEvent>();
     assert_send_sync::<HeadHealth>();
+    assert_send_sync::<RuntimeThinkingOption>();
+    assert_send_sync::<RuntimeModelOption>();
+    assert_send_sync::<RuntimeQuotaWindow>();
+    assert_send_sync::<RuntimeCatalogResponse>();
+    assert_send_sync::<UpdateProjectRequest>();
+    assert_send_sync::<WorkspaceFileKind>();
+    assert_send_sync::<WorkspaceFileEntry>();
+    assert_send_sync::<ListProjectFilesResponse>();
+    assert_send_sync::<UpdateSessionRequest>();
 };
 
 #[cfg(test)]

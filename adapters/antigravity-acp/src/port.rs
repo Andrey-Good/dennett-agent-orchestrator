@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use dennett_contracts::{
     DennettError, MessageRecord, PolicyEffect, PolicyRuleId, RunId, RunStatus, RuntimeAuthProfile,
-    RuntimeBinding, SessionId, ThinkingLevel, WorkspaceWritePolicy,
+    RuntimeBinding, RuntimeModelOption, RuntimeQuotaWindow, RuntimeThinkingOption, SessionId,
+    ThinkingLevel, WorkspaceWritePolicy,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -63,8 +64,18 @@ pub struct RuntimeDescriptor {
     pub supports_resume: bool,
     /// Whether the runtime supports `_meta.antigravity.systemPrompt.append`.
     pub supports_system_prompt_append: bool,
-    /// Models advertised by the runtime.
+    /// Models advertised by the runtime (flat identifiers).
     pub available_models: Vec<String>,
+    /// Structured model families with per-model supported thinking levels.
+    pub models: Vec<RuntimeModelOption>,
+    /// Global reasoning-effort choices advertised by the runtime.
+    pub thinking_options: Vec<RuntimeThinkingOption>,
+    /// Default model identifier selected by the runtime.
+    pub default_model_id: Option<String>,
+    /// Default reasoning level selected by the runtime.
+    pub default_thinking_level: Option<ThinkingLevel>,
+    /// Machine-readable quota windows reported by the runtime (empty when unavailable).
+    pub quotas: Vec<RuntimeQuotaWindow>,
     /// Additional technical capability labels.
     pub capabilities: Vec<String>,
 }

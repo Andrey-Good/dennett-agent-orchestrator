@@ -11,7 +11,7 @@
 //!   with deterministic idempotency keys, and never fabricates confident memory answers.
 
 use core::fmt;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,13 +27,14 @@ use dennett_contracts::{
     CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, DennettError,
     DiagnosticsResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
     HeadMemorySearchResponse, IdempotencyKey, ListAgentsResponse, ListArtifactsResponse,
-    ListOutboxResponse, ListPolicyRulesResponse, ListProjectsResponse, ListSessionsResponse,
-    MemoryOutboxItem, MemoryOutboxStatus, MemoryStatus, MessageId, MessageRecord, MessageRole,
-    OutboxItemId, PermissionDecisionRecord, PolicyRule, PolicyRuleId, ProfileMode, ProjectId,
-    ProjectRecord, RunId, RunRecord, RunStatus, RuntimeBinding, RuntimeBindingId,
-    SearchNotesRequest, SendMessageRequest, SendMessageResponse, ServiceKind,
-    SessionDetailResponse, SessionId, SessionRecord, SessionStatus, TimestampMs,
-    UpdateAgentConfigRequest,
+    ListOutboxResponse, ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
+    ListSessionsResponse, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
+    MemoryStatus, MessageId, MessageRecord, MessageRole, OutboxItemId, PermissionDecisionRecord,
+    PolicyRule, PolicyRuleId, PrincipalId, ProfileMode, ProjectId, ProjectRecord, RunId, RunRecord,
+    RunStatus, RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
+    SendMessageRequest, SendMessageResponse, ServiceKind, SessionDetailResponse, SessionId,
+    SessionRecord, SessionStatus, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
+    UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
@@ -44,6 +45,7 @@ use tokio::sync::{Mutex, watch};
 use tokio::time;
 use tokio_postgres::NoTls;
 
+use crate::memory_auth::MemoryTokenSigner;
 use crate::migrations::{query_control_schema_version, run_control_migrations, sha256_hex};
 use crate::pg_target::ValidatedControlPgTarget;
 use crate::policy::{
@@ -57,6 +59,9 @@ use crate::store::{
     fetch_session_artifacts, fetch_session_messages, fetch_session_permission_decisions,
     fetch_session_runs, map_pg_err, next_stream_seq, truncate_utf8,
 };
+use crate::workspace_files::{
+    clean_display_path, list_project_workspace_files, validate_safe_workspace_root,
+};
 
 /// Current implementation milestone label advertised in [`HeadHealth`].
 pub const HEAD_STAGE_LABEL: &str = "D1";
@@ -68,6 +73,17 @@ pub const DEFAULT_PG_OP_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Default wall-clock timeout for a single runtime turn.
 pub const DEFAULT_TURN_TIMEOUT: Duration = Duration::from_secs(120);
+/// Cache TTL for dynamic `GET /v1/runtime/catalog` responses.
+pub const RUNTIME_CATALOG_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Optional extra configuration for [`HeadService::new_with_extras`].
+#[derive(Debug, Clone, Default)]
+pub struct HeadServiceExtras {
+    /// Optional HMAC-SHA256 signer for dynamically issuing scoped `dnt1.` memory tokens per project.
+    pub memory_hmac_signer: Option<MemoryTokenSigner>,
+    /// Root directory under which isolated scratch `cwd` folders for folderless projects are created.
+    pub detached_projects_root: Option<PathBuf>,
+}
 
 /// Scoped configuration passed to `dennett-memory-mcp` when launched by the agent runtime.
 ///
@@ -105,6 +121,8 @@ pub fn d1_head_capabilities() -> Vec<String> {
         String::from("control.memory_outbox.v1"),
         String::from("control.cancel.v1"),
         String::from("control.diagnostics.v1"),
+        String::from("control.runtime_catalog.v1"),
+        String::from("control.workspace_files.v1"),
     ]
 }
 
@@ -149,6 +167,9 @@ struct HeadServiceInner {
     runtime: Arc<dyn AgentRuntimePort>,
     memory_client: Option<MemoryClient>,
     memory_mcp: Option<MemoryMcpWiring>,
+    memory_hmac_signer: Option<MemoryTokenSigner>,
+    detached_projects_root: PathBuf,
+    runtime_catalog_cache: Mutex<Option<(time::Instant, RuntimeCatalogResponse)>>,
     last_memory_status: AtomicU8,
     active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
     profile_mode: ProfileMode,
@@ -177,6 +198,32 @@ impl HeadService {
         memory_mcp: Option<MemoryMcpWiring>,
         profile_mode: ProfileMode,
         extra_secrets: Vec<String>,
+    ) -> Result<Self, DennettError> {
+        Self::new_with_extras(
+            pg_target,
+            runtime,
+            memory_client,
+            memory_mcp,
+            profile_mode,
+            extra_secrets,
+            HeadServiceExtras::default(),
+        )
+    }
+
+    /// Constructs a new [`HeadService`] with optional dynamic HMAC token signing and detached
+    /// project workspace root configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::Internal`] if PostgreSQL pool construction fails.
+    pub fn new_with_extras(
+        pg_target: ValidatedControlPgTarget,
+        runtime: Arc<dyn AgentRuntimePort>,
+        memory_client: Option<MemoryClient>,
+        memory_mcp: Option<MemoryMcpWiring>,
+        profile_mode: ProfileMode,
+        extra_secrets: Vec<String>,
+        extras: HeadServiceExtras,
     ) -> Result<Self, DennettError> {
         let mgr_cfg = ManagerConfig {
             recycling_method: RecyclingMethod::Fast,
@@ -207,6 +254,10 @@ impl HeadService {
             MEMORY_STATUS_DEGRADED
         };
 
+        let detached_projects_root = extras.detached_projects_root.unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("dennett-head-detached-{}", std::process::id()))
+        });
+
         Ok(Self {
             inner: Arc::new(HeadServiceInner {
                 pg_target,
@@ -215,12 +266,52 @@ impl HeadService {
                 runtime,
                 memory_client,
                 memory_mcp,
+                memory_hmac_signer: extras.memory_hmac_signer,
+                detached_projects_root,
+                runtime_catalog_cache: Mutex::new(None),
                 last_memory_status: AtomicU8::new(initial_memory_status),
                 active_runs: Arc::new(Mutex::new(HashMap::new())),
                 profile_mode,
                 secrets_to_redact: secrets,
             }),
         })
+    }
+
+    /// Probes the active runtime dynamically (`agy acp` or `SimulatedRuntime`) and returns the
+    /// cached or freshly refreshed [`RuntimeCatalogResponse`] (`GET /v1/runtime/catalog`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError`] if probing the active runtime fails.
+    pub async fn get_runtime_catalog(
+        &self,
+        refresh: bool,
+    ) -> Result<RuntimeCatalogResponse, DennettError> {
+        let mut cache_guard = self.inner.runtime_catalog_cache.lock().await;
+        if !refresh
+            && let Some((probed_instant, ref cached)) = *cache_guard
+            && probed_instant.elapsed() < RUNTIME_CATALOG_CACHE_TTL
+        {
+            return Ok(cached.clone());
+        }
+
+        let descriptor = self.inner.runtime.probe().await?;
+        let catalog = RuntimeCatalogResponse {
+            adapter_id: descriptor.adapter_id,
+            auth_profile: descriptor.auth_profile,
+            is_simulated: descriptor.is_simulated,
+            agy_version: descriptor.agy_version,
+            tier: descriptor.tier,
+            account_label: detect_os_account_label(),
+            default_model_id: descriptor.default_model_id,
+            default_thinking_level: descriptor.default_thinking_level,
+            models: descriptor.models,
+            thinking_options: descriptor.thinking_options,
+            quotas: descriptor.quotas,
+            probed_at: TimestampMs::now(),
+        };
+        *cache_guard = Some((time::Instant::now(), catalog.clone()));
+        Ok(catalog)
     }
 
     /// Returns the configured runtime adapter identifier.
@@ -632,6 +723,10 @@ impl HeadService {
 
     /// Registers a workspace project bound to a canonical [`dennett_contracts::MemoryScope`].
     ///
+    /// Supports both folder-bound projects (`workspace_path = Some(...)`) and folderless projects
+    /// (`workspace_path = None`, "Пока без папки"). When `memory_scope` is omitted, generates a
+    /// unique canonical scope `project:<slug>-<short8>`.
+    ///
     /// # Errors
     ///
     /// Returns [`DennettError::InvalidInput`] or [`DennettError::DatabaseUnavailable`].
@@ -642,14 +737,38 @@ impl HeadService {
     ) -> Result<ProjectRecord, DennettError> {
         req.validate()?;
         let _ = self.ensure_migrated().await?;
+
+        let project_id = ProjectId::new();
+        let raw_workspace_path = req
+            .workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let workspace_path = if let Some(raw_path) = raw_workspace_path {
+            let scope_label = format!("project:{project_id}");
+            let canonical = tokio::task::spawn_blocking(move || {
+                validate_safe_workspace_root(&raw_path, &scope_label)
+            })
+            .await
+            .map_err(|err| DennettError::Internal {
+                detail: format!("workspace path validation task failed: {err}"),
+            })??;
+            Some(clean_display_path(&canonical))
+        } else {
+            None
+        };
+
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let tx = conn
             .transaction()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
-        let project_id = ProjectId::new();
-        let workspace_path = req.workspace_path.trim().to_owned();
+        let memory_scope = match req.memory_scope {
+            Some(scope) => scope,
+            None => generate_project_memory_scope(&req.name, project_id)?,
+        };
         let row = tx
             .query_one(
                 "INSERT INTO projects (project_id, name, workspace_path, memory_scope)
@@ -660,7 +779,7 @@ impl HeadService {
                     &project_id.as_uuid(),
                     &req.name.trim(),
                     &workspace_path,
-                    &req.memory_scope.as_str(),
+                    &memory_scope.as_str(),
                 ],
             )
             .await
@@ -675,9 +794,10 @@ impl HeadService {
             "head",
             "project_created",
             &format!(
-                "registered project `{}` ({project_id}) scope={}",
+                "registered project `{}` ({project_id}) scope={} bound={}",
                 req.name.trim(),
-                req.memory_scope
+                memory_scope,
+                workspace_path.is_some()
             ),
         )
         .await?;
@@ -687,6 +807,117 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
         Ok(record)
+    }
+
+    /// Updates a project's display name and/or attaches/rebinds its workspace folder
+    /// (`PATCH /v1/projects/{project_id}`).
+    ///
+    /// When `workspace_path` is provided, strictly validates and canonicalizes the directory
+    /// outside the model (rejecting UNC/device paths, `..` traversal, symlinks, and Windows
+    /// NTFS junctions/reparse points).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::AccessDenied`],
+    /// [`DennettError::NotFound`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn update_project(
+        &self,
+        project_id: ProjectId,
+        req: UpdateProjectRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<ProjectRecord, DennettError> {
+        req.validate()?;
+        let _ = self.ensure_migrated().await?;
+
+        let validated_workspace = if let Some(raw_path) = req.workspace_path {
+            let scope_label = format!("project:{project_id}");
+            let canonical = tokio::task::spawn_blocking(move || {
+                validate_safe_workspace_root(&raw_path, &scope_label)
+            })
+            .await
+            .map_err(|err| DennettError::Internal {
+                detail: format!("workspace path validation task failed: {err}"),
+            })??;
+            Some(clean_display_path(&canonical))
+        } else {
+            None
+        };
+
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let existing = fetch_project(&tx, project_id, &self.inner.pg_target).await?;
+        let next_name = req
+            .name
+            .as_deref()
+            .map_or(existing.name.as_str(), str::trim)
+            .to_owned();
+        let next_workspace = validated_workspace.or(existing.workspace_path);
+
+        let row = tx
+            .query_one(
+                "UPDATE projects
+                 SET name = $2,
+                     workspace_path = $3
+                 WHERE project_id = $1
+                 RETURNING project_id, name, workspace_path, memory_scope,
+                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
+                &[&project_id.as_uuid(), &next_name, &next_workspace],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let _ = append_audit_event(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            None,
+            None,
+            "head",
+            "project_updated",
+            &format!(
+                "updated project `{next_name}` ({project_id}) bound={}",
+                next_workspace.is_some()
+            ),
+        )
+        .await?;
+
+        let record = decode_project_row(&row)?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(record)
+    }
+
+    /// Lists real files inside a project's bound workspace folder (`GET /v1/projects/{id}/files`).
+    ///
+    /// Executes filesystem traversal inside `tokio::task::spawn_blocking` with strict canonical
+    /// containment, symlink/junction rejection, and depth/count anti-DoS caps.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::AccessDenied`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn list_project_files(
+        &self,
+        project_id: ProjectId,
+        subpath: Option<String>,
+    ) -> Result<ListProjectFilesResponse, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let project = fetch_project(&conn, project_id, &self.inner.pg_target).await?;
+        let ws = project.workspace_path;
+
+        tokio::task::spawn_blocking(move || {
+            list_project_workspace_files(project_id, ws.as_deref(), subpath.as_deref())
+        })
+        .await
+        .map_err(|err| DennettError::Internal {
+            detail: format!("workspace file listing task failed: {err}"),
+        })?
     }
 
     /// Lists all registered projects.
@@ -779,6 +1010,68 @@ impl HeadService {
         .await?;
 
         let record = decode_session_row(&row, None)?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(record)
+    }
+
+    /// Renames an existing conversation session (`PATCH /v1/sessions/{session_id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn update_session(
+        &self,
+        session_id: SessionId,
+        req: UpdateSessionRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<SessionRecord, DennettError> {
+        req.validate()?;
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let trimmed_title = req.title.trim();
+        let row = tx
+            .query_opt(
+                "UPDATE sessions
+                 SET title = $2,
+                     updated_at = now()
+                 WHERE session_id = $1
+                 RETURNING session_id, agent_id, project_id, title, status,
+                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+                           TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint",
+                &[&session_id.as_uuid(), &trimmed_title],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let Some(row) = row else {
+            return Err(DennettError::NotFound {
+                resource: String::from("session"),
+                id: session_id.to_string(),
+            });
+        };
+
+        let _ = append_audit_event(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            Some(session_id),
+            None,
+            "head",
+            "session_renamed",
+            &format!("renamed session {session_id} to `{trimmed_title}`"),
+        )
+        .await?;
+
+        let binding = fetch_runtime_binding(&tx, session_id, &self.inner.pg_target).await?;
+        let record = decode_session_row(&row, binding)?;
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -923,6 +1216,10 @@ impl HeadService {
     ///
     /// Returns [`DennettError::InvalidInput`], [`DennettError::AccessDenied`],
     /// [`DennettError::NotFound`], or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "artifact creation validates workspace write policy, persists atomic file bytes, records DB metadata, and emits audit event in one cohesive transaction"
+    )]
     pub async fn create_artifact(
         &self,
         session_id: SessionId,
@@ -936,15 +1233,24 @@ impl HeadService {
         let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
 
         let (normalized_rel_path, hash_bytes) = if let Some(ref rel) = req.relative_path {
-            let safe_rel = resolve_within_workspace(Path::new(&project.workspace_path), rel)
-                .map_err(|reason| DennettError::AccessDenied {
+            let Some(ws_path) = project.workspace_path.as_deref() else {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("relative_path"),
+                    reason: String::from(
+                        "cannot attach workspace-relative file artifact to a project without a bound workspace folder",
+                    ),
+                });
+            };
+            let safe_rel = resolve_within_workspace(Path::new(ws_path), rel).map_err(|reason| {
+                DennettError::AccessDenied {
                     scope: format!("project:{}", project.project_id),
                     reason,
-                })?;
+                }
+            })?;
             let bytes = if let Some(ref inline) = req.content {
                 inline.as_bytes().to_vec()
             } else {
-                let full_path = Path::new(&project.workspace_path).join(&safe_rel);
+                let full_path = Path::new(ws_path).join(&safe_rel);
                 fs::read(&full_path).map_err(|err| DennettError::NotFound {
                     resource: String::from("workspace_file"),
                     id: format!("{safe_rel} ({err})"),
@@ -1117,7 +1423,17 @@ impl HeadService {
             run_id,
         };
 
-        // 3. Persist user message + running RunRecord BEFORE touching runtime (Architecture 80 §11).
+        // Determine automatic title if this is the very first user message on an untitled chat.
+        let auto_title = if !prior_history.iter().any(|m| m.role == MessageRole::User)
+            && is_default_session_title(&session.title)
+        {
+            derive_auto_session_title(&req.content)
+        } else {
+            None
+        };
+        let effective_session_title = auto_title.clone().unwrap_or_else(|| session.title.clone());
+
+        // 3. Persist user message + running RunRecord (and optional auto-title) BEFORE touching runtime (Architecture 80 §11).
         let user_message = {
             let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
             let tx = conn
@@ -1128,6 +1444,15 @@ impl HeadService {
             let msg_id = MessageId::new();
             let stream_id = format!("session:{session_id}:messages");
             let msg_seq = next_stream_seq(&tx, &stream_id, &self.inner.pg_target).await?;
+
+            if let Some(ref new_title) = auto_title {
+                tx.execute(
+                    "UPDATE sessions SET title = $2, updated_at = now() WHERE session_id = $1",
+                    &[&session_id.as_uuid(), &new_title.as_str()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            }
 
             tx.execute(
                 "INSERT INTO runs (
@@ -1199,18 +1524,39 @@ impl HeadService {
         // 4. Probe memoryd status (never blocks or aborts the control turn when memoryd is down!).
         let (memory_status, _mem_detail) = self.probe_memory_status(&correlation_id).await;
 
-        // 5. Start or explicitly resume runtime session (with scoped `dennett-memory-mcp`).
-        let mcp_servers = self.build_memory_mcp_specs();
+        // Resolve effective workspace directory & write policy: folderless projects get an
+        // isolated scratch directory and mandatory `DenyAll` write policy until a real folder is bound.
+        let (effective_workspace_cwd, effective_write_policy) = match project.workspace_path {
+            Some(ref ws_path) => (
+                PathBuf::from(ws_path),
+                agent.current_config.workspace_write_policy.clone(),
+            ),
+            None => (
+                self.ensure_detached_project_dir(project.project_id)?,
+                WorkspaceWritePolicy::DenyAll,
+            ),
+        };
+
+        // 5. Start or explicitly resume runtime session (with dynamically scoped `dennett-memory-mcp`).
+        let mcp_servers = self.build_memory_mcp_specs(&agent);
+        let mut turn_secrets = self.inner.secrets_to_redact.clone();
+        for server in &mcp_servers {
+            for entry in &server.env {
+                if entry.name == "DENNETT_MEMORY_TOKEN" && !entry.value.trim().is_empty() {
+                    turn_secrets.push(entry.value.clone());
+                }
+            }
+        }
         let start_outcome = match self
             .inner
             .runtime
             .start_or_resume_session(SessionStartRequest {
                 dennett_session_id: session_id,
-                workspace_cwd: PathBuf::from(&project.workspace_path),
+                workspace_cwd: effective_workspace_cwd.clone(),
                 system_prompt: agent.current_config.system_prompt.clone(),
                 model_preference: agent.current_config.model_preference.clone(),
                 thinking_level: agent.current_config.thinking_level,
-                workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
+                workspace_write_policy: effective_write_policy.clone(),
                 mcp_servers,
                 existing_binding,
                 history_for_rehydrate: prior_history,
@@ -1235,16 +1581,13 @@ impl HeadService {
             project_id: project.project_id,
             agent_id: agent.agent_id,
             session_id: session.session_id,
-            workspace_root: PathBuf::from(&project.workspace_path),
-            workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
+            workspace_root: effective_workspace_cwd,
+            workspace_write_policy: effective_write_policy,
             allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
             rules: policy_rules,
         });
-        let (recording_policy, decisions_buf) = RecordingPolicyEvaluator::new(
-            policy_engine,
-            correlation_id.clone(),
-            self.inner.secrets_to_redact.clone(),
-        );
+        let (recording_policy, decisions_buf) =
+            RecordingPolicyEvaluator::new(policy_engine, correlation_id.clone(), turn_secrets);
         let turn_timeout = req
             .timeout_ms
             .map_or(DEFAULT_TURN_TIMEOUT, Duration::from_millis);
@@ -1311,6 +1654,7 @@ impl HeadService {
             artifacts,
             permission_decisions: captured_decisions,
             memory_status,
+            session_title: effective_session_title,
         })
     }
 
@@ -1645,7 +1989,20 @@ impl HeadService {
         req: HeadMemorySearchRequest,
         correlation_id: &CorrelationId,
     ) -> Result<HeadMemorySearchResponse, DennettError> {
-        let Some(ref client) = self.inner.memory_client else {
+        let client_opt = if self.inner.memory_hmac_signer.is_some() {
+            let scopes = if let Some(ref scope) = req.scope {
+                let mut set = BTreeSet::new();
+                set.insert(scope.clone());
+                set
+            } else {
+                self.collect_registered_project_scopes().await?
+            };
+            self.memory_client_for_scopes(scopes, false)?
+        } else {
+            self.inner.memory_client.clone()
+        };
+
+        let Some(client) = client_opt else {
             self.record_memory_status(MemoryStatus::DegradedUnreachable);
             return Ok(HeadMemorySearchResponse {
                 memory_status: MemoryStatus::DegradedUnreachable,
@@ -1758,7 +2115,10 @@ impl HeadService {
         item: MemoryOutboxItem,
         correlation_id: &CorrelationId,
     ) -> Result<(MemoryOutboxItem, MemoryStatus), DennettError> {
-        let Some(ref client) = self.inner.memory_client else {
+        let mut scopes = BTreeSet::new();
+        scopes.insert(item.scope.clone());
+        let client_opt = self.memory_client_for_scopes(scopes, true)?;
+        let Some(client) = client_opt else {
             self.record_memory_status(MemoryStatus::DegradedUnreachable);
             let safe_err = String::from("memoryd client is not configured on dennett-head");
             let updated = self
@@ -2211,10 +2571,103 @@ impl HeadService {
         let _ = tx.commit().await;
     }
 
-    fn build_memory_mcp_specs(&self) -> Vec<RuntimeMcpServerSpec> {
+    fn memory_base_url(&self) -> Option<&str> {
+        self.inner
+            .memory_client
+            .as_ref()
+            .map(MemoryClient::base_url)
+            .or_else(|| {
+                self.inner
+                    .memory_mcp
+                    .as_ref()
+                    .map(|m| m.memory_url.as_str())
+            })
+    }
+
+    fn memory_client_for_scopes(
+        &self,
+        scopes: BTreeSet<MemoryScope>,
+        allow_write: bool,
+    ) -> Result<Option<MemoryClient>, DennettError> {
+        if let Some(ref signer) = self.inner.memory_hmac_signer
+            && let Some(base_url) = self.memory_base_url()
+            && !scopes.is_empty()
+        {
+            let mut caps = BTreeSet::new();
+            caps.insert(MemoryCapability::Read);
+            if allow_write {
+                caps.insert(MemoryCapability::Write);
+            }
+            let principal = PrincipalId::try_new("dennett-head")?;
+            let token = signer.mint_scoped_token(principal, scopes, caps)?;
+            return Ok(Some(MemoryClient::new(base_url, token)?));
+        }
+        Ok(self.inner.memory_client.clone())
+    }
+
+    async fn collect_registered_project_scopes(
+        &self,
+    ) -> Result<BTreeSet<MemoryScope>, DennettError> {
+        let mut scopes = BTreeSet::new();
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let rows = conn
+            .query("SELECT DISTINCT memory_scope FROM projects", &[])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        for row in rows {
+            let raw: String = row.get(0);
+            if let Ok(scope) = MemoryScope::try_new(raw) {
+                scopes.insert(scope);
+            }
+        }
+        if scopes.is_empty() {
+            scopes.insert(MemoryScope::try_new("project:default")?);
+        }
+        Ok(scopes)
+    }
+
+    fn ensure_detached_project_dir(&self, project_id: ProjectId) -> Result<PathBuf, DennettError> {
+        let dir = self
+            .inner
+            .detached_projects_root
+            .join("detached-projects")
+            .join(project_id.to_string());
+        fs::create_dir_all(&dir).map_err(|err| DennettError::Internal {
+            detail: format!("failed creating isolated detached project workspace: {err}"),
+        })?;
+        Ok(dir)
+    }
+
+    fn build_memory_mcp_specs(&self, agent: &AgentRecord) -> Vec<RuntimeMcpServerSpec> {
         let Some(ref mcp) = self.inner.memory_mcp else {
             return Vec::new();
         };
+
+        // When dynamic HMAC signing is configured, mint a least-privilege `dnt1.` token bound
+        // strictly to THIS agent's `allowed_memory_scopes` (preserving cross-project isolation
+        // while eliminating static-token `403 ForbiddenScope` on user-created projects).
+        let effective_token = if let Some(ref signer) = self.inner.memory_hmac_signer
+            && !agent.current_config.allowed_memory_scopes.is_empty()
+        {
+            let mut caps = BTreeSet::new();
+            caps.insert(MemoryCapability::Read);
+            caps.insert(MemoryCapability::Write);
+            let principal_res = PrincipalId::try_new(format!("agent:{}", agent.agent_id));
+            match principal_res.and_then(|principal| {
+                signer.mint_scoped_token(
+                    principal,
+                    agent.current_config.allowed_memory_scopes.clone(),
+                    caps,
+                )
+            }) {
+                Ok(tok) => tok,
+                Err(_) => mcp.memory_token.clone(),
+            }
+        } else {
+            mcp.memory_token.clone()
+        };
+
         // CRITICAL SECURITY BOUNDARY: pass ONLY `DENNETT_MEMORY_URL` and scoped
         // `DENNETT_MEMORY_TOKEN` — NEVER PostgreSQL credentials or Head DB URLs!
         vec![RuntimeMcpServerSpec {
@@ -2228,7 +2681,7 @@ impl HeadService {
                 },
                 RuntimeMcpEnvEntry {
                     name: String::from("DENNETT_MEMORY_TOKEN"),
-                    value: mcp.memory_token.clone(),
+                    value: effective_token,
                 },
             ],
         }]
@@ -2336,5 +2789,109 @@ async fn insert_permission_decision<C: deadpool_postgres::GenericClient>(
 const _: () = {
     const fn assert_send_sync<T: Send + Sync + 'static>() {}
     assert_send_sync::<HeadService>();
+    assert_send_sync::<HeadServiceExtras>();
     assert_send_sync::<MemoryMcpWiring>();
 };
+
+fn detect_os_account_label() -> Option<String> {
+    std::env::var("USERNAME")
+        .ok()
+        .or_else(|| std::env::var("USER").ok())
+        .map(|raw| raw.trim().to_owned())
+        .filter(|s| !s.is_empty() && s.len() <= 64)
+}
+
+fn generate_project_memory_scope(
+    name: &str,
+    project_id: ProjectId,
+) -> Result<MemoryScope, DennettError> {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+        if slug.len() >= 32 {
+            break;
+        }
+    }
+    let clean_slug = slug.trim_matches('-');
+    let base = if clean_slug.is_empty() {
+        "proj"
+    } else {
+        clean_slug
+    };
+    let uuid_hex = project_id.as_uuid().simple().to_string();
+    let short_id = &uuid_hex[..8];
+    MemoryScope::try_new(format!("project:{base}-{short_id}"))
+}
+
+fn is_default_session_title(title: &str) -> bool {
+    let trimmed = title.trim();
+    matches!(
+        trimmed.to_lowercase().as_str(),
+        "новый чат" | "новый разговор" | "первый разговор" | "untitled" | "new chat"
+    )
+}
+
+fn derive_auto_session_title(content: &str) -> Option<String> {
+    const MAX_CHARS: usize = 52;
+
+    let first_line = content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let stripped = first_line.trim_start_matches(['#', '*', '-', '`', '>', '•', ' ']);
+    let collapsed = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+
+    let char_count = collapsed.chars().count();
+    if char_count <= MAX_CHARS {
+        return Some(collapsed);
+    }
+
+    let prefix: String = collapsed.chars().take(MAX_CHARS).collect();
+    let cut = prefix
+        .rfind(' ')
+        .filter(|&idx| idx >= 16)
+        .map_or(prefix.as_str(), |idx| &prefix[..idx]);
+    Some(format!("{}…", cut.trim_end()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_title_cleans_markdown_and_truncates_utf8_cleanly() {
+        assert!(is_default_session_title("Новый чат"));
+        assert!(is_default_session_title("  новый разговор  "));
+        assert!(!is_default_session_title("Моё кастомное название"));
+
+        assert_eq!(
+            derive_auto_session_title("\n\n  ##   План   релизной  проверки\nдетали ниже"),
+            Some(String::from("План релизной проверки"))
+        );
+
+        let long_msg = "Спроектируй новую архитектуру кэширования запросов к PostgreSQL с автоматическим сбросом устаревших записей";
+        let title = derive_auto_session_title(long_msg).expect("derived title");
+        assert!(title.ends_with('…'));
+        assert!(title.chars().count() <= 53);
+    }
+
+    #[test]
+    fn generate_project_memory_scope_handles_cyrillic_and_ascii_names() {
+        let pid = ProjectId::new();
+        let ascii_scope = generate_project_memory_scope("Dennett Core!", pid).expect("ascii scope");
+        assert!(ascii_scope.as_str().starts_with("project:dennett-core-"));
+
+        let cyr_scope = generate_project_memory_scope("Новый проект", pid).expect("cyr scope");
+        assert!(cyr_scope.as_str().starts_with("project:proj-"));
+    }
+}
