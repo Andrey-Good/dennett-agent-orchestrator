@@ -1,7 +1,7 @@
 //! V02-safe Owner Memory Fabric HTTP proxy inside `dennett-head` (`/v1/memory/*`).
 //!
 //! Architectural boundaries (Architecture 80 §3.1, V02, D3):
-//! - Communicates strictly over HTTP via [`MemoryClient`] — NEVER links `dennett-memory-core`.
+//! - Communicates strictly over HTTP via `dennett_memory_client::MemoryClient` — NEVER links `dennett-memory-core`.
 //! - Mints least-privilege `dnt1.` tokens per owner operation (`Read`, `Write`, `Forget`,
 //!   `Export`, `Admin`) while keeping agent `dennett-memory-mcp` tokens restricted to `[Read, Write]`.
 //! - `get_memory_overview` NEVER fails with 503 on `memoryd` outage: returns `200 OK` with

@@ -153,7 +153,7 @@ async fn memoryd_health_once_succeeds_standalone_against_postgres() {
     };
 
     assert_eq!(health.service, ServiceKind::Memoryd);
-    assert_eq!(health.stage, "D1");
+    assert_eq!(health.stage, "D3");
     assert_eq!(health.profile_mode, ProfileMode::TestIsolated);
     assert!(
         health.memory_fabric_implemented,
@@ -202,10 +202,10 @@ async fn memoryd_serve_healthz_and_graceful_loopback_shutdown() {
         Err(err) => panic!("invalid /healthz JSON `{body}`: {err}"),
     };
     assert_eq!(health.service, ServiceKind::Memoryd);
-    assert_eq!(health.stage, "D1");
+    assert_eq!(health.stage, "D3");
     assert!(health.memory_fabric_implemented);
     assert!(health.postgres_connected);
-    assert_eq!(health.schema_version, Some(1));
+    assert_eq!(health.schema_version, Some(2));
     assert_eq!(health.correlation_id.as_str(), "d0-live-healthz");
 
     let (shutdown_status, shutdown_body) = send_http_request(&addr, &shutdown_request(&addr)).await;

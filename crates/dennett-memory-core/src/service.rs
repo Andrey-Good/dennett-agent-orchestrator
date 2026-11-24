@@ -60,7 +60,7 @@ use crate::search::{
 };
 
 /// Current implementation milestone label advertised in [`ServiceHealth`].
-pub const MEMORYD_STAGE_LABEL: &str = "D1";
+pub const MEMORYD_STAGE_LABEL: &str = "D3";
 /// Default maximum PostgreSQL connection pool size for standalone `dennett-memoryd`.
 pub const DEFAULT_POOL_MAX_SIZE: usize = 16;
 /// Default timeout applied to PostgreSQL operations inside [`MemoryService`].

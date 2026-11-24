@@ -53,7 +53,7 @@ pub struct PolicyContext {
     pub rules: Vec<PolicyRule>,
     /// Logical names of active A08 registered MCP servers attached to this session.
     pub registered_mcp_servers: BTreeSet<String>,
-    /// Whether the active owning task has already exhausted its external [`TaskBudget`]
+    /// Whether the active owning task has already exhausted its external `TaskBudget`
     /// (blocks native subagent/swarm spawning when `true`, A07).
     pub task_budget_exhausted: bool,
 }

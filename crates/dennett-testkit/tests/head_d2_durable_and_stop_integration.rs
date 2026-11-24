@@ -227,8 +227,8 @@ async fn d2_timers_survive_head_restart_misfire_policies_and_concurrent_idempote
     let head1 = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), None).await;
     let c1 = HeadClient::new(&head1.base_url).expect("head client 1");
     let health1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(health1.stage, "D2");
-    assert_eq!(health1.schema_version, Some(7));
+    assert_eq!(health1.stage, "D3");
+    assert_eq!(health1.schema_version, Some(8));
     assert!(health1.capabilities.iter().any(|c| c == "control.tasks.v1"));
 
     let proj = c1

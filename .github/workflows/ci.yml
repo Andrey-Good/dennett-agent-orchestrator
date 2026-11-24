@@ -193,6 +193,7 @@ jobs:
         run: |
           uv run --project ops/runner dennett-check integration
           uv run --project ops/runner dennett-check demo-d2 --dry-run
+          uv run --project ops/runner dennett-check demo-d3 --dry-run
 
       - name: Stop isolated native PostgreSQL cluster
         if: always()
