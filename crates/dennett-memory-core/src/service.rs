@@ -3,7 +3,9 @@
 //! Enforces scope and capability authorization against a verified [`AuthPrincipal`],
 //! executes atomic PostgreSQL transactions with `stream_counters`-backed monotonic
 //! event ordering, handles optimistic revision locking and concurrent idempotency races,
-//! and redacts all PostgreSQL credentials from every error path.
+//! supports D3 Memory Fabric v2 (claims, conflicts, dossiers, consolidation, separable
+//! multi-language FTS with fresh-tail overlay, forgetting, and Contract J portable
+//! export/import), and redacts all PostgreSQL credentials from every error path.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -11,13 +13,20 @@ use std::time::Duration;
 
 use deadpool_postgres::{GenericClient, Manager, ManagerConfig, Pool, RecyclingMethod};
 use dennett_contracts::{
-    AuthPrincipal, CorrectNoteRequest, CorrelationId, CreateNoteRequest, DennettError,
+    AdmissionStatus, AuthPrincipal, ClaimId, ConsolidationJob, ConsolidationJobId,
+    CorrectNoteRequest, CorrelationId, CreateClaimRequest, CreateConsolidationJobRequest,
+    CreateDocumentRequest, CreateNoteRequest, DEFAULT_NOTE_SALIENCE, DennettError, DocumentId,
     EventEvidenceLink, EvidenceAnchor, EvidenceId, EvidenceLinkId, EvidenceLinkInput,
-    EvidenceObject, EvidenceRelationship, IdempotencyKey, IngestEvidenceRequest,
-    IngestEvidenceResponse, MemoryCapability, MemoryEvent, MemoryEventId, MemoryEventKind,
-    MemoryNote, MemoryNoteId, MemoryScope, NoteHistoryResponse, NoteMutationResponse, NoteRevision,
-    NoteRevisionId, PrincipalId, ProfileMode, SearchNotesRequest, SearchNotesResponse,
-    ServiceHealth, ServiceKind, Sha256Hex, TimestampMs,
+    EvidenceObject, EvidenceRelationship, ExportRequest, ExportResponse, ForgetRequest,
+    ForgetResponse, GetDocumentVersionsResponse, IdempotencyKey, ImportRequest, ImportResponse,
+    IndexState, IndexStatus, IngestEvidenceRequest, IngestEvidenceResponse, ListClaimsResponse,
+    ListConflictsResponse, ListConsolidationJobsResponse, ListDocumentsResponse,
+    ListTombstonesResponse, MAX_NOTE_SALIENCE, MemoryCapability, MemoryClaim, MemoryConflict,
+    MemoryDocument, MemoryEvent, MemoryEventId, MemoryEventKind, MemoryNote, MemoryNoteId,
+    MemoryScope, MemoryStatsSummary, NoteHistoryResponse, NoteMutationResponse, NoteRevision,
+    NoteRevisionId, PrincipalId, ProfileMode, ResolveConflictRequest, SearchNotesRequest,
+    SearchNotesResponse, ServiceHealth, ServiceKind, Sha256Hex, SupersedeClaimRequest, TimestampMs,
+    TriggerIndexRebuildRequest, TriggerIndexRebuildResponse, UpdateDocumentRequest,
 };
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
@@ -26,11 +35,29 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{NoTls, Row};
 use uuid::Uuid;
 
+use crate::claims::{
+    execute_create_claim, execute_get_claim, execute_list_claims, execute_list_open_conflicts,
+    execute_resolve_conflict, execute_supersede_claim,
+};
+use crate::consolidation::{
+    execute_create_consolidation_job, execute_list_consolidation_jobs,
+    execute_pause_consolidation_job, execute_resume_consolidation_job,
+};
+use crate::documents::{
+    execute_create_document, execute_get_document, execute_get_document_versions,
+    execute_list_documents, execute_update_document,
+};
 use crate::fingerprint::{
     fingerprint_correct_note, fingerprint_create_note, fingerprint_ingest_evidence, sha256_hex,
 };
+use crate::forget::{execute_forget, execute_list_tombstones};
 use crate::migrations::{query_schema_version, run_migrations};
 use crate::pg_target::ValidatedPgTarget;
+use crate::portable::{execute_export_package, execute_import_package};
+use crate::search::{
+    compute_aggregate_index_status, execute_get_index_status, execute_search_notes,
+    execute_trigger_index_rebuild, maybe_advance_watermark_only, maybe_index_note_in_tx,
+};
 
 /// Current implementation milestone label advertised in [`ServiceHealth`].
 pub const MEMORYD_STAGE_LABEL: &str = "D1";
@@ -96,6 +123,10 @@ impl MemoryService {
     #[must_use]
     pub fn pg_target(&self) -> &ValidatedPgTarget {
         &self.inner.pg_target
+    }
+
+    pub(crate) fn op_timeout(&self) -> Duration {
+        self.inner.op_timeout
     }
 
     /// Ensures all Memory Fabric PostgreSQL schema migrations are applied idempotently.
@@ -193,14 +224,23 @@ impl MemoryService {
 
     /// Ingests an immutable inline evidence object into a scoped memory domain.
     ///
+    /// Content-fingerprint deduplication preserves episode distinctness: re-ingesting identical
+    /// content within the same scope under a different `idempotency_key` reuses the existing
+    /// active `evidence_id` while ALWAYS appending a distinct `memory_events` episode row with
+    /// its own `event_id`, `observed_at`, and `correlation_id`.
+    ///
     /// Repeating the request with the same `(scope, idempotency_key)` and identical payload
-    /// returns the original object with `idempotent_replay = true`; reusing the key with a
+    /// returns the original response with `idempotent_replay = true`; reusing the key with a
     /// different payload returns [`DennettError::IdempotencyMismatch`].
     ///
     /// # Errors
     ///
     /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
     /// [`DennettError::IdempotencyMismatch`], or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "evidence ingest performs transactional content-fingerprint dedup while always recording a fresh episode event"
+    )]
     pub async fn ingest_evidence(
         &self,
         principal: &AuthPrincipal,
@@ -238,36 +278,72 @@ impl MemoryService {
                     .await;
             }
 
-            let evidence_id = EvidenceId::new();
-            let event_id = MemoryEventId::new();
-            let observed_ms = req.observed_at.map(TimestampMs::as_millis);
-
+            // Serialize same-(scope, sha256) ingestion so concurrent episodes reuse one evidence row.
+            let dedup_lock_key =
+                format!("ev-dedup:{}:{}", req.scope.as_str(), content_sha.as_str());
             tx.execute(
-                "INSERT INTO evidence_objects (
-                    evidence_id, scope, sha256, media_type, byte_len, content,
-                    source_uri, observed_at, ingested_by, metadata
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7,
-                    TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($8::bigint * INTERVAL '1 millisecond'),
-                    $9, $10
-                 )",
-                &[
-                    &evidence_id.as_uuid(),
-                    &req.scope.as_str(),
-                    &content_sha.as_str(),
-                    &req.media_type,
-                    &byte_len_i64,
-                    &req.content,
-                    &req.source_uri,
-                    &observed_ms,
-                    &principal.principal_id.as_str(),
-                    &metadata_json,
-                ],
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                &[&dedup_lock_key],
             )
             .await
             .map_err(|err| self.map_pg_err(&err))?;
 
-            let event_inserted = insert_memory_event(
+            // Re-check idempotency after acquiring advisory lock.
+            if let Some(existing) =
+                lookup_idempotency(&tx, &req.scope, &req.idempotency_key, self).await?
+            {
+                return self
+                    .resolve_evidence_replay(&tx, existing, &req.idempotency_key, &fingerprint)
+                    .await;
+            }
+
+            let existing_ev = tx
+                .query_opt(
+                    "SELECT evidence_id
+                     FROM evidence_objects
+                     WHERE scope = $1 AND sha256 = $2 AND forgotten_at IS NULL
+                     ORDER BY ingested_at ASC, evidence_id ASC
+                     LIMIT 1",
+                    &[&req.scope.as_str(), &content_sha.as_str()],
+                )
+                .await
+                .map_err(|err| self.map_pg_err(&err))?;
+
+            let observed_ms = req.observed_at.map(TimestampMs::as_millis);
+            let evidence_id = if let Some(row) = existing_ev {
+                EvidenceId::from_uuid(row.get(0))
+            } else {
+                let fresh_id = EvidenceId::new();
+                tx.execute(
+                    "INSERT INTO evidence_objects (
+                        evidence_id, scope, sha256, media_type, byte_len, content,
+                        source_uri, observed_at, ingested_by, metadata,
+                        trust_level, instruction_active
+                     ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7,
+                        TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($8::bigint * INTERVAL '1 millisecond'),
+                        $9, $10, 'native', true
+                     )",
+                    &[
+                        &fresh_id.as_uuid(),
+                        &req.scope.as_str(),
+                        &content_sha.as_str(),
+                        &req.media_type,
+                        &byte_len_i64,
+                        &req.content,
+                        &req.source_uri,
+                        &observed_ms,
+                        &principal.principal_id.as_str(),
+                        &metadata_json,
+                    ],
+                )
+                .await
+                .map_err(|err| self.map_pg_err(&err))?;
+                fresh_id
+            };
+
+            let event_id = MemoryEventId::new();
+            let Some(stream_seq) = insert_memory_event(
                 &tx,
                 NewMemoryEvent {
                     event_id,
@@ -283,9 +359,8 @@ impl MemoryService {
                 },
                 self,
             )
-            .await?;
-
-            if !event_inserted {
+            .await?
+            else {
                 let _ = tx.rollback().await;
                 return self
                     .recover_evidence_idempotency_race(
@@ -295,7 +370,9 @@ impl MemoryService {
                         &fingerprint,
                     )
                     .await;
-            }
+            };
+
+            maybe_advance_watermark_only(&tx, &req.scope, event_id, stream_seq, self).await?;
 
             let evidence = fetch_evidence_row(&tx, evidence_id, self).await?;
             tx.commit().await.map_err(|err| self.map_pg_err(&err))?;
@@ -314,7 +391,7 @@ impl MemoryService {
             })?
     }
 
-    /// Fetches an immutable [`EvidenceObject`] by identifier after verifying read scope access.
+    /// Fetches an active (non-forgotten) [`EvidenceObject`] by identifier after verifying read scope access.
     ///
     /// # Errors
     ///
@@ -344,7 +421,7 @@ impl MemoryService {
     /// Creates a new revision-1 [`MemoryNote`] together with its append-only event and evidence links.
     ///
     /// Supports `ordinal: None` and multiple distinct anchors pointing at the same `evidence_id`
-    /// (Architecture 81 §3.3 / V19). Rejects links referencing missing or cross-scope evidence.
+    /// (Architecture 81 §3.3 / V19). Rejects links referencing missing, forgotten, or cross-scope evidence.
     ///
     /// # Errors
     ///
@@ -375,6 +452,10 @@ impl MemoryService {
             })?
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "transactional note creation validates evidence links, inserts note + revision 1, emits event, and updates search index"
+    )]
     async fn create_note_tx(
         &self,
         principal: &AuthPrincipal,
@@ -408,8 +489,10 @@ impl MemoryService {
         let note_id = MemoryNoteId::new();
         let revision_id = NoteRevisionId::new();
         let event_id = MemoryEventId::new();
+        let admission_status = req.admission_status.unwrap_or(AdmissionStatus::Admitted);
+        let salience = i16::from(req.salience.unwrap_or(DEFAULT_NOTE_SALIENCE));
 
-        let event_inserted = insert_memory_event(
+        let Some(stream_seq) = insert_memory_event(
             &tx,
             NewMemoryEvent {
                 event_id,
@@ -425,9 +508,8 @@ impl MemoryService {
             },
             self,
         )
-        .await?;
-
-        if !event_inserted {
+        .await?
+        else {
             let _ = tx.rollback().await;
             return self
                 .recover_note_idempotency_race(
@@ -438,7 +520,7 @@ impl MemoryService {
                     fingerprint,
                 )
                 .await;
-        }
+        };
 
         insert_evidence_links(&tx, event_id, 1, &req.evidence_links, self).await?;
 
@@ -446,8 +528,9 @@ impl MemoryService {
             "INSERT INTO memory_notes (
                 note_id, scope, current_revision, current_revision_id,
                 title, body, tags, rationale, last_event_id,
-                recorded_by, author_label
-             ) VALUES ($1, $2, 1, $3, $4, $5, $6, NULL, $7, $8, $9)",
+                recorded_by, author_label,
+                admission_status, salience, topic_key, trust_level, instruction_active
+             ) VALUES ($1, $2, 1, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12, 'native', true)",
             &[
                 &note_id.as_uuid(),
                 &req.scope.as_str(),
@@ -458,6 +541,9 @@ impl MemoryService {
                 &event_id.as_uuid(),
                 &principal.principal_id.as_str(),
                 &req.author_label,
+                &admission_status.as_str(),
+                &salience,
+                &req.topic_key,
             ],
         )
         .await
@@ -481,6 +567,17 @@ impl MemoryService {
         )
         .await?;
 
+        maybe_index_note_in_tx(
+            &tx,
+            &req.scope,
+            note_id.as_uuid(),
+            admission_status,
+            event_id,
+            stream_seq,
+            self,
+        )
+        .await?;
+
         let note = fetch_current_note_row(&tx, note_id, self).await?;
         tx.commit().await.map_err(|err| self.map_pg_err(&err))?;
 
@@ -491,7 +588,7 @@ impl MemoryService {
         })
     }
 
-    /// Reads the current projection of a [`MemoryNote`] after verifying read scope access.
+    /// Reads the current projection of an active (non-forgotten) [`MemoryNote`] after verifying read scope access.
     ///
     /// # Errors
     ///
@@ -518,7 +615,7 @@ impl MemoryService {
             })?
     }
 
-    /// Reads the complete immutable revision history of a [`MemoryNote`] in ascending revision order.
+    /// Reads the complete immutable revision history of a non-forgotten [`MemoryNote`] in ascending revision order.
     ///
     /// # Errors
     ///
@@ -535,7 +632,9 @@ impl MemoryService {
             let conn = self.get_conn(self.inner.op_timeout).await?;
             let head_row = conn
                 .query_opt(
-                    "SELECT scope, current_revision FROM memory_notes WHERE note_id = $1",
+                    "SELECT scope, current_revision
+                     FROM memory_notes
+                     WHERE note_id = $1 AND forgotten_at IS NULL",
                     &[&note_id.as_uuid()],
                 )
                 .await
@@ -605,11 +704,6 @@ impl MemoryService {
 
     /// Appends a new immutable correction revision to a [`MemoryNote`] under optimistic locking.
     ///
-    /// Preserves every prior revision intact in `memory_note_revisions`, verifies
-    /// `expected_revision` against the locked `memory_notes` row, and checks idempotency first so
-    /// network retries of an already-committed correction replay cleanly instead of failing with
-    /// a spurious `409 Conflict`.
-    ///
     /// # Errors
     ///
     /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
@@ -640,6 +734,10 @@ impl MemoryService {
             })?
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "transactional note correction enforces optimistic revision lock, inserts revision, emits event, and updates search index"
+    )]
     async fn correct_note_tx(
         &self,
         principal: &AuthPrincipal,
@@ -667,12 +765,9 @@ impl MemoryService {
             return Ok(replay);
         }
 
-        let (stored_scope, actual_revision) =
+        let (stored_scope, actual_revision, admission_status) =
             lock_note_scope_and_revision(&tx, principal, req, self).await?;
 
-        // Re-check idempotency AFTER acquiring `FOR UPDATE` so a concurrent retry with the same
-        // `(scope, idempotency_key)` that blocked behind T1 observes T1's committed event instead
-        // of failing with a spurious optimistic-revision 409 Conflict.
         if let Some(replay) = self
             .try_replay_note_idempotency(
                 &tx,
@@ -699,7 +794,7 @@ impl MemoryService {
         let revision_id = NoteRevisionId::new();
         let event_id = MemoryEventId::new();
 
-        let event_inserted = insert_memory_event(
+        let Some(stream_seq) = insert_memory_event(
             &tx,
             NewMemoryEvent {
                 event_id,
@@ -715,9 +810,8 @@ impl MemoryService {
             },
             self,
         )
-        .await?;
-
-        if !event_inserted {
+        .await?
+        else {
             let _ = tx.rollback().await;
             return self
                 .recover_note_idempotency_race(
@@ -728,7 +822,7 @@ impl MemoryService {
                     fingerprint,
                 )
                 .await;
-        }
+        };
 
         insert_evidence_links(&tx, event_id, new_revision, &req.evidence_links, self).await?;
         let rev = NewNoteRevision {
@@ -745,6 +839,17 @@ impl MemoryService {
         };
         persist_correction_revision(&tx, req, principal, rev, actual_revision, self).await?;
 
+        maybe_index_note_in_tx(
+            &tx,
+            &stored_scope,
+            req.note_id.as_uuid(),
+            admission_status,
+            event_id,
+            stream_seq,
+            self,
+        )
+        .await?;
+
         let note = fetch_current_note_row(&tx, req.note_id, self).await?;
         tx.commit().await.map_err(|err| self.map_pg_err(&err))?;
 
@@ -755,10 +860,9 @@ impl MemoryService {
         })
     }
 
-    /// Searches or lists current [`MemoryNote`] projections strictly within authorized scopes.
-    ///
-    /// Pre-filters by authorized scope(s) in PostgreSQL before evaluating text predicates and
-    /// re-verifies scope authorization on every returned record as defense-in-depth (Architecture 81 §5).
+    /// Searches or lists active [`MemoryNote`] projections strictly within authorized scopes,
+    /// combining the separable multi-language FTS index with the fresh-tail overlay and
+    /// returning honest live [`IndexStatus`].
     ///
     /// # Errors
     ///
@@ -769,70 +873,7 @@ impl MemoryService {
         principal: &AuthPrincipal,
         req: SearchNotesRequest,
     ) -> Result<SearchNotesResponse, DennettError> {
-        let limit = req.validated_limit()?;
-        let allowed_scopes = resolve_search_scopes(principal, req.scope.as_ref())?;
-        if allowed_scopes.is_empty() {
-            return Ok(SearchNotesResponse {
-                notes: Vec::new(),
-                total_matched: 0,
-                truncated: false,
-                index_status: dennett_contracts::IndexStatus::Healthy,
-                stale_warning: None,
-            });
-        }
-
-        self.ensure_migrated().await?;
-        let trimmed_query = req
-            .query
-            .as_deref()
-            .map(str::trim)
-            .filter(|q| !q.is_empty())
-            .map(ToOwned::to_owned);
-        let limit_i64 = i64::from(limit);
-
-        let op_fut = async {
-            let conn = self.get_conn(self.inner.op_timeout).await?;
-            let rows = query_scoped_notes(
-                &conn,
-                &allowed_scopes,
-                trimmed_query.as_deref(),
-                limit_i64,
-                self,
-            )
-            .await?;
-
-            let total_matched: u64 = rows
-                .first()
-                .map_or(0, |r| u64::try_from(r.get::<_, i64>(13)).unwrap_or(0));
-
-            let event_uuids: Vec<Uuid> = rows.iter().map(|r| r.get::<_, Uuid>(8)).collect();
-            let mut links_by_event = fetch_links_for_events(&conn, &event_uuids, self).await?;
-
-            let mut notes = Vec::with_capacity(rows.len());
-            for row in rows {
-                let event_uuid: Uuid = row.get(8);
-                let links = links_by_event.remove(&event_uuid).unwrap_or_default();
-                let note = decode_note_row(&row, links)?;
-                // Defense-in-depth post-filter verification (Architecture 81 §5).
-                require_scope_capability(principal, &note.scope, MemoryCapability::Read)?;
-                notes.push(note);
-            }
-
-            let returned_count = u64::try_from(notes.len()).unwrap_or(u64::MAX);
-            Ok(SearchNotesResponse {
-                notes,
-                total_matched,
-                truncated: total_matched > returned_count,
-                index_status: dennett_contracts::IndexStatus::Healthy,
-                stale_warning: None,
-            })
-        };
-
-        time::timeout(self.inner.op_timeout, op_fut)
-            .await
-            .map_err(|_| DennettError::Timeout {
-                operation: String::from("memory_service::search_notes"),
-            })?
+        execute_search_notes(self, principal, req).await
     }
 
     /// Fetches an append-only [`MemoryEvent`] and all of its [`EventEvidenceLink`]s.
@@ -903,7 +944,436 @@ impl MemoryService {
             })?
     }
 
-    async fn get_conn(&self, timeout: Duration) -> Result<deadpool_postgres::Object, DennettError> {
+    // ========================================================================
+    // Phase D3 Memory Fabric APIs
+    // ========================================================================
+
+    /// Creates a structured [`MemoryClaim`], detecting contradictions against active competing claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::NotFound`], [`DennettError::Conflict`], [`DennettError::IdempotencyMismatch`],
+    /// or [`DennettError::DatabaseUnavailable`].
+    pub async fn create_claim(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: CreateClaimRequest,
+    ) -> Result<MemoryClaim, DennettError> {
+        execute_create_claim(self, principal, correlation_id, req).await
+    }
+
+    /// Fetches a single non-forgotten [`MemoryClaim`] by identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn get_claim(
+        &self,
+        principal: &AuthPrincipal,
+        claim_id: ClaimId,
+    ) -> Result<MemoryClaim, DennettError> {
+        execute_get_claim(self, principal, claim_id).await
+    }
+
+    /// Lists non-forgotten [`MemoryClaim`] records across authorized scopes with optional filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn list_claims(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+        topic_key: Option<&str>,
+    ) -> Result<ListClaimsResponse, DennettError> {
+        execute_list_claims(self, principal, scope, topic_key).await
+    }
+
+    /// Lists non-forgotten [`MemoryClaim`] records for a single authorized `scope` and `topic_key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn list_claims_by_topic(
+        &self,
+        principal: &AuthPrincipal,
+        scope: &MemoryScope,
+        topic_key: &str,
+    ) -> Result<ListClaimsResponse, DennettError> {
+        if topic_key.trim().is_empty() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("topic_key"),
+                reason: String::from("must not be empty"),
+            });
+        }
+        execute_list_claims(self, principal, Some(scope), Some(topic_key)).await
+    }
+
+    /// Atomically supersedes an active [`MemoryClaim`] under row-level locking and temporal guards.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::NotFound`], [`DennettError::Conflict`], [`DennettError::IdempotencyMismatch`],
+    /// or [`DennettError::DatabaseUnavailable`].
+    pub async fn supersede_claim(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: SupersedeClaimRequest,
+    ) -> Result<MemoryClaim, DennettError> {
+        execute_supersede_claim(self, principal, correlation_id, req).await
+    }
+
+    /// Lists open [`MemoryConflict`] rows across authorized scopes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn list_open_conflicts(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListConflictsResponse, DennettError> {
+        execute_list_open_conflicts(self, principal, scope).await
+    }
+
+    /// Resolves or adjudicates an open [`MemoryConflict`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::NotFound`], [`DennettError::Conflict`], [`DennettError::IdempotencyMismatch`],
+    /// or [`DennettError::DatabaseUnavailable`].
+    pub async fn resolve_conflict(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: ResolveConflictRequest,
+    ) -> Result<MemoryConflict, DennettError> {
+        execute_resolve_conflict(self, principal, correlation_id, req).await
+    }
+
+    /// Creates a version-1 human-readable [`MemoryDocument`] dossier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::NotFound`], [`DennettError::Conflict`], [`DennettError::IdempotencyMismatch`],
+    /// or [`DennettError::DatabaseUnavailable`].
+    pub async fn create_document(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: CreateDocumentRequest,
+    ) -> Result<MemoryDocument, DennettError> {
+        execute_create_document(self, principal, correlation_id, req).await
+    }
+
+    /// Fetches a non-forgotten [`MemoryDocument`] by identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn get_document(
+        &self,
+        principal: &AuthPrincipal,
+        document_id: DocumentId,
+    ) -> Result<MemoryDocument, DennettError> {
+        execute_get_document(self, principal, document_id).await
+    }
+
+    /// Lists non-forgotten [`MemoryDocument`] dossiers across authorized scopes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn list_documents(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListDocumentsResponse, DennettError> {
+        execute_list_documents(self, principal, scope).await
+    }
+
+    /// Updates a [`MemoryDocument`] under optimistic concurrency (`expected_version`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::NotFound`], [`DennettError::Conflict`], [`DennettError::IdempotencyMismatch`],
+    /// or [`DennettError::DatabaseUnavailable`].
+    pub async fn update_document(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: UpdateDocumentRequest,
+    ) -> Result<MemoryDocument, DennettError> {
+        execute_update_document(self, principal, correlation_id, req).await
+    }
+
+    /// Fetches immutable version history for a non-forgotten [`MemoryDocument`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn get_document_versions(
+        &self,
+        principal: &AuthPrincipal,
+        document_id: DocumentId,
+    ) -> Result<GetDocumentVersionsResponse, DennettError> {
+        execute_get_document_versions(self, principal, document_id).await
+    }
+
+    /// Creates and executes an interruptible deterministic [`ConsolidationJob`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`], [`DennettError::IdempotencyMismatch`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn create_consolidation_job(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: CreateConsolidationJobRequest,
+    ) -> Result<ConsolidationJob, DennettError> {
+        execute_create_consolidation_job(self, principal, correlation_id, req, None).await
+    }
+
+    /// Creates and runs at most `max_steps` work items of a [`ConsolidationJob`], pausing cleanly
+    /// at a durable checkpoint if remaining items exist (useful for step-budgeted runs and fault tests).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`], [`DennettError::IdempotencyMismatch`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn create_consolidation_job_with_step_limit(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: CreateConsolidationJobRequest,
+        max_steps: usize,
+    ) -> Result<ConsolidationJob, DennettError> {
+        execute_create_consolidation_job(self, principal, correlation_id, req, Some(max_steps))
+            .await
+    }
+
+    /// Lists [`ConsolidationJob`] records across authorized scopes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn list_consolidation_jobs(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListConsolidationJobsResponse, DennettError> {
+        execute_list_consolidation_jobs(self, principal, scope).await
+    }
+
+    /// Pauses an active (`pending` or `running`) [`ConsolidationJob`] at its durable checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn pause_consolidation_job(
+        &self,
+        principal: &AuthPrincipal,
+        job_id: ConsolidationJobId,
+    ) -> Result<ConsolidationJob, DennettError> {
+        execute_pause_consolidation_job(self, principal, job_id).await
+    }
+
+    /// Resumes a `paused`, `failed`, or `pending` [`ConsolidationJob`] from its saved checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn resume_consolidation_job(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        job_id: ConsolidationJobId,
+    ) -> Result<ConsolidationJob, DennettError> {
+        execute_resume_consolidation_job(self, principal, correlation_id, job_id).await
+    }
+
+    /// Queries honest live search index health and watermark status for an authorized scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn get_index_status(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+    ) -> Result<IndexState, DennettError> {
+        execute_get_index_status(self, principal, scope).await
+    }
+
+    /// Rebuilds the separable search index for a scope from canonical active tables (`Admin`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn trigger_index_rebuild(
+        &self,
+        principal: &AuthPrincipal,
+        req: TriggerIndexRebuildRequest,
+    ) -> Result<TriggerIndexRebuildResponse, DennettError> {
+        execute_trigger_index_rebuild(self, principal, req).await
+    }
+
+    /// Computes live scoped summary statistics across authorized scopes (`GET /v1/memory/stats`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn get_stats(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+    ) -> Result<MemoryStatsSummary, DennettError> {
+        let allowed_scopes = resolve_search_scopes(principal, scope)?;
+        if allowed_scopes.is_empty() {
+            return Ok(MemoryStatsSummary {
+                scope: scope.cloned(),
+                sources_count: 0,
+                active_notes_count: 0,
+                active_claims_count: 0,
+                documents_count: 0,
+                open_conflicts_count: 0,
+                imported_untrusted_count: 0,
+                index_status: IndexStatus::Healthy,
+                watermark_seq: 0,
+                last_rebuild_at: None,
+            });
+        }
+
+        self.ensure_migrated().await?;
+        let requested_scope = scope.cloned();
+
+        let op_fut = async {
+            let conn = self.get_conn(self.inner.op_timeout).await?;
+            let row = conn
+                .query_one(
+                    "SELECT
+                        (SELECT COUNT(*)::bigint FROM evidence_objects
+                         WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL),
+                        (SELECT COUNT(*)::bigint FROM memory_notes
+                         WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND admission_status <> 'rejected'),
+                        (SELECT COUNT(*)::bigint FROM memory_claims
+                         WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND epistemic_status NOT IN ('superseded', 'retracted')),
+                        (SELECT COUNT(*)::bigint FROM memory_documents
+                         WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL),
+                        (SELECT COUNT(*)::bigint FROM memory_conflicts
+                         WHERE scope = ANY($1::text[]) AND status = 'open'),
+                        (SELECT COUNT(*)::bigint FROM memory_notes
+                         WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND trust_level = 'external_untrusted')
+                        + (SELECT COUNT(*)::bigint FROM memory_claims
+                           WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND trust_level = 'external_untrusted')
+                        + (SELECT COUNT(*)::bigint FROM memory_documents
+                           WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND trust_level = 'external_untrusted')",
+                    &[&allowed_scopes],
+                )
+                .await
+                .map_err(|err| self.map_pg_err(&err))?;
+
+            let (index_status, _, watermark_seq, last_rebuild_at) =
+                compute_aggregate_index_status(&conn, &allowed_scopes, self).await?;
+
+            Ok(MemoryStatsSummary {
+                scope: requested_scope,
+                sources_count: u64::try_from(row.get::<_, i64>(0)).unwrap_or(0),
+                active_notes_count: u64::try_from(row.get::<_, i64>(1)).unwrap_or(0),
+                active_claims_count: u64::try_from(row.get::<_, i64>(2)).unwrap_or(0),
+                documents_count: u64::try_from(row.get::<_, i64>(3)).unwrap_or(0),
+                open_conflicts_count: u64::try_from(row.get::<_, i64>(4)).unwrap_or(0),
+                imported_untrusted_count: u64::try_from(row.get::<_, i64>(5)).unwrap_or(0),
+                index_status,
+                watermark_seq,
+                last_rebuild_at,
+            })
+        };
+
+        time::timeout(self.inner.op_timeout, op_fut)
+            .await
+            .map_err(|_| DennettError::Timeout {
+                operation: String::from("memory_service::get_stats"),
+            })?
+    }
+
+    /// Forgets a memory entity with immediate content scrub, search-index purge, and audit tombstone.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`],
+    /// [`DennettError::NotFound`], [`DennettError::IdempotencyMismatch`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn forget(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: ForgetRequest,
+    ) -> Result<ForgetResponse, DennettError> {
+        execute_forget(self, principal, correlation_id, req).await
+    }
+
+    /// Lists content-free [`dennett_contracts::ForgetTombstone`] audit records for authorized scopes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn list_tombstones(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListTombstonesResponse, DennettError> {
+        execute_list_tombstones(self, principal, scope).await
+    }
+
+    /// Exports one authorized scope as a deterministic, secret-stripped Contract J package (`Export`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn export_package(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: ExportRequest,
+    ) -> Result<ExportResponse, DennettError> {
+        execute_export_package(self, principal, correlation_id, req).await
+    }
+
+    /// Imports an external Contract J package strictly as `external_untrusted` data (`Write`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn import_package(
+        &self,
+        principal: &AuthPrincipal,
+        correlation_id: &CorrelationId,
+        req: ImportRequest,
+    ) -> Result<ImportResponse, DennettError> {
+        execute_import_package(self, principal, correlation_id, req).await
+    }
+
+    pub(crate) async fn get_conn(
+        &self,
+        timeout: Duration,
+    ) -> Result<deadpool_postgres::Object, DennettError> {
         time::timeout(timeout, self.inner.pool.get())
             .await
             .map_err(|_| DennettError::DatabaseUnavailable {
@@ -914,7 +1384,7 @@ impl MemoryService {
             })
     }
 
-    fn map_pg_err(&self, err: &tokio_postgres::Error) -> DennettError {
+    pub(crate) fn map_pg_err(&self, err: &tokio_postgres::Error) -> DennettError {
         let safe = self.inner.pg_target.sanitize_error(&err.to_string());
         if let Some(db_err) = err.as_db_error() {
             let code = db_err.code().code();
@@ -1043,29 +1513,36 @@ impl MemoryService {
     }
 }
 
-/// Capabilities advertised by standalone `dennett-memoryd` in milestone D1.
+/// Capabilities advertised by standalone `dennett-memoryd`.
 #[must_use]
 pub fn d1_memoryd_capabilities() -> Vec<String> {
     vec![
         String::from("healthz"),
         String::from("postgres-connectivity"),
         String::from("memory-v1"),
+        String::from("memory-v2"),
         String::from("scoped-auth"),
         String::from("evidence-multi-anchor"),
         String::from("note-revisions"),
         String::from("idempotency"),
+        String::from("claims-conflicts"),
+        String::from("dossiers"),
+        String::from("consolidation"),
+        String::from("rebuildable-fts"),
+        String::from("forgetting"),
+        String::from("portable-export-import"),
     ]
 }
 
-struct StoredIdempotencyRecord {
-    event_id: MemoryEventId,
-    kind: MemoryEventKind,
-    payload_fingerprint: String,
-    target_entity_id: Uuid,
-    target_revision: Option<i64>,
+pub(crate) struct StoredIdempotencyRecord {
+    pub(crate) event_id: MemoryEventId,
+    pub(crate) kind: MemoryEventKind,
+    pub(crate) payload_fingerprint: String,
+    pub(crate) target_entity_id: Uuid,
+    pub(crate) target_revision: Option<i64>,
 }
 
-fn require_scope_capability(
+pub(crate) fn require_scope_capability(
     principal: &AuthPrincipal,
     scope: &MemoryScope,
     capability: MemoryCapability,
@@ -1086,7 +1563,7 @@ fn require_scope_capability(
 
 /// Checks scope/capability on an existing stored resource without disclosing the name of a
 /// foreign scope the principal is not allowed to see.
-fn require_resource_scope_capability(
+pub(crate) fn require_resource_scope_capability(
     principal: &AuthPrincipal,
     resource_scope: &MemoryScope,
     capability: MemoryCapability,
@@ -1110,7 +1587,7 @@ fn require_resource_scope_capability(
     })
 }
 
-fn resolve_search_scopes(
+pub(crate) fn resolve_search_scopes(
     principal: &AuthPrincipal,
     requested: Option<&MemoryScope>,
 ) -> Result<Vec<String>, DennettError> {
@@ -1131,26 +1608,26 @@ fn resolve_search_scopes(
         .collect())
 }
 
-struct NewMemoryEvent<'a> {
-    event_id: MemoryEventId,
-    scope: &'a MemoryScope,
-    kind: MemoryEventKind,
-    principal_id: &'a PrincipalId,
-    correlation_id: &'a CorrelationId,
-    idempotency_key: &'a IdempotencyKey,
-    fingerprint: &'a Sha256Hex,
-    target_entity_id: Uuid,
-    target_revision: Option<i64>,
-    observed_ms: Option<i64>,
+pub(crate) struct NewMemoryEvent<'a> {
+    pub(crate) event_id: MemoryEventId,
+    pub(crate) scope: &'a MemoryScope,
+    pub(crate) kind: MemoryEventKind,
+    pub(crate) principal_id: &'a PrincipalId,
+    pub(crate) correlation_id: &'a CorrelationId,
+    pub(crate) idempotency_key: &'a IdempotencyKey,
+    pub(crate) fingerprint: &'a Sha256Hex,
+    pub(crate) target_entity_id: Uuid,
+    pub(crate) target_revision: Option<i64>,
+    pub(crate) observed_ms: Option<i64>,
 }
 
-/// Inserts a row into `memory_events`, returning `Ok(false)` when a concurrent idempotency race
-/// tripped `memory_events_scope_idempotency_uniq`.
-async fn insert_memory_event<C: GenericClient>(
+/// Inserts a row into `memory_events`, returning `Ok(Some(stream_seq))` on success or `Ok(None)`
+/// when a concurrent idempotency race tripped `memory_events_scope_idempotency_uniq`.
+pub(crate) async fn insert_memory_event<C: GenericClient>(
     client: &C,
     ev: NewMemoryEvent<'_>,
     svc: &MemoryService,
-) -> Result<bool, DennettError> {
+) -> Result<Option<i64>, DennettError> {
     let stream_id = scope_stream_id(ev.scope);
     let stream_seq = allocate_stream_seq(client, &stream_id, svc).await?;
 
@@ -1182,8 +1659,8 @@ async fn insert_memory_event<C: GenericClient>(
         .await;
 
     match res {
-        Ok(_) => Ok(true),
-        Err(err) if is_idempotency_unique_violation(&err) => Ok(false),
+        Ok(_) => Ok(Some(stream_seq)),
+        Err(err) if is_idempotency_unique_violation(&err) => Ok(None),
         Err(err) => Err(svc.map_pg_err(&err)),
     }
 }
@@ -1235,10 +1712,13 @@ async fn lock_note_scope_and_revision<C: GenericClient>(
     principal: &AuthPrincipal,
     req: &CorrectNoteRequest,
     svc: &MemoryService,
-) -> Result<(MemoryScope, i64), DennettError> {
+) -> Result<(MemoryScope, i64, AdmissionStatus), DennettError> {
     let locked = client
         .query_opt(
-            "SELECT scope, current_revision FROM memory_notes WHERE note_id = $1 FOR UPDATE",
+            "SELECT scope, current_revision, admission_status
+             FROM memory_notes
+             WHERE note_id = $1 AND forgotten_at IS NULL
+             FOR UPDATE",
             &[&req.note_id.as_uuid()],
         )
         .await
@@ -1253,6 +1733,7 @@ async fn lock_note_scope_and_revision<C: GenericClient>(
 
     let stored_scope = MemoryScope::try_new(note_row.get::<_, String>(0))?;
     let actual_revision: i64 = note_row.get(1);
+    let admission_status: AdmissionStatus = note_row.get::<_, String>(2).parse()?;
 
     require_resource_scope_capability(principal, &stored_scope, MemoryCapability::Write)?;
     if stored_scope != req.scope {
@@ -1262,7 +1743,7 @@ async fn lock_note_scope_and_revision<C: GenericClient>(
         });
     }
 
-    Ok((stored_scope, actual_revision))
+    Ok((stored_scope, actual_revision, admission_status))
 }
 
 fn ensure_expected_revision(
@@ -1337,7 +1818,7 @@ async fn update_note_head<C: GenericClient>(
                  recorded_by = $8,
                  author_label = $9,
                  updated_at = now()
-             WHERE note_id = $10 AND current_revision = $11",
+             WHERE note_id = $10 AND current_revision = $11 AND forgotten_at IS NULL",
             &[
                 &new_revision,
                 &revision_id.as_uuid(),
@@ -1366,64 +1847,7 @@ async fn update_note_head<C: GenericClient>(
     Ok(())
 }
 
-async fn query_scoped_notes<C: GenericClient>(
-    client: &C,
-    allowed_scopes: &[String],
-    query_text: Option<&str>,
-    limit_i64: i64,
-    svc: &MemoryService,
-) -> Result<Vec<Row>, DennettError> {
-    if let Some(q) = query_text {
-        let like_pattern = format!("%{}%", escape_like_pattern(q));
-        client
-            .query(
-                "SELECT note_id, scope, current_revision, current_revision_id,
-                        title, body, tags, rationale, last_event_id,
-                        recorded_by, author_label,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
-                        COUNT(*) OVER()::bigint AS total_matched
-                 FROM memory_notes
-                 WHERE scope = ANY($1::text[])
-                   AND (
-                        to_tsvector('simple', title || ' ' || body || ' ' || COALESCE(rationale, ''))
-                            @@ plainto_tsquery('simple', $2)
-                        OR title ILIKE $3 ESCAPE '\\'
-                        OR body ILIKE $3 ESCAPE '\\'
-                        OR COALESCE(rationale, '') ILIKE $3 ESCAPE '\\'
-                        OR EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements_text(tags) AS tag_val
-                            WHERE tag_val ILIKE $3 ESCAPE '\\'
-                        )
-                   )
-                 ORDER BY updated_at DESC, note_id ASC
-                 LIMIT $4",
-                &[&allowed_scopes, &q, &like_pattern, &limit_i64],
-            )
-            .await
-            .map_err(|err| svc.map_pg_err(&err))
-    } else {
-        client
-            .query(
-                "SELECT note_id, scope, current_revision, current_revision_id,
-                        title, body, tags, rationale, last_event_id,
-                        recorded_by, author_label,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
-                        COUNT(*) OVER()::bigint AS total_matched
-                 FROM memory_notes
-                 WHERE scope = ANY($1::text[])
-                 ORDER BY updated_at DESC, note_id ASC
-                 LIMIT $2",
-                &[&allowed_scopes, &limit_i64],
-            )
-            .await
-            .map_err(|err| svc.map_pg_err(&err))
-    }
-}
-
-fn scope_stream_id(scope: &MemoryScope) -> String {
+pub(crate) fn scope_stream_id(scope: &MemoryScope) -> String {
     format!("memory:scope:{}", scope.as_str())
 }
 
@@ -1432,17 +1856,6 @@ fn is_idempotency_unique_violation(err: &tokio_postgres::Error) -> bool {
         db_err.code() == &SqlState::UNIQUE_VIOLATION
             && db_err.constraint() == Some(IDEMPOTENCY_UNIQUE_CONSTRAINT)
     })
-}
-
-fn escape_like_pattern(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if matches!(ch, '\\' | '%' | '_') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 async fn allocate_stream_seq<C: GenericClient>(
@@ -1464,7 +1877,7 @@ async fn allocate_stream_seq<C: GenericClient>(
     Ok(row.get(0))
 }
 
-async fn lookup_idempotency<C: GenericClient>(
+pub(crate) async fn lookup_idempotency<C: GenericClient>(
     client: &C,
     scope: &MemoryScope,
     key: &IdempotencyKey,
@@ -1493,7 +1906,7 @@ async fn lookup_idempotency<C: GenericClient>(
     }))
 }
 
-async fn verify_evidence_links_in_scope<C: GenericClient>(
+pub(crate) async fn verify_evidence_links_in_scope<C: GenericClient>(
     client: &C,
     scope: &MemoryScope,
     links: &[EvidenceLinkInput],
@@ -1508,7 +1921,9 @@ async fn verify_evidence_links_in_scope<C: GenericClient>(
 
     let rows = client
         .query(
-            "SELECT evidence_id, scope FROM evidence_objects WHERE evidence_id = ANY($1::uuid[])",
+            "SELECT evidence_id, scope
+             FROM evidence_objects
+             WHERE evidence_id = ANY($1::uuid[]) AND forgotten_at IS NULL",
             &[&id_vec],
         )
         .await
@@ -1540,7 +1955,7 @@ async fn verify_evidence_links_in_scope<C: GenericClient>(
     Ok(())
 }
 
-async fn insert_evidence_links<C: GenericClient>(
+pub(crate) async fn insert_evidence_links<C: GenericClient>(
     client: &C,
     event_id: MemoryEventId,
     revision: i64,
@@ -1591,7 +2006,7 @@ async fn fetch_evidence_row<C: GenericClient>(
                     TRUNC(EXTRACT(EPOCH FROM ingested_at) * 1000)::bigint,
                     ingested_by, metadata
              FROM evidence_objects
-             WHERE evidence_id = $1",
+             WHERE evidence_id = $1 AND forgotten_at IS NULL",
             &[&evidence_id.as_uuid()],
         )
         .await
@@ -1636,9 +2051,11 @@ async fn fetch_current_note_row<C: GenericClient>(
                     title, body, tags, rationale, last_event_id,
                     recorded_by, author_label,
                     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
+                    admission_status, salience, topic_key,
+                    trust_level, instruction_active
              FROM memory_notes
-             WHERE note_id = $1",
+             WHERE note_id = $1 AND forgotten_at IS NULL",
             &[&note_id.as_uuid()],
         )
         .await
@@ -1668,10 +2085,12 @@ async fn fetch_note_at_revision<C: GenericClient>(
                     r.title, r.body, r.tags, r.rationale, r.event_id,
                     r.recorded_by, r.author_label,
                     TRUNC(EXTRACT(EPOCH FROM n.created_at) * 1000)::bigint,
-                    TRUNC(EXTRACT(EPOCH FROM r.created_at) * 1000)::bigint
+                    TRUNC(EXTRACT(EPOCH FROM r.created_at) * 1000)::bigint,
+                    n.admission_status, n.salience, n.topic_key,
+                    n.trust_level, n.instruction_active
              FROM memory_notes n
              JOIN memory_note_revisions r ON r.note_id = n.note_id
-             WHERE n.note_id = $1 AND r.revision = $2",
+             WHERE n.note_id = $1 AND r.revision = $2 AND n.forgotten_at IS NULL",
             &[&note_id.as_uuid(), &revision],
         )
         .await
@@ -1689,7 +2108,7 @@ async fn fetch_note_at_revision<C: GenericClient>(
     decode_note_row(&row, links.remove(&event_uuid).unwrap_or_default())
 }
 
-async fn fetch_links_for_events<C: GenericClient>(
+pub(crate) async fn fetch_links_for_events<C: GenericClient>(
     client: &C,
     event_ids: &[Uuid],
     svc: &MemoryService,
@@ -1735,10 +2154,14 @@ async fn fetch_links_for_events<C: GenericClient>(
     Ok(out)
 }
 
-fn decode_note_row(
+pub(crate) fn decode_note_row(
     row: &Row,
     evidence_links: Vec<EventEvidenceLink>,
 ) -> Result<MemoryNote, DennettError> {
+    let salience_i16: i16 = row.get(14);
+    let salience = u8::try_from(salience_i16.clamp(0, i16::from(MAX_NOTE_SALIENCE)))
+        .unwrap_or(DEFAULT_NOTE_SALIENCE);
+
     Ok(MemoryNote {
         note_id: MemoryNoteId::from_uuid(row.get(0)),
         scope: MemoryScope::try_new(row.get::<_, String>(1))?,
@@ -1753,11 +2176,11 @@ fn decode_note_row(
         author_label: row.get(10),
         created_at: TimestampMs::from_millis(row.get(11)),
         updated_at: TimestampMs::from_millis(row.get(12)),
-        admission_status: dennett_contracts::AdmissionStatus::Admitted,
-        salience: dennett_contracts::DEFAULT_NOTE_SALIENCE,
-        topic_key: None,
-        trust_level: dennett_contracts::TrustLevel::Native,
-        instruction_active: false,
+        admission_status: row.get::<_, String>(13).parse()?,
+        salience,
+        topic_key: row.get(15),
+        trust_level: row.get::<_, String>(16).parse()?,
+        instruction_active: row.get(17),
         evidence_links,
     })
 }
@@ -1775,7 +2198,7 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::search::escape_like_pattern;
 
     #[test]
     fn escape_like_pattern_escapes_wildcards_and_backslashes() {

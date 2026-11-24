@@ -12,7 +12,9 @@ use crate::fingerprint::sha256_hex;
 const MIGRATION_ADVISORY_LOCK_KEY: i64 = 728_391_045_123_456_789;
 
 /// Latest Memory Fabric schema migration version bundled in this build.
-pub const LATEST_SCHEMA_VERSION: i64 = 1;
+pub const LATEST_SCHEMA_VERSION: i64 = 2;
+/// Alias matching the architecture specification name for [`LATEST_SCHEMA_VERSION`].
+pub const LATEST_MEMORY_SCHEMA_VERSION: i64 = LATEST_SCHEMA_VERSION;
 
 /// One versioned SQL migration bundled into `dennett-memory-core`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,11 +28,18 @@ pub struct Migration {
 }
 
 /// Ordered list of all Memory Fabric schema migrations owned by `dennett-memoryd`.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_memory_core_v1",
-    sql: include_str!("../migrations/0001_memory_core_v1.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_memory_core_v1",
+        sql: include_str!("../migrations/0001_memory_core_v1.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "0002_memory_fabric_v2",
+        sql: include_str!("../migrations/0002_memory_fabric_v2.sql"),
+    },
+];
 
 /// Runs all pending Memory Fabric migrations atomically and idempotently.
 ///
