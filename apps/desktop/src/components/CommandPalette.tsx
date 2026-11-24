@@ -7,8 +7,10 @@ import {
   FolderPlus,
   FolderSimple,
   GearSix,
+  ListChecks,
   MagnifyingGlass,
   Plus,
+  Tray,
 } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
@@ -42,32 +44,46 @@ export function CommandPalette() {
   const connected = Boolean(state.healthSnapshot?.connected);
   const trimmed = query.trim().toLowerCase();
 
+  const activeProjects = useMemo(
+    () =>
+      state.projects.filter((p) => {
+        const lc = p.lifecycle_state ?? "active";
+        return lc !== "archived" && lc !== "deleted_record";
+      }),
+    [state.projects],
+  );
+
   const projectById = useMemo(() => {
     const map = new Map<string, (typeof state.projects)[number]>();
-    for (const p of state.projects) {
+    for (const p of activeProjects) {
       map.set(p.project_id, p);
     }
     return map;
-  }, [state.projects]);
+  }, [activeProjects]);
 
   const matchingProjects = useMemo(() => {
     if (!trimmed) {
-      return state.projects.slice(0, 4);
+      return activeProjects.slice(0, 4);
     }
-    return state.projects
+    return activeProjects
       .filter(
         (p) =>
           p.name.toLowerCase().includes(trimmed) ||
           (p.workspace_path?.toLowerCase().includes(trimmed) ?? false),
       )
       .slice(0, 6);
-  }, [state.projects, trimmed]);
+  }, [activeProjects, trimmed]);
+
+  const activeSessions = useMemo(
+    () => state.sessions.filter((s) => projectById.has(s.project_id)),
+    [projectById, state.sessions],
+  );
 
   const matchingSessions = useMemo(() => {
     if (!trimmed) {
-      return state.sessions.slice(0, 6);
+      return activeSessions.slice(0, 6);
     }
-    return state.sessions
+    return activeSessions
       .filter((s) => {
         const proj = projectById.get(s.project_id);
         return (
@@ -76,7 +92,7 @@ export function CommandPalette() {
         );
       })
       .slice(0, 8);
-  }, [projectById, state.sessions, trimmed]);
+  }, [activeSessions, projectById, trimmed]);
 
   const items = useMemo<PaletteItem[]>(() => {
     const list: PaletteItem[] = [];
@@ -152,6 +168,28 @@ export function CommandPalette() {
         run: () => {
           close();
           void actions.createFolderlessProject();
+        },
+      },
+      {
+        id: "action:open-inbox",
+        section: "actions",
+        label: "Открыть Входящие и Радар",
+        kbd: "Alt 2",
+        icon: <Tray size={15} aria-hidden="true" />,
+        run: () => {
+          close();
+          actions.setActiveView("inbox");
+        },
+      },
+      {
+        id: "action:open-tasks",
+        section: "actions",
+        label: "Открыть Поручения и расписания",
+        kbd: "Alt 3",
+        icon: <ListChecks size={15} aria-hidden="true" />,
+        run: () => {
+          close();
+          actions.setActiveView("tasks");
         },
       },
       {

@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowsClockwise, Database, Key, PlugsConnected, X } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  ArrowsClockwise,
+  Database,
+  Key,
+  PlugsConnected,
+  ShieldCheck,
+  X,
+} from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
 
@@ -16,6 +23,14 @@ export function SettingsSheet() {
     }
   }, [state.healthSnapshot?.head_url]);
 
+  const projectNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of state.projects) {
+      map.set(p.project_id, p.name);
+    }
+    return map;
+  }, [state.projects]);
+
   if (!state.isSettingsOpen) {
     return null;
   }
@@ -31,6 +46,8 @@ export function SettingsSheet() {
   const engineLabel = isSimulated
     ? "SimulatedRuntime"
     : `Google Antigravity · agy acp ${catalog?.agy_version ?? "1.5+"}`;
+
+  const activeGrants = state.activeGrants.filter((g) => !g.revoked_at);
 
   const handleReconnect = (event: FormEvent) => {
     event.preventDefault();
@@ -59,7 +76,7 @@ export function SettingsSheet() {
         <header className="settings-sheet__header">
           <div>
             <h2>Настройки и подключения</h2>
-            <p>Активный движок, сервер управления Dennett Head и память</p>
+            <p>Активный движок, сервер управления Dennett Head, память и выданные разрешения</p>
           </div>
           <button
             type="button"
@@ -108,6 +125,50 @@ export function SettingsSheet() {
                   : "Обновить список моделей"}
               </button>
             </div>
+          </section>
+
+          <section className="settings-card" data-testid="settings-grants-section">
+            <div className="settings-card__head">
+              <ShieldCheck size={16} aria-hidden="true" />
+              <strong>Действующие разрешения ({activeGrants.length})</strong>
+            </div>
+            {activeGrants.length === 0 ? (
+              <p className="settings-note">
+                Активных постоянных разрешений записи нет. Выданные через «Разрешить для проекта»
+                права можно мгновенно отозвать здесь или во Входящих.
+              </p>
+            ) : (
+              <div className="d2-grant-list">
+                {activeGrants.map((grant) => (
+                  <div
+                    key={grant.grant_id}
+                    className="d2-grant-row"
+                    data-testid={`settings-grant-row-${grant.grant_id}`}
+                  >
+                    <div className="d2-grant-row__info">
+                      <strong>
+                        {grant.tool_pattern === "workspace_write"
+                          ? "Запись в папку проекта"
+                          : grant.tool_pattern}
+                      </strong>
+                      <small>
+                        {projectNames.get(grant.project_id) ?? grant.scope} · вызовов:{" "}
+                        {grant.uses_consumed}
+                        {grant.max_uses ? ` / ${grant.max_uses}` : ""}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      className="d2-danger-btn d2-danger-btn--sm"
+                      data-testid={`settings-revoke-grant-${grant.grant_id}`}
+                      onClick={() => void actions.revokeCapabilityGrant(grant.grant_id)}
+                    >
+                      Отозвать
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="settings-card">

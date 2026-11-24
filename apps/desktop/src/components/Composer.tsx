@@ -4,6 +4,7 @@ import {
   Brain,
   CaretDown,
   Check,
+  Clock,
   ShieldCheck,
   Sparkle,
   Stop,
@@ -22,10 +23,15 @@ const THINKING_LABELS: Record<ThinkingLevel, string> = {
 };
 
 const WRITE_POLICY_ITEMS: Array<{
-  mode: "allow_workspace" | "deny_all";
+  mode: "ask_before_write" | "allow_workspace" | "deny_all";
   label: string;
   description: string;
 }> = [
+  {
+    mode: "ask_before_write",
+    label: "Спрашивать запись",
+    description: "Запрашивать подтверждение в чате и Входящих перед изменением файла",
+  },
   {
     mode: "allow_workspace",
     label: "Запись в папку",
@@ -45,12 +51,12 @@ function policyLabel(policy: WorkspaceWritePolicy | undefined, isFolderless: boo
   switch (policy?.mode) {
     case "allow_workspace":
       return "Запись в папку";
+    case "ask_before_write":
+      return "Спрашивать запись";
     case "deny_all":
       return "Только чтение";
     case "allow_paths":
       return "Ограниченная запись (CLI)";
-    case "ask_before_write":
-      return "Спрашивать запись (CLI)";
     default:
       return "Запись в папку";
   }
@@ -68,8 +74,9 @@ export function Composer() {
   const isConnected = Boolean(state.healthSnapshot?.connected);
   const isRunning = meta.isRunningActiveSession;
   const isCancelling = meta.isCancellingActiveSession;
-  const canSend =
-    Boolean(sessionId) && isConnected && !isRunning && meta.currentDraft.trim().length > 0;
+  const hasDraft = meta.currentDraft.trim().length > 0;
+  // Allow submitting either online OR queueing offline with stable client_message_id!
+  const canSend = Boolean(sessionId) && !isRunning && hasDraft;
 
   const catalog = state.runtimeCatalog;
   const models = catalog?.models ?? [];
@@ -202,14 +209,10 @@ export function Composer() {
           >
             <strong>Доступ к файлам</strong>
             <p>Политика проверяется внешним PolicyEngine до выполнения инструмента.</p>
-            {(activeAgent.current_config.workspace_write_policy.mode === "ask_before_write" ||
-              activeAgent.current_config.workspace_write_policy.mode === "allow_paths") && (
+            {activeAgent.current_config.workspace_write_policy.mode === "allow_paths" && (
               <p className="popover-readonly-note" data-testid="cli-write-policy-note">
-                Активна политика из CLI:{" "}
-                <strong>
-                  {policyLabel(activeAgent.current_config.workspace_write_policy, false)}
-                </strong>
-                . В D1 выберите режим ниже, если хотите изменить доступ.
+                Активна политика из CLI: <strong>Ограниченная запись (CLI)</strong>. Выберите режим
+                ниже, если хотите изменить доступ.
               </p>
             )}
             {WRITE_POLICY_ITEMS.map((item) => {
@@ -221,6 +224,7 @@ export function Composer() {
                   role="menuitemradio"
                   aria-checked={isSelected}
                   className={isSelected ? "is-selected" : ""}
+                  data-testid={`write-policy-option-${item.mode}`}
                   onClick={() => {
                     setOpenPopover(null);
                     void actions.updateActiveAgentWritePolicy({ mode: item.mode });
@@ -310,10 +314,14 @@ export function Composer() {
             ref={meta.composerInputRef}
             className="composer__input"
             rows={1}
-            placeholder="Напишите поручение агенту…"
+            placeholder={
+              isConnected
+                ? "Напишите поручение агенту…"
+                : "Офлайн-черновик — нажмите Enter, чтобы поставить в очередь отправки…"
+            }
             aria-label="Поле ввода сообщения"
             value={meta.currentDraft}
-            disabled={!sessionId || !isConnected}
+            disabled={!sessionId}
             onChange={(e) => {
               if (sessionId) {
                 actions.updateDraft(sessionId, e.target.value);
@@ -414,14 +422,26 @@ export function Composer() {
               ) : (
                 <button
                   type="button"
-                  className="send-button"
+                  className={`send-button ${!isConnected ? "send-button--queue" : ""}`}
                   onClick={() => void actions.sendMessage()}
                   disabled={!canSend}
-                  aria-label="Отправить сообщение"
+                  aria-label={
+                    isConnected
+                      ? "Отправить сообщение"
+                      : "Поставить сообщение в офлайн-очередь"
+                  }
                   data-testid="send-button"
-                  title="Отправить (Enter)"
+                  title={
+                    isConnected
+                      ? "Отправить (Enter)"
+                      : "Поставить в очередь до восстановления сети (Enter)"
+                  }
                 >
-                  <ArrowUp size={15} weight="bold" />
+                  {isConnected ? (
+                    <ArrowUp size={15} weight="bold" />
+                  ) : (
+                    <Clock size={15} weight="bold" />
+                  )}
                 </button>
               )}
             </div>

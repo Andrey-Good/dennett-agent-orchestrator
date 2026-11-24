@@ -1,16 +1,23 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  Archive,
+  ArrowCounterClockwise,
   ArrowsClockwise,
   CaretDown,
   Check,
+  CheckCircle,
+  DotsThree,
+  EyeSlash,
   FileCode,
   FileText,
   FolderOpen,
   FolderSimple,
   Plus,
   Sidebar,
+  Trash,
 } from "@phosphor-icons/react";
 
+import type { ArtifactRecord } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
 
 const MIME_OPTIONS: Array<{ value: string; label: string }> = [
@@ -43,7 +50,11 @@ export function WorkspacePanel() {
   const [artMime, setArtMime] = useState("text/markdown");
   const [artContent, setArtContent] = useState("");
   const [mimeOpen, setMimeOpen] = useState(false);
+  const [artifactMenuOpen, setArtifactMenuOpen] = useState(false);
+  const [artifactMenuFlipUp, setArtifactMenuFlipUp] = useState(false);
   const mimeAnchorRef = useRef<HTMLDivElement | null>(null);
+  const artifactMenuRef = useRef<HTMLDivElement | null>(null);
+  const resourceScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!mimeOpen) {
@@ -69,11 +80,69 @@ export function WorkspacePanel() {
     };
   }, [mimeOpen]);
 
+  useEffect(() => {
+    if (!artifactMenuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (artifactMenuRef.current && !artifactMenuRef.current.contains(event.target as Node)) {
+        setArtifactMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setArtifactMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+    };
+  }, [artifactMenuOpen]);
+
+  const rawArtifacts = state.activeDetail?.artifacts ?? [];
+
+  // Group artifacts by logical name (excluding removed entries) so v1/v2 collapse neatly into one row + revision pills.
+  const groupedArtifacts = useMemo(() => {
+    const visible = rawArtifacts.filter((a) => (a.lifecycle_state ?? "active") !== "removed");
+    const byName = new Map<string, ArtifactRecord[]>();
+    for (const art of visible) {
+      const list = byName.get(art.name) ?? [];
+      list.push(art);
+      byName.set(art.name, list);
+    }
+    return Array.from(byName.entries()).map(([name, revs]) => {
+      const sorted = [...revs].sort((a, b) => a.revision - b.revision);
+      const latest = sorted[sorted.length - 1]!;
+      return { name, revisions: sorted, latest };
+    });
+  }, [rawArtifacts]);
+
+  const selectedRevisions = useMemo(() => {
+    const sel = meta.selectedArtifact;
+    if (!sel) {
+      return [];
+    }
+    if (
+      state.artifactRevisions.length > 0 &&
+      state.artifactRevisions[0]?.name === sel.name &&
+      state.artifactRevisions[0]?.session_id === sel.session_id
+    ) {
+      return state.artifactRevisions;
+    }
+    return rawArtifacts
+      .filter((a) => a.name === sel.name)
+      .sort((a, b) => a.revision - b.revision);
+  }, [meta.selectedArtifact, rawArtifacts, state.artifactRevisions]);
+
   if (!state.isRightPanelOpen) {
     return null;
   }
 
-  const artifacts = state.activeDetail?.artifacts ?? [];
   const activeProject = meta.activeProject;
   const filesData = state.projectFiles;
   const isBound = Boolean(activeProject?.workspace_path);
@@ -97,6 +166,10 @@ export function WorkspacePanel() {
 
   const currentMimeLabel =
     MIME_OPTIONS.find((item) => item.value === artMime)?.label ?? artMime;
+
+  const selectedArt = meta.selectedArtifact;
+  const selectedCompleteness = selectedArt?.completeness_status ?? "final";
+  const selectedLifecycle = selectedArt?.lifecycle_state ?? "active";
 
   return (
     <aside
@@ -131,7 +204,7 @@ export function WorkspacePanel() {
         </div>
       </header>
 
-      <div className="resource-scroll">
+      <div className="resource-scroll" ref={resourceScrollRef}>
         <section className="resource-section" data-testid="workspace-files-section">
           <div className="resource-section__head">
             <h3>
@@ -212,7 +285,7 @@ export function WorkspacePanel() {
         <section className="resource-section" data-testid="workspace-artifacts-section">
           <div className="resource-section__head">
             <h3>
-              Артефакты сессии <span>{artifacts.length}</span>
+              Артефакты сессии <span>{groupedArtifacts.length}</span>
             </h3>
             <button
               type="button"
@@ -304,26 +377,37 @@ export function WorkspacePanel() {
             </form>
           )}
 
-          {artifacts.length === 0 ? (
+          {groupedArtifacts.length === 0 ? (
             <p className="resource-empty">Артефактов в этой сессии пока нет.</p>
           ) : (
             <div className="artifact-list" data-testid="artifact-list">
-              {artifacts.map((art) => {
-                const isSelected = meta.selectedArtifact?.artifact_id === art.artifact_id;
+              {groupedArtifacts.map(({ name, revisions, latest }) => {
+                const isSelected = selectedArt?.name === name;
+                const completeness = latest.completeness_status ?? "final";
+                const lifecycle = latest.lifecycle_state ?? "active";
                 return (
                   <button
-                    key={art.artifact_id}
+                    key={latest.artifact_id}
                     type="button"
                     className={`resource-row ${isSelected ? "is-selected" : ""}`}
-                    onClick={() => void actions.selectArtifact(art.artifact_id)}
-                    data-testid={`artifact-item-${art.artifact_id}`}
+                    onClick={() => void actions.selectArtifact(latest.artifact_id)}
+                    data-testid={`artifact-item-${latest.artifact_id}`}
                   >
                     <FileText size={16} aria-hidden="true" />
                     <span>
-                      <strong>{art.name}</strong>
+                      <strong>{name}</strong>
                       <small>
-                        {art.mime_type} · rev {art.revision}
+                        {latest.mime_type} · v{latest.revision}
+                        {revisions.length > 1 ? ` (${revisions.length} верс.)` : ""}
+                        {lifecycle === "archived" ? " · архив" : ""}
+                        {lifecycle === "deleted" ? " · удалено" : ""}
                       </small>
+                    </span>
+                    <span
+                      className={`artifact-badge artifact-badge--${completeness}`}
+                      data-testid={`artifact-completeness-${latest.artifact_id}`}
+                    >
+                      {completeness === "partial" ? "Частичный" : "Финальный"}
                     </span>
                   </button>
                 );
@@ -331,18 +415,194 @@ export function WorkspacePanel() {
             </div>
           )}
 
-          {meta.selectedArtifact && (
+          {selectedArt && (
             <div className="artifact-preview" data-testid="artifact-preview">
               <div className="artifact-preview__meta">
-                <strong>{meta.selectedArtifact.name}</strong>
-                <span>rev {meta.selectedArtifact.revision}</span>
+                <div className="artifact-preview__title-group">
+                  <strong>{selectedArt.name}</strong>
+                  <span
+                    className={`artifact-badge artifact-badge--${selectedCompleteness}`}
+                    data-testid="artifact-preview-completeness"
+                  >
+                    {selectedCompleteness === "partial" ? "Частичный" : "Финальный"}
+                  </span>
+                </div>
+
+                <div className="artifact-preview__controls" ref={artifactMenuRef}>
+                  <span className="artifact-preview__rev">rev {selectedArt.revision}</span>
+                  <button
+                    type="button"
+                    className="icon-button icon-button--xs"
+                    aria-label={`Действия с артефактом ${selectedArt.name}`}
+                    aria-expanded={artifactMenuOpen}
+                    aria-haspopup="menu"
+                    data-testid="artifact-lifecycle-trigger"
+                    onClick={(e) => {
+                      if (artifactMenuOpen) {
+                        setArtifactMenuOpen(false);
+                        return;
+                      }
+                      const scrollEl = resourceScrollRef.current;
+                      if (scrollEl) {
+                        const scrollRect = scrollEl.getBoundingClientRect();
+                        const triggerRect = e.currentTarget.getBoundingClientRect();
+                        if (scrollRect.height > 0) {
+                          const spaceBelow = scrollRect.bottom - triggerRect.bottom;
+                          const spaceAbove = triggerRect.top - scrollRect.top;
+                          setArtifactMenuFlipUp(spaceBelow < 190 && spaceAbove > spaceBelow);
+                        } else {
+                          setArtifactMenuFlipUp(false);
+                        }
+                      } else {
+                        setArtifactMenuFlipUp(false);
+                      }
+                      setArtifactMenuOpen(true);
+                    }}
+                  >
+                    <DotsThree size={15} weight="bold" />
+                  </button>
+
+                  {artifactMenuOpen && (
+                    <div
+                      className={`floating-popover artifact-lifecycle-menu ${
+                        artifactMenuFlipUp ? "artifact-lifecycle-menu--up" : ""
+                      }`}
+                      role="menu"
+                      aria-label="Управление артефактом"
+                      data-testid="artifact-lifecycle-menu"
+                    >
+                      {selectedCompleteness === "partial" && selectedLifecycle !== "deleted" && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="artifact-action-finalize"
+                          onClick={() => {
+                            setArtifactMenuOpen(false);
+                            void actions.applyArtifactLifecycle(
+                              selectedArt.session_id,
+                              selectedArt.artifact_id,
+                              "finalize",
+                            );
+                          }}
+                        >
+                          <CheckCircle size={14} aria-hidden="true" />
+                          <span>Отметить финальным</span>
+                        </button>
+                      )}
+
+                      {selectedLifecycle === "archived" ? (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="artifact-action-unarchive"
+                          onClick={() => {
+                            setArtifactMenuOpen(false);
+                            void actions.applyArtifactLifecycle(
+                              selectedArt.session_id,
+                              selectedArt.artifact_id,
+                              "unarchive",
+                            );
+                          }}
+                        >
+                          <ArrowCounterClockwise size={14} aria-hidden="true" />
+                          <span>Вернуть из архива</span>
+                        </button>
+                      ) : selectedLifecycle !== "deleted" ? (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="artifact-action-archive"
+                          onClick={() => {
+                            setArtifactMenuOpen(false);
+                            void actions.applyArtifactLifecycle(
+                              selectedArt.session_id,
+                              selectedArt.artifact_id,
+                              "archive",
+                            );
+                          }}
+                        >
+                          <Archive size={14} aria-hidden="true" />
+                          <span>В архив</span>
+                        </button>
+                      ) : null}
+
+                      {selectedLifecycle !== "deleted" && (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            data-testid="artifact-action-remove"
+                            onClick={() => {
+                              setArtifactMenuOpen(false);
+                              void actions.applyArtifactLifecycle(
+                                selectedArt.session_id,
+                                selectedArt.artifact_id,
+                                "remove",
+                              );
+                            }}
+                          >
+                            <EyeSlash size={14} aria-hidden="true" />
+                            <span>Убрать из списка</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="menu-item-danger"
+                            data-testid="artifact-action-delete"
+                            onClick={() => {
+                              setArtifactMenuOpen(false);
+                              void actions.applyArtifactLifecycle(
+                                selectedArt.session_id,
+                                selectedArt.artifact_id,
+                                "delete",
+                              );
+                            }}
+                          >
+                            <Trash size={14} aria-hidden="true" />
+                            <span>Удалить из Dennett</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {selectedRevisions.length > 1 && (
+                <div
+                  className="artifact-revisions-bar"
+                  role="tablist"
+                  aria-label="Версии артефакта"
+                  data-testid="artifact-revisions-bar"
+                >
+                  {selectedRevisions.map((rev) => {
+                    const isCurrent = rev.artifact_id === selectedArt.artifact_id;
+                    return (
+                      <button
+                        key={rev.artifact_id}
+                        type="button"
+                        role="tab"
+                        aria-selected={isCurrent}
+                        className={`artifact-rev-pill ${isCurrent ? "is-active" : ""}`}
+                        data-testid={`artifact-revision-pill-${rev.revision}`}
+                        onClick={() => void actions.selectArtifact(rev.artifact_id)}
+                      >
+                        v{rev.revision}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Strictly plain text child — zero innerHTML/XSS */}
               <pre className="artifact-preview__body">
-                {meta.selectedArtifact.content ??
-                  (meta.selectedArtifact.relative_path
-                    ? `Файл рабочей области: ${meta.selectedArtifact.relative_path}`
-                    : "(пустой артефакт)")}
+                {selectedLifecycle === "deleted"
+                  ? "(Содержимое артефакта удалено в Dennett; файлы в рабочей папке не затронуты)"
+                  : (selectedArt.content ??
+                    (selectedArt.relative_path
+                      ? `Файл рабочей области: ${selectedArt.relative_path}`
+                      : "(пустой артефакт)"))}
               </pre>
             </div>
           )}

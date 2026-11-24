@@ -12,9 +12,13 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use dennett_contracts::{
-    CreateAgentRequest, CreateArtifactRequest, CreateProjectRequest, CreateSessionRequest,
-    MemoryScope, MemoryStatus, SendMessageRequest, ThinkingLevel, UpdateAgentConfigRequest,
-    WorkspaceWritePolicy,
+    ArtifactCompleteness, ArtifactLifecycleAction, ArtifactLifecycleRequest,
+    ArtifactLifecycleState, CreateAgentRequest, CreateArtifactRequest, CreateProjectRequest,
+    CreateSessionRequest, CreateTaskRequest, DispatchEffectRequest, ExternalEffectStatus,
+    IdempotencyKey, InboxCardKind, MemoryScope, MemoryStatus, PermissionResolutionDecision,
+    ProjectLifecycleState, RebindProjectRequest, ReconcileEffectRequest, ResolvePermissionRequest,
+    RevokeGrantRequest, SendMessageRequest, SimEffectBehavior, TaskStatus, ThinkingLevel,
+    UpdateAgentConfigRequest, UpdateTaskRequest, WorkspaceWritePolicy,
 };
 use dennett_desktop_lib::{HeadBridge, HeadEndpointPolicy};
 use serde_json::json;
@@ -542,4 +546,790 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
 
     head.shutdown().await;
     let _ = fs::remove_dir_all(&workspace_dir);
+}
+
+async fn wait_for_task_terminal(
+    bridge: &HeadBridge,
+    task_id: dennett_contracts::TaskId,
+    timeout: Duration,
+) -> dennett_contracts::TaskRecord {
+    let deadline = time::Instant::now() + timeout;
+    loop {
+        let detail = bridge
+            .get_task_detail(task_id)
+            .await
+            .expect("get_task_detail");
+        if detail.task.status.is_terminal() {
+            return detail.task;
+        }
+        assert!(
+            time::Instant::now() < deadline,
+            "timed out waiting for task {task_id} to reach terminal state (last={:?})",
+            detail.task.status
+        );
+        time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies full interactive ask_before_write approval lifecycle, grant creation/revocation, and Stop cancellation through HeadBridge"
+)]
+async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revocation() {
+    let (mem_pg, ctrl_pg) = require_pg_urls();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let scope_str = format!("project:desktop-d2-apr-{}", &suffix[..8]);
+    let scope = MemoryScope::try_new(&scope_str).expect("valid scope");
+    let token = format!("tok-d2-apr-{suffix}");
+
+    let workspace_dir = env::temp_dir().join(format!("dennett-d2-apr-ws-{}", &suffix[..8]));
+    fs::create_dir_all(&workspace_dir).expect("create temp workspace");
+
+    let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
+    let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
+
+    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
+        .expect("construct HeadBridge");
+
+    let snap_before = bridge
+        .get_state_snapshot(None, true)
+        .await
+        .expect("initial state snapshot");
+
+    let project = bridge
+        .create_project(&CreateProjectRequest {
+            name: format!("D2 Approval Proj {}", &suffix[..6]),
+            workspace_path: Some(workspace_dir.to_string_lossy().into_owned()),
+            memory_scope: Some(scope.clone()),
+        })
+        .await
+        .expect("create_project");
+
+    let mut allowed = BTreeSet::new();
+    allowed.insert(scope);
+    let agent = bridge
+        .create_agent(&CreateAgentRequest {
+            name: format!("D2 Approval Agent {}", &suffix[..6]),
+            description: String::from("Interactive ask_before_write desktop test agent"),
+            system_prompt: String::from("Ask before writing."),
+            model_preference: Some(String::from("sim-model-alpha")),
+            thinking_level: Some(ThinkingLevel::Medium),
+            allowed_memory_scopes: allowed,
+            workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            default_budget: None,
+            attached_skills: Vec::new(),
+        })
+        .await
+        .expect("create_agent");
+
+    let session = bridge
+        .create_session(&CreateSessionRequest {
+            agent_id: agent.agent_id,
+            project_id: project.project_id,
+            title: String::from("D2 Interactive Approval Chat"),
+        })
+        .await
+        .expect("create_session");
+
+    // Start turn that triggers interactive ask_before_write permission request concurrently.
+    let send_bridge = bridge.clone();
+    let sid = session.session_id;
+    let turn_handle = tokio::spawn(async move {
+        send_bridge
+            .send_message(
+                sid,
+                &SendMessageRequest {
+                    content: String::from("[SIM:TOOL:write_file:approved.txt|approved via bridge]"),
+                    timeout_ms: Some(15_000),
+                    client_message_id: None,
+                },
+            )
+            .await
+    });
+
+    // Poll pending permission request through cloned HeadBridge (proving zero lock contention).
+    let deadline = time::Instant::now() + Duration::from_secs(10);
+    let pending_req = loop {
+        let list = bridge
+            .list_permission_requests(Some("pending"), Some(session.session_id))
+            .await
+            .expect("list_permission_requests");
+        if let Some(req) = list.requests.into_iter().next() {
+            break req;
+        }
+        assert!(
+            time::Instant::now() < deadline,
+            "timed out waiting for pending permission request"
+        );
+        time::sleep(Duration::from_millis(30)).await;
+    };
+
+    // File MUST NOT exist on disk before owner approval!
+    let approved_path = workspace_dir.join("approved.txt");
+    assert!(
+        !approved_path.exists(),
+        "file must not be written before interactive approval"
+    );
+
+    let inbox = bridge
+        .list_inbox_cards(Some("open"), Some(project.project_id))
+        .await
+        .expect("list_inbox_cards");
+    assert!(
+        inbox
+            .cards
+            .iter()
+            .any(|c| c.kind == InboxCardKind::PermissionApproval
+                && c.permission_request_id == Some(pending_req.request_id)),
+        "Action Inbox must expose open permission_approval card"
+    );
+
+    // Approve for project via HeadBridge -> issues revocable grant + unblocks write_file once.
+    let resolved = bridge
+        .resolve_permission_request(
+            pending_req.request_id,
+            &ResolvePermissionRequest {
+                expected_revision: Some(pending_req.revision),
+                decision: PermissionResolutionDecision::ApproveProject,
+                reason: Some(String::from("Owner approved project write via desktop UI")),
+                max_uses: None,
+                expires_in_secs: None,
+            },
+        )
+        .await
+        .expect("resolve_permission_request");
+    let grant = resolved
+        .issued_grant
+        .expect("ApproveProject must issue a revocable CapabilityGrant");
+
+    let turn_resp = turn_handle
+        .await
+        .expect("turn task join")
+        .expect("send_message should succeed after approval");
+    assert!(turn_resp.assistant_message.is_some());
+    assert_eq!(
+        fs::read_to_string(&approved_path).expect("approved file exists"),
+        "approved via bridge"
+    );
+
+    // Events stream observed the permission.requested / permission.resolved events cleanly.
+    let feed = bridge
+        .get_events(
+            snap_before.snapshot_cursor.committed_seq,
+            Some(snap_before.snapshot_cursor.authority_epoch),
+            Some(project.project_id),
+            Some(100),
+        )
+        .await
+        .expect("get_events");
+    assert!(
+        feed.events
+            .iter()
+            .any(|ev| ev.event_type == "permission.requested"),
+        "event journal must contain permission.requested"
+    );
+    assert!(
+        feed.events
+            .iter()
+            .any(|ev| ev.event_type == "permission.resolved"),
+        "event journal must contain permission.resolved"
+    );
+
+    // Verify grant is visible and immediately revocable through HeadBridge.
+    let grants = bridge
+        .list_capability_grants(Some(project.project_id), false)
+        .await
+        .expect("list_capability_grants");
+    assert!(grants.grants.iter().any(|g| g.grant_id == grant.grant_id));
+
+    let revoked = bridge
+        .revoke_capability_grant(
+            grant.grant_id,
+            &RevokeGrantRequest {
+                reason: Some(String::from("revoked in desktop settings")),
+            },
+        )
+        .await
+        .expect("revoke_capability_grant");
+    assert!(revoked.revoked_at.is_some());
+
+    // After revocation, a second write MUST require approval again; cancelling via Stop unblocks cleanly.
+    let second_bridge = bridge.clone();
+    let second_handle = tokio::spawn(async move {
+        second_bridge
+            .send_message(
+                sid,
+                &SendMessageRequest {
+                    content: String::from("[SIM:TOOL:write_file:after-revoke.txt|blocked]"),
+                    timeout_ms: Some(15_000),
+                    client_message_id: None,
+                },
+            )
+            .await
+    });
+
+    let deadline2 = time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let list = bridge
+            .list_permission_requests(Some("pending"), Some(session.session_id))
+            .await
+            .expect("list_permission_requests after revoke");
+        if !list.requests.is_empty() {
+            break;
+        }
+        assert!(
+            time::Instant::now() < deadline2,
+            "revoked grant must force a fresh pending permission request"
+        );
+        time::sleep(Duration::from_millis(30)).await;
+    }
+
+    let cancel_resp = bridge
+        .cancel_run(session.session_id)
+        .await
+        .expect("cancel_run during pending approval");
+    assert!(cancel_resp.cancelled);
+    let _ = second_handle.await.expect("second turn join");
+    assert!(
+        !workspace_dir.join("after-revoke.txt").exists(),
+        "cancelled pending approval must never write file"
+    );
+
+    head.shutdown().await;
+    memoryd.shutdown().await;
+    let _ = fs::remove_dir_all(&workspace_dir);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies targeted per-task Stop leaving sibling alive plus inline goal update generation bump over real PG16"
+)]
+async fn d2_desktop_bridge_targeted_task_stop_leaves_sibling_alive_and_updates_goal_generation() {
+    let (mem_pg, ctrl_pg) = require_pg_urls();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let scope_str = format!("project:desktop-d2-tsk-{}", &suffix[..8]);
+    let scope = MemoryScope::try_new(&scope_str).expect("valid scope");
+    let token = format!("tok-d2-tsk-{suffix}");
+
+    let workspace_dir = env::temp_dir().join(format!("dennett-d2-tsk-ws-{}", &suffix[..8]));
+    fs::create_dir_all(&workspace_dir).expect("create temp workspace");
+
+    let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
+    let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
+
+    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
+        .expect("construct HeadBridge");
+
+    let project = bridge
+        .create_project(&CreateProjectRequest {
+            name: format!("D2 Tasks Proj {}", &suffix[..6]),
+            workspace_path: Some(workspace_dir.to_string_lossy().into_owned()),
+            memory_scope: Some(scope.clone()),
+        })
+        .await
+        .expect("create_project");
+
+    let mut allowed = BTreeSet::new();
+    allowed.insert(scope);
+    let agent = bridge
+        .create_agent(&CreateAgentRequest {
+            name: format!("D2 Tasks Agent {}", &suffix[..6]),
+            description: String::from("Durable task desktop bridge test agent"),
+            system_prompt: String::from("Execute tasks accurately."),
+            model_preference: Some(String::from("sim-model-alpha")),
+            thinking_level: Some(ThinkingLevel::Low),
+            allowed_memory_scopes: allowed,
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            default_budget: None,
+            attached_skills: Vec::new(),
+        })
+        .await
+        .expect("create_agent");
+
+    let task_a = bridge
+        .create_task(&CreateTaskRequest {
+            project_id: project.project_id,
+            session_id: None,
+            agent_id: agent.agent_id,
+            parent_task_id: None,
+            title: Some(String::from("Slow Task A")),
+            goal: String::from("[SIM:SLOW:6000] Long running Task A"),
+            schedule: None,
+            wait_for_signal: None,
+            budget: None,
+            attached_skills: Vec::new(),
+            auth_profile_override: None,
+            execute_immediately: Some(true),
+        })
+        .await
+        .expect("create task A");
+
+    let task_b = bridge
+        .create_task(&CreateTaskRequest {
+            project_id: project.project_id,
+            session_id: None,
+            agent_id: agent.agent_id,
+            parent_task_id: None,
+            title: Some(String::from("Sibling Task B")),
+            goal: String::from("[SIM:SLOW:350] Sibling Task B must survive"),
+            schedule: None,
+            wait_for_signal: None,
+            budget: None,
+            attached_skills: Vec::new(),
+            auth_profile_override: None,
+            execute_immediately: Some(true),
+        })
+        .await
+        .expect("create task B");
+
+    // Wait briefly so Task A is running, then issue targeted Stop strictly on Task A.
+    time::sleep(Duration::from_millis(80)).await;
+    let stop_a = bridge
+        .cancel_task(task_a.task_id)
+        .await
+        .expect("cancel_task A");
+    assert_eq!(stop_a.task.status, TaskStatus::Cancelled);
+    assert!(!stop_a.external_outcome_unknown);
+
+    // Sibling Task B MUST complete normally without being disturbed by Task A's Stop!
+    let final_b = wait_for_task_terminal(&bridge, task_b.task_id, Duration::from_secs(10)).await;
+    assert_eq!(
+        final_b.status,
+        TaskStatus::Succeeded,
+        "cancelling Task A must never kill sibling Task B"
+    );
+
+    // Inline goal update via HeadBridge bumps `generation` cleanly (V07).
+    let task_c = bridge
+        .create_task(&CreateTaskRequest {
+            project_id: project.project_id,
+            session_id: None,
+            agent_id: agent.agent_id,
+            parent_task_id: None,
+            title: Some(String::from("Signal Task C")),
+            goal: String::from("Original goal v1"),
+            schedule: None,
+            wait_for_signal: Some(String::from("go")),
+            budget: None,
+            attached_skills: Vec::new(),
+            auth_profile_override: None,
+            execute_immediately: None,
+        })
+        .await
+        .expect("create waiting_signal task C");
+    assert_eq!(task_c.generation, 1);
+    assert_eq!(task_c.status, TaskStatus::WaitingSignal);
+
+    let updated_c = bridge
+        .update_task(
+            task_c.task_id,
+            &UpdateTaskRequest {
+                title: None,
+                goal: Some(String::from("Refined goal v2")),
+                schedule: None,
+                clear_schedule: false,
+                budget: None,
+                execute_immediately: Some(false),
+            },
+        )
+        .await
+        .expect("update_task C");
+    assert_eq!(updated_c.generation, 2);
+    assert_eq!(updated_c.goal, "Refined goal v2");
+
+    head.shutdown().await;
+    memoryd.shutdown().await;
+    let _ = fs::remove_dir_all(&workspace_dir);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies LostAck -> unknown_external inbox visibility, honest Stop, and reconcile without blind retries over real PG16"
+)]
+async fn d2_desktop_bridge_lost_ack_unknown_external_visibility_honest_stop_and_reconcile() {
+    let (mem_pg, ctrl_pg) = require_pg_urls();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let scope_str = format!("project:desktop-d2-unk-{}", &suffix[..8]);
+    let scope = MemoryScope::try_new(&scope_str).expect("valid scope");
+    let token = format!("tok-d2-unk-{suffix}");
+
+    let workspace_dir = env::temp_dir().join(format!("dennett-d2-unk-ws-{}", &suffix[..8]));
+    fs::create_dir_all(&workspace_dir).expect("create temp workspace");
+
+    let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
+    let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
+
+    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
+        .expect("construct HeadBridge");
+
+    let project = bridge
+        .create_project(&CreateProjectRequest {
+            name: format!("D2 Unknown Proj {}", &suffix[..6]),
+            workspace_path: Some(workspace_dir.to_string_lossy().into_owned()),
+            memory_scope: Some(scope.clone()),
+        })
+        .await
+        .expect("create_project");
+
+    let mut allowed = BTreeSet::new();
+    allowed.insert(scope);
+    let agent = bridge
+        .create_agent(&CreateAgentRequest {
+            name: format!("D2 Unknown Agent {}", &suffix[..6]),
+            description: String::from("LostAck UNKNOWN reconciliation desktop test agent"),
+            system_prompt: String::from("Track external effects safely."),
+            model_preference: None,
+            thinking_level: Some(ThinkingLevel::Low),
+            allowed_memory_scopes: allowed,
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            default_budget: None,
+            attached_skills: Vec::new(),
+        })
+        .await
+        .expect("create_agent");
+
+    let task = bridge
+        .create_task(&CreateTaskRequest {
+            project_id: project.project_id,
+            session_id: None,
+            agent_id: agent.agent_id,
+            parent_task_id: None,
+            title: Some(String::from("External Webhook Task")),
+            goal: String::from("Dispatch external notification"),
+            schedule: None,
+            wait_for_signal: Some(String::from("ready")),
+            budget: None,
+            attached_skills: Vec::new(),
+            auth_profile_override: None,
+            execute_immediately: None,
+        })
+        .await
+        .expect("create task");
+
+    let idem_key = IdempotencyKey::try_new(format!("desktop-lost-ack-{}", &suffix[..8]))
+        .expect("valid idempotency key");
+    let dispatched = bridge
+        .dispatch_effect(&DispatchEffectRequest {
+            project_id: project.project_id,
+            session_id: task.session_id,
+            task_id: Some(task.task_id),
+            run_id: None,
+            agent_id: agent.agent_id,
+            effect_idempotency_key: idem_key,
+            connector_id: Some(String::from("simulated_external")),
+            operation: String::from("send_webhook"),
+            target_recipient: String::from("ops@example.test"),
+            parameters_json: String::from("{\"msg\":\"deploy-ready\"}"),
+            simulated_behavior: Some(SimEffectBehavior::LostAck),
+        })
+        .await
+        .expect("dispatch_effect LostAck");
+    assert_eq!(dispatched.effect.status, ExternalEffectStatus::Unknown);
+    assert!(dispatched.external_outcome_unknown);
+
+    // Task transitions to unknown_external and Action Inbox exposes an UnknownEffect card.
+    let detail = bridge
+        .get_task_detail(task.task_id)
+        .await
+        .expect("get_task_detail");
+    assert_eq!(detail.task.status, TaskStatus::UnknownExternal);
+    assert!(
+        detail
+            .open_inbox_cards
+            .iter()
+            .any(|c| c.kind == InboxCardKind::UnknownEffect
+                && c.effect_id == Some(dispatched.effect.effect_id)),
+        "open Action Inbox must show UnknownEffect card"
+    );
+
+    // Honest Stop reports external_outcome_unknown = true instead of pretending the webhook was undone.
+    let stop_resp = bridge
+        .cancel_task(task.task_id)
+        .await
+        .expect("cancel_task with unknown external effect");
+    assert!(stop_resp.external_outcome_unknown);
+    assert_eq!(stop_resp.task.status, TaskStatus::UnknownExternal);
+    assert_eq!(stop_resp.unknown_effects.len(), 1);
+
+    // Reconcile via HeadBridge resolves to Confirmed with provider_execution_count == 1 (ZERO blind retries).
+    let reconciled = bridge
+        .reconcile_effect(
+            dispatched.effect.effect_id,
+            &ReconcileEffectRequest {
+                manual_resolution: None,
+                reason: Some(String::from("reconciled from desktop inbox")),
+            },
+        )
+        .await
+        .expect("reconcile_effect");
+    assert_eq!(reconciled.effect.status, ExternalEffectStatus::Confirmed);
+    assert!(reconciled.provider_found);
+    assert_eq!(reconciled.provider_execution_count, 1);
+
+    let listed = bridge
+        .list_effects(Some(task.task_id), None, None)
+        .await
+        .expect("list_effects");
+    assert_eq!(listed.effects.len(), 1);
+    assert_eq!(listed.effects[0].status, ExternalEffectStatus::Confirmed);
+
+    head.shutdown().await;
+    memoryd.shutdown().await;
+    let _ = fs::remove_dir_all(&workspace_dir);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies client_message_id dedup, full Contract C project lifecycle without touching disk files, and Contract D artifact revisions"
+)]
+async fn d2_desktop_bridge_client_message_id_dedup_project_lifecycle_and_artifact_revisions() {
+    let (mem_pg, ctrl_pg) = require_pg_urls();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let scope_str = format!("project:desktop-d2-lc-{}", &suffix[..8]);
+    let scope = MemoryScope::try_new(&scope_str).expect("valid scope");
+    let token = format!("tok-d2-lc-{suffix}");
+
+    let ws_a = env::temp_dir().join(format!("dennett-d2-lca-{}", &suffix[..8]));
+    let ws_b = env::temp_dir().join(format!("dennett-d2-lcb-{}", &suffix[..8]));
+    fs::create_dir_all(&ws_a).expect("create ws_a");
+    fs::create_dir_all(&ws_b).expect("create ws_b");
+    let sentinel_a = ws_a.join("user-precious.txt");
+    let sentinel_b = ws_b.join("user-rebound.txt");
+    fs::write(&sentinel_a, "do not delete A").expect("write sentinel A");
+    fs::write(&sentinel_b, "do not delete B").expect("write sentinel B");
+
+    let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
+    let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
+
+    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
+        .expect("construct HeadBridge");
+
+    let project = bridge
+        .create_project(&CreateProjectRequest {
+            name: format!("D2 Lifecycle Proj {}", &suffix[..6]),
+            workspace_path: Some(ws_a.to_string_lossy().into_owned()),
+            memory_scope: Some(scope.clone()),
+        })
+        .await
+        .expect("create_project");
+
+    let mut allowed = BTreeSet::new();
+    allowed.insert(scope);
+    let agent = bridge
+        .create_agent(&CreateAgentRequest {
+            name: format!("D2 Lifecycle Agent {}", &suffix[..6]),
+            description: String::from("Dedup & lifecycle test agent"),
+            system_prompt: String::from("Be concise."),
+            model_preference: None,
+            thinking_level: Some(ThinkingLevel::Low),
+            allowed_memory_scopes: allowed,
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            default_budget: None,
+            attached_skills: Vec::new(),
+        })
+        .await
+        .expect("create_agent");
+
+    let session = bridge
+        .create_session(&CreateSessionRequest {
+            agent_id: agent.agent_id,
+            project_id: project.project_id,
+            title: String::from("D2 Dedup Session"),
+        })
+        .await
+        .expect("create_session");
+
+    // 1. Offline queue `client_message_id` deduplication guarantees exactly one execution.
+    let client_msg_id = format!("offline-queue-{}", &suffix[..8]);
+    let first = bridge
+        .send_message(
+            session.session_id,
+            &SendMessageRequest {
+                content: String::from("Send exactly once across reconnect"),
+                timeout_ms: None,
+                client_message_id: Some(client_msg_id.clone()),
+            },
+        )
+        .await
+        .expect("first send_message");
+    assert!(!first.deduplicated);
+
+    let replay = bridge
+        .send_message(
+            session.session_id,
+            &SendMessageRequest {
+                content: String::from("Send exactly once across reconnect"),
+                timeout_ms: None,
+                client_message_id: Some(client_msg_id),
+            },
+        )
+        .await
+        .expect("replayed send_message");
+    assert!(replay.deduplicated);
+    assert_eq!(replay.run.run_id, first.run.run_id);
+    assert_eq!(
+        replay.user_message.message_id,
+        first.user_message.message_id
+    );
+
+    // 2. Artifact revisions v1 (partial) -> v2 (final) and Contract D lifecycle actions.
+    let v1 = bridge
+        .create_artifact(
+            session.session_id,
+            &CreateArtifactRequest {
+                run_id: Some(first.run.run_id),
+                name: String::from("draft-spec.md"),
+                mime_type: String::from("text/markdown"),
+                content: Some(String::from("# Draft v1")),
+                relative_path: None,
+                completeness_status: ArtifactCompleteness::Partial,
+            },
+        )
+        .await
+        .expect("create v1");
+    assert_eq!(v1.revision, 1);
+    assert_eq!(v1.completeness_status, ArtifactCompleteness::Partial);
+
+    let v2 = bridge
+        .create_artifact(
+            session.session_id,
+            &CreateArtifactRequest {
+                run_id: Some(first.run.run_id),
+                name: String::from("draft-spec.md"),
+                mime_type: String::from("text/markdown"),
+                content: Some(String::from("# Final v2")),
+                relative_path: None,
+                completeness_status: ArtifactCompleteness::Final,
+            },
+        )
+        .await
+        .expect("create v2");
+    assert_eq!(v2.revision, 2);
+
+    let revs = bridge
+        .list_artifact_revisions(session.session_id, "draft-spec.md")
+        .await
+        .expect("list_artifact_revisions");
+    assert_eq!(revs.artifacts.len(), 2);
+    assert_eq!(revs.artifacts[0].revision, 1);
+    assert_eq!(revs.artifacts[1].revision, 2);
+
+    let finalized = bridge
+        .apply_artifact_lifecycle(
+            session.session_id,
+            v1.artifact_id,
+            &ArtifactLifecycleRequest {
+                action: ArtifactLifecycleAction::Finalize,
+                reason: Some(String::from("promoted v1")),
+            },
+        )
+        .await
+        .expect("finalize v1");
+    assert_eq!(
+        finalized.artifact.completeness_status,
+        ArtifactCompleteness::Final
+    );
+    assert!(!finalized.user_workspace_files_deleted);
+
+    let archived_art = bridge
+        .apply_artifact_lifecycle(
+            session.session_id,
+            v1.artifact_id,
+            &ArtifactLifecycleRequest {
+                action: ArtifactLifecycleAction::Archive,
+                reason: None,
+            },
+        )
+        .await
+        .expect("archive artifact");
+    assert_eq!(
+        archived_art.artifact.lifecycle_state,
+        ArtifactLifecycleState::Archived
+    );
+
+    // 3. Contract C project lifecycle: archive -> unarchive -> rebind -> detach -> delete(confirm=true)
+    //    NEVER deletes user files on disk!
+    let archived = bridge
+        .archive_project(project.project_id)
+        .await
+        .expect("archive_project");
+    assert_eq!(
+        archived.project.lifecycle_state,
+        ProjectLifecycleState::Archived
+    );
+    assert!(!archived.user_workspace_files_deleted);
+
+    let with_archived = bridge
+        .list_projects_with_options(true)
+        .await
+        .expect("list_projects_with_options(true)");
+    assert!(
+        with_archived
+            .projects
+            .iter()
+            .any(|p| p.project_id == project.project_id
+                && p.lifecycle_state == ProjectLifecycleState::Archived)
+    );
+
+    let unarchived = bridge
+        .unarchive_project(project.project_id)
+        .await
+        .expect("unarchive_project");
+    assert_eq!(
+        unarchived.project.lifecycle_state,
+        ProjectLifecycleState::Active
+    );
+
+    let rebound = bridge
+        .rebind_project(
+            project.project_id,
+            &RebindProjectRequest {
+                workspace_path: ws_b.to_string_lossy().into_owned(),
+                reason: Some(String::from("moved folder")),
+            },
+        )
+        .await
+        .expect("rebind_project");
+    assert!(!rebound.user_workspace_files_deleted);
+    assert!(rebound.project.workspace_path.is_some());
+
+    let detached = bridge
+        .detach_project_workspace(project.project_id)
+        .await
+        .expect("detach_project_workspace");
+    assert_eq!(
+        detached.project.lifecycle_state,
+        ProjectLifecycleState::Detached
+    );
+    assert!(detached.project.workspace_path.is_none());
+    assert!(!detached.user_workspace_files_deleted);
+
+    let deleted = bridge
+        .delete_project(project.project_id, true)
+        .await
+        .expect("delete_project(confirm=true)");
+    assert_eq!(
+        deleted.project.lifecycle_state,
+        ProjectLifecycleState::DeletedRecord
+    );
+    assert!(!deleted.user_workspace_files_deleted);
+
+    // User files on disk remain 100% untouched!
+    assert_eq!(
+        fs::read_to_string(&sentinel_a).expect("sentinel A intact"),
+        "do not delete A"
+    );
+    assert_eq!(
+        fs::read_to_string(&sentinel_b).expect("sentinel B intact"),
+        "do not delete B"
+    );
+
+    head.shutdown().await;
+    memoryd.shutdown().await;
+    let _ = fs::remove_dir_all(&ws_a);
+    let _ = fs::remove_dir_all(&ws_b);
 }

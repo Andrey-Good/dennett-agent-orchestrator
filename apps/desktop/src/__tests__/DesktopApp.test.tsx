@@ -851,7 +851,7 @@ describe("Dennett Desktop D1 Rework UI", () => {
     expect(await screen.findByText(/Принято .* Запрос в Сессию A/)).toBeInTheDocument();
   });
 
-  it("H1-02: defaults folder-bound projects to allow_workspace, upgrades folderless agents on attach, removes dead ask_before_write choice, and renders policy denial / empty-reply notices", async () => {
+  it("H1-02 / D2: defaults folder-bound projects to allow_workspace, upgrades folderless agents on attach, enables interactive ask_before_write, and renders policy denial / empty-reply notices", async () => {
     const user = userEvent.setup();
     const bridge = new MockDesktopBridge({
       connected: true,
@@ -875,13 +875,18 @@ describe("Dennett Desktop D1 Rework UI", () => {
       expect(bridge.agents[0]?.current_config.workspace_write_policy.mode).toBe("allow_workspace");
     });
 
-    // 3. Access popover offers strictly D1 interactive choices (Запись в папку & Только чтение — never Спрашивать запись)
+    // 3. Access popover in D2 offers all 3 live choices: Спрашивать запись, Запись в папку, Только чтение
     await user.click(screen.getByTestId("access-selector-trigger"));
     const accessPopover = await screen.findByTestId("access-popover");
+    expect(accessPopover).toHaveTextContent("Спрашивать запись");
     expect(accessPopover).toHaveTextContent("Запись в папку");
     expect(accessPopover).toHaveTextContent("Только чтение");
-    expect(accessPopover).not.toHaveTextContent("Спрашивать запись");
-    await user.keyboard("{Escape}");
+    await user.click(screen.getByTestId("write-policy-option-ask_before_write"));
+    await waitFor(() => {
+      expect(bridge.agents[0]?.current_config.workspace_write_policy.mode).toBe(
+        "ask_before_write",
+      );
+    });
 
     // 4. Denied permission_decisions + run with assistant_message_id=null renders explicit visible notices
     const { project, agent, sessionA } = makeSeedFixture();

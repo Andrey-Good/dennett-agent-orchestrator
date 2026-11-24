@@ -5,6 +5,7 @@ import {
   FolderOpen,
   FolderPlus,
   Plugs,
+  WifiSlash,
 } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
@@ -39,6 +40,33 @@ export function ChatCard() {
     <main className="chat-card" data-testid="chat-card">
       <StatusBanners />
 
+      {!connected && hasSession && (
+        <div
+          className="status-banners"
+          data-testid="head-offline-inline-banner"
+        >
+          <div className="status-banner status-banner--warning" role="alert">
+            <div className="status-banner__copy">
+              <WifiSlash size={15} aria-hidden="true" />
+              <span>
+                <strong>Связь с dennett-head потеряна</strong> — вы можете продолжать писать
+                черновик или поставить сообщение в очередь; оно отправится один раз после
+                восстановления связи.
+              </span>
+            </div>
+            <button
+              type="button"
+              className="state-action"
+              onClick={() => void actions.refreshAll()}
+              data-testid="inline-retry-head-button"
+            >
+              <ArrowsClockwise size={12} aria-hidden="true" />
+              Повторить
+            </button>
+          </div>
+        </div>
+      )}
+
       {!state.initialized && state.isLoading ? (
         <div className="center-state" data-testid="loading-state">
           <div className="loading-lines loading-lines--centered">
@@ -48,7 +76,7 @@ export function ChatCard() {
           </div>
           <p>Подключение к dennett-head…</p>
         </div>
-      ) : !connected ? (
+      ) : !connected && !hasSession ? (
         <section
           className="center-state offline-state"
           role="alert"

@@ -13,8 +13,10 @@ import { ActivityRail } from "./components/ActivityRail";
 import { ChatCard } from "./components/ChatCard";
 import { CommandPalette } from "./components/CommandPalette";
 import { DevFolderPickerModal } from "./components/DevFolderPickerModal";
+import { InboxRadarCard } from "./components/InboxRadarCard";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { Sidebar } from "./components/Sidebar";
+import { TasksCard } from "./components/TasksCard";
 import { TitleBar } from "./components/TitleBar";
 import { UserSettingsBar } from "./components/UserSettingsBar";
 import { WorkspacePanel } from "./components/WorkspacePanel";
@@ -39,7 +41,13 @@ function DesktopShell() {
       <Sidebar />
       <UserSettingsBar />
       <div className="workspace-stage" data-testid="workspace-stage">
-        <ChatCard />
+        {state.activeView === "inbox" ? (
+          <InboxRadarCard />
+        ) : state.activeView === "tasks" ? (
+          <TasksCard />
+        ) : (
+          <ChatCard />
+        )}
         <WorkspacePanel />
       </div>
       <SettingsSheet />

@@ -21,8 +21,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_INTEGRATION_TESTS = 29
-MIN_DESKTOP_FRONTEND_TESTS = 20
+MIN_INTEGRATION_TESTS = 42
+MIN_DESKTOP_FRONTEND_TESTS = 28
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
@@ -1563,6 +1563,315 @@ def run_demo_d1(
                 )
 
 
+def _preseed_demo_d2_workspace(
+    head_http_url: str,
+    workspace_dir: Path,
+    memory_scope: str,
+) -> dict[str, str]:
+    """Pre-seed a clean D2 starter workspace with interactive `ask_before_write` policy."""
+    project = _post_loopback_json(
+        head_http_url,
+        "/v1/projects",
+        {
+            "name": "Рабочее пространство",
+            "workspace_path": str(workspace_dir),
+            "memory_scope": memory_scope,
+        },
+    )
+    agent = _post_loopback_json(
+        head_http_url,
+        "/v1/agents",
+        {
+            "name": "Проектный агент",
+            "description": "Проектный агент Dennett (D2: интерактивные подтверждения, поручения и таймеры)",
+            "system_prompt": (
+                f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
+                f"`{memory_scope}` для чтения и записи проектных решений и сохраняй результаты "
+                f"в рабочей папке проекта."
+            ),
+            "thinking_level": "medium",
+            "allowed_memory_scopes": [memory_scope],
+            "workspace_write_policy": {"mode": "ask_before_write"},
+        },
+    )
+    session = _post_loopback_json(
+        head_http_url,
+        "/v1/sessions",
+        {
+            "agent_id": agent["agent_id"],
+            "project_id": project["project_id"],
+            "title": "Новый чат",
+        },
+    )
+    return {
+        "project_id": str(project["project_id"]),
+        "agent_id": str(agent["agent_id"]),
+        "session_id": str(session["session_id"]),
+    }
+
+
+def run_demo_d2(
+    repo_root: Path,
+    *,
+    runtime: str,
+    auth_profile: str,
+    no_ui: bool,
+    dry_run: bool,
+) -> None:
+    """Launch an isolated disposable D2 environment (PG v4 + memoryd + Head scheduler/effects + Desktop UI)."""
+    compose_file = repo_root / "ops" / "test-env" / "docker-compose.test.yml"
+    if not compose_file.is_file():
+        raise CheckError(f"Missing docker compose file: {compose_file}")
+
+    session_tag = uuid.uuid4().hex[:8]
+    project_name = f"dennett-demo-d2-{session_tag}"
+    temp_root = Path(tempfile.gettempdir()) / f"dennett-demo-d2-{session_tag}"
+    profile_root = temp_root / "agy-profile"
+    workspace_dir = temp_root / "workspace"
+    effects_ledger_path = temp_root / "effects-ledger.json"
+    memory_scope = "project:workspace"
+
+    exe_suffix = ".exe" if os.name == "nt" else ""
+    target_debug = repo_root / "target" / "debug"
+    memoryd_bin = target_debug / f"dennett-memoryd{exe_suffix}"
+    memory_mcp_bin = target_debug / f"dennett-memory-mcp{exe_suffix}"
+    head_bin = target_debug / f"dennett-head{exe_suffix}"
+    desktop_bin = target_debug / f"dennett-desktop{exe_suffix}"
+
+    if dry_run:
+        plan = {
+            "mode": "demo-d2-dry-run",
+            "stage": "D2",
+            "control_schema_version": 4,
+            "isolated_profile_mode": "test_isolated",
+            "compose_project": project_name,
+            "compose_file": str(compose_file),
+            "runtime": runtime,
+            "auth_profile": auth_profile,
+            "launch_ui": not no_ui,
+            "temp_agy_profile_root": str(profile_root),
+            "demo_workspace_dir": str(workspace_dir),
+            "effects_ledger_path": str(effects_ledger_path),
+            "default_memory_scope": memory_scope,
+            "dynamic_memory_hmac_enabled": True,
+            "preseeded_workspace": {
+                "project_name": "Рабочее пространство",
+                "memory_scope": memory_scope,
+                "agent_name": "Проектный агент",
+                "workspace_write_policy": "ask_before_write",
+                "session_title": "Новый чат",
+            },
+            "binaries": {
+                "memoryd": str(memoryd_bin),
+                "memory_mcp": str(memory_mcp_bin),
+                "head": str(head_bin),
+                "desktop": str(desktop_bin),
+            },
+            "v03_invariant": (
+                "Closing the dennett-desktop window leaves dennett-head, HeadScheduler, and "
+                "dennett-memoryd running; press Ctrl+C in this launcher to stop the isolated D2 stack."
+            ),
+        }
+        print(json.dumps(plan, indent=2, ensure_ascii=False), flush=True)
+        return
+
+    if runtime == "antigravity":
+        agy_bin = os.environ.get("DENNETT_AGY_BIN", "").strip() or "agy"
+        if shutil.which(agy_bin) is None and not Path(agy_bin).is_file():
+            raise CheckError(
+                f"Antigravity CLI `{agy_bin}` not found on PATH. "
+                "Install `agy >= 1.5.0` or pass `--runtime simulated` for offline UI inspection."
+            )
+
+    clean_env = build_tool_env(removals=("DENNETT_MEMORY_PG_URL", "DENNETT_CONTROL_PG_URL"))
+
+    # Build server binaries (+ desktop binary with embedded dist when UI is enabled).
+    run_cmd(
+        [
+            "cargo",
+            "build",
+            "--bin",
+            "dennett-memoryd",
+            "--bin",
+            "dennett-memory-mcp",
+            "--bin",
+            "dennett-head",
+            "--bin",
+            "dennettctl",
+        ],
+        cwd=repo_root,
+        env=clean_env,
+    )
+    if not no_ui:
+        _check_windows_binary_unlocked(desktop_bin, "dennett-desktop")
+        run_cmd(["pnpm", "--dir", "apps/desktop", "run", "build"], cwd=repo_root, env=clean_env)
+        run_cmd(
+            ["cargo", "build", "-p", "dennett-desktop", "--features", "custom-protocol"],
+            cwd=repo_root,
+            env=clean_env,
+        )
+
+    profile_root.mkdir(parents=True, exist_ok=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    demo_token = f"dennett-demo-d2-{secrets.token_hex(16)}"
+    memory_hmac_secret = secrets.token_hex(32)
+    auth_config_json = json.dumps(
+        {
+            "audience": "dennett-memoryd",
+            "allowed_issuers": ["dennett-standalone", "dennett-head"],
+            "hmac_secret": memory_hmac_secret,
+            "tokens": [
+                {
+                    "token_id": f"tok-demo-d2-{session_tag}",
+                    "token": demo_token,
+                    "principal_id": "dennett-demo-d2-head",
+                    "issuer": "dennett-standalone",
+                    "allowed_scopes": [memory_scope, "project:default"],
+                    "capabilities": ["read", "write"],
+                    "revoked": False,
+                }
+            ],
+        }
+    )
+
+    conv_before = count_real_agy_conversations()
+    compose_base = ["docker", "compose", "-p", project_name, "-f", str(compose_file)]
+    memoryd_proc: subprocess.Popen[str] | None = None
+    head_proc: subprocess.Popen[str] | None = None
+    ui_proc: subprocess.Popen[str] | None = None
+
+    try:
+        run_cmd([*compose_base, "up", "-d", "--wait"], cwd=repo_root, env=clean_env)
+        host_port = resolve_compose_host_port(repo_root, compose_file, project_name)
+        mem_url = (
+            f"postgres://dennett_memory_role:dennett_memory_test_pw"
+            f"@127.0.0.1:{host_port}/dennett_memory_test"
+        )
+        ctrl_url = (
+            f"postgres://dennett_control_role:dennett_control_test_pw"
+            f"@127.0.0.1:{host_port}/dennett_control_test"
+        )
+        validate_test_pg_url("DENNETT_TEST_MEMORY_PG_URL", mem_url)
+        validate_test_pg_url("DENNETT_TEST_CONTROL_PG_URL", ctrl_url)
+
+        mem_env = build_tool_env(
+            overrides={
+                "DENNETT_TEST_PROFILE": "1",
+                "DENNETT_TEST_MEMORY_PG_URL": mem_url,
+                "DENNETT_MEMORY_AUTH_CONFIG": auth_config_json,
+            },
+            removals=("DENNETT_MEMORY_PG_URL", "DENNETT_MEMORY_AUTH_CONFIG_FILE"),
+        )
+        memoryd_proc = subprocess.Popen(
+            [str(memoryd_bin), "--serve", "127.0.0.1:0"],
+            cwd=repo_root,
+            env=mem_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        memoryd_addr = _read_listening_addr(memoryd_proc, "dennett-memoryd")
+        memoryd_http_url = f"http://{memoryd_addr}"
+
+        head_env = build_tool_env(
+            overrides={
+                "DENNETT_TEST_PROFILE": "1",
+                "DENNETT_TEST_CONTROL_PG_URL": ctrl_url,
+                "DENNETT_MEMORY_TOKEN": demo_token,
+                "DENNETT_MEMORY_HMAC_SECRET": memory_hmac_secret,
+            },
+            removals=("DENNETT_CONTROL_PG_URL",),
+        )
+        head_proc = subprocess.Popen(
+            [
+                str(head_bin),
+                "--serve",
+                "127.0.0.1:0",
+                "--runtime",
+                runtime,
+                "--auth-profile",
+                auth_profile,
+                "--profile-root",
+                str(profile_root),
+                "--effects-ledger",
+                str(effects_ledger_path),
+                "--memory-url",
+                memoryd_http_url,
+                "--memory-mcp-bin",
+                str(memory_mcp_bin),
+            ],
+            cwd=repo_root,
+            env=head_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        head_addr = _read_listening_addr(head_proc, "dennett-head")
+        head_http_url = f"http://{head_addr}"
+        seeded = _preseed_demo_d2_workspace(head_http_url, workspace_dir, memory_scope)
+
+        print("\n=== Dennett D2 Isolated Environment Ready ===", flush=True)
+        print(f"  DENNETT_HEAD_URL      : {head_http_url}", flush=True)
+        print(f"  DENNETT_MEMORY_URL    : {memoryd_http_url}", flush=True)
+        print(f"  Runtime / Auth Profile: {runtime} / {auth_profile}", flush=True)
+        print(f"  Workspace Path        : {workspace_dir}", flush=True)
+        print(f"  Effects Ledger        : {effects_ledger_path}", flush=True)
+        print(f"  Starter Project       : Рабочее пространство ({seeded['project_id']})", flush=True)
+        print(f"  Starter Session       : Новый чат ({seeded['session_id']})", flush=True)
+        print("  Write Policy          : ask_before_write (Спрашивать запись)", flush=True)
+        print(f"  Memory Scope (HMAC)   : {memory_scope} (+ dynamic per-project scopes)", flush=True)
+        print(f"  Isolated agy Profile  : {profile_root}", flush=True)
+        print(
+            "  V03 Note: Closing the Dennett window leaves Head, HeadScheduler & memoryd alive; "
+            "re-run `dennett-desktop` with DENNETT_HEAD_URL or press Ctrl+C here to stop all demo services.\n",
+            flush=True,
+        )
+
+        if not no_ui:
+            ui_env = build_tool_env(overrides={"DENNETT_HEAD_URL": head_http_url})
+            ui_proc = subprocess.Popen(
+                [str(desktop_bin)],
+                cwd=repo_root,
+                env=ui_env,
+                stdin=subprocess.DEVNULL,
+            )
+
+        print("[dennett-check] D2 demo running. Press Ctrl+C to shut down and clean up...", flush=True)
+        while True:
+            if head_proc.poll() is not None:
+                raise CheckError(f"dennett-head exited unexpectedly (code={head_proc.returncode}).")
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\n[dennett-check] Ctrl+C received; tearing down isolated D2 demo...", flush=True)
+    finally:
+        _graceful_stop_daemon(ui_proc, "dennett-desktop")
+        _graceful_stop_daemon(head_proc, "dennett-head")
+        _graceful_stop_daemon(memoryd_proc, "dennett-memoryd")
+        run_cmd(
+            [*compose_base, "down", "-v"],
+            cwd=repo_root,
+            env=clean_env,
+            check=False,
+            timeout_seconds=60,
+        )
+        shutil.rmtree(temp_root, ignore_errors=True)
+        if runtime == "antigravity":
+            conv_after = count_real_agy_conversations()
+            if conv_before != conv_after:
+                print(
+                    f"[dennett-check] WARNING: ~/.gemini conversations count changed "
+                    f"(before={conv_before}, after={conv_after})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the CLI argument parser for `dennett-check`."""
     parser = argparse.ArgumentParser(
@@ -1626,6 +1935,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the isolated demo launch plan as JSON and exit without starting processes.",
     )
 
+    p_demo_d2 = sub.add_parser(
+        "demo-d2",
+        help="Start a safe isolated D2 trial (ephemeral PG v4 + memoryd + Head scheduler/effects + native Desktop UI).",
+    )
+    p_demo_d2.add_argument(
+        "--runtime",
+        choices=("antigravity", "simulated"),
+        default="antigravity",
+        help="Runtime adapter for dennett-head (default: antigravity).",
+    )
+    p_demo_d2.add_argument(
+        "--auth-profile",
+        choices=("oauth-personal", "gemini-api-key"),
+        default="oauth-personal",
+        help="Auth profile for dennett-head (default: oauth-personal for Google AI Ultra).",
+    )
+    p_demo_d2.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Start PG + memoryd + Head only and print DENNETT_HEAD_URL without opening the desktop window.",
+    )
+    p_demo_d2.add_argument(
+        "--dry-run",
+        "--print-plan",
+        dest="dry_run",
+        action="store_true",
+        help="Print the isolated D2 demo launch plan as JSON and exit without starting processes.",
+    )
+
     p_all = sub.add_parser(
         "all",
         help="Run docs, deps, fast, self-check, and integration sequentially.",
@@ -1662,6 +2000,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 check_runtime_probe(repo_root)
             case "demo-d1":
                 run_demo_d1(
+                    repo_root,
+                    runtime=args.runtime,
+                    auth_profile=args.auth_profile,
+                    no_ui=args.no_ui,
+                    dry_run=args.dry_run,
+                )
+            case "demo-d2":
+                run_demo_d2(
                     repo_root,
                     runtime=args.runtime,
                     auth_profile=args.auth_profile,

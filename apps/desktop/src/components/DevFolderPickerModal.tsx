@@ -57,7 +57,9 @@ export function DevFolderPickerModal() {
   const title =
     state.folderPickerIntent.mode === "attach-project"
       ? "Привязать рабочую папку"
-      : "Выбрать папку проекта";
+      : state.folderPickerIntent.mode === "rebind-project"
+        ? "Перепривязать рабочую папку"
+        : "Выбрать папку проекта";
 
   const handleNavigateSubmit = (event: FormEvent) => {
     event.preventDefault();

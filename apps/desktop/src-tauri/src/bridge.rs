@@ -14,13 +14,24 @@ use std::time::Duration;
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    AgentId, AgentRecord, ArtifactId, ArtifactRecord, CancelRunResponse, CorrelationId,
-    CreateAgentRequest, CreateArtifactRequest, CreateProjectRequest, CreateSessionRequest,
-    DennettError, DiagnosticsResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
-    HeadMemorySearchResponse, ListAgentsResponse, ListArtifactsResponse, ListProjectFilesResponse,
-    ListProjectsResponse, ListSessionsResponse, ProjectId, ProjectRecord, RuntimeCatalogResponse,
-    SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
-    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest,
+    AgentId, AgentRecord, ArtifactId, ArtifactLifecycleRequest, ArtifactLifecycleResponse,
+    ArtifactRecord, CancelRunResponse, CancelTaskResponse, CapabilityGrantId,
+    CapabilityGrantRecord, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
+    CreateProjectRequest, CreateSessionRequest, CreateTaskRequest, DennettError,
+    DiagnosticsResponse, DispatchEffectRequest, DispatchEffectResponse, EffectClaimId,
+    EventStreamResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
+    HeadMemorySearchResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
+    ListArtifactsResponse, ListCapabilityGrantsResponse, ListEffectsResponse, ListInboxResponse,
+    ListPermissionRequestsResponse, ListProjectFilesResponse, ListProjectsResponse,
+    ListSessionsResponse, ListTasksResponse, PermissionRequestId, ProjectId,
+    ProjectLifecycleResponse, ProjectRecord, RebindProjectRequest, ReconcileEffectRequest,
+    ReconcileEffectResponse, ReplyTaskRequest, ResolveInboxCardRequest, ResolveInboxCardResponse,
+    ResolvePermissionRequest, ResolvePermissionResponse, RevokeGrantRequest,
+    RuntimeCatalogResponse, SchedulerTickRequest, SchedulerTickResponse, SendAgentMessageRequest,
+    SendAgentMessageResponse, SendMessageRequest, SendMessageResponse, SessionDetailResponse,
+    SessionId, SessionRecord, StateSnapshotResponse, TaskDetailResponse, TaskId, TaskRecord,
+    TaskSignalRequest, TaskSignalResponse, UpdateAgentConfigRequest, UpdateProjectRequest,
+    UpdateSessionRequest, UpdateTaskRequest,
 };
 use dennett_head_client::HeadClient;
 use serde::{Deserialize, Serialize};
@@ -638,6 +649,513 @@ impl HeadBridge {
         let cid = CorrelationId::generate();
         self.client
             .search_memory(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists registered workspace projects with optional archived inclusion (`GET /v1/projects?include_archived=...`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_projects_with_options(
+        &self,
+        include_archived: bool,
+    ) -> Result<ListProjectsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_projects_with_options(include_archived, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Rebinds a project's canonical workspace folder (`POST /v1/projects/{id}/rebind`, Contract C).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation/boundary failure or unreachable Head.
+    pub async fn rebind_project(
+        &self,
+        project_id: ProjectId,
+        req: &RebindProjectRequest,
+    ) -> Result<ProjectLifecycleResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .rebind_project(project_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Detaches a project's workspace folder without deleting user files (`POST /v1/projects/{id}/detach-workspace`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the project does not exist or Head is unreachable.
+    pub async fn detach_project_workspace(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<ProjectLifecycleResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .detach_project_workspace(project_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Reversibly archives a project and pauses its pending timers (`POST /v1/projects/{id}/archive`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the project does not exist or Head is unreachable.
+    pub async fn archive_project(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<ProjectLifecycleResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .archive_project(project_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Restores an archived project to active state (`POST /v1/projects/{id}/unarchive`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the project does not exist or Head is unreachable.
+    pub async fn unarchive_project(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<ProjectLifecycleResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .unarchive_project(project_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Removes a project entry from Dennett active lists without deleting user files (`POST /v1/projects/{id}/remove`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the project does not exist or Head is unreachable.
+    pub async fn remove_project(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<ProjectLifecycleResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .remove_project(project_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Deletes Dennett metadata for a project while leaving external user folders untouched (`DELETE /v1/projects/{id}?confirm=...`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if confirmation is missing, project is missing, or Head is unreachable.
+    pub async fn delete_project(
+        &self,
+        project_id: ProjectId,
+        confirm: bool,
+    ) -> Result<ProjectLifecycleResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_project(project_id, confirm, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists all revisions (`v1`, `v2`, …) of an artifact in `session_id` (`GET /v1/sessions/{id}/artifacts/{key}/revisions`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the session/artifact is missing or Head is unreachable.
+    pub async fn list_artifact_revisions(
+        &self,
+        session_id: SessionId,
+        artifact_id_or_name: &str,
+    ) -> Result<ListArtifactsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_artifact_revisions(session_id, artifact_id_or_name, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Applies an explicit Contract D lifecycle transition to one artifact revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on conflict, missing artifact, or unreachable Head.
+    pub async fn apply_artifact_lifecycle(
+        &self,
+        session_id: SessionId,
+        artifact_id: ArtifactId,
+        req: &ArtifactLifecycleRequest,
+    ) -> Result<ArtifactLifecycleResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .apply_artifact_lifecycle(session_id, artifact_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Fetches a consistent `REPEATABLE READ` control-plane snapshot and its exact `snapshot_cursor` (`GET /v1/state/snapshot`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn get_state_snapshot(
+        &self,
+        project_id: Option<ProjectId>,
+        include_archived: bool,
+    ) -> Result<StateSnapshotResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_state_snapshot(project_id, include_archived, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Tails ordered control-plane journal events after `after_cursor` (`GET /v1/events`, V15/V18).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] (including `CONFLICT` on `stream_epoch` / `stream_cursor_expired` resync)
+    /// or unreachable Head.
+    pub async fn get_events(
+        &self,
+        after_cursor: i64,
+        expected_epoch: Option<i64>,
+        project_id: Option<ProjectId>,
+        limit: Option<u32>,
+    ) -> Result<EventStreamResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_events(after_cursor, expected_epoch, project_id, limit, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Creates a durable Dennett task or scheduled obligation (`POST /v1/tasks`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, policy violation, or unreachable Head.
+    pub async fn create_task(&self, req: &CreateTaskRequest) -> Result<TaskRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .create_task(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists durable tasks filtered optionally by project or status (`GET /v1/tasks`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_tasks(
+        &self,
+        project_id: Option<ProjectId>,
+        status: Option<&str>,
+    ) -> Result<ListTasksResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_tasks(project_id, status, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Fetches full durable task detail including runs, timers, signals, effects, and open inbox cards.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the task does not exist or Head is unreachable.
+    pub async fn get_task_detail(
+        &self,
+        task_id: TaskId,
+    ) -> Result<TaskDetailResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_task_detail(task_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Updates a task's title, goal, schedule, or budget (`PATCH /v1/tasks/{id}`, bumping `generation`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, conflict, or unreachable Head.
+    pub async fn update_task(
+        &self,
+        task_id: TaskId,
+        req: &UpdateTaskRequest,
+    ) -> Result<TaskRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_task(task_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Delivers an idempotent signal to a durable task (`POST /v1/tasks/{id}/signals`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, idempotency mismatch, or unreachable Head.
+    pub async fn send_task_signal(
+        &self,
+        task_id: TaskId,
+        req: &TaskSignalRequest,
+    ) -> Result<TaskSignalResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .send_task_signal(task_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Answers a task's clarification request and resumes execution (`POST /v1/tasks/{id}/reply`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, conflict, or unreachable Head.
+    pub async fn reply_to_task(
+        &self,
+        task_id: TaskId,
+        req: &ReplyTaskRequest,
+    ) -> Result<TaskRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .reply_to_task(task_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Issues targeted `Stop` for a single durable task without affecting sibling tasks (`POST /v1/tasks/{id}/cancel`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the task does not exist or Head is unreachable.
+    pub async fn cancel_task(&self, task_id: TaskId) -> Result<CancelTaskResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .cancel_task(task_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Advances the test-isolated scheduler clock (`POST /v1/tasks/scheduler/tick`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if Head is not in `TestIsolated` mode or unreachable.
+    pub async fn scheduler_tick(
+        &self,
+        req: &SchedulerTickRequest,
+    ) -> Result<SchedulerTickResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .scheduler_tick(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists Action Inbox decision cards (`GET /v1/inbox`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_inbox_cards(
+        &self,
+        status: Option<&str>,
+        project_id: Option<ProjectId>,
+    ) -> Result<ListInboxResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_inbox_cards(status, project_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Resolves an Action Inbox card with optimistic `expected_revision` checking (`POST /v1/inbox/{id}/resolve`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on stale revision conflict, missing card, or unreachable Head.
+    pub async fn resolve_inbox_card(
+        &self,
+        card_id: InboxCardId,
+        req: &ResolveInboxCardRequest,
+    ) -> Result<ResolveInboxCardResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .resolve_inbox_card(card_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists live interactive permission requests (`GET /v1/permissions/requests`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_permission_requests(
+        &self,
+        status: Option<&str>,
+        session_id: Option<SessionId>,
+    ) -> Result<ListPermissionRequestsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_permission_requests(status, session_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Resolves a live interactive permission request (`POST /v1/permissions/requests/{id}/resolve`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, conflict, or unreachable Head.
+    pub async fn resolve_permission_request(
+        &self,
+        request_id: PermissionRequestId,
+        req: &ResolvePermissionRequest,
+    ) -> Result<ResolvePermissionResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .resolve_permission_request(request_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists revocable capability grants (`GET /v1/grants`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_capability_grants(
+        &self,
+        project_id: Option<ProjectId>,
+        include_revoked: bool,
+    ) -> Result<ListCapabilityGrantsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_capability_grants(project_id, include_revoked, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Immediately revokes an active capability grant (`POST /v1/grants/{id}/revoke`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the grant does not exist or Head is unreachable.
+    pub async fn revoke_capability_grant(
+        &self,
+        grant_id: CapabilityGrantId,
+        req: &RevokeGrantRequest,
+    ) -> Result<CapabilityGrantRecord, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .revoke_capability_grant(grant_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Sends a plain-text inter-agent coordination message (`POST /v1/agents/{id}/messages`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, access denial, or unreachable Head.
+    pub async fn send_agent_message(
+        &self,
+        recipient_agent_id: AgentId,
+        req: &SendAgentMessageRequest,
+    ) -> Result<SendAgentMessageResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .send_agent_message(recipient_agent_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists incoming plain-text messages for an agent (`GET /v1/agents/{id}/messages`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the agent does not exist or Head is unreachable.
+    pub async fn list_agent_messages(
+        &self,
+        recipient_agent_id: AgentId,
+        undelivered_only: bool,
+    ) -> Result<ListAgentMessagesResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_agent_messages(recipient_agent_id, undelivered_only, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Dispatches an idempotent external effect through `Head`'s `ExternalEffectPort` (`POST /v1/effects/dispatch`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, idempotency mismatch, or unreachable Head.
+    pub async fn dispatch_effect(
+        &self,
+        req: &DispatchEffectRequest,
+    ) -> Result<DispatchEffectResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .dispatch_effect(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists tracked external effect claims (`GET /v1/effects`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_effects(
+        &self,
+        task_id: Option<TaskId>,
+        session_id: Option<SessionId>,
+        status: Option<&str>,
+    ) -> Result<ListEffectsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_effects(task_id, session_id, status, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Reconciles an `unknown` external effect claim without blind re-dispatch (`POST /v1/effects/{id}/reconcile`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the claim is missing or Head is unreachable.
+    pub async fn reconcile_effect(
+        &self,
+        effect_id: EffectClaimId,
+        req: &ReconcileEffectRequest,
+    ) -> Result<ReconcileEffectResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .reconcile_effect(effect_id, req, Some(&cid))
             .await
             .map_err(BridgeError::from)
     }

@@ -1,53 +1,98 @@
 import type { DesktopBridge } from "./bridge";
 import type {
   AgentRecord,
+  ArtifactLifecycleRequest,
+  ArtifactLifecycleResponse,
   ArtifactRecord,
   CancelRunResponse,
+  CancelTaskResponse,
+  CapabilityGrantRecord,
   CreateAgentRequest,
   CreateArtifactRequest,
   CreateProjectRequest,
   CreateSessionRequest,
+  CreateTaskRequest,
   DesktopHealthSnapshot,
   DiagnosticsResponse,
+  DispatchEffectRequest,
+  DispatchEffectResponse,
+  EventStreamResponse,
   FlushOutboxResponse,
   HeadHealth,
   HeadMemorySearchRequest,
   HeadMemorySearchResponse,
+  ListAgentMessagesResponse,
   ListAgentsResponse,
   ListArtifactsResponse,
+  ListCapabilityGrantsResponse,
+  ListEffectsResponse,
+  ListInboxResponse,
+  ListPermissionRequestsResponse,
   ListProjectFilesResponse,
   ListProjectsResponse,
   ListSessionsResponse,
+  ListTasksResponse,
+  ProjectLifecycleResponse,
   ProjectRecord,
+  RebindProjectRequest,
+  ReconcileEffectRequest,
+  ReconcileEffectResponse,
+  ReplyTaskRequest,
+  ResolveInboxCardRequest,
+  ResolveInboxCardResponse,
+  ResolvePermissionRequest,
+  ResolvePermissionResponse,
+  RevokeGrantRequest,
   RuntimeCatalogResponse,
+  SendAgentMessageRequest,
+  SendAgentMessageResponse,
   SendMessageRequest,
   SendMessageResponse,
   SessionDetailResponse,
   SessionRecord,
+  StateSnapshotResponse,
+  TaskDetailResponse,
+  TaskRecord,
+  TaskSignalRequest,
+  TaskSignalResponse,
   UpdateAgentConfigRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
+  UpdateTaskRequest,
 } from "./contracts";
 
 async function parseErrorResponse(resp: Response): Promise<{ code: string; message: string }> {
   try {
     const data = (await resp.json()) as {
-      error?: { code?: string; message?: string; detail?: string; reason?: string };
+      error?: {
+        code?: string;
+        kind?: string;
+        resource?: string;
+        message?: string;
+        detail?: string;
+        reason?: string;
+      };
       code?: string;
       message?: string;
     };
+    const resolvedCode = data.code ?? data.error?.code ?? `HTTP_${resp.status}`;
     if (data.error) {
+      const resourcePrefix =
+        data.error.resource && data.error.resource.length > 0
+          ? `conflict on ${data.error.resource}: `
+          : "";
+      const detailText =
+        data.error.message ??
+        (data.error.reason ? `${resourcePrefix}${data.error.reason}` : null) ??
+        data.error.detail ??
+        `dennett-head returned HTTP ${resp.status}`;
       return {
-        code: data.error.code ?? `HTTP_${resp.status}`,
-        message:
-          data.error.message ??
-          data.error.detail ??
-          data.error.reason ??
-          `dennett-head returned HTTP ${resp.status}`,
+        code: resolvedCode,
+        message: detailText,
       };
     }
     if (typeof data.message === "string") {
-      return { code: data.code ?? `HTTP_${resp.status}`, message: data.message };
+      return { code: resolvedCode, message: data.message };
     }
   } catch {
     // Ignore non-JSON error body.
@@ -56,6 +101,17 @@ async function parseErrorResponse(resp: Response): Promise<{ code: string; messa
     code: resp.status >= 500 ? "HEAD_UNREACHABLE" : `HTTP_${resp.status}`,
     message: `dennett-head returned HTTP ${resp.status} ${resp.statusText}`.trim(),
   };
+}
+
+function buildQuery(entries: Array<[string, string | number | boolean | null | undefined]>): string {
+  const parts: string[] = [];
+  for (const [key, val] of entries) {
+    if (val === undefined || val === null || val === "") {
+      continue;
+    }
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(val))}`);
+  }
+  return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
 
 /**
@@ -146,13 +202,38 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
 
     pickWorkspaceFolder: async () => null,
 
-    listProjects: () => requestJson<ListProjectsResponse>("GET", "/v1/projects"),
+    listProjects: (includeArchived?: boolean) =>
+      requestJson<ListProjectsResponse>(
+        "GET",
+        includeArchived ? "/v1/projects?include_archived=true" : "/v1/projects",
+      ),
 
     createProject: (request: CreateProjectRequest) =>
       requestJson<ProjectRecord>("POST", "/v1/projects", request),
 
     updateProject: (projectId: string, request: UpdateProjectRequest) =>
       requestJson<ProjectRecord>("PATCH", `/v1/projects/${projectId}`, request),
+
+    rebindProject: (projectId: string, request: RebindProjectRequest) =>
+      requestJson<ProjectLifecycleResponse>("POST", `/v1/projects/${projectId}/rebind`, request),
+
+    detachProjectWorkspace: (projectId: string) =>
+      requestJson<ProjectLifecycleResponse>("POST", `/v1/projects/${projectId}/detach-workspace`),
+
+    archiveProject: (projectId: string) =>
+      requestJson<ProjectLifecycleResponse>("POST", `/v1/projects/${projectId}/archive`),
+
+    unarchiveProject: (projectId: string) =>
+      requestJson<ProjectLifecycleResponse>("POST", `/v1/projects/${projectId}/unarchive`),
+
+    removeProject: (projectId: string) =>
+      requestJson<ProjectLifecycleResponse>("POST", `/v1/projects/${projectId}/remove`),
+
+    deleteProject: (projectId: string, confirm: boolean) =>
+      requestJson<ProjectLifecycleResponse>(
+        "DELETE",
+        `/v1/projects/${projectId}?confirm=${confirm ? "true" : "false"}`,
+      ),
 
     listProjectFiles: (projectId: string, subpath?: string) => {
       const qs = subpath ? `?subpath=${encodeURIComponent(subpath)}` : "";
@@ -166,6 +247,21 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
 
     updateAgentConfig: (agentId: string, request: UpdateAgentConfigRequest) =>
       requestJson<AgentRecord>("POST", `/v1/agents/${agentId}/config-versions`, request),
+
+    sendAgentMessage: (recipientAgentId: string, request: SendAgentMessageRequest) =>
+      requestJson<SendAgentMessageResponse>(
+        "POST",
+        `/v1/agents/${recipientAgentId}/messages`,
+        request,
+      ),
+
+    listAgentMessages: (recipientAgentId: string, undeliveredOnly?: boolean) =>
+      requestJson<ListAgentMessagesResponse>(
+        "GET",
+        `/v1/agents/${recipientAgentId}/messages${buildQuery([
+          ["undelivered_only", undeliveredOnly ? true : null],
+        ])}`,
+      ),
 
     listSessions: () => requestJson<ListSessionsResponse>("GET", "/v1/sessions"),
 
@@ -201,6 +297,139 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
       }
       return found;
     },
+
+    listArtifactRevisions: (sessionId: string, artifactIdOrName: string) =>
+      requestJson<ListArtifactsResponse>(
+        "GET",
+        `/v1/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactIdOrName)}/revisions`,
+      ),
+
+    applyArtifactLifecycle: (
+      sessionId: string,
+      artifactId: string,
+      request: ArtifactLifecycleRequest,
+    ) =>
+      requestJson<ArtifactLifecycleResponse>(
+        "POST",
+        `/v1/sessions/${sessionId}/artifacts/${artifactId}/lifecycle`,
+        request,
+      ),
+
+    getStateSnapshot: (projectId?: string | null, includeArchived?: boolean) =>
+      requestJson<StateSnapshotResponse>(
+        "GET",
+        `/v1/state/snapshot${buildQuery([
+          ["project_id", projectId],
+          ["include_archived", includeArchived ? true : null],
+        ])}`,
+      ),
+
+    getEvents: (
+      afterCursor: number,
+      expectedEpoch?: number | null,
+      projectId?: string | null,
+      limit?: number | null,
+    ) =>
+      requestJson<EventStreamResponse>(
+        "GET",
+        `/v1/events${buildQuery([
+          ["after_cursor", afterCursor],
+          ["epoch", expectedEpoch],
+          ["project_id", projectId],
+          ["limit", limit],
+        ])}`,
+      ),
+
+    createTask: (request: CreateTaskRequest) =>
+      requestJson<TaskRecord>("POST", "/v1/tasks", request),
+
+    listTasks: (projectId?: string | null, status?: string | null) =>
+      requestJson<ListTasksResponse>(
+        "GET",
+        `/v1/tasks${buildQuery([
+          ["project_id", projectId],
+          ["status", status],
+        ])}`,
+      ),
+
+    getTaskDetail: (taskId: string) =>
+      requestJson<TaskDetailResponse>("GET", `/v1/tasks/${taskId}`),
+
+    updateTask: (taskId: string, request: UpdateTaskRequest) =>
+      requestJson<TaskRecord>("PATCH", `/v1/tasks/${taskId}`, request),
+
+    sendTaskSignal: (taskId: string, request: TaskSignalRequest) =>
+      requestJson<TaskSignalResponse>("POST", `/v1/tasks/${taskId}/signals`, request),
+
+    replyToTask: (taskId: string, request: ReplyTaskRequest) =>
+      requestJson<TaskRecord>("POST", `/v1/tasks/${taskId}/reply`, request),
+
+    cancelTask: (taskId: string) =>
+      requestJson<CancelTaskResponse>("POST", `/v1/tasks/${taskId}/cancel`),
+
+    listInboxCards: (status?: string | null, projectId?: string | null) =>
+      requestJson<ListInboxResponse>(
+        "GET",
+        `/v1/inbox${buildQuery([
+          ["status", status],
+          ["project_id", projectId],
+        ])}`,
+      ),
+
+    resolveInboxCard: (cardId: string, request: ResolveInboxCardRequest) =>
+      requestJson<ResolveInboxCardResponse>("POST", `/v1/inbox/${cardId}/resolve`, request),
+
+    listPermissionRequests: (status?: string | null, sessionId?: string | null) =>
+      requestJson<ListPermissionRequestsResponse>(
+        "GET",
+        `/v1/permissions/requests${buildQuery([
+          ["status", status],
+          ["session_id", sessionId],
+        ])}`,
+      ),
+
+    resolvePermissionRequest: (requestId: string, request: ResolvePermissionRequest) =>
+      requestJson<ResolvePermissionResponse>(
+        "POST",
+        `/v1/permissions/requests/${requestId}/resolve`,
+        request,
+      ),
+
+    listCapabilityGrants: (projectId?: string | null, includeRevoked?: boolean) =>
+      requestJson<ListCapabilityGrantsResponse>(
+        "GET",
+        `/v1/grants${buildQuery([
+          ["project_id", projectId],
+          ["include_revoked", includeRevoked ? true : null],
+        ])}`,
+      ),
+
+    revokeCapabilityGrant: (grantId: string, request?: RevokeGrantRequest) =>
+      requestJson<CapabilityGrantRecord>(
+        "POST",
+        `/v1/grants/${grantId}/revoke`,
+        request ?? {},
+      ),
+
+    dispatchEffect: (request: DispatchEffectRequest) =>
+      requestJson<DispatchEffectResponse>("POST", "/v1/effects/dispatch", request),
+
+    listEffects: (taskId?: string | null, sessionId?: string | null, status?: string | null) =>
+      requestJson<ListEffectsResponse>(
+        "GET",
+        `/v1/effects${buildQuery([
+          ["task_id", taskId],
+          ["session_id", sessionId],
+          ["status", status],
+        ])}`,
+      ),
+
+    reconcileEffect: (effectId: string, request?: ReconcileEffectRequest) =>
+      requestJson<ReconcileEffectResponse>(
+        "POST",
+        `/v1/effects/${effectId}/reconcile`,
+        request ?? {},
+      ),
 
     listDiagnostics: (limit?: number) => {
       const qs = limit !== undefined ? `?limit=${limit}` : "";

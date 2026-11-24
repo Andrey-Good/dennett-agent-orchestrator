@@ -9,4 +9,9 @@ if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
 
 afterEach(() => {
   cleanup();
+  try {
+    window.localStorage.clear();
+  } catch {
+    // Ignore restricted storage environments.
+  }
 });

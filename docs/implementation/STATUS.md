@@ -1,56 +1,54 @@
 # Текущее состояние новой реализации
 
-Обновлено 2026-11-24. Текущая ветка реализации D1: `d1/first-vertical-slice` (от принятой базы D0 `d0/foundation` `1a40e46`). Новый baseline не наследует завершённые milestones, тесты или approvals старой реализации.
+Обновлено 2026-11-24. Текущая ветка реализации D2: `d2/durable-runs-and-stop` (от принятой базы D1 `7496ee2`). Новый baseline не наследует завершённые milestones, тесты или approvals старой реализации.
 
 ## Текущая работа
 
-Текущий этап: **D1** (первый настоящий путь: агент на `agy acp`, самостоятельный `memoryd` на PostgreSQL, сохраняемый разговор и новый desktop-чат). Состояние: **технически завершён и прошёл полный аудит H1; ожидает владельца (точка приёмки H1)**. До явного принятия H1 переход к D2 не начинается.
+Текущий этап: **D2 («Поручения, автономное ожидание и предсказуемая остановка»)**. Состояние: **Slice A (`34d67ac`) реализован и верифицирован; Slice B (Desktop UI, Tauri Bridge, `demo-d2` runner) реализован в рабочей копии и передаётся на живой UI/UX-аудит `@d2-ui-reviewer`; ожидает финального аудита и приёмки владельца (точка приёмки H2)**. До явного принятия H2 переход к D3 не начинается.
 
 Запись приёмки **H0** (2026-11-23): владелец явно принял этап D0 (`d0/foundation` @ `1a40e46`, CI [#45179510052](https://github.com/Andrey-Good/dennett-agent-orchestrator/actions/runs/45179510052)) и разрешил запуск D1.
-Запись дизайн-согласования **D1 Desktop Chat** (2026-11-23): владелец подтвердил визуальное направление `WP-M01-003` v5 (единый бесшовный Windows 11 Mica сверху и слева + отдельный скруглённый прямоугольник чата + отдельная выезжающая правая панель `Workspace` поверх того же Mica-фона, перенос визуального эталона поверх нового чистого бэкенда `HeadClient` → `dennett-head`).
+Запись приёмки **H1** (2026-11-24): этап D1 (`d1/first-vertical-slice` @ `7496ee2`, `H1-01`..`H1-08` закрыты) принят владельцем; разрешён запуск этапа D2 на ветке `d2/durable-runs-and-stop`.
+Запись дизайн-согласования **D2** (2026-11-24): утверждена спецификация [D2_ARCHITECTURE_AND_UX_BLUEPRINT.md](../design/D2_ARCHITECTURE_AND_UX_BLUEPRINT.md) (`c88debe`) в визуальном направлении `WP-M01-003` v5 без `<select>` и без `backdrop-filter`.
 
-Основные коммиты D1 в ветке `d1/first-vertical-slice`:
-- `26c8c4e` — фиксация приёмки H0 и старта D1.
-- `dc5e184` — **Slice 1** (проверено на Carbon): самостоятельный `dennett-memoryd` на PostgreSQL (`dennett-memory-core`, миграция `0001_memory_core_v1.sql`, `event_evidence_links` по V19, `StandaloneAuthVerifier`, `axum` API, `dennett-memory-client`, `dennett-memory-cli`, `dennett-memory-mcp`; `V01`, `V06`, `V19`; 3 дефекта закрыты, 3 мутации пойманы).
-- `2c3d1b4` — **Slice 2** (проверено на Carbon): `dennett-head` (`dennett_control` БД, миграция `0001_control_core_v1.sql`, `PolicyEngine`, Agent/ConfigVersion/Project/Session/Messages/Artifacts, V02 `memory_commit_outbox`, `HeadClient`/`dennettctl`) + продуктовый `adapters/antigravity-acp` с реальным `dennett-memory-mcp`, `PreToolUse` защитой записи в workspace, `AllowOnce`/`RejectOnce`, `Stop`/`session/cancel`, явным `session_id`/rehydrate и строгим разделением `oauth-personal` vs `gemini-api-key` (`V02`, `V04`, `V05`, `V06`, `V29`, `A01–A06`, `A09`; 5 дефектов закрыты, 3 мутации пойманы).
-- `85b8f76` / `b1432a1` / `0c019a7` — **Slice 3** (проверено на Carbon + зелёный CI [#45229373219](https://github.com/Andrey-Good/dennett-agent-orchestrator/actions/runs/45229373219)): новый `apps/desktop` (Tauri 2 + React 19/TS/Vite, Windows 11 Mica), `V03` независимость демонов при закрытии окна, `dennett-check demo-d1`, CI Linux + Windows + PG.
-- `53a0d31` / `30dc620` — **UI/UX Rework & Dynamic Runtime Catalog** (проверено `ui-reviewer` в живом браузере и `code-verifier` с мутациями): эталонный dark glass UI `WP-M01-003` (3-частная левая геометрия, нативный `rfd` выбор папки, динамические тёмные меню без `<select>` и без `backdrop-filter`, `<QuotaRings />` слот, правая панель `Workspace` с реальными файлами и артефактами), живой `GET /v1/runtime/catalog` без захардкоженных моделей, проекты без папки (`0002_projects_nullable_workspace.sql`), `PATCH /v1/projects/{id}`, `GET /v1/projects/{id}/files`, `PATCH /v1/sessions/{id}`, авто-именование чатов, динамические HMAC `dnt1.` scope-токены без привязки `Head` к `memory-core` и структурное редактирование `dnt1.` токенов.
-- **H1 Hardening Pass (`H1-01`..`H1-08`, поверх `30dc620` на `d1/first-vertical-slice`)**:
-  - `H1-01`: сквозная проверка loopback `Host`, `Origin` и `Sec-Fetch-Site` на всех маршрутах `dennett-head` (защита от DNS-rebinding и cross-site CSRF; флаг `--allow-non-loopback` проброшен в `HeadAppState`).
-  - `H1-02`: разумный дефолт `allow_workspace` для проектов с папкой (с апгрейдом агента `deny_all → allow_workspace` при привязке папки), строго рабочие D1-опции в `Composer` (`Запись в папку` / `Только чтение`) и явные карточки в ленте при отказе политики или пустом ответе модели.
-  - `H1-03`: валидация введённого пути в `DevFolderPickerModal` через `/__dennett_dev_dirs` перед подтверждением (исключена тихая привязка `$HOME`).
-  - `H1-04`: мгновенное оптимистичное отображение сообщения пользователя с очисткой поля ввода и сохранением нового черновика, по-сессионное состояние `runningSessionIds`/`cancellingSessionIds` (баннер и `Stop`/`Esc` строго для активного чата, фоновый индикатор в сайдбаре) и capture-phase закрытие поповеров по `Escape` без отмены активного запуска.
-  - `H1-05`: каноническая Serde-сериализация `ThinkingLevel::XHigh` как `"xhigh"` (с `alias = "x_high"`).
-  - `H1-06`: поиск проектов + навигация `ArrowDown`/`ArrowUp`/`Enter` и empty-state в `CommandPalette`, авто-раскрытие свёрнутого сайдбара при вводе в верхний поиск, чистое скрытие времени при наведении на чат (без наезда на карандаш), полноширинный inline-rename проектов без клиппинга первого символа и чистые хлебные крошки на `<= 960px`.
-  - `H1-07`: потоковое SHA-256 хеширование файловых артефактов (`BufReader` в O(1) RAM) в `spawn_blocking` до взятия соединения из пула PG, forward-миграция `0003_artifacts_unique_revision.sql` (`LATEST_CONTROL_SCHEMA_VERSION = 3`, `UNIQUE (session_id, name, revision)`) и `SELECT ... FOR UPDATE` строки сессии для конкурентной сериализации ревизий.
-  - `H1-08`: CLI-паритет `dennettctl` (`runtime catalog`, `project update`, `project files`, `session update`, актуальный `--help`) и синхронизация `STATUS.md` / `REQUIREMENTS_COVERAGE.md`.
+Основные коммиты и срезы D2 в ветке `d2/durable-runs-and-stop`:
+- `c88debe` — спецификация архитектуры, схемы PostgreSQL `v4`, инвариантов конкурентности (`V07`, `V15`–`V18`, `90 §30`, `A05`/`A06`/`A07`/`A10`) и UX-экранов D2.
+- `34d67ac` — **Slice A** (проверено на Carbon):
+  - `crates/dennett-contracts/src/d2.rs` без расширения прямых зависимостей (`serde`, `thiserror`, `uuid`);
+  - forward-миграция `services/head/migrations/0004_d2_durable_tasks_and_lifecycle.sql` (`LATEST_CONTROL_SCHEMA_VERSION = 4`), append-only `control_events`, `control_stream_counters` (`V15`/`V18`), `ordered_outbox` + `ordered_outbox_heads` (`V16`/`V17`);
+  - `tasks`, `HeadScheduler` (таймеры `OnceAt`/`Interval`/`DailyLocalTime` с IANA TZ и `execute_once`/`skip`/`ask`), идемпотентные сигналы, `generation` fencing (`V07`), адресный `Stop`, делегирование помощнику с ослаблением прав и текстовые сообщения `POST /v1/agents/{id}/messages` (`A07`);
+  - интерактивный `ask_before_write` (`permission_requests`, `inbox_cards`, `capability_grants` с отзывом, асинхронный `PolicyEvaluator` в `adapters/antigravity-acp`, сброс pending-запросов при `Stop`, `A05`/`A06`);
+  - `SimulatedExternalConnector` с персистентным ledger (`--effects-ledger`), `LostAck -> unknown_external`, запретом слепого повтора, честным `Stop` (`external_outcome_unknown = true`) и `/reconcile`;
+  - строгий жизненный цикл проектов контракта C (`rebind`/`detach-workspace`/`archive`/`unarchive`/`remove`/`delete`, `90 §30`), версии/полнота/жизненный цикл артефактов контракта D, `client_message_id` идемпотентность и полный CLI-паритет `dennettctl`.
+- **Slice B (рабочая копия поверх `34d67ac`, перед ревью `@d2-ui-reviewer`)**:
+  - `apps/desktop/src-tauri`: все D2 методы `HeadClient` проброшены в `HeadBridge` и Tauri-команды без расширения `capabilities/default.json` и CSP и без нарушения изоляции крейта `dennett-desktop`; добавлены 4 реальных PG16 интеграционных теста (`desktop_bridge_v03_integration`: 6/6);
+  - `apps/desktop/src`: живая курсорная синхронизация `/v1/state/snapshot` + `/v1/events?after_cursor=...` с авто-resync по `409`, рабочие экраны `ActivityRail` (`Чаты` с inline-карточками подтверждения/уточнения/`UNKNOWN`, `Входящие` с живым счётчиком и отзывом `capability_grants`, `Поручения` с быстрым созданием, кастомными поповерами расписания/бюджета, inline-редактированием цели и адресным `Stop`), включён интерактивный `Спрашивать запись` в `Composer` и отзыв грантов в `SettingsSheet`, сохранение черновиков и офлайн-очередь с `client_message_id`, контекстные меню `…` проектов (контракт C + секция `Архив`) и версий/жизненного цикла артефактов (`v1`/`v2` в `WorkspacePanel`), capture-phase `Escape` на всех меню; 0 `<select>`, 0 `backdrop-filter`, 0 `dangerouslySetInnerHTML`, 0 dev-прокси строк в `apps/desktop/dist`;
+  - `ops/runner`: добавлен `dennett-check demo-d2` (с `--runtime`, `--auth-profile`, `--no-ui`, `--dry-run`, `--effects-ledger` и проверкой блокировки `dennett-desktop.exe`), подняты пороги `MIN_INTEGRATION_TESTS = 42` и `MIN_DESKTOP_FRONTEND_TESTS = 28`.
 
-## Подтверждённые проверки D1 (актуальная рабочая копия `d1/first-vertical-slice` поверх `30dc620`)
+## Подтверждённые проверки D2 (актуальная рабочая копия `d2/durable-runs-and-stop` поверх `34d67ac`)
 
 - **Локально на Windows 11 (2026-11-24):**
   - `uv run --project ops/runner dennett-check all --manage-pg` — PASS:
-    - `docs`: 110 Markdown-файлов, 4144 локальных ссылок валидны;
+    - `docs`: 111 Markdown-файлов, 4175 локальных ссылок валидны;
     - `deps`: 504 locked crates, все границы сохранены (`dennett-contracts` direct = `['serde', 'thiserror', 'uuid']`, `dennett-head` не зависит от `dennett-memory-core`, `dennett-desktop` изолирован от `Head`/`memory-core`/PG/`antigravity-acp`, 0 `claude`/`codex`/`openai`/`anthropic`);
-    - `fast`: `tsc --noEmit`, Vitest **20/20** (0 skipped), Vite production build (0 совпадений dev-proxy/picker в `apps/desktop/dist`), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --no-deps` (`-D warnings`), `cargo test --doc`, fast nextest **116/116** (0 skipped, 0 leaky);
+    - `fast`: `tsc --noEmit`, Vitest **28/28** (0 failed, 0 skipped), Vite production build (0 совпадений dev-proxy/picker в `apps/desktop/dist`), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --no-deps` (`-D warnings`), `cargo test --doc`, fast nextest **124/124** (0 skipped, 0 leaky);
     - `self-check`: 4/4 инварианта harness подтверждены;
-    - `integration --manage-pg`: **29/29** реальных PostgreSQL 16 + мультипроцессных тестов (0 skipped, 0 leaky; схема `control` `v3`, включая `V01`, `V02`, `V03`, `V05`, `V06`, `V19`, `V29`, `H1-01` DNS-rebinding/CSRF, `H1-05` `"xhigh"`, `H1-07` конкурентные ревизии артефактов, `H1-08` `dennettctl` parity и per-project HMAC `dnt1.` scopes).
-  - Нативная сборка Tauri 2: `cargo build -p dennett-desktop --features custom-protocol` — PASS (`target/debug/dennett-desktop.exe`).
+    - `integration --manage-pg`: **42/42** реальных PostgreSQL 16 + мультипроцессных тестов (0 skipped, 0 leaky; схема `control` `v4`, включая все D1-регрессии + `head_d2_concurrency_integration` `V07`/`V15`–`V18`, `head_d2_durable_and_stop_integration` `A05`/`A06`/`A07`/`A10`/`LostAck`/контракты C и D/`90 §30` и `desktop_bridge_v03_integration` 6/6).
+  - `uv run --project ops/runner dennett-check demo-d2 --dry-run` — PASS (изолированный план запуска PG `v4` + `memoryd` + `Head` `--effects-ledger` + `ask_before_write`).
+  - Нативная сборка Tauri 2: `cargo build -p dennett-desktop --features custom-protocol` — PASS (`target/debug/dennett-desktop.exe`, без запуска окна; `rg "__dennett_dev_head|__dennett_dev_dirs" --no-ignore apps/desktop/dist` = 0 совпадений).
   - `uv run --project ops/runner dennett-check runtime-probe` (живой `agy acp 1.5.15`, `Google AI Ultra`): PASS (**4/4** живых E2E теста — `acp_live_probe` 2/2 + `head_live_agy_e2e` 2/2; реальный `~/.gemini/antigravity-cli/conversations` не тронут: `before=25 after=25`, 0 висящих контейнеров).
-  - Предыдущий зелёный прогон GitHub Actions CI (`Dennett CI`): [#45229373219](https://github.com/Andrey-Good/dennett-agent-orchestrator/actions/runs/45229373219) (после финального коммита и push H1-правок требуется свежий прогон CI).
-  - Мутационные проверки Carbon-верификаторами: **13/13 пойманы и байт-в-байт откачены** (10 в Slice 1–3 + 3 в UI/Dynamic Catalog rework).
 
-## Ограничения D1 (граница этапа)
+## Ограничения D2 (граница этапа)
 
-- Реализовано сквозное ядро D1 (память с источниками/версиями/историей/scope-правами, `head` со схемой `v3` + `agy acp` с динамическим каталогом моделей, новый desktop-чат `WP-M01-003`, файлы проекта и обычные артефакты). Полнотекстовый/векторный поиск и консолидация памяти — D3; длительные фоновые поручения/расписания/таймеры и интерактивные approval-диалоги — D2; гибридные веб-поверхности L/MCP Apps — D4; multi-device и резервная реплика — D5; голос и сенсорика — D6.
-- Живой LLM-прогон по платному `GEMINI_API_KEY` (фоновый профиль) остаётся на D2/D3; на D1 живьём подтверждены интерактивный `oauth-personal` (`Google AI Ultra`) и жёсткий fail-closed отказ `gemini-api-key` без ключа.
-- Авторизация HTTP API `dennett-head` привязана к `loopback-only` со сквозными проверками `Host`/`Origin`/`Sec-Fetch-Site` (однопользовательский локальный D1); mTLS/peer auth для Node и нескольких устройств вводится на D5.
-- На Windows внешний `SIGTERM` (`TerminateProcess`) в `demo-d1` обходит Python `finally`, а штатный интерактивный `Ctrl+C` корректно останавливает и убирает все демо-процессы и контейнер PG.
+- Реализован сквозной контур D2: долговечные поручения/таймеры/сигналы, упорядоченный журнал доставки `V15`–`V18`, интерактивный `ask_before_write` с отзываемыми грантами, делегирование помощнику с ослаблением прав и текстовой кооперацией (`V07`, `A07`), `SimulatedExternalConnector` с `LostAck -> unknown_external` и сверкой `/reconcile`, строгий жизненный цикл проектов/артефактов (контракты C и D, `90 §30`), курсорный Desktop UI (`Входящие`, `Поручения`, офлайн-очередь черновиков с `client_message_id`) и `dennett-check demo-d2`.
+- Реальные внешние коннекторы (Telegram/email/computer-use) остаются на D7 (в D2 проверяется детерминированный `SimulatedExternalConnector` с персистентным ledger); полнотекстовый/векторный поиск памяти и консолидация — D3; гибридные веб-поверхности L/MCP Apps — D4; multi-device, mTLS/peer auth и резервная реплика — D5; голос и сенсорика — D6.
+- Живой LLM-прогон по платному `GEMINI_API_KEY` (фоновый профиль) зависит от наличия ключа в окружении; без ключа профиль fail-closed с `AUTH_REQUIRED` без тихого переключения на `oauth-personal`.
+- На Windows внешний `SIGTERM` (`TerminateProcess`) в `demo-d1`/`demo-d2` обходит Python `finally`, а штатный интерактивный `Ctrl+C` корректно останавливает и убирает все демо-процессы и контейнер PG.
 
 ## Этапы и приёмка
 
 - D0 — основа/проверки: **принят (H0 принят владельцем 2026-11-23 на `d0/foundation` `1a40e46`)**.
-- D1 — агент (`agy acp`) + `memoryd` + реальный сохраняемый чат: **технически завершён (`d1/first-vertical-slice` поверх `30dc620`, схема `v3`); ожидает ревью правок H1 и приёмки H1 владельцем**.
-- D2 — длительные поручения/ожидание/отмена: не начат; H2 не принят.
+- D1 — агент (`agy acp`) + `memoryd` + реальный сохраняемый чат: **принят (H1 принят владельцем 2026-11-24 на `d1/first-vertical-slice` `7496ee2`)**.
+- D2 — длительные поручения/ожидание/отмена: **Slice A (`34d67ac`) + Slice B реализованы на `d2/durable-runs-and-stop` (схема `v4`); ожидает живого UI/UX-ревью `@d2-ui-reviewer`, финального аудита и приёмки H2 владельцем**.
 - D3 — полная память и подключения: не начат; H3 не принят.
 - D4 — графика и рабочие экраны: не начат; H4 не принят.
 - D5 — устройства и полный резерв: не начат; H5 не принят.
@@ -74,4 +72,4 @@
 
 ## Открытые дефекты новой программы
 
-Открытых блокирующих дефектов D1 нет (все 11 замечаний Slice 1–3, 5 визуальных/3 security-замечания UI Rework и все 8 находок полного аудита `H1-01`..`H1-08` закрыты с тестами до приёмки H1).
+Открытых блокирующих дефектов D0/D1 нет; Slice B этапа D2 передаётся на независимую проверку `@d2-ui-reviewer` перед финальной сводкой H2.

@@ -100,26 +100,46 @@ export function TitleBar() {
         </button>
 
         <nav className="breadcrumbs" aria-label="Текущий контекст">
-          <span className={meta.activeSession ? "breadcrumb-prefix" : ""}>Проекты</span>
-          {meta.activeProject && (
+          {state.activeView === "inbox" ? (
             <>
+              <span className="breadcrumb-prefix">Dennett</span>
               <span className="breadcrumb-sep" aria-hidden="true">
                 /
               </span>
-              <span
-                className={meta.activeSession ? "breadcrumb-prefix" : ""}
-                title={meta.activeProject.workspace_path ?? "Пока без папки"}
-              >
-                {meta.activeProject.name}
-              </span>
+              <strong>Входящие и Радар</strong>
             </>
-          )}
-          {meta.activeSession && (
+          ) : state.activeView === "tasks" ? (
             <>
+              <span className="breadcrumb-prefix">Dennett</span>
               <span className="breadcrumb-sep" aria-hidden="true">
                 /
               </span>
-              <strong>{meta.activeSession.title}</strong>
+              <strong>Поручения и расписания</strong>
+            </>
+          ) : (
+            <>
+              <span className={meta.activeSession ? "breadcrumb-prefix" : ""}>Проекты</span>
+              {meta.activeProject && (
+                <>
+                  <span className="breadcrumb-sep" aria-hidden="true">
+                    /
+                  </span>
+                  <span
+                    className={meta.activeSession ? "breadcrumb-prefix" : ""}
+                    title={meta.activeProject.workspace_path ?? "Пока без папки"}
+                  >
+                    {meta.activeProject.name}
+                  </span>
+                </>
+              )}
+              {meta.activeSession && (
+                <>
+                  <span className="breadcrumb-sep" aria-hidden="true">
+                    /
+                  </span>
+                  <strong>{meta.activeSession.title}</strong>
+                </>
+              )}
             </>
           )}
         </nav>

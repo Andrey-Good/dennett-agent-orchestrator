@@ -1,42 +1,81 @@
 import type { DesktopBridge } from "./bridge";
 import type {
+  AgentMessageRecord,
   AgentRecord,
+  ArtifactLifecycleRequest,
+  ArtifactLifecycleResponse,
   ArtifactRecord,
   CancelRunResponse,
+  CancelTaskResponse,
+  CapabilityGrantRecord,
+  ControlEventRecord,
   CreateAgentRequest,
   CreateArtifactRequest,
   CreateProjectRequest,
   CreateSessionRequest,
+  CreateTaskRequest,
   DesktopHealthSnapshot,
   DiagnosticsResponse,
+  DispatchEffectRequest,
+  DispatchEffectResponse,
+  EffectClaimRecord,
+  EventStreamResponse,
   FlushOutboxResponse,
   HeadHealth,
   HeadMemorySearchRequest,
   HeadMemorySearchResponse,
+  InboxCardRecord,
+  ListAgentMessagesResponse,
   ListAgentsResponse,
   ListArtifactsResponse,
+  ListCapabilityGrantsResponse,
+  ListEffectsResponse,
+  ListInboxResponse,
+  ListPermissionRequestsResponse,
   ListProjectFilesResponse,
   ListProjectsResponse,
   ListSessionsResponse,
+  ListTasksResponse,
   MemoryNote,
   MemoryStatus,
   MessageRecord,
   PermissionDecisionRecord,
+  PermissionRequestRecord,
+  ProjectLifecycleResponse,
   ProjectRecord,
+  RebindProjectRequest,
+  ReconcileEffectRequest,
+  ReconcileEffectResponse,
+  ReplyTaskRequest,
+  ResolveInboxCardRequest,
+  ResolveInboxCardResponse,
+  ResolvePermissionRequest,
+  ResolvePermissionResponse,
+  RevokeGrantRequest,
   RunRecord,
   RuntimeAuthProfile,
   RuntimeBinding,
   RuntimeCatalogResponse,
   RuntimeModelOption,
   RuntimeQuotaWindow,
+  SendAgentMessageRequest,
+  SendAgentMessageResponse,
   SendMessageRequest,
   SendMessageResponse,
   SessionDetailResponse,
   SessionRecord,
+  StateSnapshotResponse,
+  TaskDetailResponse,
+  TaskRecord,
+  TaskSignalRecord,
+  TaskSignalRequest,
+  TaskSignalResponse,
+  TaskTimerRecord,
   ThinkingLevel,
   UpdateAgentConfigRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
+  UpdateTaskRequest,
   WorkspaceFileEntry,
 } from "./contracts";
 
@@ -57,6 +96,12 @@ export interface MockBridgeSeed {
   projects?: ProjectRecord[];
   agents?: AgentRecord[];
   sessions?: SessionRecord[];
+  tasks?: TaskRecord[];
+  inboxCards?: InboxCardRecord[];
+  permissionRequests?: PermissionRequestRecord[];
+  capabilityGrants?: CapabilityGrantRecord[];
+  effects?: EffectClaimRecord[];
+  agentMessages?: AgentMessageRecord[];
   messagesBySession?: Record<string, MessageRecord[]>;
   artifactsBySession?: Record<string, ArtifactRecord[]>;
   runsBySession?: Record<string, RunRecord[]>;
@@ -152,6 +197,14 @@ export class MockDesktopBridge implements DesktopBridge {
   public projects: ProjectRecord[];
   public agents: AgentRecord[];
   public sessions: SessionRecord[];
+  public tasks: TaskRecord[];
+  public inboxCards: InboxCardRecord[];
+  public permissionRequests: PermissionRequestRecord[];
+  public capabilityGrants: CapabilityGrantRecord[];
+  public effects: EffectClaimRecord[];
+  public agentMessages: AgentMessageRecord[];
+  public timersByTask: Record<string, TaskTimerRecord[]> = {};
+  public signalsByTask: Record<string, TaskSignalRecord[]> = {};
   public messagesBySession: Record<string, MessageRecord[]>;
   public artifactsBySession: Record<string, ArtifactRecord[]>;
   public runsBySession: Record<string, RunRecord[]>;
@@ -162,8 +215,14 @@ export class MockDesktopBridge implements DesktopBridge {
   public sendDelayMs: number;
   public failNextSendWith: { code: string; message: string } | null;
 
+  public authorityEpoch = 1;
+  public retainedFromSeq = 1;
+  public events: ControlEventRecord[] = [];
+  private cursorSeq = 0;
+  private clientMessageIndex = new Map<string, SendMessageResponse>();
+
   public readonly calls: Array<{ method: string; args?: unknown }> = [];
-  private idSeq = 100;
+  private idSeq = 10000;
   private pendingCancelResolvers = new Map<string, () => void>();
 
   constructor(seed: MockBridgeSeed = {}) {
@@ -190,9 +249,18 @@ export class MockDesktopBridge implements DesktopBridge {
       seed.models ??
       (this.runtimeIsSimulated ? [...DEFAULT_SIMULATED_MODELS] : [...DEFAULT_ANTIGRAVITY_MODELS]);
     this.quotas = [...(seed.quotas ?? [])];
-    this.projects = [...(seed.projects ?? [])];
+    this.projects = (seed.projects ?? []).map((p) => ({
+      ...p,
+      lifecycle_state: p.lifecycle_state ?? "active",
+    }));
     this.agents = [...(seed.agents ?? [])];
     this.sessions = [...(seed.sessions ?? [])];
+    this.tasks = [...(seed.tasks ?? [])];
+    this.inboxCards = [...(seed.inboxCards ?? [])];
+    this.permissionRequests = [...(seed.permissionRequests ?? [])];
+    this.capabilityGrants = [...(seed.capabilityGrants ?? [])];
+    this.effects = [...(seed.effects ?? [])];
+    this.agentMessages = [...(seed.agentMessages ?? [])];
     this.messagesBySession = { ...(seed.messagesBySession ?? {}) };
     this.artifactsBySession = { ...(seed.artifactsBySession ?? {}) };
     this.runsBySession = { ...(seed.runsBySession ?? {}) };
@@ -202,6 +270,35 @@ export class MockDesktopBridge implements DesktopBridge {
     this.mockPickedFolder = seed.mockPickedFolder ?? null;
     this.sendDelayMs = seed.sendDelayMs ?? 0;
     this.failNextSendWith = seed.failNextSendWith ?? null;
+  }
+
+  public emitControlEvent(
+    eventType: string,
+    opts: {
+      entityKey?: string;
+      projectId?: string | null;
+      sessionId?: string | null;
+      taskId?: string | null;
+      payload?: Record<string, unknown>;
+    } = {},
+  ): ControlEventRecord {
+    this.cursorSeq += 1;
+    const ev: ControlEventRecord = {
+      cursor_seq: this.cursorSeq,
+      event_id: this.nextUuid("99000000"),
+      authority_epoch: this.authorityEpoch,
+      entity_key: opts.entityKey ?? "control:mock",
+      entity_seq: this.cursorSeq,
+      event_type: eventType,
+      project_id: opts.projectId ?? null,
+      session_id: opts.sessionId ?? null,
+      task_id: opts.taskId ?? null,
+      correlation_id: `corr-ev-${this.cursorSeq}`,
+      payload_json: JSON.stringify(opts.payload ?? {}),
+      created_at: Date.now(),
+    };
+    this.events.push(ev);
+    return ev;
   }
 
   private nextUuid(prefix: string): string {
@@ -229,12 +326,12 @@ export class MockDesktopBridge implements DesktopBridge {
 
     const health: HeadHealth = {
       service: "head",
-      stage: "D1",
+      stage: "D2",
       profile_mode: this.runtimeIsSimulated ? "test_isolated" : "production",
       postgres_connected: true,
       postgres_role: "dennett_control_role",
       postgres_database: "dennett_control_test",
-      schema_version: 3,
+      schema_version: 4,
       memory_status: this.memoryStatus,
       memory_detail: this.memoryDetail,
       runtime_adapter_id: this.runtimeAdapterId,
@@ -248,6 +345,11 @@ export class MockDesktopBridge implements DesktopBridge {
         "control.cancel.v1",
         "control.runtime_catalog.v1",
         "control.workspace_files.v1",
+        "control.tasks.v1",
+        "control.events.v1",
+        "control.inbox.v1",
+        "control.approvals.v1",
+        "control.effects.v1",
       ],
       correlation_id: "corr-health-1",
     };
@@ -296,10 +398,20 @@ export class MockDesktopBridge implements DesktopBridge {
     return this.mockPickedFolder;
   }
 
-  public async listProjects(): Promise<ListProjectsResponse> {
-    this.calls.push({ method: "listProjects" });
+  public async listProjects(includeArchived = false): Promise<ListProjectsResponse> {
+    this.calls.push({ method: "listProjects", args: { includeArchived } });
     this.ensureConnected();
-    return { projects: [...this.projects] };
+    const visible = this.projects.filter((p) => {
+      const lc = p.lifecycle_state ?? "active";
+      if (lc === "deleted_record") {
+        return false;
+      }
+      if (!includeArchived && lc === "archived") {
+        return false;
+      }
+      return true;
+    });
+    return { projects: [...visible] };
   }
 
   public async createProject(request: CreateProjectRequest): Promise<ProjectRecord> {
@@ -318,9 +430,12 @@ export class MockDesktopBridge implements DesktopBridge {
       name: request.name,
       workspace_path: request.workspace_path ?? null,
       memory_scope: scope,
+      lifecycle_state: "active",
+      archived_at: null,
       created_at: Date.now(),
     };
     this.projects = [record, ...this.projects];
+    this.emitControlEvent("project.created", { projectId });
     return record;
   }
 
@@ -339,9 +454,124 @@ export class MockDesktopBridge implements DesktopBridge {
       name: request.name?.trim() || existing.name,
       workspace_path:
         request.workspace_path !== undefined ? request.workspace_path : existing.workspace_path,
+      lifecycle_state:
+        request.workspace_path && existing.lifecycle_state === "detached"
+          ? "active"
+          : (existing.lifecycle_state ?? "active"),
     };
     this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.emitControlEvent("project.updated", { projectId });
     return updated;
+  }
+
+  public async rebindProject(
+    projectId: string,
+    request: RebindProjectRequest,
+  ): Promise<ProjectLifecycleResponse> {
+    this.calls.push({ method: "rebindProject", args: { projectId, request } });
+    this.ensureConnected();
+    const existing = this.projects.find((p) => p.project_id === projectId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
+    }
+    const updated: ProjectRecord = {
+      ...existing,
+      workspace_path: request.workspace_path.trim(),
+      lifecycle_state: existing.lifecycle_state === "archived" ? "archived" : "active",
+    };
+    this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.emitControlEvent("project.rebound", { projectId });
+    return { project: updated, affected_timers: 0, user_workspace_files_deleted: false };
+  }
+
+  public async detachProjectWorkspace(projectId: string): Promise<ProjectLifecycleResponse> {
+    this.calls.push({ method: "detachProjectWorkspace", args: projectId });
+    this.ensureConnected();
+    const existing = this.projects.find((p) => p.project_id === projectId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
+    }
+    const updated: ProjectRecord = {
+      ...existing,
+      workspace_path: null,
+      lifecycle_state: "detached",
+    };
+    this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.emitControlEvent("project.workspace_detached", { projectId });
+    return { project: updated, affected_timers: 0, user_workspace_files_deleted: false };
+  }
+
+  public async archiveProject(projectId: string): Promise<ProjectLifecycleResponse> {
+    this.calls.push({ method: "archiveProject", args: projectId });
+    this.ensureConnected();
+    const existing = this.projects.find((p) => p.project_id === projectId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
+    }
+    const updated: ProjectRecord = {
+      ...existing,
+      lifecycle_state: "archived",
+      archived_at: Date.now(),
+    };
+    this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.emitControlEvent("project.archived", { projectId });
+    return { project: updated, affected_timers: 0, user_workspace_files_deleted: false };
+  }
+
+  public async unarchiveProject(projectId: string): Promise<ProjectLifecycleResponse> {
+    this.calls.push({ method: "unarchiveProject", args: projectId });
+    this.ensureConnected();
+    const existing = this.projects.find((p) => p.project_id === projectId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
+    }
+    const updated: ProjectRecord = {
+      ...existing,
+      lifecycle_state: "active",
+      archived_at: null,
+    };
+    this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.emitControlEvent("project.unarchived", { projectId });
+    return { project: updated, affected_timers: 0, user_workspace_files_deleted: false };
+  }
+
+  public async removeProject(projectId: string): Promise<ProjectLifecycleResponse> {
+    this.calls.push({ method: "removeProject", args: projectId });
+    this.ensureConnected();
+    const existing = this.projects.find((p) => p.project_id === projectId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
+    }
+    const updated: ProjectRecord = {
+      ...existing,
+      lifecycle_state: "deleted_record",
+    };
+    this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.emitControlEvent("project.removed", { projectId });
+    return { project: updated, affected_timers: 0, user_workspace_files_deleted: false };
+  }
+
+  public async deleteProject(
+    projectId: string,
+    confirm: boolean,
+  ): Promise<ProjectLifecycleResponse> {
+    this.calls.push({ method: "deleteProject", args: { projectId, confirm } });
+    this.ensureConnected();
+    if (!confirm) {
+      throw { code: "INVALID_INPUT", message: "confirm=true is required to delete project" };
+    }
+    const existing = this.projects.find((p) => p.project_id === projectId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
+    }
+    const updated: ProjectRecord = {
+      ...existing,
+      workspace_path: null,
+      lifecycle_state: "deleted_record",
+    };
+    this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.emitControlEvent("project.deleted", { projectId });
+    return { project: updated, affected_timers: 0, user_workspace_files_deleted: false };
   }
 
   public async listProjectFiles(
@@ -398,6 +628,8 @@ export class MockDesktopBridge implements DesktopBridge {
         thinking_level: request.thinking_level ?? null,
         allowed_memory_scopes: [...request.allowed_memory_scopes],
         workspace_write_policy: request.workspace_write_policy,
+        default_budget: request.default_budget ?? null,
+        attached_skills: [...(request.attached_skills ?? [])],
         created_at: now,
       },
       created_at: now,
@@ -432,11 +664,57 @@ export class MockDesktopBridge implements DesktopBridge {
         thinking_level: request.thinking_level ?? null,
         allowed_memory_scopes: [...request.allowed_memory_scopes],
         workspace_write_policy: request.workspace_write_policy,
+        default_budget: request.default_budget ?? existing.current_config.default_budget ?? null,
+        attached_skills: request.attached_skills ?? existing.current_config.attached_skills ?? [],
         created_at: now,
       },
     };
     this.agents = this.agents.map((a) => (a.agent_id === agentId ? updated : a));
     return updated;
+  }
+
+  public async sendAgentMessage(
+    recipientAgentId: string,
+    request: SendAgentMessageRequest,
+  ): Promise<SendAgentMessageResponse> {
+    this.calls.push({ method: "sendAgentMessage", args: { recipientAgentId, request } });
+    this.ensureConnected();
+    const existing = this.agentMessages.find(
+      (m) =>
+        m.recipient_agent_id === recipientAgentId && m.idempotency_key === request.idempotency_key,
+    );
+    if (existing) {
+      return { message: existing, deduplicated: true };
+    }
+    const msg: AgentMessageRecord = {
+      agent_message_id: this.nextUuid("85000000"),
+      sender_agent_id: request.sender_agent_id ?? null,
+      recipient_agent_id: recipientAgentId,
+      project_id: request.project_id,
+      related_task_id: request.related_task_id ?? null,
+      idempotency_key: request.idempotency_key,
+      body_text: request.body_text,
+      delivered_in_run_id: null,
+      correlation_id: "corr-agent-msg",
+      created_at: Date.now(),
+      delivered_at: null,
+    };
+    this.agentMessages = [...this.agentMessages, msg];
+    return { message: msg, deduplicated: false };
+  }
+
+  public async listAgentMessages(
+    recipientAgentId: string,
+    undeliveredOnly = false,
+  ): Promise<ListAgentMessagesResponse> {
+    this.calls.push({ method: "listAgentMessages", args: { recipientAgentId, undeliveredOnly } });
+    this.ensureConnected();
+    const list = this.agentMessages.filter(
+      (m) =>
+        m.recipient_agent_id === recipientAgentId &&
+        (!undeliveredOnly || m.delivered_in_run_id === null),
+    );
+    return { messages: list };
   }
 
   public async listSessions(): Promise<ListSessionsResponse> {
@@ -509,6 +787,14 @@ export class MockDesktopBridge implements DesktopBridge {
     this.calls.push({ method: "sendMessage", args: { sessionId, request } });
     this.ensureConnected();
 
+    if (request.client_message_id) {
+      const dedupKey = `${sessionId}:${request.client_message_id}`;
+      const existing = this.clientMessageIndex.get(dedupKey);
+      if (existing) {
+        return { ...existing, deduplicated: true };
+      }
+    }
+
     if (this.failNextSendWith) {
       const err = this.failNextSendWith;
       this.failNextSendWith = null;
@@ -555,6 +841,7 @@ export class MockDesktopBridge implements DesktopBridge {
       role: "user",
       content: request.content,
       run_id: runId,
+      client_message_id: request.client_message_id ?? null,
       correlation_id: "corr-turn-1",
       created_at: now,
     };
@@ -617,7 +904,7 @@ export class MockDesktopBridge implements DesktopBridge {
         : s,
     );
 
-    return {
+    const response: SendMessageResponse = {
       user_message: userMsg,
       assistant_message: assistantMsg,
       run,
@@ -626,7 +913,17 @@ export class MockDesktopBridge implements DesktopBridge {
       permission_decisions: [],
       memory_status: this.memoryStatus,
       session_title: effectiveTitle,
+      deduplicated: false,
     };
+
+    if (request.client_message_id) {
+      this.clientMessageIndex.set(`${sessionId}:${request.client_message_id}`, response);
+    }
+    this.emitControlEvent("session.message_completed", {
+      projectId: session.project_id,
+      sessionId,
+    });
+    return response;
   }
 
   public async cancelRun(sessionId: string): Promise<CancelRunResponse> {
@@ -636,12 +933,20 @@ export class MockDesktopBridge implements DesktopBridge {
     if (resolver) {
       resolver();
     }
+    const unknownEffects = this.effects.filter(
+      (ef) => ef.session_id === sessionId && ef.status === "unknown",
+    );
     return {
       session_id: sessionId,
       run_id: resolver ? this.nextUuid("40000000") : null,
       cancelled: Boolean(resolver),
-      status: resolver ? "cancelled" : null,
+      status: unknownEffects.length > 0 ? "unknown_external" : resolver ? "cancelled" : null,
       memory_status: this.memoryStatus,
+      external_outcome_unknown: unknownEffects.length > 0,
+      committed_effects: this.effects.filter(
+        (ef) => ef.session_id === sessionId && ef.status === "confirmed",
+      ),
+      unknown_effects: unknownEffects,
     };
   }
 
@@ -674,9 +979,12 @@ export class MockDesktopBridge implements DesktopBridge {
       content: request.content ?? null,
       relative_path: request.relative_path ?? null,
       sha256: "a".repeat(64),
+      completeness_status: request.completeness_status ?? "final",
+      lifecycle_state: "active",
       created_at: Date.now(),
     };
     this.artifactsBySession[sessionId] = [...existing, artifact];
+    this.emitControlEvent("artifact.created", { projectId: session.project_id, sessionId });
     return artifact;
   }
 
@@ -692,6 +1000,802 @@ export class MockDesktopBridge implements DesktopBridge {
     return found;
   }
 
+  public async listArtifactRevisions(
+    sessionId: string,
+    artifactIdOrName: string,
+  ): Promise<ListArtifactsResponse> {
+    this.calls.push({ method: "listArtifactRevisions", args: { sessionId, artifactIdOrName } });
+    this.ensureConnected();
+    const all = this.artifactsBySession[sessionId] ?? [];
+    const byId = all.find((a) => a.artifact_id === artifactIdOrName);
+    const logicalName = byId ? byId.name : artifactIdOrName;
+    const matched = all
+      .filter((a) => a.name === logicalName)
+      .sort((a, b) => a.revision - b.revision);
+    return { artifacts: matched };
+  }
+
+  public async applyArtifactLifecycle(
+    sessionId: string,
+    artifactId: string,
+    request: ArtifactLifecycleRequest,
+  ): Promise<ArtifactLifecycleResponse> {
+    this.calls.push({
+      method: "applyArtifactLifecycle",
+      args: { sessionId, artifactId, request },
+    });
+    this.ensureConnected();
+    const list = this.artifactsBySession[sessionId] ?? [];
+    const existing = list.find((a) => a.artifact_id === artifactId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `artifact ${artifactId} not found` };
+    }
+    let updated: ArtifactRecord = { ...existing };
+    switch (request.action) {
+      case "finalize":
+        updated = { ...updated, completeness_status: "final" };
+        break;
+      case "archive":
+        updated = { ...updated, lifecycle_state: "archived" };
+        break;
+      case "unarchive":
+        updated = { ...updated, lifecycle_state: "active" };
+        break;
+      case "remove":
+        updated = { ...updated, lifecycle_state: "removed" };
+        break;
+      case "delete":
+        updated = { ...updated, lifecycle_state: "deleted", content: null };
+        break;
+    }
+    this.artifactsBySession[sessionId] = list.map((a) =>
+      a.artifact_id === artifactId ? updated : a,
+    );
+    this.emitControlEvent(`artifact.${request.action}`, { sessionId });
+    return { artifact: updated, user_workspace_files_deleted: false };
+  }
+
+  public async getStateSnapshot(
+    projectId?: string | null,
+    includeArchived = false,
+  ): Promise<StateSnapshotResponse> {
+    this.calls.push({ method: "getStateSnapshot", args: { projectId, includeArchived } });
+    this.ensureConnected();
+    const projects = this.projects.filter((p) => {
+      const lc = p.lifecycle_state ?? "active";
+      if (lc === "deleted_record") {
+        return false;
+      }
+      if (projectId && p.project_id !== projectId) {
+        return false;
+      }
+      if (!includeArchived && !projectId && lc === "archived") {
+        return false;
+      }
+      return true;
+    });
+    const sessions = projectId
+      ? this.sessions.filter((s) => s.project_id === projectId)
+      : [...this.sessions];
+    const tasks = projectId
+      ? this.tasks.filter((t) => t.project_id === projectId)
+      : [...this.tasks];
+    const openInbox = this.inboxCards.filter(
+      (c) => c.status === "open" && (!projectId || c.project_id === projectId),
+    );
+    const activeGrants = this.capabilityGrants.filter(
+      (g) => !g.revoked_at && (!projectId || g.project_id === projectId),
+    );
+    return {
+      snapshot_cursor: {
+        authority_epoch: this.authorityEpoch,
+        committed_seq: this.cursorSeq,
+        retained_from_seq: this.retainedFromSeq,
+      },
+      projects,
+      agents: [...this.agents],
+      sessions,
+      tasks,
+      inbox_cards: openInbox,
+      active_grants: activeGrants,
+      unresolved_inbox_count: openInbox.length,
+    };
+  }
+
+  public async getEvents(
+    afterCursor: number,
+    expectedEpoch?: number | null,
+    projectId?: string | null,
+    limit?: number | null,
+  ): Promise<EventStreamResponse> {
+    this.calls.push({
+      method: "getEvents",
+      args: { afterCursor, expectedEpoch, projectId, limit },
+    });
+    this.ensureConnected();
+    if (expectedEpoch !== undefined && expectedEpoch !== null && expectedEpoch !== this.authorityEpoch) {
+      throw {
+        code: "CONFLICT",
+        message: `conflict on stream_epoch: expected epoch ${expectedEpoch}, current is ${this.authorityEpoch}`,
+      };
+    }
+    if (afterCursor + 1 < this.retainedFromSeq) {
+      throw {
+        code: "CONFLICT",
+        message: `conflict on stream_cursor_expired: cursor ${afterCursor} predates retained_from_seq ${this.retainedFromSeq}`,
+      };
+    }
+    const maxItems = limit ?? 100;
+    const scanned = this.events.filter((ev) => ev.cursor_seq > afterCursor).slice(0, maxItems);
+    const scannedThrough =
+      scanned.length > 0 ? scanned[scanned.length - 1]!.cursor_seq : afterCursor;
+    const filtered = projectId ? scanned.filter((ev) => ev.project_id === projectId) : scanned;
+    const hasMore = this.events.some((ev) => ev.cursor_seq > scannedThrough);
+    return {
+      authority_epoch: this.authorityEpoch,
+      retained_from_seq: this.retainedFromSeq,
+      after_cursor: afterCursor,
+      scanned_through_seq: scannedThrough,
+      next_cursor: scannedThrough,
+      has_more: hasMore,
+      events: filtered,
+    };
+  }
+
+  public async createTask(request: CreateTaskRequest): Promise<TaskRecord> {
+    this.calls.push({ method: "createTask", args: request });
+    this.ensureConnected();
+    const now = Date.now();
+    let sessionId = request.session_id ?? null;
+    if (!sessionId) {
+      const createdSession = await this.createSession({
+        agent_id: request.agent_id,
+        project_id: request.project_id,
+        title: request.title?.trim() || deriveAutoTitle(request.goal) || "Поручение",
+      });
+      sessionId = createdSession.session_id;
+    }
+    const taskId = this.nextUuid("75000000");
+    const status = request.schedule
+      ? "waiting_timer"
+      : request.wait_for_signal
+        ? "waiting_signal"
+        : request.execute_immediately === false
+          ? "queued"
+          : "running";
+
+    const nextFireAt =
+      request.schedule?.kind.kind === "once_at"
+        ? request.schedule.kind.fire_at
+        : request.schedule?.kind.kind === "interval"
+          ? now + request.schedule.kind.interval_secs * 1000
+          : request.schedule?.kind.kind === "daily_wall_time"
+            ? now + 3_600_000
+            : null;
+
+    const task: TaskRecord = {
+      task_id: taskId,
+      project_id: request.project_id,
+      session_id: sessionId,
+      agent_id: request.agent_id,
+      parent_task_id: request.parent_task_id ?? null,
+      title: request.title?.trim() || deriveAutoTitle(request.goal) || "Новое поручение",
+      goal: request.goal.trim(),
+      generation: 1,
+      status,
+      wait_detail: request.wait_for_signal
+        ? `Ожидание сигнала «${request.wait_for_signal}»`
+        : request.schedule
+          ? request.schedule.original_expression ?? "Запланировано по таймеру"
+          : null,
+      partial_result_summary: null,
+      error_code: null,
+      error_summary: null,
+      active_run_id: null,
+      schedule: request.schedule
+        ? {
+            ...request.schedule,
+            missed_run_policy: request.schedule.missed_run_policy ?? "execute_once",
+            next_fire_at: request.schedule.next_fire_at ?? nextFireAt,
+          }
+        : null,
+      budget: request.budget ?? { exceed_policy: "ask_approval" },
+      usage: { turns_used: 0, tokens_used: 0, wall_ms_used: 0, confidence: "unknown" },
+      attached_skills: [...(request.attached_skills ?? [])],
+      auth_profile_override: request.auth_profile_override ?? null,
+      created_at: now,
+      updated_at: now,
+      finished_at: null,
+    };
+    this.tasks = [task, ...this.tasks];
+    this.emitControlEvent("task.created", { projectId: task.project_id, taskId: task.task_id });
+    return task;
+  }
+
+  public async listTasks(
+    projectId?: string | null,
+    status?: string | null,
+  ): Promise<ListTasksResponse> {
+    this.calls.push({ method: "listTasks", args: { projectId, status } });
+    this.ensureConnected();
+    const list = this.tasks.filter(
+      (t) => (!projectId || t.project_id === projectId) && (!status || t.status === status),
+    );
+    return { tasks: list };
+  }
+
+  public async getTaskDetail(taskId: string): Promise<TaskDetailResponse> {
+    this.calls.push({ method: "getTaskDetail", args: taskId });
+    this.ensureConnected();
+    const task = this.tasks.find((t) => t.task_id === taskId);
+    if (!task) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    return {
+      task,
+      runs: (this.runsBySession[task.session_id] ?? []).filter((r) => r.task_id === taskId),
+      timers: this.timersByTask[taskId] ?? [],
+      signals: this.signalsByTask[taskId] ?? [],
+      effects: this.effects.filter((ef) => ef.task_id === taskId),
+      open_inbox_cards: this.inboxCards.filter(
+        (c) => c.task_id === taskId && c.status === "open",
+      ),
+    };
+  }
+
+  public async updateTask(taskId: string, request: UpdateTaskRequest): Promise<TaskRecord> {
+    this.calls.push({ method: "updateTask", args: { taskId, request } });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    const bumpsGen = Boolean(request.goal || request.schedule || request.clear_schedule);
+    const updated: TaskRecord = {
+      ...existing,
+      title: request.title?.trim() || existing.title,
+      goal: request.goal?.trim() || existing.goal,
+      generation: bumpsGen ? existing.generation + 1 : existing.generation,
+      schedule: request.clear_schedule
+        ? null
+        : request.schedule !== undefined
+          ? request.schedule
+          : existing.schedule,
+      budget: request.budget ?? existing.budget,
+      updated_at: Date.now(),
+    };
+    this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    this.emitControlEvent("task.updated", { projectId: updated.project_id, taskId });
+    return updated;
+  }
+
+  public async sendTaskSignal(
+    taskId: string,
+    request: TaskSignalRequest,
+  ): Promise<TaskSignalResponse> {
+    this.calls.push({ method: "sendTaskSignal", args: { taskId, request } });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    const signals = this.signalsByTask[taskId] ?? [];
+    const dup = signals.find((s) => s.idempotency_key === request.idempotency_key);
+    if (dup) {
+      return { signal: dup, task: existing, deduplicated: true };
+    }
+    const now = Date.now();
+    const woke = existing.status === "waiting_signal";
+    const signal: TaskSignalRecord = {
+      signal_id: this.nextUuid("76000000"),
+      task_id: taskId,
+      idempotency_key: request.idempotency_key,
+      signal_name: request.signal_name,
+      payload_text: request.payload_text ?? "",
+      payload_sha256: "b".repeat(64),
+      applied_generation: existing.generation,
+      outcome_status: existing.status === "cancelled" ? "rejected_stopped" : woke ? "woke_task" : "queued_on_task",
+      correlation_id: "corr-signal-1",
+      created_at: now,
+    };
+    this.signalsByTask[taskId] = [...signals, signal];
+    const updated: TaskRecord = woke
+      ? { ...existing, status: "running", wait_detail: null, updated_at: now }
+      : existing;
+    this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    this.emitControlEvent("task.signal_received", { projectId: updated.project_id, taskId });
+    return { signal, task: updated, deduplicated: false };
+  }
+
+  public async replyToTask(taskId: string, request: ReplyTaskRequest): Promise<TaskRecord> {
+    this.calls.push({ method: "replyToTask", args: { taskId, request } });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    const now = Date.now();
+    const updated: TaskRecord = {
+      ...existing,
+      status: "running",
+      wait_detail: null,
+      partial_result_summary: `Ответ получен: ${request.answer_text.trim()}`,
+      updated_at: now,
+    };
+    this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    this.inboxCards = this.inboxCards.map((c) =>
+      c.task_id === taskId && c.kind === "clarification" && c.status === "open"
+        ? { ...c, status: "resolved", resolution_summary: request.answer_text.trim(), resolved_at: now, revision: c.revision + 1 }
+        : c,
+    );
+    this.emitControlEvent("task.clarification_answered", { projectId: updated.project_id, taskId });
+    return updated;
+  }
+
+  public async cancelTask(taskId: string): Promise<CancelTaskResponse> {
+    this.calls.push({ method: "cancelTask", args: taskId });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    const unknownEffects = this.effects.filter(
+      (ef) => ef.task_id === taskId && ef.status === "unknown",
+    );
+    const committedEffects = this.effects.filter(
+      (ef) => ef.task_id === taskId && ef.status === "confirmed",
+    );
+    const hasUnknown = unknownEffects.length > 0 || existing.status === "unknown_external";
+    const now = Date.now();
+    const updated: TaskRecord = {
+      ...existing,
+      status: hasUnknown ? "unknown_external" : "cancelled",
+      wait_detail: hasUnknown
+        ? "Остановлено локально, но внешний исход остаётся неизвестным (UNKNOWN)."
+        : null,
+      finished_at: hasUnknown ? existing.finished_at ?? null : now,
+      updated_at: now,
+    };
+    this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    this.emitControlEvent(
+      hasUnknown ? "task.stopped_with_unknown_external" : "task.cancelled",
+      { projectId: updated.project_id, taskId },
+    );
+    return {
+      task: updated,
+      cancelled_run_id: existing.active_run_id ?? null,
+      external_outcome_unknown: hasUnknown,
+      committed_effects: committedEffects,
+      unknown_effects: unknownEffects,
+      memory_status: this.memoryStatus,
+    };
+  }
+
+  public async listInboxCards(
+    status?: string | null,
+    projectId?: string | null,
+  ): Promise<ListInboxResponse> {
+    this.calls.push({ method: "listInboxCards", args: { status, projectId } });
+    this.ensureConnected();
+    const filtered = this.inboxCards.filter((c) => {
+      if (projectId && c.project_id !== projectId) {
+        return false;
+      }
+      if (status && status !== "all" && c.status !== status) {
+        return false;
+      }
+      return true;
+    });
+    const unresolvedCount = this.inboxCards.filter(
+      (c) => c.status === "open" && (!projectId || c.project_id === projectId),
+    ).length;
+    return { cards: filtered, unresolved_count: unresolvedCount };
+  }
+
+  public async resolveInboxCard(
+    cardId: string,
+    request: ResolveInboxCardRequest,
+  ): Promise<ResolveInboxCardResponse> {
+    this.calls.push({ method: "resolveInboxCard", args: { cardId, request } });
+    this.ensureConnected();
+    const existing = this.inboxCards.find((c) => c.card_id === cardId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `inbox_card ${cardId} not found` };
+    }
+    if (existing.revision !== request.expected_revision || existing.status !== "open") {
+      throw {
+        code: "CONFLICT",
+        message: "conflict on inbox_card: inbox card revision mismatch (already_resolved)",
+      };
+    }
+
+    const now = Date.now();
+    let updatedTask: TaskRecord | null = null;
+    let updatedPerm: PermissionRequestRecord | null = null;
+    let issuedGrant: CapabilityGrantRecord | null = null;
+    let updatedEffect: EffectClaimRecord | null = null;
+    let summary = "Решено владельцем";
+
+    const res = request.resolution;
+    if (res.action === "permission" && existing.permission_request_id) {
+      const permResp = await this.resolvePermissionRequest(existing.permission_request_id, {
+        decision: res.decision,
+        reason: res.reason ?? null,
+        max_uses: res.max_uses ?? null,
+        expires_in_secs: res.expires_in_secs ?? null,
+      });
+      updatedPerm = permResp.request;
+      issuedGrant = permResp.issued_grant ?? null;
+      summary = `Решение: ${res.decision}`;
+    } else if (res.action === "clarification" && existing.task_id) {
+      updatedTask = await this.replyToTask(existing.task_id, { answer_text: res.answer_text });
+      summary = `Ответ: ${res.answer_text}`;
+    } else if (res.action === "reconcile_effect" && existing.effect_id) {
+      const recResp = await this.reconcileEffect(existing.effect_id, {
+        manual_resolution: res.manual_resolution ?? null,
+        reason: res.reason ?? null,
+      });
+      updatedEffect = recResp.effect;
+      updatedTask = recResp.task ?? null;
+      summary = `Сверка эффекта: ${recResp.effect.status}`;
+    } else if (res.action === "stop_task" && existing.task_id) {
+      const stopResp = await this.cancelTask(existing.task_id);
+      updatedTask = stopResp.task;
+      summary = "Поручение остановлено";
+    } else if (res.action === "increase_budget" && existing.task_id) {
+      const t = this.tasks.find((item) => item.task_id === existing.task_id);
+      if (t) {
+        updatedTask = {
+          ...t,
+          status: "queued",
+          budget: {
+            ...t.budget,
+            max_turns:
+              res.additional_turns && t.budget.max_turns
+                ? t.budget.max_turns + res.additional_turns
+                : t.budget.max_turns,
+            max_tokens:
+              res.additional_tokens && t.budget.max_tokens
+                ? t.budget.max_tokens + res.additional_tokens
+                : t.budget.max_tokens,
+            max_wall_secs:
+              res.additional_wall_secs && t.budget.max_wall_secs
+                ? t.budget.max_wall_secs + res.additional_wall_secs
+                : t.budget.max_wall_secs,
+          },
+          updated_at: now,
+        };
+        this.tasks = this.tasks.map((item) =>
+          item.task_id === updatedTask!.task_id ? updatedTask! : item,
+        );
+      }
+      summary = "Бюджет увеличен";
+    } else if (res.action === "missed_schedule" && existing.task_id) {
+      const t = this.tasks.find((item) => item.task_id === existing.task_id);
+      if (t) {
+        updatedTask = {
+          ...t,
+          status: res.run_now ? "queued" : "waiting_timer",
+          updated_at: now,
+        };
+        this.tasks = this.tasks.map((item) =>
+          item.task_id === updatedTask!.task_id ? updatedTask! : item,
+        );
+      }
+      summary = res.run_now ? "Запущено один раз" : "Пропущенный запуск отложен";
+    }
+
+    const updatedCard: InboxCardRecord = {
+      ...existing,
+      status: "resolved",
+      resolution_summary: summary,
+      revision: existing.revision + 1,
+      updated_at: now,
+      resolved_at: now,
+    };
+    this.inboxCards = this.inboxCards.map((c) => (c.card_id === cardId ? updatedCard : c));
+    this.emitControlEvent("inbox.resolved", { projectId: existing.project_id });
+    return {
+      card: updatedCard,
+      task: updatedTask,
+      permission_request: updatedPerm,
+      issued_grant: issuedGrant,
+      effect: updatedEffect,
+    };
+  }
+
+  public async listPermissionRequests(
+    status?: string | null,
+    sessionId?: string | null,
+  ): Promise<ListPermissionRequestsResponse> {
+    this.calls.push({ method: "listPermissionRequests", args: { status, sessionId } });
+    this.ensureConnected();
+    const list = this.permissionRequests.filter(
+      (r) =>
+        (!status || status === "all" || r.status === status) &&
+        (!sessionId || r.session_id === sessionId),
+    );
+    return { requests: list };
+  }
+
+  public async resolvePermissionRequest(
+    requestId: string,
+    request: ResolvePermissionRequest,
+  ): Promise<ResolvePermissionResponse> {
+    this.calls.push({ method: "resolvePermissionRequest", args: { requestId, request } });
+    this.ensureConnected();
+    const existing = this.permissionRequests.find((r) => r.request_id === requestId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `permission_request ${requestId} not found` };
+    }
+    if (
+      request.expected_revision !== undefined &&
+      request.expected_revision !== null &&
+      existing.revision !== request.expected_revision
+    ) {
+      throw { code: "CONFLICT", message: "conflict on permission_request: stale revision" };
+    }
+    const now = Date.now();
+    let issuedGrant: CapabilityGrantRecord | null = null;
+    if (request.decision === "approve_project" || request.decision === "approve_task") {
+      issuedGrant = {
+        grant_id: this.nextUuid("82000000"),
+        scope:
+          request.decision === "approve_task" && existing.task_id
+            ? `task:${existing.task_id}`
+            : `project:${existing.project_id}`,
+        project_id: existing.project_id,
+        agent_id: existing.agent_id,
+        session_id: existing.session_id,
+        task_id: request.decision === "approve_task" ? (existing.task_id ?? null) : null,
+        tool_pattern: "workspace_write",
+        target_prefixes: [],
+        max_uses: request.max_uses ?? null,
+        uses_consumed: 1,
+        reason: request.reason ?? "Одобрено владельцем для проекта",
+        expires_at: request.expires_in_secs ? now + request.expires_in_secs * 1000 : null,
+        revoked_at: null,
+        revoked_reason: null,
+        created_at: now,
+      };
+      this.capabilityGrants = [issuedGrant, ...this.capabilityGrants];
+    }
+
+    const nextStatus =
+      request.decision === "deny"
+        ? "denied"
+        : request.decision === "approve_once"
+          ? "approved_once"
+          : "approved_scope";
+
+    const decision: PermissionDecisionRecord = {
+      decision_id: this.nextUuid("83000000"),
+      session_id: existing.session_id,
+      run_id: existing.run_id,
+      tool_call_id: existing.tool_call_id,
+      tool_name: existing.tool_name,
+      target_pattern: existing.target_summary,
+      scope: `project:${existing.project_id}`,
+      effect: request.decision === "deny" ? "deny" : "allow",
+      matched_rule_id: null,
+      reason: request.reason ?? `Owner decision: ${request.decision}`,
+      evaluated_outside_model: true,
+      correlation_id: existing.correlation_id,
+      created_at: now,
+    };
+
+    const updatedReq: PermissionRequestRecord = {
+      ...existing,
+      status: nextStatus,
+      issued_grant_id: issuedGrant?.grant_id ?? null,
+      decision_id: decision.decision_id,
+      revision: existing.revision + 1,
+      resolved_at: now,
+    };
+    this.permissionRequests = this.permissionRequests.map((r) =>
+      r.request_id === requestId ? updatedReq : r,
+    );
+    this.inboxCards = this.inboxCards.map((c) =>
+      c.permission_request_id === requestId && c.status === "open"
+        ? { ...c, status: "resolved", resolved_at: now, revision: c.revision + 1 }
+        : c,
+    );
+    this.emitControlEvent("permission.resolved", {
+      projectId: existing.project_id,
+      sessionId: existing.session_id,
+    });
+    return { request: updatedReq, decision, issued_grant: issuedGrant };
+  }
+
+  public async listCapabilityGrants(
+    projectId?: string | null,
+    includeRevoked = false,
+  ): Promise<ListCapabilityGrantsResponse> {
+    this.calls.push({ method: "listCapabilityGrants", args: { projectId, includeRevoked } });
+    this.ensureConnected();
+    const list = this.capabilityGrants.filter(
+      (g) => (!projectId || g.project_id === projectId) && (includeRevoked || !g.revoked_at),
+    );
+    return { grants: list };
+  }
+
+  public async revokeCapabilityGrant(
+    grantId: string,
+    request?: RevokeGrantRequest,
+  ): Promise<CapabilityGrantRecord> {
+    this.calls.push({ method: "revokeCapabilityGrant", args: { grantId, request } });
+    this.ensureConnected();
+    const existing = this.capabilityGrants.find((g) => g.grant_id === grantId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `capability_grant ${grantId} not found` };
+    }
+    const updated: CapabilityGrantRecord = {
+      ...existing,
+      revoked_at: Date.now(),
+      revoked_reason: request?.reason ?? "Отозвано пользователем",
+    };
+    this.capabilityGrants = this.capabilityGrants.map((g) =>
+      g.grant_id === grantId ? updated : g,
+    );
+    this.emitControlEvent("grant.revoked", { projectId: existing.project_id });
+    return updated;
+  }
+
+  public async dispatchEffect(request: DispatchEffectRequest): Promise<DispatchEffectResponse> {
+    this.calls.push({ method: "dispatchEffect", args: request });
+    this.ensureConnected();
+    const existing = this.effects.find(
+      (e) => e.effect_idempotency_key === request.effect_idempotency_key,
+    );
+    if (existing) {
+      return {
+        effect: existing,
+        deduplicated: true,
+        external_outcome_unknown: existing.status === "unknown",
+      };
+    }
+    const now = Date.now();
+    const isLostAck = request.simulated_behavior === "lost_ack";
+    const status = isLostAck
+      ? "unknown"
+      : request.simulated_behavior === "denied"
+        ? "denied"
+        : request.simulated_behavior === "failed_before_accept"
+          ? "failed"
+          : "confirmed";
+    const claim: EffectClaimRecord = {
+      effect_id: this.nextUuid("88000000"),
+      project_id: request.project_id,
+      session_id: request.session_id,
+      task_id: request.task_id ?? null,
+      run_id: request.run_id ?? null,
+      agent_id: request.agent_id,
+      effect_idempotency_key: request.effect_idempotency_key,
+      connector_id: request.connector_id ?? "simulated_external",
+      operation: request.operation,
+      target_recipient: request.target_recipient,
+      parameters_json: request.parameters_json ?? "{}",
+      parameters_sha256: "c".repeat(64),
+      status,
+      provider_operation_id: status === "confirmed" ? "prov-op-1" : null,
+      receipt_json: status === "confirmed" ? "{\"ok\":true}" : null,
+      error_summary: isLostAck ? "Lost acknowledgement from external service" : null,
+      reconciled_at: null,
+      correlation_id: "corr-effect-1",
+      created_at: now,
+      updated_at: now,
+    };
+    this.effects = [claim, ...this.effects];
+    if (isLostAck) {
+      this.inboxCards = [
+        {
+          card_id: this.nextUuid("89000000"),
+          project_id: request.project_id,
+          session_id: request.session_id,
+          task_id: request.task_id ?? null,
+          run_id: request.run_id ?? null,
+          agent_id: request.agent_id,
+          kind: "unknown_effect",
+          status: "open",
+          urgency: "critical",
+          subject: `Неизвестный исход: ${request.operation} → ${request.target_recipient}`,
+          detail:
+            "Запрос отправлен во внешний сервис, но подтверждение потеряно. Слепой повтор заблокирован.",
+          effect_id: claim.effect_id,
+          revision: 1,
+          created_at: now,
+          updated_at: now,
+        },
+        ...this.inboxCards,
+      ];
+    }
+    this.emitControlEvent(isLostAck ? "effect.unknown" : "effect.confirmed", {
+      projectId: request.project_id,
+      sessionId: request.session_id,
+      taskId: request.task_id ?? null,
+    });
+    return { effect: claim, deduplicated: false, external_outcome_unknown: isLostAck };
+  }
+
+  public async listEffects(
+    taskId?: string | null,
+    sessionId?: string | null,
+    status?: string | null,
+  ): Promise<ListEffectsResponse> {
+    this.calls.push({ method: "listEffects", args: { taskId, sessionId, status } });
+    this.ensureConnected();
+    const list = this.effects.filter(
+      (ef) =>
+        (!taskId || ef.task_id === taskId) &&
+        (!sessionId || ef.session_id === sessionId) &&
+        (!status || ef.status === status),
+    );
+    return { effects: list };
+  }
+
+  public async reconcileEffect(
+    effectId: string,
+    request?: ReconcileEffectRequest,
+  ): Promise<ReconcileEffectResponse> {
+    this.calls.push({ method: "reconcileEffect", args: { effectId, request } });
+    this.ensureConnected();
+    const existing = this.effects.find((ef) => ef.effect_id === effectId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `effect_claim ${effectId} not found` };
+    }
+    const now = Date.now();
+    const nextStatus =
+      request?.manual_resolution === "mark_not_executed" ? "failed" : "confirmed";
+    const updated: EffectClaimRecord = {
+      ...existing,
+      status: nextStatus,
+      provider_operation_id:
+        nextStatus === "confirmed" ? (existing.provider_operation_id ?? "prov-reconciled-1") : null,
+      reconciled_at: now,
+      updated_at: now,
+    };
+    this.effects = this.effects.map((ef) => (ef.effect_id === effectId ? updated : ef));
+    this.inboxCards = this.inboxCards.map((c) =>
+      c.effect_id === effectId && c.status === "open"
+        ? {
+            ...c,
+            status: "resolved",
+            resolution_summary:
+              nextStatus === "confirmed" ? "Подтверждено выполнение" : "Отмечено невыполненным",
+            resolved_at: now,
+            revision: c.revision + 1,
+          }
+        : c,
+    );
+    let updatedTask: TaskRecord | null = null;
+    if (existing.task_id) {
+      const t = this.tasks.find((item) => item.task_id === existing.task_id);
+      if (t && t.status === "unknown_external") {
+        updatedTask = {
+          ...t,
+          status: nextStatus === "confirmed" ? "succeeded" : "failed",
+          wait_detail: null,
+          finished_at: now,
+          updated_at: now,
+        };
+        this.tasks = this.tasks.map((item) =>
+          item.task_id === updatedTask!.task_id ? updatedTask! : item,
+        );
+      }
+    }
+    this.emitControlEvent("effect.reconciled", {
+      projectId: existing.project_id,
+      sessionId: existing.session_id,
+      taskId: existing.task_id ?? null,
+    });
+    return {
+      effect: updated,
+      task: updatedTask,
+      provider_found: nextStatus === "confirmed",
+      provider_execution_count: nextStatus === "confirmed" ? 1 : 0,
+    };
+  }
+
   public async listDiagnostics(limit?: number): Promise<DiagnosticsResponse> {
     this.calls.push({ method: "listDiagnostics", args: limit });
     this.ensureConnected();
@@ -704,7 +1808,7 @@ export class MockDesktopBridge implements DesktopBridge {
           run_id: null,
           component: "head",
           event_kind: "head_ready",
-          safe_summary: "dennett-head готов к работе (D1)",
+          safe_summary: "dennett-head готов к работе (D2)",
           created_at: Date.now(),
         },
       ],
@@ -781,6 +1885,8 @@ export function createBrowserPreviewBridge(): DesktopBridge {
         name: "dennett-agent-orchestrator",
         workspace_path: "A:/Dev/dennett-agent-orchestrator",
         memory_scope: "project:dennett-preview",
+        lifecycle_state: "active",
+        archived_at: null,
         created_at: now - 300_000,
       },
     ],
@@ -798,7 +1904,7 @@ export function createBrowserPreviewBridge(): DesktopBridge {
           model_preference: "gemini-4-neon",
           thinking_level: defaultThinking,
           allowed_memory_scopes: ["project:dennett-preview"],
-          workspace_write_policy: { mode: "allow_workspace" },
+          workspace_write_policy: { mode: "ask_before_write" },
           created_at: now - 300_000,
         },
         created_at: now - 300_000,
@@ -810,7 +1916,7 @@ export function createBrowserPreviewBridge(): DesktopBridge {
         session_id: sessionId,
         agent_id: agentId,
         project_id: projectId,
-        title: "Рабочий диалог D1",
+        title: "Обзор архитектуры D2",
         runtime_binding: {
           binding_id: "60000000-0000-4000-8000-000000000001",
           session_id: sessionId,
@@ -818,37 +1924,24 @@ export function createBrowserPreviewBridge(): DesktopBridge {
           auth_profile: "oauth-personal",
           tier: "Google AI Ultra",
           agy_version: "1.5.15",
-          provider_session_id: "preview-sess-1",
+          provider_session_id: "prov-preview-1",
           workspace_cwd: "A:/Dev/dennett-agent-orchestrator",
           is_simulated: false,
           rehydrate_count: 0,
-          created_at: now - 120_000,
-          updated_at: now - 60_000,
+          created_at: now - 250_000,
+          updated_at: now - 120_000,
         },
         status: "active",
-        created_at: now - 120_000,
-        updated_at: now - 60_000,
+        created_at: now - 250_000,
+        updated_at: now - 120_000,
       },
     ],
-    messagesBySession: {
-      [sessionId]: [
-        {
-          message_id: "50000000-0000-4000-8000-000000000001",
-          session_id: sessionId,
-          role: "assistant",
-          content:
-            "Демо-предпросмотр интерфейса Dennett (`?mock=1`). Запустите стек `Head + memoryd` для живой работы с `agy acp`.",
-          run_id: null,
-          correlation_id: "corr-preview-1",
-          created_at: now - 60_000,
-        },
-      ],
-    },
     filesByProject: {
       [projectId]: [
+        { relative_path: "apps", name: "apps", kind: "directory", size_bytes: null, depth: 1 },
         {
-          relative_path: "src",
-          name: "src",
+          relative_path: "crates",
+          name: "crates",
           kind: "directory",
           size_bytes: null,
           depth: 1,
@@ -857,8 +1950,31 @@ export function createBrowserPreviewBridge(): DesktopBridge {
           relative_path: "README.md",
           name: "README.md",
           kind: "file",
-          size_bytes: 2048,
+          size_bytes: 2840,
           depth: 1,
+        },
+      ],
+    },
+    messagesBySession: {
+      [sessionId]: [
+        {
+          message_id: "50000000-0000-4000-8000-000000000001",
+          session_id: sessionId,
+          role: "user",
+          content: "Проверь статус поручений, таймеров и интерактивных разрешений D2.",
+          run_id: null,
+          correlation_id: "corr-preview-1",
+          created_at: now - 180_000,
+        },
+        {
+          message_id: "50000000-0000-4000-8000-000000000002",
+          session_id: sessionId,
+          role: "assistant",
+          content:
+            "Демон `dennett-head` активен на схеме `v4`. Поручения, таймеры, Action Inbox и интерактивный режим «Спрашивать запись» подключены по курсору `/v1/events`.",
+          run_id: null,
+          correlation_id: "corr-preview-1",
+          created_at: now - 175_000,
         },
       ],
     },
