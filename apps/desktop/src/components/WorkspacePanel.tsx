@@ -7,6 +7,7 @@ import {
   ArrowsClockwise,
   CaretDown,
   CaretRight,
+  ChatsCircle,
   Check,
   CheckCircle,
   Copy,
@@ -363,6 +364,12 @@ export function WorkspacePanel() {
       </header>
 
       <div className="resource-scroll" ref={resourceScrollRef}>
+        {meta.isStandaloneActiveSession ? (
+          <div className="workspace-standalone-note" data-testid="workspace-standalone-note">
+            <ChatsCircle size={15} aria-hidden="true" />
+            <span>Одиночный чат без привязки к папке</span>
+          </div>
+        ) : (
         <section className="resource-section" data-testid="workspace-files-section">
           <div className="resource-section__head">
             <button
@@ -503,6 +510,7 @@ export function WorkspacePanel() {
             </>
           )}
         </section>
+        )}
 
         <section className="resource-section" data-testid="workspace-artifacts-section">
           <div className="resource-section__head">

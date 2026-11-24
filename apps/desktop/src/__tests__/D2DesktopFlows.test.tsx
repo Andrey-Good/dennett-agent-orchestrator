@@ -38,6 +38,8 @@ function makeD2Fixture() {
     memory_scope: "project:dennett-d2",
     lifecycle_state: "active",
     archived_at: null,
+    pinned: false,
+    pinned_at: null,
     created_at: now - 30_000,
   };
   const agent: AgentRecord = {
@@ -66,6 +68,8 @@ function makeD2Fixture() {
     title: "Диалог D2",
     runtime_binding: null,
     status: "active",
+    pinned: false,
+    pinned_at: null,
     created_at: now - 25_000,
     updated_at: now - 5_000,
   };
@@ -447,6 +451,8 @@ describe("Dennett Desktop Phase D2 UI", () => {
       memory_scope: "project:keep-my-files",
       lifecycle_state: "active",
       archived_at: null,
+      pinned: false,
+      pinned_at: null,
       created_at: now - 20_000,
     };
     const artV1: ArtifactRecord = {
@@ -718,6 +724,8 @@ describe("Dennett Desktop Phase D2 UI", () => {
       memory_scope: "project:archived-proj",
       lifecycle_state: "archived",
       archived_at: now - 10_000,
+      pinned: false,
+      pinned_at: null,
       created_at: now - 30_000,
     };
     const archivedSession: SessionRecord = {
@@ -726,6 +734,8 @@ describe("Dennett Desktop Phase D2 UI", () => {
       project_id: archivedProject.project_id,
       title: "Чат в архиве",
       status: "active",
+      pinned: false,
+      pinned_at: null,
       created_at: now - 20_000,
       updated_at: now - 10_000,
     };
@@ -736,6 +746,8 @@ describe("Dennett Desktop Phase D2 UI", () => {
       memory_scope: "project:deleted-proj",
       lifecycle_state: "deleted_record",
       archived_at: null,
+      pinned: false,
+      pinned_at: null,
       created_at: now - 40_000,
     };
 
@@ -840,6 +852,8 @@ describe("Dennett Desktop Phase D2 UI", () => {
       memory_scope: "project:second-proj",
       lifecycle_state: "active",
       archived_at: null,
+      pinned: false,
+      pinned_at: null,
       created_at: now - 50_000,
     };
     const sessionB: SessionRecord = {
@@ -848,6 +862,8 @@ describe("Dennett Desktop Phase D2 UI", () => {
       project_id: projectB.project_id,
       title: "Чат второго проекта",
       status: "active",
+      pinned: false,
+      pinned_at: null,
       created_at: now - 40_000,
       updated_at: now - 40_000,
     };

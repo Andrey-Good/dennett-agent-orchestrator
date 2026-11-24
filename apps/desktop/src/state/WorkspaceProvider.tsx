@@ -14,6 +14,8 @@ import type { DesktopBridge, WindowControls } from "../api/bridge";
 import {
   isStreamResyncConflict,
   normalizeBridgeError,
+  sortProjectsByPin,
+  sortSessionsByPin,
   type AgentRecord,
   type ArtifactCompleteness,
   type ArtifactLifecycleAction,
@@ -234,6 +236,9 @@ export interface WorkspaceActions {
   selectSession(sessionId: string): Promise<void>;
   createBlankChat(projectId?: string): Promise<SessionRecord | null>;
   createBlankChatWithDraft(projectId?: string, initialDraft?: string): Promise<SessionRecord | null>;
+  createStandaloneChat(): Promise<SessionRecord | null>;
+  toggleProjectPin(projectId: string): Promise<void>;
+  toggleSessionPin(sessionId: string): Promise<void>;
   createFolderlessProject(): Promise<ProjectRecord | null>;
   createProjectFromFolder(folderPath: string): Promise<ProjectRecord | null>;
   requestFolderPicker(intent: FolderPickerIntent): Promise<void>;
@@ -317,6 +322,8 @@ export interface WorkspaceMeta {
   activeProject: ProjectRecord | null;
   activeSession: SessionRecord | null;
   activeAgent: AgentRecord | null;
+  standaloneSessions: SessionRecord[];
+  isStandaloneActiveSession: boolean;
   selectedArtifact: ArtifactRecord | null;
   currentDraft: string;
   queuedMessagesForActiveSession: QueuedOfflineMessage[];
@@ -355,6 +362,9 @@ export interface WorkspaceProviderProps {
 
 const DEFAULT_SYSTEM_PROMPT =
   "Ты агент Dennett. Помогай владельцу вести проект, опираясь на проверяемые факты и память Dennett.";
+const STANDALONE_MEMORY_SCOPE = "chat:standalone";
+const STANDALONE_SYSTEM_PROMPT =
+  "Ты агент Dennett. Помогай владельцу в свободном чате без привязки к папке проекта, опираясь на проверяемые факты и память Dennett.";
 
 function extractFolderBasename(rawPath: string): string {
   const cleaned = rawPath.trim().replace(/[\\/]+$/, "");
@@ -677,9 +687,13 @@ export function WorkspaceProvider({
       const seq = ++detailRequestSeqRef.current;
       try {
         const detail = await bridge.getSessionDetail(sessionId);
-        setSessions((prev) =>
-          prev.map((s) => (s.session_id === detail.session.session_id ? detail.session : s)),
-        );
+        setSessions((prev) => {
+          const next = sortSessionsByPin(
+            prev.map((s) => (s.session_id === detail.session.session_id ? detail.session : s)),
+          );
+          sessionsRef.current = next;
+          return next;
+        });
         if (seq !== detailRequestSeqRef.current || selectedSessionRef.current !== sessionId) {
           return;
         }
@@ -763,26 +777,31 @@ export function WorkspaceProvider({
           return;
         }
 
+        const sortedProjects = sortProjectsByPin(snap.projects);
+        const sortedSessions = sortSessionsByPin(snap.sessions);
+
         streamCursorRef.current = snap.snapshot_cursor;
         setStreamCursor(snap.snapshot_cursor);
-        projectsRef.current = snap.projects;
+        projectsRef.current = sortedProjects;
         agentsRef.current = snap.agents;
-        sessionsRef.current = snap.sessions;
+        sessionsRef.current = sortedSessions;
 
-        const nonDeletedProjects = snap.projects.filter(
+        const nonDeletedProjects = sortedProjects.filter(
           (p) => (p.lifecycle_state ?? "active") !== "deleted_record",
         );
         const activeProjectIds = new Set(
           nonDeletedProjects.filter(isActiveProjectRecord).map((p) => p.project_id),
         );
-        const visibleActiveSessions = snap.sessions.filter((s) => activeProjectIds.has(s.project_id));
+        const visibleActiveSessions = sortedSessions.filter(
+          (s) => s.project_id === null || activeProjectIds.has(s.project_id),
+        );
         const visibleUserChats = visibleActiveSessions.filter(
           (s) => (s.session_kind ?? "user_chat") === "user_chat",
         );
 
-        setProjects(snap.projects);
+        setProjects(sortedProjects);
         setAgents(snap.agents);
-        setSessions(snap.sessions);
+        setSessions(sortedSessions);
         setTasks(snap.tasks);
         setInboxCards(snap.inbox_cards);
         setUnresolvedInboxCount(
@@ -808,7 +827,7 @@ export function WorkspaceProvider({
         if (preferredSessionId !== undefined) {
           targetSessionId = preferredSessionId;
         } else if (keepArchivedInspection && currentProj) {
-          const archivedSessions = snap.sessions.filter(
+          const archivedSessions = sortedSessions.filter(
             (s) => s.project_id === currentProj.project_id,
           );
           targetSessionId =
@@ -837,16 +856,16 @@ export function WorkspaceProvider({
         }
 
         const resolvedSession = targetSessionId
-          ? snap.sessions.find((s) => s.session_id === targetSessionId) ?? null
+          ? sortedSessions.find((s) => s.session_id === targetSessionId) ?? null
           : null;
-        const nextProjectId =
-          resolvedSession?.project_id ??
-          (keepArchivedInspection && currentProj ? currentProj.project_id : null) ??
-          (currentProj && activeProjectIds.has(currentProj.project_id)
-            ? currentProj.project_id
-            : null) ??
-          nonDeletedProjects.find(isActiveProjectRecord)?.project_id ??
-          null;
+        const nextProjectId = resolvedSession
+          ? resolvedSession.project_id
+          : ((keepArchivedInspection && currentProj ? currentProj.project_id : null) ??
+            (currentProj && activeProjectIds.has(currentProj.project_id)
+              ? currentProj.project_id
+              : null) ??
+            nonDeletedProjects.find(isActiveProjectRecord)?.project_id ??
+            null);
 
         const changedSession = targetSessionId !== selectedSessionRef.current;
         setSelectedProjectSync(nextProjectId);
@@ -927,6 +946,9 @@ export function WorkspaceProvider({
   );
 
   const activeProject = useMemo(() => {
+    if (activeSession && activeSession.project_id === null) {
+      return null;
+    }
     if (selectedProjectId) {
       const explicit = projects.find(
         (p) =>
@@ -937,7 +959,7 @@ export function WorkspaceProvider({
         return explicit;
       }
     }
-    if (activeSession) {
+    if (activeSession && activeSession.project_id !== null) {
       const matched = projects.find(
         (p) =>
           p.project_id === activeSession.project_id &&
@@ -1235,10 +1257,18 @@ export function WorkspaceProvider({
     async (sessionId: string) => {
       const targetSess = sessionsRef.current.find((s) => s.session_id === sessionId);
       if (targetSess) {
-        const ownerProj = projectsRef.current.find((p) => p.project_id === targetSess.project_id);
-        inspectingArchivedProjectRef.current =
-          (ownerProj?.lifecycle_state ?? "active") === "archived";
-        setSelectedProjectSync(targetSess.project_id);
+        if (targetSess.project_id === null) {
+          inspectingArchivedProjectRef.current = false;
+          setSelectedProjectSync(null);
+          setProjectFiles(null);
+        } else {
+          const ownerProj = projectsRef.current.find(
+            (p) => p.project_id === targetSess.project_id,
+          );
+          inspectingArchivedProjectRef.current =
+            (ownerProj?.lifecycle_state ?? "active") === "archived";
+          setSelectedProjectSync(targetSess.project_id);
+        }
       }
       setActiveViewState("chat");
       setSelectedSessionSync(sessionId);
@@ -1299,6 +1329,155 @@ export function WorkspaceProvider({
     [bridge],
   );
 
+  const ensureStandaloneAgent = useCallback(async (): Promise<AgentRecord> => {
+    const exactMatch = agentsRef.current.find(
+      (agent) =>
+        agent.current_config.allowed_memory_scopes.length === 1 &&
+        agent.current_config.allowed_memory_scopes[0] === STANDALONE_MEMORY_SCOPE,
+    );
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    let cat = catalogRef.current;
+    if (!cat) {
+      cat = await bridge.getRuntimeCatalog(false).catch(() => null);
+      if (cat) {
+        catalogRef.current = cat;
+        setRuntimeCatalog(cat);
+      }
+    }
+
+    const defaultModelId = cat?.default_model_id ?? cat?.models[0]?.model_id ?? null;
+    const defaultThinking = cat?.default_thinking_level ?? "medium";
+    const created = await bridge.createAgent({
+      name: "Агент · Чаты",
+      description: "Агент Dennett для одиночных чатов без привязки к папке проекта",
+      system_prompt: STANDALONE_SYSTEM_PROMPT,
+      model_preference: defaultModelId,
+      thinking_level: defaultThinking,
+      allowed_memory_scopes: [STANDALONE_MEMORY_SCOPE],
+      workspace_write_policy: { mode: "deny_all" },
+    });
+    agentsRef.current = [created, ...agentsRef.current];
+    setAgents((prev) => [created, ...prev]);
+    return created;
+  }, [bridge]);
+
+  const createStandaloneChat = useCallback(async (): Promise<SessionRecord | null> => {
+    setErrorBanner(null);
+    try {
+      inspectingArchivedProjectRef.current = false;
+      const agent = await ensureStandaloneAgent();
+      const created = await bridge.createSession({
+        agent_id: agent.agent_id,
+        project_id: null,
+        title: "Новый чат",
+        session_kind: "user_chat",
+      });
+      const nextSessions = sortSessionsByPin([created, ...sessionsRef.current]);
+      sessionsRef.current = nextSessions;
+      setSessions(nextSessions);
+      setActiveViewState("chat");
+      setSelectedProjectSync(null);
+      setSelectedSessionSync(created.session_id);
+      setProjectFiles(null);
+      setCancelledNotice(null);
+      await loadSessionDetail(created.session_id);
+      focusComposerSoon(false);
+      return created;
+    } catch (err) {
+      setErrorBanner(normalizeBridgeError(err));
+      return null;
+    }
+  }, [
+    bridge,
+    ensureStandaloneAgent,
+    focusComposerSoon,
+    loadSessionDetail,
+    setSelectedProjectSync,
+    setSelectedSessionSync,
+  ]);
+
+  const toggleProjectPin = useCallback(
+    async (projectId: string) => {
+      const existing = projectsRef.current.find((p) => p.project_id === projectId);
+      if (!existing) {
+        return;
+      }
+      setErrorBanner(null);
+      const previous = projectsRef.current;
+      const nextPinned = !existing.pinned;
+      const optimistic: ProjectRecord = {
+        ...existing,
+        pinned: nextPinned,
+        pinned_at: nextPinned ? Date.now() : null,
+      };
+      const optimisticList = sortProjectsByPin(
+        previous.map((p) => (p.project_id === projectId ? optimistic : p)),
+      );
+      projectsRef.current = optimisticList;
+      setProjects(optimisticList);
+      try {
+        const updated = await bridge.updateProject(projectId, { pinned: nextPinned });
+        const committed = sortProjectsByPin(
+          projectsRef.current.map((p) => (p.project_id === projectId ? updated : p)),
+        );
+        projectsRef.current = committed;
+        setProjects(committed);
+      } catch (err) {
+        projectsRef.current = previous;
+        setProjects(previous);
+        setErrorBanner(normalizeBridgeError(err));
+      }
+    },
+    [bridge],
+  );
+
+  const toggleSessionPin = useCallback(
+    async (sessionId: string) => {
+      const existing = sessionsRef.current.find((s) => s.session_id === sessionId);
+      if (!existing) {
+        return;
+      }
+      setErrorBanner(null);
+      const previous = sessionsRef.current;
+      const nextPinned = !existing.pinned;
+      const optimistic: SessionRecord = {
+        ...existing,
+        pinned: nextPinned,
+        pinned_at: nextPinned ? Date.now() : null,
+      };
+      const optimisticList = sortSessionsByPin(
+        previous.map((s) => (s.session_id === sessionId ? optimistic : s)),
+      );
+      sessionsRef.current = optimisticList;
+      setSessions(optimisticList);
+      setActiveDetail((prev) =>
+        prev && prev.session.session_id === sessionId ? { ...prev, session: optimistic } : prev,
+      );
+      try {
+        const updated = await bridge.updateSession(sessionId, { pinned: nextPinned });
+        const committed = sortSessionsByPin(
+          sessionsRef.current.map((s) => (s.session_id === sessionId ? updated : s)),
+        );
+        sessionsRef.current = committed;
+        setSessions(committed);
+        setActiveDetail((prev) =>
+          prev && prev.session.session_id === sessionId ? { ...prev, session: updated } : prev,
+        );
+      } catch (err) {
+        sessionsRef.current = previous;
+        setSessions(previous);
+        setActiveDetail((prev) =>
+          prev && prev.session.session_id === sessionId ? { ...prev, session: existing } : prev,
+        );
+        setErrorBanner(normalizeBridgeError(err));
+      }
+    },
+    [bridge],
+  );
+
   const createFolderlessProject = useCallback(async (): Promise<ProjectRecord | null> => {
     setErrorBanner(null);
     try {
@@ -1309,8 +1488,9 @@ export function WorkspaceProvider({
         memory_scope: null,
       });
       inspectingArchivedProjectRef.current = false;
-      projectsRef.current = [project, ...projectsRef.current];
-      setProjects((prev) => [project, ...prev]);
+      const nextProjects = sortProjectsByPin([project, ...projectsRef.current]);
+      projectsRef.current = nextProjects;
+      setProjects(nextProjects);
       const agent = await ensureScopedAgent(project.memory_scope, project.name, false);
       const session = await bridge.createSession({
         agent_id: agent.agent_id,
@@ -1318,8 +1498,9 @@ export function WorkspaceProvider({
         title: "Новый чат",
         session_kind: "user_chat",
       });
-      sessionsRef.current = [session, ...sessionsRef.current];
-      setSessions((prev) => [session, ...prev]);
+      const nextSessions = sortSessionsByPin([session, ...sessionsRef.current]);
+      sessionsRef.current = nextSessions;
+      setSessions(nextSessions);
       setActiveViewState("chat");
       setSelectedProjectSync(project.project_id);
       setSelectedSessionSync(session.session_id);
@@ -1355,8 +1536,9 @@ export function WorkspaceProvider({
           memory_scope: null,
         });
         inspectingArchivedProjectRef.current = false;
-        projectsRef.current = [project, ...projectsRef.current];
-        setProjects((prev) => [project, ...prev]);
+        const nextProjects = sortProjectsByPin([project, ...projectsRef.current]);
+        projectsRef.current = nextProjects;
+        setProjects(nextProjects);
         const agent = await ensureScopedAgent(project.memory_scope, project.name, true);
         const session = await bridge.createSession({
           agent_id: agent.agent_id,
@@ -1364,8 +1546,9 @@ export function WorkspaceProvider({
           title: "Новый чат",
           session_kind: "user_chat",
         });
-        sessionsRef.current = [session, ...sessionsRef.current];
-        setSessions((prev) => [session, ...prev]);
+        const nextSessions = sortSessionsByPin([session, ...sessionsRef.current]);
+        sessionsRef.current = nextSessions;
+        setSessions(nextSessions);
         setActiveViewState("chat");
         setSelectedProjectSync(project.project_id);
         setSelectedSessionSync(session.session_id);
@@ -1426,8 +1609,9 @@ export function WorkspaceProvider({
           title: "Новый чат",
           session_kind: "user_chat",
         });
-        sessionsRef.current = [created, ...sessionsRef.current];
-        setSessions((prev) => [created, ...prev]);
+        const nextSessions = sortSessionsByPin([created, ...sessionsRef.current]);
+        sessionsRef.current = nextSessions;
+        setSessions(nextSessions);
         if (initialDraft !== undefined) {
           setDraftsBySession((prev) => ({ ...prev, [created.session_id]: initialDraft }));
         }
@@ -1658,7 +1842,13 @@ export function WorkspaceProvider({
       setErrorBanner(null);
       try {
         const updated = await bridge.updateSession(sessionId, { title: trimmed });
-        setSessions((prev) => prev.map((s) => (s.session_id === sessionId ? updated : s)));
+        setSessions((prev) => {
+          const next = sortSessionsByPin(
+            prev.map((s) => (s.session_id === sessionId ? updated : s)),
+          );
+          sessionsRef.current = next;
+          return next;
+        });
         setActiveDetail((prev) =>
           prev && prev.session.session_id === sessionId ? { ...prev, session: updated } : prev,
         );
@@ -1729,7 +1919,7 @@ export function WorkspaceProvider({
     const item: QueuedOfflineMessage = {
       client_message_id: generateClientMessageId(),
       session_id: sessionId,
-      project_id: sess?.project_id ?? "",
+      project_id: sess?.project_id ?? null,
       content: trimmed,
       created_at: Date.now(),
     };
@@ -1787,21 +1977,25 @@ export function WorkspaceProvider({
           client_message_id: effectiveClientMessageId,
         });
 
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.session_id === sessionId
-              ? {
-                  ...s,
-                  title:
-                    response.session_title && response.session_title.trim().length > 0
-                      ? response.session_title
-                      : s.title,
-                  runtime_binding: response.runtime_binding,
-                  updated_at: response.run.finished_at ?? response.run.created_at,
-                }
-              : s,
-          ),
-        );
+        setSessions((prev) => {
+          const next = sortSessionsByPin(
+            prev.map((s) =>
+              s.session_id === sessionId
+                ? {
+                    ...s,
+                    title:
+                      response.session_title && response.session_title.trim().length > 0
+                        ? response.session_title
+                        : s.title,
+                    runtime_binding: response.runtime_binding,
+                    updated_at: response.run.finished_at ?? response.run.created_at,
+                  }
+                : s,
+            ),
+          );
+          sessionsRef.current = next;
+          return next;
+        });
 
         setHealthSnapshot((prev) =>
           prev && prev.health
@@ -1861,7 +2055,9 @@ export function WorkspaceProvider({
       const snapshotQueue = [...queuedMessagesRef.current];
       let lastSkippedError: BridgeErrorPayload | null = null;
       for (const item of snapshotQueue) {
-        const proj = projectsRef.current.find((p) => p.project_id === item.project_id);
+        const proj = item.project_id
+          ? projectsRef.current.find((p) => p.project_id === item.project_id)
+          : undefined;
         if (
           proj &&
           (proj.lifecycle_state === "archived" || proj.lifecycle_state === "deleted_record")
@@ -1953,7 +2149,7 @@ export function WorkspaceProvider({
           {
             client_message_id: stableClientMsgId,
             session_id: sessionId,
-            project_id: sess?.project_id ?? "",
+            project_id: sess?.project_id ?? null,
             content,
             created_at: Date.now(),
           },
@@ -2413,7 +2609,21 @@ export function WorkspaceProvider({
         if (lower === "n") {
           event.preventDefault();
           if (healthSnapshot?.connected) {
-            void createBlankChat();
+            const currentSess = selectedSessionRef.current
+              ? (sessionsRef.current.find((s) => s.session_id === selectedSessionRef.current) ??
+                null)
+              : null;
+            const isViewingStandalone = currentSess !== null && currentSess.project_id === null;
+            const hasSelectedActiveProject =
+              selectedProjectRef.current !== null &&
+              projectsRef.current.some(
+                (p) => p.project_id === selectedProjectRef.current && isActiveProjectRecord(p),
+              );
+            if (isViewingStandalone || !hasSelectedActiveProject) {
+              void createStandaloneChat();
+            } else {
+              void createBlankChat(selectedProjectRef.current ?? undefined);
+            }
           }
           return;
         }
@@ -2472,6 +2682,7 @@ export function WorkspaceProvider({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     createBlankChat,
+    createStandaloneChat,
     folderPickerIntent,
     healthSnapshot?.connected,
     isCommandOpen,
@@ -2483,6 +2694,15 @@ export function WorkspaceProvider({
     toggleRightPanel,
     toggleSidebar,
   ]);
+
+  const standaloneSessions = useMemo(
+    () =>
+      sessions.filter(
+        (s) => s.project_id === null && (s.session_kind ?? "user_chat") !== "task_run",
+      ),
+    [sessions],
+  );
+  const isStandaloneActiveSession = Boolean(activeSession && activeSession.project_id === null);
 
   const selectedArtifact = useMemo(() => {
     if (!activeDetail || !selectedArtifactId) {
@@ -2598,6 +2818,9 @@ export function WorkspaceProvider({
         selectSession,
         createBlankChat,
         createBlankChatWithDraft,
+        createStandaloneChat,
+        toggleProjectPin,
+        toggleSessionPin,
         createFolderlessProject,
         createProjectFromFolder,
         requestFolderPicker,
@@ -2656,6 +2879,8 @@ export function WorkspaceProvider({
         activeProject,
         activeSession,
         activeAgent,
+        standaloneSessions,
+        isStandaloneActiveSession,
         selectedArtifact,
         currentDraft,
         queuedMessagesForActiveSession,
@@ -2697,6 +2922,7 @@ export function WorkspaceProvider({
       createBlankChatWithDraft,
       createFolderlessProject,
       createProjectFromFolder,
+      createStandaloneChat,
       createTask,
       currentDraft,
       deleteProject,
@@ -2725,6 +2951,7 @@ export function WorkspaceProvider({
       isSettingsOpen,
       isSidebarEffectiveOpen,
       isSidebarOpen,
+      isStandaloneActiveSession,
       isStatsOpen,
       isSyncedAfterConnect,
       isUpdatingModel,
@@ -2772,12 +2999,15 @@ export function WorkspaceProvider({
       setCommandOpen,
       setRightPanelOpen,
       setSidebarOpen,
+      standaloneSessions,
       stopActiveRun,
       stoppingTaskIds,
       streamCursor,
       submitFolderPickerPath,
       tasks,
+      toggleProjectPin,
       toggleRightPanel,
+      toggleSessionPin,
       toggleSidebar,
       unarchiveProject,
       unresolvedInboxCount,

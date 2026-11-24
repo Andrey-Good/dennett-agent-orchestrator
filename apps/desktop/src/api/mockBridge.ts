@@ -1,82 +1,84 @@
 import type { DesktopBridge } from "./bridge";
-import type {
-  AgentMessageRecord,
-  AgentRecord,
-  ArtifactLifecycleRequest,
-  ArtifactLifecycleResponse,
-  ArtifactRecord,
-  CancelRunResponse,
-  CancelTaskResponse,
-  CapabilityGrantRecord,
-  ControlEventRecord,
-  CreateAgentRequest,
-  CreateArtifactRequest,
-  CreateProjectRequest,
-  CreateSessionRequest,
-  CreateTaskRequest,
-  DesktopHealthSnapshot,
-  DiagnosticsResponse,
-  DispatchEffectRequest,
-  DispatchEffectResponse,
-  EffectClaimRecord,
-  EventStreamResponse,
-  FlushOutboxResponse,
-  HeadHealth,
-  HeadMemorySearchRequest,
-  HeadMemorySearchResponse,
-  InboxCardRecord,
-  ListAgentMessagesResponse,
-  ListAgentsResponse,
-  ListArtifactsResponse,
-  ListCapabilityGrantsResponse,
-  ListEffectsResponse,
-  ListInboxResponse,
-  ListPermissionRequestsResponse,
-  ListProjectFilesResponse,
-  ListProjectsResponse,
-  ListSessionsResponse,
-  ListTasksResponse,
-  MemoryNote,
-  MemoryStatus,
-  MessageRecord,
-  PermissionDecisionRecord,
-  PermissionRequestRecord,
-  ProjectLifecycleResponse,
-  ProjectRecord,
-  RebindProjectRequest,
-  ReconcileEffectRequest,
-  ReconcileEffectResponse,
-  ReplyTaskRequest,
-  ResolveInboxCardRequest,
-  ResolveInboxCardResponse,
-  ResolvePermissionRequest,
-  ResolvePermissionResponse,
-  RevokeGrantRequest,
-  RunRecord,
-  RuntimeAuthProfile,
-  RuntimeBinding,
-  RuntimeCatalogResponse,
-  RuntimeModelOption,
-  RuntimeQuotaWindow,
-  SendAgentMessageRequest,
-  SendAgentMessageResponse,
-  SendMessageRequest,
-  SendMessageResponse,
-  SessionDetailResponse,
-  SessionRecord,
-  StateSnapshotResponse,
-  TaskDetailResponse,
-  TaskRecord,
-  TaskSignalRecord,
-  TaskSignalRequest,
-  TaskSignalResponse,
-  TaskTimerRecord,
-  ThinkingLevel,
-  UpdateAgentConfigRequest,
-  UpdateProjectRequest,
-  UpdateSessionRequest,
-  UpdateTaskRequest,
-  WorkspaceFileEntry,
+import {
+  sortProjectsByPin,
+  sortSessionsByPin,
+  type AgentMessageRecord,
+  type AgentRecord,
+  type ArtifactLifecycleRequest,
+  type ArtifactLifecycleResponse,
+  type ArtifactRecord,
+  type CancelRunResponse,
+  type CancelTaskResponse,
+  type CapabilityGrantRecord,
+  type ControlEventRecord,
+  type CreateAgentRequest,
+  type CreateArtifactRequest,
+  type CreateProjectRequest,
+  type CreateSessionRequest,
+  type CreateTaskRequest,
+  type DesktopHealthSnapshot,
+  type DiagnosticsResponse,
+  type DispatchEffectRequest,
+  type DispatchEffectResponse,
+  type EffectClaimRecord,
+  type EventStreamResponse,
+  type FlushOutboxResponse,
+  type HeadHealth,
+  type HeadMemorySearchRequest,
+  type HeadMemorySearchResponse,
+  type InboxCardRecord,
+  type ListAgentMessagesResponse,
+  type ListAgentsResponse,
+  type ListArtifactsResponse,
+  type ListCapabilityGrantsResponse,
+  type ListEffectsResponse,
+  type ListInboxResponse,
+  type ListPermissionRequestsResponse,
+  type ListProjectFilesResponse,
+  type ListProjectsResponse,
+  type ListSessionsResponse,
+  type ListTasksResponse,
+  type MemoryNote,
+  type MemoryStatus,
+  type MessageRecord,
+  type PermissionDecisionRecord,
+  type PermissionRequestRecord,
+  type ProjectLifecycleResponse,
+  type ProjectRecord,
+  type RebindProjectRequest,
+  type ReconcileEffectRequest,
+  type ReconcileEffectResponse,
+  type ReplyTaskRequest,
+  type ResolveInboxCardRequest,
+  type ResolveInboxCardResponse,
+  type ResolvePermissionRequest,
+  type ResolvePermissionResponse,
+  type RevokeGrantRequest,
+  type RunRecord,
+  type RuntimeAuthProfile,
+  type RuntimeBinding,
+  type RuntimeCatalogResponse,
+  type RuntimeModelOption,
+  type RuntimeQuotaWindow,
+  type SendAgentMessageRequest,
+  type SendAgentMessageResponse,
+  type SendMessageRequest,
+  type SendMessageResponse,
+  type SessionDetailResponse,
+  type SessionRecord,
+  type StateSnapshotResponse,
+  type TaskDetailResponse,
+  type TaskRecord,
+  type TaskSignalRecord,
+  type TaskSignalRequest,
+  type TaskSignalResponse,
+  type TaskTimerRecord,
+  type ThinkingLevel,
+  type UpdateAgentConfigRequest,
+  type UpdateProjectRequest,
+  type UpdateSessionRequest,
+  type UpdateTaskRequest,
+  type WorkspaceFileEntry,
 } from "./contracts";
 
 export interface MockBridgeSeed {
@@ -225,6 +227,7 @@ export class MockDesktopBridge implements DesktopBridge {
 
   public readonly calls: Array<{ method: string; args?: unknown }> = [];
   private idSeq = 10000;
+  private lastMutationTs = 0;
   private pendingCancelResolvers = new Map<string, () => void>();
 
   constructor(seed: MockBridgeSeed = {}) {
@@ -251,12 +254,23 @@ export class MockDesktopBridge implements DesktopBridge {
       seed.models ??
       (this.runtimeIsSimulated ? [...DEFAULT_SIMULATED_MODELS] : [...DEFAULT_ANTIGRAVITY_MODELS]);
     this.quotas = [...(seed.quotas ?? [])];
-    this.projects = (seed.projects ?? []).map((p) => ({
-      ...p,
-      lifecycle_state: p.lifecycle_state ?? "active",
-    }));
+    this.projects = sortProjectsByPin(
+      (seed.projects ?? []).map((p) => ({
+        ...p,
+        lifecycle_state: p.lifecycle_state ?? "active",
+        pinned: Boolean(p.pinned),
+        pinned_at: p.pinned ? (p.pinned_at ?? null) : null,
+      })),
+    );
     this.agents = [...(seed.agents ?? [])];
-    this.sessions = [...(seed.sessions ?? [])];
+    this.sessions = sortSessionsByPin(
+      (seed.sessions ?? []).map((s) => ({
+        ...s,
+        project_id: s.project_id ?? null,
+        pinned: Boolean(s.pinned),
+        pinned_at: s.pinned ? (s.pinned_at ?? null) : null,
+      })),
+    );
     this.tasks = [...(seed.tasks ?? [])];
     this.inboxCards = [...(seed.inboxCards ?? [])];
     this.permissionRequests = [...(seed.permissionRequests ?? [])];
@@ -309,13 +323,22 @@ export class MockDesktopBridge implements DesktopBridge {
     return `${prefix}-0000-4000-8000-${n}`;
   }
 
+  private nextTimestamp(): number {
+    const now = Date.now();
+    this.lastMutationTs = Math.max(now, this.lastMutationTs + 1);
+    return this.lastMutationTs;
+  }
+
   private ensureConnected(): void {
     if (!this.connected) {
       throw { code: "HEAD_UNREACHABLE", message: this.offlineError };
     }
   }
 
-  private isProjectDeleted(projectId: string): boolean {
+  private isProjectDeleted(projectId: string | null | undefined): boolean {
+    if (!projectId) {
+      return false;
+    }
     const project = this.projects.find((p) => p.project_id === projectId);
     return project !== undefined && (project.lifecycle_state ?? "active") === "deleted_record";
   }
@@ -381,7 +404,7 @@ export class MockDesktopBridge implements DesktopBridge {
       postgres_connected: true,
       postgres_role: "dennett_control_role",
       postgres_database: "dennett_control_test",
-      schema_version: 6,
+      schema_version: 7,
       memory_status: this.memoryStatus,
       memory_detail: this.memoryDetail,
       runtime_adapter_id: this.runtimeAdapterId,
@@ -461,7 +484,7 @@ export class MockDesktopBridge implements DesktopBridge {
       }
       return true;
     });
-    return { projects: [...visible] };
+    return { projects: sortProjectsByPin(visible) };
   }
 
   public async createProject(request: CreateProjectRequest): Promise<ProjectRecord> {
@@ -482,9 +505,11 @@ export class MockDesktopBridge implements DesktopBridge {
       memory_scope: scope,
       lifecycle_state: "active",
       archived_at: null,
-      created_at: Date.now(),
+      pinned: false,
+      pinned_at: null,
+      created_at: this.nextTimestamp(),
     };
-    this.projects = [record, ...this.projects];
+    this.projects = sortProjectsByPin([record, ...this.projects]);
     this.emitControlEvent("project.created", { projectId });
     return record;
   }
@@ -499,6 +524,13 @@ export class MockDesktopBridge implements DesktopBridge {
     if (!existing) {
       throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
     }
+    const nextPinned = request.pinned !== undefined ? request.pinned : existing.pinned;
+    const nextPinnedAt =
+      request.pinned === true
+        ? (existing.pinned_at ?? this.nextTimestamp())
+        : request.pinned === false
+          ? null
+          : (existing.pinned_at ?? null);
     const updated: ProjectRecord = {
       ...existing,
       name: request.name?.trim() || existing.name,
@@ -508,8 +540,12 @@ export class MockDesktopBridge implements DesktopBridge {
         request.workspace_path && existing.lifecycle_state === "detached"
           ? "active"
           : (existing.lifecycle_state ?? "active"),
+      pinned: nextPinned,
+      pinned_at: nextPinnedAt,
     };
-    this.projects = this.projects.map((p) => (p.project_id === projectId ? updated : p));
+    this.projects = sortProjectsByPin(
+      this.projects.map((p) => (p.project_id === projectId ? updated : p)),
+    );
     this.emitControlEvent("project.updated", { projectId });
     return updated;
   }
@@ -789,29 +825,32 @@ export class MockDesktopBridge implements DesktopBridge {
   public async listSessions(): Promise<ListSessionsResponse> {
     this.calls.push({ method: "listSessions" });
     this.ensureConnected();
-    return { sessions: [...this.sessions] };
+    return { sessions: sortSessionsByPin(this.sessions) };
   }
 
   public async createSession(request: CreateSessionRequest): Promise<SessionRecord> {
     this.calls.push({ method: "createSession", args: request });
     this.ensureConnected();
-    const now = Date.now();
+    const now = this.nextTimestamp();
     const sessionId = this.nextUuid("30000000");
     const session: SessionRecord = {
       session_id: sessionId,
       agent_id: request.agent_id,
-      project_id: request.project_id,
+      project_id: request.project_id ?? null,
       title: request.title,
       session_kind: request.session_kind ?? "user_chat",
       runtime_binding: null,
       status: "active",
+      pinned: false,
+      pinned_at: null,
       created_at: now,
       updated_at: now,
     };
-    this.sessions = [session, ...this.sessions];
+    this.sessions = sortSessionsByPin([session, ...this.sessions]);
     this.messagesBySession[sessionId] = [];
     this.artifactsBySession[sessionId] = [];
     this.runsBySession[sessionId] = [];
+    this.emitControlEvent("session.created", { projectId: session.project_id, sessionId });
     return session;
   }
 
@@ -821,16 +860,35 @@ export class MockDesktopBridge implements DesktopBridge {
   ): Promise<SessionRecord> {
     this.calls.push({ method: "updateSession", args: { sessionId, request } });
     this.ensureConnected();
+    if (request.title === undefined && request.pinned === undefined) {
+      throw { code: "INVALID_INPUT", message: "updateSession requires title or pinned" };
+    }
     const existing = this.sessions.find((s) => s.session_id === sessionId);
     if (!existing) {
       throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
     }
+    const nextTitle = request.title !== undefined ? request.title.trim() : existing.title;
+    if (request.title !== undefined && nextTitle.length === 0) {
+      throw { code: "INVALID_INPUT", message: "session title cannot be empty" };
+    }
+    const nextPinned = request.pinned !== undefined ? request.pinned : existing.pinned;
+    const nextPinnedAt =
+      request.pinned === true
+        ? (existing.pinned_at ?? this.nextTimestamp())
+        : request.pinned === false
+          ? null
+          : (existing.pinned_at ?? null);
     const updated: SessionRecord = {
       ...existing,
-      title: request.title.trim(),
-      updated_at: Date.now(),
+      title: nextTitle,
+      pinned: nextPinned,
+      pinned_at: nextPinnedAt,
+      updated_at: request.title !== undefined ? this.nextTimestamp() : existing.updated_at,
     };
-    this.sessions = this.sessions.map((s) => (s.session_id === sessionId ? updated : s));
+    this.sessions = sortSessionsByPin(
+      this.sessions.map((s) => (s.session_id === sessionId ? updated : s)),
+    );
+    this.emitControlEvent("session.updated", { projectId: updated.project_id, sessionId });
     return updated;
   }
 
@@ -876,7 +934,9 @@ export class MockDesktopBridge implements DesktopBridge {
       throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
     }
     const agent = this.agents.find((a) => a.agent_id === session.agent_id);
-    const project = this.projects.find((p) => p.project_id === session.project_id);
+    const project = session.project_id
+      ? this.projects.find((p) => p.project_id === session.project_id)
+      : undefined;
 
     const prior = this.messagesBySession[sessionId] ?? [];
     let effectiveTitle = session.title;
@@ -924,7 +984,9 @@ export class MockDesktopBridge implements DesktopBridge {
       tier: this.tier,
       agy_version: this.runtimeIsSimulated ? null : "1.5.15",
       provider_session_id: `prov-${sessionId.slice(0, 8)}`,
-      workspace_cwd: project?.workspace_path ?? "/detached",
+      workspace_cwd:
+        project?.workspace_path ??
+        (session.project_id ? "/detached" : `/standalone-sessions/${sessionId}`),
       is_simulated: this.runtimeIsSimulated,
       rehydrate_count: 0,
       created_at: now,
@@ -968,10 +1030,12 @@ export class MockDesktopBridge implements DesktopBridge {
       ...(assistantMsg ? [assistantMsg] : []),
     ];
     this.runsBySession[sessionId] = [...(this.runsBySession[sessionId] ?? []), run];
-    this.sessions = this.sessions.map((s) =>
-      s.session_id === sessionId
-        ? { ...s, title: effectiveTitle, runtime_binding: binding, updated_at: now + 10 }
-        : s,
+    this.sessions = sortSessionsByPin(
+      this.sessions.map((s) =>
+        s.session_id === sessionId
+          ? { ...s, title: effectiveTitle, runtime_binding: binding, updated_at: now + 10 }
+          : s,
+      ),
     );
 
     const response: SendMessageResponse = {
@@ -1049,12 +1113,18 @@ export class MockDesktopBridge implements DesktopBridge {
     if (!session) {
       throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
     }
+    if (session.project_id === null && request.relative_path) {
+      throw {
+        code: "INVALID_INPUT",
+        message: "standalone sessions do not support workspace relative_path artifacts",
+      };
+    }
     const existing = this.artifactsBySession[sessionId] ?? [];
     const sameNameRevs = existing.filter((a) => a.name === request.name).length;
     const artifact: ArtifactRecord = {
       artifact_id: this.nextUuid("70000000"),
       session_id: sessionId,
-      project_id: session.project_id,
+      project_id: session.project_id ?? null,
       run_id: request.run_id ?? null,
       name: request.name,
       mime_type: request.mime_type,
@@ -1152,21 +1222,28 @@ export class MockDesktopBridge implements DesktopBridge {
   ): Promise<StateSnapshotResponse> {
     this.calls.push({ method: "getStateSnapshot", args: { projectId, includeArchived } });
     this.ensureConnected();
-    const projects = this.projects.filter((p) => {
-      const lc = p.lifecycle_state ?? "active";
-      if (lc === "deleted_record") {
-        return false;
-      }
-      if (projectId && p.project_id !== projectId) {
-        return false;
-      }
-      if (!includeArchived && !projectId && lc === "archived") {
-        return false;
-      }
-      return true;
-    });
-    const sessions = this.sessions.filter(
-      (s) => !this.isProjectDeleted(s.project_id) && (!projectId || s.project_id === projectId),
+    const projects = sortProjectsByPin(
+      this.projects.filter((p) => {
+        const lc = p.lifecycle_state ?? "active";
+        if (lc === "deleted_record") {
+          return false;
+        }
+        if (projectId && p.project_id !== projectId) {
+          return false;
+        }
+        if (!includeArchived && !projectId && lc === "archived") {
+          return false;
+        }
+        return true;
+      }),
+    );
+    const sessions = sortSessionsByPin(
+      this.sessions.filter((s) => {
+        if (s.project_id === null) {
+          return !projectId;
+        }
+        return !this.isProjectDeleted(s.project_id) && (!projectId || s.project_id === projectId);
+      }),
     );
     const tasks = this.tasks.filter(
       (t) => !this.isProjectDeleted(t.project_id) && (!projectId || t.project_id === projectId),
@@ -1194,7 +1271,13 @@ export class MockDesktopBridge implements DesktopBridge {
     }
     const visibleRunningSessionIds = Array.from(runningSessionIds).filter((sid) => {
       const s = this.sessions.find((item) => item.session_id === sid);
-      return !s || (!this.isProjectDeleted(s.project_id) && (!projectId || s.project_id === projectId));
+      if (!s) {
+        return true;
+      }
+      if (s.project_id === null) {
+        return !projectId;
+      }
+      return !this.isProjectDeleted(s.project_id) && (!projectId || s.project_id === projectId);
     });
     return {
       snapshot_cursor: {
@@ -2068,6 +2151,8 @@ export function createBrowserPreviewBridge(): DesktopBridge {
         memory_scope: "project:dennett-preview",
         lifecycle_state: "active",
         archived_at: null,
+        pinned: false,
+        pinned_at: null,
         created_at: now - 300_000,
       },
     ],
@@ -2113,6 +2198,8 @@ export function createBrowserPreviewBridge(): DesktopBridge {
           updated_at: now - 120_000,
         },
         status: "active",
+        pinned: false,
+        pinned_at: null,
         created_at: now - 250_000,
         updated_at: now - 120_000,
       },

@@ -361,6 +361,8 @@ export interface ProjectRecord {
   memory_scope: string;
   lifecycle_state?: ProjectLifecycleState;
   archived_at?: number | null;
+  pinned: boolean;
+  pinned_at?: number | null;
   created_at: number;
 }
 
@@ -382,11 +384,13 @@ export interface RuntimeBinding {
 export interface SessionRecord {
   session_id: string;
   agent_id: string;
-  project_id: string;
+  project_id: string | null;
   title: string;
   session_kind?: SessionKind;
   runtime_binding?: RuntimeBinding | null;
   status: SessionStatus;
+  pinned: boolean;
+  pinned_at?: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -426,7 +430,7 @@ export interface RunRecord {
 export interface ArtifactRecord {
   artifact_id: string;
   session_id: string;
-  project_id: string;
+  project_id: string | null;
   run_id?: string | null;
   name: string;
   mime_type: string;
@@ -522,6 +526,7 @@ export interface CreateProjectRequest {
 export interface UpdateProjectRequest {
   name?: string | null;
   workspace_path?: string | null;
+  pinned?: boolean;
 }
 
 export interface RebindProjectRequest {
@@ -583,13 +588,14 @@ export interface ListSessionsResponse {
 
 export interface CreateSessionRequest {
   agent_id: string;
-  project_id: string;
+  project_id?: string | null;
   title: string;
   session_kind?: SessionKind;
 }
 
 export interface UpdateSessionRequest {
-  title: string;
+  title?: string;
+  pinned?: boolean;
 }
 
 export interface SessionDetailResponse {
@@ -911,9 +917,44 @@ export interface ReconcileEffectResponse {
 export interface QueuedOfflineMessage {
   client_message_id: string;
   session_id: string;
-  project_id: string;
+  project_id: string | null;
   content: string;
   created_at: number;
+}
+
+export function comparePinnedRecords(
+  aPinned: boolean | undefined,
+  aPinnedAt: number | null | undefined,
+  bPinned: boolean | undefined,
+  bPinnedAt: number | null | undefined,
+  fallbackA: number,
+  fallbackB: number,
+): number {
+  const ap = Boolean(aPinned);
+  const bp = Boolean(bPinned);
+  if (ap !== bp) {
+    return ap ? -1 : 1;
+  }
+  if (ap && bp) {
+    const aTs = aPinnedAt ?? -Infinity;
+    const bTs = bPinnedAt ?? -Infinity;
+    if (aTs !== bTs) {
+      return bTs - aTs;
+    }
+  }
+  return fallbackB - fallbackA;
+}
+
+export function sortProjectsByPin(projects: ProjectRecord[]): ProjectRecord[] {
+  return [...projects].sort((a, b) =>
+    comparePinnedRecords(a.pinned, a.pinned_at, b.pinned, b.pinned_at, a.created_at, b.created_at),
+  );
+}
+
+export function sortSessionsByPin(sessions: SessionRecord[]): SessionRecord[] {
+  return [...sessions].sort((a, b) =>
+    comparePinnedRecords(a.pinned, a.pinned_at, b.pinned, b.pinned_at, a.updated_at, b.updated_at),
+  );
 }
 
 export interface BridgeErrorPayload {

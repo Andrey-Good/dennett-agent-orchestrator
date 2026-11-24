@@ -13,6 +13,7 @@ import {
   LinkBreak,
   PencilSimple,
   Plus,
+  PushPin,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -111,6 +112,14 @@ export function Sidebar() {
     return { activeGroups: active, archivedGroups: archived };
   }, [query, state.projects, state.selectedSessionId, state.sessions]);
 
+  const standaloneChats = useMemo(
+    () =>
+      meta.standaloneSessions.filter(
+        (session) => !query || session.title.toLowerCase().includes(query),
+      ),
+    [meta.standaloneSessions, query],
+  );
+
   const startSessionRename = (session: SessionRecord) => {
     setEditingProjectId(null);
     setEditingSessionId(session.session_id);
@@ -154,456 +163,538 @@ export function Sidebar() {
     );
   };
 
+  const renderChatRow = (session: SessionRecord) => {
+    const isActive =
+      state.activeView === "chat" && state.selectedSessionId === session.session_id;
+    const isRunning = state.runningSessionIds.includes(session.session_id);
+    const isEditingSess = editingSessionId === session.session_id;
+    const isTaskRun = (session.session_kind ?? "user_chat") === "task_run";
+    const isPinned = Boolean(session.pinned);
+
+    return (
+      <div
+        key={session.session_id}
+        className={`chat-row-wrap ${isActive ? "is-active" : ""} ${
+          isRunning ? "is-running" : ""
+        } ${isPinned ? "is-pinned" : ""}`}
+        role="listitem"
+      >
+        {isEditingSess ? (
+          <input
+            type="text"
+            className="inline-rename-input inline-rename-input--chat"
+            value={editingSessionTitle}
+            autoFocus
+            aria-label="Новое название чата"
+            data-testid="inline-session-rename-input"
+            onFocus={(e) => {
+              e.currentTarget.scrollLeft = 0;
+              e.currentTarget.select();
+            }}
+            onChange={(e) => setEditingSessionTitle(e.target.value)}
+            onBlur={() => commitSessionRename(session)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitSessionRename(session);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setEditingSessionId(null);
+              }
+            }}
+          />
+        ) : (
+          <>
+            <button
+              type="button"
+              className={`chat-row ${isActive ? "is-active" : ""}`}
+              onClick={() => void actions.selectSession(session.session_id)}
+              onDoubleClick={() => startSessionRename(session)}
+              onKeyDown={(e) => {
+                if (e.key === "F2") {
+                  e.preventDefault();
+                  startSessionRename(session);
+                }
+              }}
+              aria-current={isActive ? "page" : undefined}
+              data-testid={`session-item-${session.session_id}`}
+            >
+              <span className="chat-row__title-wrap">
+                {isRunning && (
+                  <span
+                    className="chat-row__running-dot"
+                    aria-label="Чат выполняется"
+                    data-testid={`session-running-dot-${session.session_id}`}
+                  />
+                )}
+                <span className="chat-row__title">{session.title}</span>
+                {isTaskRun && (
+                  <span
+                    className="chat-row__kind-badge"
+                    data-testid={`session-kind-badge-${session.session_id}`}
+                  >
+                    Фон
+                  </span>
+                )}
+              </span>
+              <small className="chat-row__meta">
+                {isRunning ? "в работе" : formatRelativeTime(session.updated_at)}
+              </small>
+            </button>
+            <div className="chat-row__actions">
+              <button
+                type="button"
+                className="chat-row__rename-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startSessionRename(session);
+                }}
+                aria-label={`Переименовать чат ${session.title}`}
+                title="Переименовать чат (F2)"
+              >
+                <PencilSimple size={12} />
+              </button>
+              <button
+                type="button"
+                className={`chat-row__pin-btn ${isPinned ? "is-pinned" : ""}`}
+                disabled={!isConnected}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void actions.toggleSessionPin(session.session_id);
+                }}
+                aria-label={
+                  isPinned
+                    ? `Открепить чат ${session.title}`
+                    : `Закрепить чат ${session.title}`
+                }
+                aria-pressed={isPinned}
+                data-testid={`session-pin-btn-${session.session_id}`}
+                title={isPinned ? "Открепить чат" : "Закрепить чат"}
+              >
+                <PushPin size={12} weight={isPinned ? "fill" : "regular"} />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   return (
     <aside
       className="project-sidebar"
       aria-label="Проекты и чаты"
       data-testid="desktop-sidebar"
     >
-      <div className="sidebar-heading">
-        <span className="sidebar-title">Проекты</span>
+      <section
+        className="sidebar-projects-section"
+        aria-label="Проекты"
+        data-testid="sidebar-projects-section"
+      >
+        <div className="sidebar-heading">
+          <span className="sidebar-title">Проекты</span>
 
-        <button
-          ref={createTriggerRef}
-          type="button"
-          className={`icon-button new-project-trigger ${createMenuOpen ? "is-active" : ""}`}
-          onClick={() => setCreateMenuOpen((prev) => !prev)}
-          disabled={!isConnected}
-          aria-label="Новый проект"
-          aria-expanded={createMenuOpen}
-          aria-haspopup="menu"
-          data-testid="new-project-trigger"
-          title="Новый проект"
-        >
-          <Plus size={16} />
-        </button>
-
-        <PortalPopover
-          isOpen={createMenuOpen}
-          anchorEl={createTriggerRef.current}
-          onClose={() => setCreateMenuOpen(false)}
-          placement="bottom-end"
-          className="project-create-menu"
-          role="menu"
-          ariaLabel="Создать проект"
-          testId="project-create-menu"
-        >
-          <strong>Новый проект</strong>
           <button
+            ref={createTriggerRef}
             type="button"
-            role="menuitem"
-            data-testid="create-project-pick-folder"
-            onClick={() => {
-              setCreateMenuOpen(false);
-              void actions.requestFolderPicker({ mode: "create-project" });
-            }}
+            className={`icon-button new-project-trigger ${createMenuOpen ? "is-active" : ""}`}
+            onClick={() => setCreateMenuOpen((prev) => !prev)}
+            disabled={!isConnected}
+            aria-label="Новый проект"
+            aria-expanded={createMenuOpen}
+            aria-haspopup="menu"
+            data-testid="new-project-trigger"
+            title="Новый проект"
           >
-            <FolderOpen size={18} aria-hidden="true" />
-            <span>
-              <strong>Выбрать папку…</strong>
-              <small>Открыть существующую папку или репозиторий</small>
-            </span>
+            <Plus size={16} />
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            data-testid="create-project-folderless"
-            onClick={() => {
-              setCreateMenuOpen(false);
-              void actions.createFolderlessProject();
-            }}
+
+          <PortalPopover
+            isOpen={createMenuOpen}
+            anchorEl={createTriggerRef.current}
+            onClose={() => setCreateMenuOpen(false)}
+            placement="bottom-end"
+            className="project-create-menu"
+            role="menu"
+            ariaLabel="Создать проект"
+            testId="project-create-menu"
           >
-            <FolderPlus size={18} aria-hidden="true" />
-            <span>
-              <strong>Пока без папки</strong>
-              <small>Начать чат сразу, привязать папку позже</small>
-            </span>
-          </button>
-        </PortalPopover>
-      </div>
+            <strong>Новый проект</strong>
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="create-project-pick-folder"
+              onClick={() => {
+                setCreateMenuOpen(false);
+                void actions.requestFolderPicker({ mode: "create-project" });
+              }}
+            >
+              <FolderOpen size={18} aria-hidden="true" />
+              <span>
+                <strong>Выбрать папку…</strong>
+                <small>Открыть существующую папку или репозиторий</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="create-project-folderless"
+              onClick={() => {
+                setCreateMenuOpen(false);
+                void actions.createFolderlessProject();
+              }}
+            >
+              <FolderPlus size={18} aria-hidden="true" />
+              <span>
+                <strong>Пока без папки</strong>
+                <small>Начать чат сразу, привязать папку позже</small>
+              </span>
+            </button>
+          </PortalPopover>
+        </div>
 
-      <div className="sidebar-scroll">
-        {activeGroups.length === 0 && archivedGroups.length === 0 ? (
-          <div className="sidebar-empty">
-            {query ? (
-              <p>По запросу «{state.searchQuery}» ничего не найдено.</p>
-            ) : (
-              <p>Нажмите «+», чтобы открыть папку или начать проект без папки.</p>
-            )}
-          </div>
-        ) : (
-          <div className="project-groups">
-            {activeGroups.map(({ project, sessions }) => {
-              const isEditingProj = editingProjectId === project.project_id;
-              const isFolderless = !project.workspace_path;
-              const isMenuOpen = openProjectMenu?.project.project_id === project.project_id;
-              const isSelectedProject = meta.activeProject?.project_id === project.project_id;
+        <div className="sidebar-projects-scroll" data-testid="sidebar-projects-scroll">
+          {activeGroups.length === 0 && archivedGroups.length === 0 ? (
+            <div className="sidebar-empty">
+              {query ? (
+                <p>По запросу «{state.searchQuery}» ничего не найдено.</p>
+              ) : (
+                <p>Нажмите «+», чтобы открыть папку или начать проект без папки.</p>
+              )}
+            </div>
+          ) : (
+            <div className="project-groups">
+              {activeGroups.map(({ project, sessions }) => {
+                const isEditingProj = editingProjectId === project.project_id;
+                const isFolderless = !project.workspace_path;
+                const isMenuOpen = openProjectMenu?.project.project_id === project.project_id;
+                const isSelectedProject = meta.activeProject?.project_id === project.project_id;
 
-              return (
-                <section
-                  key={project.project_id}
-                  className="project-group"
-                  data-testid={`project-group-${project.project_id}`}
-                >
-                  <div
-                    className={`project-heading ${isEditingProj ? "is-editing" : ""} ${
-                      isMenuOpen ? "has-menu-open" : ""
-                    } ${isSelectedProject ? "is-selected-project" : ""}`}
-                    tabIndex={0}
-                    data-testid={`project-heading-${project.project_id}`}
-                    onClick={() => {
-                      if (!isEditingProj) {
-                        actions.selectProject(project.project_id);
-                      }
-                    }}
-                    onDoubleClick={() => startProjectRename(project)}
-                    onKeyDown={(e) => {
-                      if (e.key === "F2") {
-                        e.preventDefault();
-                        startProjectRename(project);
-                      } else if (e.key === "Enter" && !isEditingProj) {
-                        e.preventDefault();
-                        actions.selectProject(project.project_id);
-                      }
-                    }}
+                return (
+                  <section
+                    key={project.project_id}
+                    className="project-group"
+                    data-testid={`project-group-${project.project_id}`}
                   >
-                    {isFolderless ? (
-                      <FolderDashed
-                        size={16}
-                        className="project-icon project-icon--unbound"
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <FolderSimple size={16} className="project-icon" aria-hidden="true" />
-                    )}
+                    <div
+                      className={`project-heading ${isEditingProj ? "is-editing" : ""} ${
+                        isMenuOpen ? "has-menu-open" : ""
+                      } ${isSelectedProject ? "is-selected-project" : ""}`}
+                      tabIndex={0}
+                      data-testid={`project-heading-${project.project_id}`}
+                      onClick={() => {
+                        if (!isEditingProj) {
+                          actions.selectProject(project.project_id);
+                        }
+                      }}
+                      onDoubleClick={() => startProjectRename(project)}
+                      onKeyDown={(e) => {
+                        if (e.key === "F2") {
+                          e.preventDefault();
+                          startProjectRename(project);
+                        } else if (e.key === "Enter" && !isEditingProj) {
+                          e.preventDefault();
+                          actions.selectProject(project.project_id);
+                        }
+                      }}
+                    >
+                      {isFolderless ? (
+                        <FolderDashed
+                          size={16}
+                          className="project-icon project-icon--unbound"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <FolderSimple size={16} className="project-icon" aria-hidden="true" />
+                      )}
 
-                    {isEditingProj ? (
-                      <input
-                        type="text"
-                        className="inline-rename-input"
-                        value={editingProjectName}
-                        autoFocus
-                        aria-label="Новое название проекта"
-                        data-testid="inline-project-rename-input"
-                        onClick={(e) => e.stopPropagation()}
-                        onFocus={(e) => {
-                          e.currentTarget.scrollLeft = 0;
-                          e.currentTarget.select();
-                        }}
-                        onChange={(e) => setEditingProjectName(e.target.value)}
-                        onBlur={() => commitProjectRename(project)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            commitProjectRename(project);
-                          } else if (e.key === "Escape") {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setEditingProjectId(null);
-                          }
-                        }}
-                      />
-                    ) : (
-                      <span
-                        className="project-heading__name"
-                        title={project.workspace_path ?? "Пока без папки — можно привязать позже"}
-                      >
-                        {project.name}
-                      </span>
-                    )}
+                      {isEditingProj ? (
+                        <input
+                          type="text"
+                          className="inline-rename-input"
+                          value={editingProjectName}
+                          autoFocus
+                          aria-label="Новое название проекта"
+                          data-testid="inline-project-rename-input"
+                          onClick={(e) => e.stopPropagation()}
+                          onFocus={(e) => {
+                            e.currentTarget.scrollLeft = 0;
+                            e.currentTarget.select();
+                          }}
+                          onChange={(e) => setEditingProjectName(e.target.value)}
+                          onBlur={() => commitProjectRename(project)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              commitProjectRename(project);
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setEditingProjectId(null);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <>
+                          <span
+                            className="project-heading__name"
+                            title={project.workspace_path ?? "Пока без папки — можно привязать позже"}
+                          >
+                            {project.name}
+                          </span>
+                          {project.pinned && (
+                            <PushPin
+                              size={12}
+                              weight="fill"
+                              className="project-pin-indicator"
+                              aria-label="Закреплён"
+                              data-testid={`project-pin-indicator-${project.project_id}`}
+                            />
+                          )}
+                        </>
+                      )}
 
-                    {!isEditingProj && (
-                      <div className="project-heading__actions">
-                        {isFolderless && (
+                      {!isEditingProj && (
+                        <div className="project-heading__actions">
+                          {isFolderless && (
+                            <button
+                              type="button"
+                              className="row-action-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void actions.requestFolderPicker({
+                                  mode: "attach-project",
+                                  projectId: project.project_id,
+                                });
+                              }}
+                              aria-label={`Привязать папку к проекту ${project.name}`}
+                              title="Привязать папку…"
+                            >
+                              <FolderOpen size={14} />
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="row-action-btn"
                             onClick={(e) => {
                               e.stopPropagation();
-                              void actions.requestFolderPicker({
-                                mode: "attach-project",
-                                projectId: project.project_id,
-                              });
+                              startProjectRename(project);
                             }}
-                            aria-label={`Привязать папку к проекту ${project.name}`}
-                            title="Привязать папку…"
+                            aria-label={`Переименовать проект ${project.name}`}
+                            title="Переименовать проект (F2)"
                           >
-                            <FolderOpen size={14} />
+                            <PencilSimple size={13} />
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className="row-action-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            startProjectRename(project);
-                          }}
-                          aria-label={`Переименовать проект ${project.name}`}
-                          title="Переименовать проект (F2)"
-                        >
-                          <PencilSimple size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          className={`row-action-btn ${isMenuOpen ? "is-menu-open" : ""}`}
-                          disabled={!isConnected}
-                          aria-expanded={isMenuOpen}
-                          aria-haspopup="menu"
-                          aria-label={`Меню проекта ${project.name}`}
-                          data-testid={`project-menu-trigger-${project.project_id}`}
-                          title="Действия с проектом"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleProjectMenu(project, false, e.currentTarget);
-                          }}
-                        >
-                          <DotsThree size={15} weight="bold" />
-                        </button>
-                        <button
-                          type="button"
-                          className="new-chat-trigger"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void actions.createBlankChat(project.project_id);
-                          }}
-                          disabled={!isConnected}
-                          aria-label={`Новый чат в проекте ${project.name}`}
-                          data-testid={`new-chat-btn-${project.project_id}`}
-                          title="Новый чат (Ctrl+N)"
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="nested-chats" role="list">
-                    {sessions.length === 0 ? (
-                      <button
-                        type="button"
-                        className="nested-chats__empty-btn"
-                        onClick={() => void actions.createBlankChat(project.project_id)}
-                        disabled={!isConnected}
-                      >
-                        + Новый чат
-                      </button>
-                    ) : (
-                      sessions.map((session) => {
-                        const isActive =
-                          state.activeView === "chat" &&
-                          state.selectedSessionId === session.session_id;
-                        const isRunning = state.runningSessionIds.includes(session.session_id);
-                        const isEditingSess = editingSessionId === session.session_id;
-                        const isTaskRun = (session.session_kind ?? "user_chat") === "task_run";
-
-                        return (
-                          <div
-                            key={session.session_id}
-                            className={`chat-row-wrap ${isActive ? "is-active" : ""} ${
-                              isRunning ? "is-running" : ""
-                            }`}
-                            role="listitem"
+                          <button
+                            type="button"
+                            className={`row-action-btn ${isMenuOpen ? "is-menu-open" : ""}`}
+                            disabled={!isConnected}
+                            aria-expanded={isMenuOpen}
+                            aria-haspopup="menu"
+                            aria-label={`Меню проекта ${project.name}`}
+                            data-testid={`project-menu-trigger-${project.project_id}`}
+                            title="Действия с проектом"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleProjectMenu(project, false, e.currentTarget);
+                            }}
                           >
-                            {isEditingSess ? (
-                              <input
-                                type="text"
-                                className="inline-rename-input inline-rename-input--chat"
-                                value={editingSessionTitle}
-                                autoFocus
-                                aria-label="Новое название чата"
-                                data-testid="inline-session-rename-input"
-                                onFocus={(e) => {
-                                  e.currentTarget.scrollLeft = 0;
-                                  e.currentTarget.select();
-                                }}
-                                onChange={(e) => setEditingSessionTitle(e.target.value)}
-                                onBlur={() => commitSessionRename(session)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    commitSessionRename(session);
-                                  } else if (e.key === "Escape") {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    setEditingSessionId(null);
-                                  }
-                                }}
+                            <DotsThree size={15} weight="bold" />
+                          </button>
+                          <button
+                            type="button"
+                            className="new-chat-trigger"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void actions.createBlankChat(project.project_id);
+                            }}
+                            disabled={!isConnected}
+                            aria-label={`Новый чат в проекте ${project.name}`}
+                            data-testid={`new-chat-btn-${project.project_id}`}
+                            title="Новый чат (Ctrl+N)"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="nested-chats" role="list">
+                      {sessions.length === 0 ? (
+                        <button
+                          type="button"
+                          className="nested-chats__empty-btn"
+                          onClick={() => void actions.createBlankChat(project.project_id)}
+                          disabled={!isConnected}
+                        >
+                          + Новый чат
+                        </button>
+                      ) : (
+                        sessions.map((session) => renderChatRow(session))
+                      )}
+                    </div>
+                  </section>
+                );
+              })}
+
+              {archivedGroups.length > 0 && (
+                <div className="sidebar-archive-section" data-testid="sidebar-archive-section">
+                  <button
+                    type="button"
+                    className="sidebar-archive-toggle"
+                    aria-expanded={archiveExpanded}
+                    data-testid="sidebar-archive-toggle"
+                    onClick={() => setArchiveExpanded((prev) => !prev)}
+                  >
+                    {archiveExpanded ? (
+                      <CaretDown size={12} aria-hidden="true" />
+                    ) : (
+                      <CaretRight size={12} aria-hidden="true" />
+                    )}
+                    <Archive size={13} aria-hidden="true" />
+                    <span>Архив ({archivedGroups.length})</span>
+                  </button>
+
+                  {archiveExpanded && (
+                    <div className="sidebar-archive-list" data-testid="sidebar-archive-list">
+                      {archivedGroups.map(({ project, sessions: archivedSessions }) => {
+                        const isMenuOpen = openProjectMenu?.project.project_id === project.project_id;
+                        const isSelectedArchived =
+                          meta.activeProject?.project_id === project.project_id;
+                        return (
+                          <div key={project.project_id} className="archived-project-block">
+                            <div
+                              className={`project-heading project-heading--archived ${
+                                isMenuOpen ? "has-menu-open" : ""
+                              } ${isSelectedArchived ? "is-selected-project" : ""}`}
+                              tabIndex={0}
+                              data-testid={`archived-project-${project.project_id}`}
+                              onClick={() => actions.selectProject(project.project_id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  actions.selectProject(project.project_id);
+                                }
+                              }}
+                            >
+                              <Archive
+                                size={14}
+                                className="project-icon--unbound"
+                                aria-hidden="true"
                               />
-                            ) : (
-                              <>
+                              <span className="project-heading__name">{project.name}</span>
+                              <div className="project-heading__actions">
                                 <button
                                   type="button"
-                                  className={`chat-row ${isActive ? "is-active" : ""}`}
-                                  onClick={() => void actions.selectSession(session.session_id)}
-                                  onDoubleClick={() => startSessionRename(session)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "F2") {
-                                      e.preventDefault();
-                                      startSessionRename(session);
-                                    }
-                                  }}
-                                  aria-current={isActive ? "page" : undefined}
-                                  data-testid={`session-item-${session.session_id}`}
-                                >
-                                  <span className="chat-row__title-wrap">
-                                    {isRunning && (
-                                      <span
-                                        className="chat-row__running-dot"
-                                        aria-label="Чат выполняется"
-                                        data-testid={`session-running-dot-${session.session_id}`}
-                                      />
-                                    )}
-                                    <span className="chat-row__title">{session.title}</span>
-                                    {isTaskRun && (
-                                      <span
-                                        className="chat-row__kind-badge"
-                                        data-testid={`session-kind-badge-${session.session_id}`}
-                                      >
-                                        Фон
-                                      </span>
-                                    )}
-                                  </span>
-                                  <small className="chat-row__meta">
-                                    {isRunning
-                                      ? "в работе"
-                                      : formatRelativeTime(session.updated_at)}
-                                  </small>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="chat-row__rename-btn"
+                                  className="row-action-btn"
+                                  disabled={!isConnected}
+                                  data-testid={`unarchive-project-btn-${project.project_id}`}
+                                  aria-label={`Вернуть проект ${project.name} из архива`}
+                                  title="Вернуть из архива"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    startSessionRename(session);
+                                    void actions.unarchiveProject(project.project_id);
                                   }}
-                                  aria-label={`Переименовать чат ${session.title}`}
-                                  title="Переименовать чат (F2)"
                                 >
-                                  <PencilSimple size={12} />
+                                  <ArrowCounterClockwise size={13} />
                                 </button>
-                              </>
+                                <button
+                                  type="button"
+                                  className={`row-action-btn ${isMenuOpen ? "is-menu-open" : ""}`}
+                                  disabled={!isConnected}
+                                  aria-expanded={isMenuOpen}
+                                  aria-haspopup="menu"
+                                  aria-label={`Меню архивного проекта ${project.name}`}
+                                  data-testid={`project-menu-trigger-${project.project_id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleProjectMenu(project, true, e.currentTarget);
+                                  }}
+                                >
+                                  <DotsThree size={15} weight="bold" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {isSelectedArchived && archivedSessions.length > 0 && (
+                              <div className="nested-chats nested-chats--archived" role="list">
+                                {archivedSessions.map((sess) => {
+                                  const isActive = state.selectedSessionId === sess.session_id;
+                                  return (
+                                    <button
+                                      key={sess.session_id}
+                                      type="button"
+                                      className={`chat-row ${isActive ? "is-active" : ""}`}
+                                      data-testid={`archived-session-item-${sess.session_id}`}
+                                      onClick={() => void actions.selectSession(sess.session_id)}
+                                    >
+                                      <span className="chat-row__title-wrap">
+                                        <span className="chat-row__title">{sess.title}</span>
+                                      </span>
+                                      <small className="chat-row__meta">архив</small>
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             )}
                           </div>
                         );
-                      })
-                    )}
-                  </div>
-                </section>
-              );
-            })}
-
-            {archivedGroups.length > 0 && (
-              <div className="sidebar-archive-section" data-testid="sidebar-archive-section">
-                <button
-                  type="button"
-                  className="sidebar-archive-toggle"
-                  aria-expanded={archiveExpanded}
-                  data-testid="sidebar-archive-toggle"
-                  onClick={() => setArchiveExpanded((prev) => !prev)}
-                >
-                  {archiveExpanded ? (
-                    <CaretDown size={12} aria-hidden="true" />
-                  ) : (
-                    <CaretRight size={12} aria-hidden="true" />
+                      })}
+                    </div>
                   )}
-                  <Archive size={13} aria-hidden="true" />
-                  <span>Архив ({archivedGroups.length})</span>
-                </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
 
-                {archiveExpanded && (
-                  <div className="sidebar-archive-list" data-testid="sidebar-archive-list">
-                    {archivedGroups.map(({ project, sessions: archivedSessions }) => {
-                      const isMenuOpen = openProjectMenu?.project.project_id === project.project_id;
-                      const isSelectedArchived =
-                        meta.activeProject?.project_id === project.project_id;
-                      return (
-                        <div key={project.project_id} className="archived-project-block">
-                          <div
-                            className={`project-heading project-heading--archived ${
-                              isMenuOpen ? "has-menu-open" : ""
-                            } ${isSelectedArchived ? "is-selected-project" : ""}`}
-                            tabIndex={0}
-                            data-testid={`archived-project-${project.project_id}`}
-                            onClick={() => actions.selectProject(project.project_id)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                actions.selectProject(project.project_id);
-                              }
-                            }}
-                          >
-                            <Archive
-                              size={14}
-                              className="project-icon--unbound"
-                              aria-hidden="true"
-                            />
-                            <span className="project-heading__name">{project.name}</span>
-                            <div className="project-heading__actions">
-                              <button
-                                type="button"
-                                className="row-action-btn"
-                                disabled={!isConnected}
-                                data-testid={`unarchive-project-btn-${project.project_id}`}
-                                aria-label={`Вернуть проект ${project.name} из архива`}
-                                title="Вернуть из архива"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void actions.unarchiveProject(project.project_id);
-                                }}
-                              >
-                                <ArrowCounterClockwise size={13} />
-                              </button>
-                              <button
-                                type="button"
-                                className={`row-action-btn ${isMenuOpen ? "is-menu-open" : ""}`}
-                                disabled={!isConnected}
-                                aria-expanded={isMenuOpen}
-                                aria-haspopup="menu"
-                                aria-label={`Меню архивного проекта ${project.name}`}
-                                data-testid={`project-menu-trigger-${project.project_id}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleProjectMenu(project, true, e.currentTarget);
-                                }}
-                              >
-                                <DotsThree size={15} weight="bold" />
-                              </button>
-                            </div>
-                          </div>
+      <section
+        className="sidebar-chats-section"
+        aria-label="Чаты"
+        data-testid="sidebar-chats-section"
+      >
+        <div className="sidebar-heading sidebar-heading--chats">
+          <span className="sidebar-title">Чаты</span>
+          <button
+            type="button"
+            className="icon-button new-project-trigger"
+            onClick={() => void actions.createStandaloneChat()}
+            disabled={!isConnected}
+            title="Новый чат"
+            aria-label="Новый одиночный чат"
+            data-testid="new-standalone-chat-btn"
+          >
+            <Plus size={16} />
+          </button>
+        </div>
 
-                          {isSelectedArchived && archivedSessions.length > 0 && (
-                            <div className="nested-chats nested-chats--archived" role="list">
-                              {archivedSessions.map((sess) => {
-                                const isActive = state.selectedSessionId === sess.session_id;
-                                return (
-                                  <button
-                                    key={sess.session_id}
-                                    type="button"
-                                    className={`chat-row ${isActive ? "is-active" : ""}`}
-                                    data-testid={`archived-session-item-${sess.session_id}`}
-                                    onClick={() => void actions.selectSession(sess.session_id)}
-                                  >
-                                    <span className="chat-row__title-wrap">
-                                      <span className="chat-row__title">{sess.title}</span>
-                                    </span>
-                                    <small className="chat-row__meta">архив</small>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+        <div className="sidebar-chats-scroll" data-testid="sidebar-chats-scroll">
+          {standaloneChats.length === 0 ? (
+            <div
+              className="sidebar-empty sidebar-empty--compact"
+              data-testid="standalone-chats-empty"
+            >
+              {query ? (
+                <p>По запросу «{state.searchQuery}» чаты не найдены.</p>
+              ) : (
+                <p>Одиночных чатов пока нет</p>
+              )}
+            </div>
+          ) : (
+            <div
+              className="standalone-chats-list"
+              role="list"
+              data-testid="standalone-chats-list"
+            >
+              {standaloneChats.map((session) => renderChatRow(session))}
+            </div>
+          )}
+        </div>
+      </section>
 
-      {/* Portaled Project Lifecycle Menu (never clipped by sidebar-scroll) */}
+      {/* Portaled Project Lifecycle Menu (never clipped by sidebar scroll containers) */}
       <PortalPopover
         isOpen={openProjectMenu !== null}
         anchorEl={openProjectMenu?.anchorEl ?? null}
@@ -621,6 +712,25 @@ export function Sidebar() {
           const isFolderless = !project.workspace_path;
           return (
             <>
+              {!isArchived && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid={`project-menu-pin-${project.project_id}`}
+                  onClick={() => {
+                    setOpenProjectMenu(null);
+                    void actions.toggleProjectPin(project.project_id);
+                  }}
+                >
+                  <PushPin
+                    size={14}
+                    weight={project.pinned ? "fill" : "regular"}
+                    aria-hidden="true"
+                  />
+                  <span>{project.pinned ? "Открепить" : "Закрепить"}</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 role="menuitem"

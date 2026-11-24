@@ -79,9 +79,10 @@ export function Composer() {
   const activeAgent = meta.activeAgent;
   const activeProject = meta.activeProject;
   const isArchivedProject = meta.isActiveProjectArchived;
+  const isStandaloneSession = meta.isStandaloneActiveSession;
   const isTaskRunSession = (meta.activeSession?.session_kind ?? "user_chat") === "task_run";
   const clarificationCard = meta.activeClarificationCard;
-  const isFolderless = activeProject ? !activeProject.workspace_path : false;
+  const isFolderless = isStandaloneSession || (activeProject ? !activeProject.workspace_path : true);
   const isConnected = Boolean(state.healthSnapshot?.connected);
   const isRunning = meta.isRunningActiveSession;
   const isCancelling = meta.isCancellingActiveSession;
@@ -406,7 +407,9 @@ export function Composer() {
               clarificationCard
                 ? "Ответьте на уточняющий вопрос агента…"
                 : isConnected
-                  ? "Напишите поручение агенту…"
+                  ? isStandaloneSession
+                    ? "Напишите сообщение…"
+                    : "Напишите поручение агенту…"
                   : "Офлайн-черновик — нажмите Enter, чтобы поставить в очередь отправки…"
             }
             aria-label={
@@ -437,9 +440,11 @@ export function Composer() {
                   aria-label="Доступ к файлам проекта"
                   data-testid="access-selector-trigger"
                   title={
-                    isFolderless
-                      ? "Проект без папки работает в режиме только чтение до привязки папки"
-                      : "Политика записи в рабочую папку"
+                    isStandaloneSession
+                      ? "Одиночный чат работает в режиме только чтение без привязки к папке"
+                      : isFolderless
+                        ? "Проект без папки работает в режиме только чтение до привязки папки"
+                        : "Политика записи в рабочую папку"
                   }
                   onClick={() =>
                     setOpenPopover((prev) => (prev === "access" ? null : "access"))

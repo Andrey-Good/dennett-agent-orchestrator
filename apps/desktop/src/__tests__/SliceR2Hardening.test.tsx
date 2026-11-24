@@ -46,6 +46,8 @@ function makeMultiProjectFixture() {
     memory_scope: "project:alpha",
     lifecycle_state: "active",
     archived_at: null,
+    pinned: false,
+    pinned_at: null,
     created_at: now - 120_000,
   };
   const projectB: ProjectRecord = {
@@ -55,6 +57,8 @@ function makeMultiProjectFixture() {
     memory_scope: "project:beta",
     lifecycle_state: "active",
     archived_at: null,
+    pinned: false,
+    pinned_at: null,
     created_at: now - 90_000,
   };
   const projectC: ProjectRecord = {
@@ -64,6 +68,8 @@ function makeMultiProjectFixture() {
     memory_scope: "project:gamma",
     lifecycle_state: "active",
     archived_at: null,
+    pinned: false,
+    pinned_at: null,
     created_at: now - 60_000,
   };
 
@@ -103,6 +109,8 @@ function makeMultiProjectFixture() {
     title: "Чат Альфа",
     session_kind: "user_chat",
     status: "active",
+    pinned: false,
+    pinned_at: null,
     created_at: now - 100_000,
     updated_at: now - 5_000,
   };
@@ -113,6 +121,8 @@ function makeMultiProjectFixture() {
     title: "Чат Бета",
     session_kind: "user_chat",
     status: "active",
+    pinned: false,
+    pinned_at: null,
     created_at: now - 80_000,
     updated_at: now - 10_000,
   };
@@ -526,6 +536,8 @@ describe("Slice R2 Hardening & UX Refinement", () => {
       memory_scope: "project:legacy",
       lifecycle_state: "archived",
       archived_at: now - 50_000,
+      pinned: false,
+      pinned_at: null,
       created_at: now - 200_000,
     };
     const archivedSession: SessionRecord = {
@@ -535,6 +547,8 @@ describe("Slice R2 Hardening & UX Refinement", () => {
       title: "Старый чат",
       session_kind: "user_chat",
       status: "active",
+      pinned: false,
+      pinned_at: null,
       created_at: now - 150_000,
       updated_at: now - 60_000,
     };
@@ -545,6 +559,8 @@ describe("Slice R2 Hardening & UX Refinement", () => {
       title: "Фоновый запуск таймера",
       session_kind: "task_run",
       status: "active",
+      pinned: false,
+      pinned_at: null,
       created_at: now - 20_000,
       updated_at: now - 2_000,
     };
@@ -889,6 +905,8 @@ describe("Slice R2 Hardening & UX Refinement", () => {
       title: "Проверка сборки каждые 2 часа",
       session_kind: "task_run",
       status: "active",
+      pinned: false,
+      pinned_at: null,
       created_at: now - 5_000,
       updated_at: now - 5_000,
     };

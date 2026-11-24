@@ -134,6 +134,47 @@ export function TitleBar() {
               </span>
               <strong>Поручения и расписания</strong>
             </>
+          ) : meta.isStandaloneActiveSession && meta.activeSession ? (
+            <>
+              <span className="breadcrumb-prefix">Чаты</span>
+              <span className="breadcrumb-sep" aria-hidden="true">
+                /
+              </span>
+              {editingBreadcrumb ? (
+                <input
+                  type="text"
+                  className="inline-rename-input breadcrumb-rename-input"
+                  value={breadcrumbTitleDraft}
+                  autoFocus
+                  aria-label="Переименовать текущий чат"
+                  data-testid="breadcrumb-rename-input"
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => setBreadcrumbTitleDraft(e.target.value)}
+                  onBlur={commitBreadcrumbRename}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitBreadcrumbRename();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setEditingBreadcrumb(false);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="breadcrumb-title-btn"
+                  onClick={startBreadcrumbRename}
+                  disabled={!connected}
+                  data-testid="breadcrumb-session-title"
+                  title="Нажмите, чтобы переименовать чат"
+                >
+                  <strong>{meta.activeSession.title}</strong>
+                </button>
+              )}
+            </>
           ) : (
             <>
               <span className={meta.activeSession ? "breadcrumb-prefix" : ""}>Проекты</span>

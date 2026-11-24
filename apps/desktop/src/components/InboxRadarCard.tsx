@@ -166,14 +166,14 @@ export function InboxRadarCard() {
 
   const query = state.searchQuery.trim().toLowerCase();
 
-  const matchesScopeAndQuery = (projectId: string, haystack: string): boolean => {
+  const matchesScopeAndQuery = (projectId: string | null, haystack: string): boolean => {
     if (projectFilter !== "all" && projectId !== projectFilter) {
       return false;
     }
     if (!query) {
       return true;
     }
-    const projName = (projectById.get(projectId) ?? "").toLowerCase();
+    const projName = (projectId ? (projectById.get(projectId) ?? "") : "Чаты").toLowerCase();
     return haystack.toLowerCase().includes(query) || projName.includes(query);
   };
 
@@ -224,7 +224,11 @@ export function InboxRadarCard() {
     );
     const runningSet = new Set(state.runningSessionIds);
     return state.sessions
-      .filter((s) => runningSet.has(s.session_id) && activeProjectIds.has(s.project_id))
+      .filter(
+        (s) =>
+          runningSet.has(s.session_id) &&
+          (s.project_id === null || activeProjectIds.has(s.project_id)),
+      )
       .filter((s) => !taskRunningSessionIds.has(s.session_id))
       .filter((s) => matchesScopeAndQuery(s.project_id, s.title));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -834,7 +838,10 @@ export function InboxRadarCard() {
                       <div className="d2-radar-row__copy">
                         <strong title={session.title}>{session.title}</strong>
                         <small>
-                          {projectById.get(session.project_id) ?? "Проект"} ·{" "}
+                          {session.project_id
+                            ? (projectById.get(session.project_id) ?? "Проект")
+                            : "Чаты"}{" "}
+                          ·{" "}
                           {awaitingApproval ? "ожидает вашего решения" : "активный ход в чате"}
                         </small>
                       </div>

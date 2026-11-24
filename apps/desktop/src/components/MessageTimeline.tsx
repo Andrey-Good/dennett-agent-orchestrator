@@ -34,12 +34,27 @@ const SUGGESTED_PROMPTS = [
   "Проверь слабые места и риски текущего подхода",
 ];
 
+const STANDALONE_SUGGESTED_PROMPTS = [
+  "Объясни сложную тему простыми словами с примерами",
+  "Помоги структурировать идею и разобрать плюсы и минусы",
+  "Подготовь короткий черновик документа или заметки",
+];
+
 export function MessageTimeline() {
   const { state, actions, meta } = useWorkspace();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef(true);
   const lastSessionIdRef = useRef<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   const sessionId = state.selectedSessionId;
   const persistedMessages = state.activeDetail?.messages ?? [];
@@ -199,8 +214,12 @@ export function MessageTimeline() {
       void navigator.clipboard.writeText(content).catch(() => {});
     }
     setCopiedId(messageId);
-    setTimeout(() => {
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
       setCopiedId((curr) => (curr === messageId ? null : curr));
+      copyTimerRef.current = null;
     }, 1500);
   };
 
@@ -239,6 +258,27 @@ export function MessageTimeline() {
                   Проект находится в архиве. В этом чате нет сообщений — чтобы продолжить диалог,
                   верните проект из архива.
                 </p>
+              </>
+            ) : meta.isStandaloneActiveSession ? (
+              <>
+                <h2>{meta.activeSession?.title || "Новый чат"}</h2>
+                <p>Задайте вопрос или обсудите идею без привязки к папке проекта</p>
+                <div className="prompt-suggestions">
+                  {STANDALONE_SUGGESTED_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => {
+                        if (state.selectedSessionId) {
+                          actions.updateDraft(state.selectedSessionId, prompt);
+                          meta.composerInputRef.current?.focus();
+                        }
+                      }}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
               </>
             ) : (
               <>
@@ -291,6 +331,24 @@ export function MessageTimeline() {
                     data-testid={`message-${msg.role}`}
                   >
                     <div className="message-block">
+                      <button
+                        type="button"
+                        className={`message-copy-button ${isCopied ? "is-copied" : ""}`}
+                        onClick={() => handleCopy(msg.message_id, msg.content)}
+                        aria-label={isCopied ? "Скопировано" : "Скопировать сообщение"}
+                        data-testid={`message-copy-btn-${msg.message_id}`}
+                        title={isCopied ? "Скопировано" : "Скопировать"}
+                      >
+                        {isCopied ? (
+                          <>
+                            <Check size={13} aria-hidden="true" />
+                            <span className="message-copy-feedback">Скопировано</span>
+                          </>
+                        ) : (
+                          <Copy size={13} aria-hidden="true" />
+                        )}
+                      </button>
+
                       <div className="message-copy">
                         {isUser ? (
                           <p className="message-user-text">{msg.content}</p>
@@ -337,16 +395,6 @@ export function MessageTimeline() {
                         {run && !isUser && run.rehydrated && (
                           <span className="run-tag">Контекст восстановлен</span>
                         )}
-
-                        <button
-                          type="button"
-                          className="message-copy-button"
-                          onClick={() => handleCopy(msg.message_id, msg.content)}
-                          aria-label="Скопировать сообщение"
-                          title={isCopied ? "Скопировано" : "Скопировать"}
-                        >
-                          {isCopied ? <Check size={13} /> : <Copy size={13} />}
-                        </button>
                       </div>
                     </div>
                   </article>

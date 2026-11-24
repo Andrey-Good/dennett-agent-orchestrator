@@ -35,6 +35,8 @@ function makeSeedFixture() {
     name: "dennett-core",
     workspace_path: "A:/Dev/dennett-core",
     memory_scope: "project:dennett-core",
+    pinned: false,
+    pinned_at: null,
     created_at: now - 10_000,
   };
   const agent: AgentRecord = {
@@ -73,11 +75,13 @@ function makeSeedFixture() {
       is_simulated: false,
       rehydrate_count: 0,
       created_at: now - 9_000,
-      updated_at: now - 5_000,
+      updated_at: now - 4_000,
     },
     status: "active",
+    pinned: false,
+    pinned_at: null,
     created_at: now - 9_000,
-    updated_at: now - 5_000,
+    updated_at: now - 4_000,
   };
   const sessionB: SessionRecord = {
     session_id: "30000000-0000-4000-8000-000000000002",
@@ -86,8 +90,10 @@ function makeSeedFixture() {
     title: "Сессия B",
     runtime_binding: null,
     status: "active",
+    pinned: false,
+    pinned_at: null,
     created_at: now - 8_000,
-    updated_at: now - 4_000,
+    updated_at: now - 5_000,
   };
   return { project, agent, sessionA, sessionB };
 }
@@ -1107,6 +1113,8 @@ describe("Dennett Desktop D1 Rework UI", () => {
       name: "Альфа-исследование",
       workspace_path: null,
       memory_scope: "project:alpha",
+      pinned: false,
+      pinned_at: null,
       created_at: Date.now() - 10_000,
     };
     const bridge = new MockDesktopBridge({

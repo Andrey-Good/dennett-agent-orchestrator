@@ -93,7 +93,7 @@ export function CommandPalette() {
     () =>
       state.sessions.filter(
         (s) =>
-          projectById.has(s.project_id) &&
+          (s.project_id === null || projectById.has(s.project_id)) &&
           (s.session_kind ?? "user_chat") !== "task_run",
       ),
     [projectById, state.sessions],
@@ -105,10 +105,11 @@ export function CommandPalette() {
     }
     return activeSessions
       .filter((s) => {
-        const proj = projectById.get(s.project_id);
+        const proj = s.project_id ? projectById.get(s.project_id) : null;
+        const scopeLabel = proj ? proj.name : "чаты";
         return (
           s.title.toLowerCase().includes(trimmed) ||
-          (proj?.name.toLowerCase().includes(trimmed) ?? false)
+          scopeLabel.toLowerCase().includes(trimmed)
         );
       })
       .slice(0, 8);
@@ -142,12 +143,12 @@ export function CommandPalette() {
     }
 
     for (const session of matchingSessions) {
-      const proj = projectById.get(session.project_id);
+      const proj = session.project_id ? projectById.get(session.project_id) : null;
       list.push({
         id: `session:${session.session_id}`,
         section: "sessions",
         label: session.title,
-        meta: proj?.name,
+        meta: proj ? proj.name : "Чаты",
         icon: <ChatsCircle size={15} aria-hidden="true" />,
         run: () => {
           close();
@@ -157,6 +158,17 @@ export function CommandPalette() {
     }
 
     const quickActions: PaletteItem[] = [
+      {
+        id: "action:new-standalone-chat",
+        section: "actions",
+        label: "Новый одиночный чат",
+        disabled: !connected,
+        icon: <ChatsCircle size={15} aria-hidden="true" />,
+        run: () => {
+          close();
+          void actions.createStandaloneChat();
+        },
+      },
       {
         id: "action:new-chat",
         section: "actions",
