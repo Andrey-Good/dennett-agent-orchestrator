@@ -51,6 +51,11 @@ pub struct PolicyContext {
     pub allowed_memory_scopes: BTreeSet<MemoryScope>,
     /// Active persisted policy rules loaded from `dennett_control`.
     pub rules: Vec<PolicyRule>,
+    /// Logical names of active A08 registered MCP servers attached to this session.
+    pub registered_mcp_servers: BTreeSet<String>,
+    /// Whether the active owning task has already exhausted its external [`TaskBudget`]
+    /// (blocks native subagent/swarm spawning when `true`, A07).
+    pub task_budget_exhausted: bool,
 }
 
 /// Detailed policy evaluation result supporting revocable [`CapabilityGrantRecord`]s and
@@ -441,7 +446,13 @@ impl PolicyEngine {
 
             let requires_explicit_scope = matches!(
                 mem_op,
-                "memory_write_note" | "memory_correct_note" | "mcp:dennett-memory"
+                "memory_write_note"
+                    | "memory_correct_note"
+                    | "memory_create_claim"
+                    | "memory_supersede_claim"
+                    | "memory_resolve_conflict"
+                    | "memory_upsert_document"
+                    | "mcp:dennett-memory"
             );
 
             match req.raw_input.get("scope") {
@@ -564,6 +575,67 @@ impl PolicyEngine {
                     req.tool_name
                 ),
                 scope: format!("project:{owning_project_id}"),
+            });
+        }
+
+        // 4c. Native runtime subagent / swarm coordination tools (A07):
+        //     Permitted inside an active project session when not denied by explicit Step 2 rules
+        //     and when the owning task's external budget is NOT exhausted. Note that any workspace
+        //     or shell tool executed by a spawned subagent still passes through PolicyEngine!
+        if !is_execute
+            && !is_file_write
+            && !is_file_read
+            && let Some(sub_op) = canonical_native_subagent_op(&tool_lower, &req.tool_kind)
+        {
+            if self.ctx.task_budget_exhausted {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "denied native subagent tool `{sub_op}`: owning task external budget is exhausted"
+                    ),
+                    scope: self.primary_scope_label(),
+                });
+            }
+            if self.ctx.project_id.is_none() {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "denied native subagent tool `{sub_op}`: standalone session has no owning project boundary"
+                    ),
+                    scope: format!("session:{}", self.ctx.session_id),
+                });
+            }
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                matched_rule_id: None,
+                reason: format!(
+                    "allowed native runtime subagent tool `{sub_op}` within active project boundary and remaining task budget"
+                ),
+                scope: self.primary_scope_label(),
+            });
+        }
+
+        // 4d. Active registered A08 MCP servers (explicitly enabled & trusted in capability_records;
+        //     Step 2 explicit Deny rules already ran above and still take precedence).
+        if !is_execute
+            && !is_file_write
+            && !is_file_read
+            && let Some(server_name) = match_registered_mcp_server(
+                &tool_lower,
+                &req.title,
+                &self.ctx.registered_mcp_servers,
+            )
+        {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                matched_rule_id: None,
+                reason: format!(
+                    "allowed registered active A08 MCP server `{server_name}` tool `{}`",
+                    req.tool_name
+                ),
+                scope: self.primary_scope_label(),
             });
         }
 
@@ -778,18 +850,37 @@ const FILE_TARGET_INPUT_KEYS: &[&str] = &[
     "Uri",
     "uri",
 ];
-const MEMORY_MCP_OPS: [&str; 5] = [
+const MEMORY_MCP_OPS: [&str; 14] = [
     "memory_search",
     "memory_get_current",
     "memory_get_history",
     "memory_write_note",
     "memory_correct_note",
+    "memory_list_claims",
+    "memory_create_claim",
+    "memory_supersede_claim",
+    "memory_list_conflicts",
+    "memory_resolve_conflict",
+    "memory_list_documents",
+    "memory_get_document",
+    "memory_upsert_document",
+    "memory_index_status",
 ];
-const CONTROL_MCP_OPS: [&str; 4] = [
+const CONTROL_MCP_OPS: [&str; 7] = [
     "dennett_event_create",
     "dennett_event_list",
     "dennett_event_update",
     "dennett_event_cancel",
+    "dennett_agent_send_message",
+    "dennett_agent_list_messages",
+    "dennett_delegate_task",
+];
+const NATIVE_SUBAGENT_OPS: [&str; 5] = [
+    "invoke_subagent",
+    "define_subagent",
+    "swarm",
+    "post_message",
+    "read_board",
 ];
 
 fn has_any_json_key(raw_input: &serde_json::Value, keys: &[&str]) -> bool {
@@ -854,6 +945,46 @@ fn is_read_tool(tool_lower: &str, tool_kind: &str) -> bool {
                 | "view_file_outline"
                 | "view_code_item"
         )
+}
+
+fn canonical_native_subagent_op(tool_lower: &str, tool_kind: &str) -> Option<&'static str> {
+    if matches!(
+        tool_kind.trim().to_ascii_lowercase().as_str(),
+        "execute" | "edit" | "delete" | "move"
+    ) {
+        return None;
+    }
+    NATIVE_SUBAGENT_OPS.into_iter().find(|&op| tool_lower == op)
+}
+
+fn match_registered_mcp_server<'a>(
+    tool_lower: &str,
+    title: &str,
+    registered: &'a BTreeSet<String>,
+) -> Option<&'a str> {
+    if registered.is_empty() {
+        return None;
+    }
+    let title_lower = title.trim().to_ascii_lowercase();
+    for srv in registered {
+        let srv_lower = srv.to_ascii_lowercase();
+        let srv_under = srv_lower.replace('-', "_");
+        if tool_lower == srv_lower
+            || tool_lower.starts_with(&format!("{srv_lower}:"))
+            || tool_lower.starts_with(&format!("{srv_lower}/"))
+            || tool_lower.starts_with(&format!("{srv_lower}__"))
+            || tool_lower.starts_with(&format!("mcp:{srv_lower}"))
+            || tool_lower.starts_with(&format!("mcp__{srv_lower}__"))
+            || tool_lower.starts_with(&format!("mcp_{srv_lower}_"))
+            || tool_lower.starts_with(&format!("mcp__{srv_under}__"))
+            || tool_lower.starts_with(&format!("mcp_{srv_under}_"))
+            || title_lower.starts_with(&format!("{srv_lower}:"))
+            || title_lower.starts_with(&format!("mcp:{srv_lower}"))
+        {
+            return Some(srv.as_str());
+        }
+    }
+    None
 }
 
 fn canonical_memory_mcp_op(
@@ -1328,6 +1459,8 @@ mod tests {
             },
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![allow_all_rule, deny_shell_rule],
         });
 
@@ -1390,6 +1523,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![],
         });
 
@@ -1430,6 +1565,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![],
         });
 
@@ -1531,6 +1668,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![deny_secrets],
         });
 
@@ -1607,6 +1746,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![],
         });
 
@@ -1712,6 +1853,8 @@ mod tests {
                 allowed_prefixes: vec![String::from("docs/safe")],
             }),
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![allow_docs],
         });
 
@@ -1741,6 +1884,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![PolicyRule {
                 rule_id: PolicyRuleId::new(),
                 scope: format!("project:{project_id}"),
@@ -1824,6 +1969,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![],
         });
         assert_eq!(
@@ -1846,6 +1993,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![],
         });
         let mut ok_evt = make_req("dennett_event_create", "other", None);
@@ -1873,6 +2022,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![],
         });
         assert_eq!(
@@ -1909,6 +2060,8 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             parent_write_ceiling: Some(WorkspaceWritePolicy::DenyAll),
             allowed_memory_scopes: BTreeSet::from([standalone_scope]),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
             rules: vec![],
         });
 
@@ -1943,6 +2096,124 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn d3_a07_a08_policy_enforces_native_subagents_budget_and_registered_mcp_servers() {
+        let ws = temp_workspace("d3-a07-a08");
+        let project_id = ProjectId::new();
+        let scope_alpha = MemoryScope::try_new("project:alpha").expect("scope");
+
+        let base_ctx = PolicyContext {
+            project_id: Some(project_id),
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: Some(TaskId::new()),
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::from([scope_alpha]),
+            registered_mcp_servers: BTreeSet::from([String::from("docs-helper")]),
+            task_budget_exhausted: false,
+            rules: vec![],
+        };
+
+        // 1. Native subagent allowed in active project with remaining budget.
+        let engine = PolicyEngine::new(base_ctx.clone());
+        let sub_req = make_req("invoke_subagent", "other", Some("helper"));
+        assert_eq!(
+            engine.evaluate_request(&sub_req).effect,
+            PolicyEffect::Allow
+        );
+
+        // 2. Native subagent DENIED when task budget is exhausted!
+        let mut exhausted_ctx = base_ctx.clone();
+        exhausted_ctx.task_budget_exhausted = true;
+        let exhausted_engine = PolicyEngine::new(exhausted_ctx);
+        assert_eq!(
+            exhausted_engine.evaluate_request(&sub_req).effect,
+            PolicyEffect::Deny
+        );
+
+        // 3. Explicit Deny rule overrides native subagent allow!
+        let mut denied_sub_ctx = base_ctx.clone();
+        denied_sub_ctx.rules.push(PolicyRule {
+            rule_id: PolicyRuleId::new(),
+            scope: format!("project:{project_id}"),
+            tool_name: String::from("invoke_subagent"),
+            target_pattern: None,
+            effect: PolicyEffect::Deny,
+            reason: String::from("subagents disabled in this project"),
+            created_at: TimestampMs::now(),
+        });
+        assert_eq!(
+            PolicyEngine::new(denied_sub_ctx)
+                .evaluate_request(&sub_req)
+                .effect,
+            PolicyEffect::Deny
+        );
+
+        // 4. D3 control-mcp text cooperation tools allowed in active project (including task_run).
+        for ctrl_tool in [
+            "dennett_agent_send_message",
+            "dennett_agent_list_messages",
+            "dennett_delegate_task",
+        ] {
+            let mut req = make_req(ctrl_tool, "other", None);
+            req.raw_input = json!({ "project_id": project_id.to_string() });
+            assert_eq!(
+                engine.evaluate_request(&req).effect,
+                PolicyEffect::Allow,
+                "expected {ctrl_tool} to be allowed in project"
+            );
+        }
+
+        // 5. D3 memory MCP write tools require explicit allowed scope.
+        let mut ok_claim = make_req("memory_create_claim", "other", None);
+        ok_claim.raw_input = json!({ "scope": "project:alpha", "topic_key": "k" });
+        assert_eq!(
+            engine.evaluate_request(&ok_claim).effect,
+            PolicyEffect::Allow
+        );
+        let missing_scope_claim = make_req("memory_create_claim", "other", None);
+        assert_eq!(
+            engine.evaluate_request(&missing_scope_claim).effect,
+            PolicyEffect::Deny
+        );
+
+        // 6. Active registered A08 MCP server allowed; unregistered server denied; Deny beats Allow!
+        let reg_mcp = make_req("mcp__docs-helper__lookup", "other", None);
+        assert_eq!(
+            engine.evaluate_request(&reg_mcp).effect,
+            PolicyEffect::Allow
+        );
+
+        let unreg_mcp = make_req("mcp__untrusted-srv__exec", "other", None);
+        assert_eq!(
+            engine.evaluate_request(&unreg_mcp).effect,
+            PolicyEffect::Deny
+        );
+
+        let mut denied_mcp_ctx = base_ctx;
+        denied_mcp_ctx.rules.push(PolicyRule {
+            rule_id: PolicyRuleId::new(),
+            scope: String::from("global"),
+            tool_name: String::from("mcp__docs-helper__*"),
+            target_pattern: None,
+            effect: PolicyEffect::Deny,
+            reason: String::from("blocked by owner policy"),
+            created_at: TimestampMs::now(),
+        });
+        assert_eq!(
+            PolicyEngine::new(denied_mcp_ctx)
+                .evaluate_request(&reg_mcp)
+                .effect,
+            PolicyEffect::Deny
+        );
+
+        let _ = fs::remove_dir_all(&ws);
     }
 
     proptest! {

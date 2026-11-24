@@ -1490,7 +1490,7 @@ fn infer_tool_name(kind: &str, title: &str, raw_input: &Value) -> String {
         return String::from("read_file");
     }
 
-    // 3. Only non-native, non-shell/file calls may resolve to Dennett memory MCP tools from title.
+    // 3. Only non-native, non-shell/file calls may resolve to Dennett memory/control MCP tools from title.
     let lower_title = title.to_ascii_lowercase();
     for mcp_tool in [
         "memory_search",
@@ -1498,6 +1498,22 @@ fn infer_tool_name(kind: &str, title: &str, raw_input: &Value) -> String {
         "memory_get_history",
         "memory_write_note",
         "memory_correct_note",
+        "memory_list_claims",
+        "memory_create_claim",
+        "memory_supersede_claim",
+        "memory_list_conflicts",
+        "memory_resolve_conflict",
+        "memory_list_documents",
+        "memory_get_document",
+        "memory_upsert_document",
+        "memory_index_status",
+        "dennett_event_create",
+        "dennett_event_list",
+        "dennett_event_update",
+        "dennett_event_cancel",
+        "dennett_agent_send_message",
+        "dennett_agent_list_messages",
+        "dennett_delegate_task",
     ] {
         if has_identifier_token(&lower_title, mcp_tool) {
             return mcp_tool.to_owned();
@@ -1511,6 +1527,15 @@ fn infer_tool_name(kind: &str, title: &str, raw_input: &Value) -> String {
         || lower_title.contains("(dennett-memory")
     {
         return String::from("mcp:dennett-memory");
+    }
+    if lower_title == "dennett-control"
+        || lower_title.starts_with("dennett-control:")
+        || lower_title.starts_with("dennett-control/")
+        || lower_title.starts_with("dennett-control__")
+        || lower_title.starts_with("mcp:dennett-control")
+        || lower_title.contains("(dennett-control")
+    {
+        return String::from("mcp:dennett-control");
     }
 
     if title.trim().is_empty() {
@@ -1872,15 +1897,31 @@ fn extract_json_rpc_error(msg: &Value, secrets: &[String]) -> Option<DennettErro
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or("unknown JSON-RPC error");
-    let data = err_obj.get("data").map_or_default(Value::to_string);
+    let data_val = err_obj.get("data");
+    let data = data_val.map_or_default(Value::to_string);
     let combined = if data.is_empty() {
         message.to_owned()
     } else {
         format!("{message} ({data})")
     };
+    let safe_detail = redact_secrets_owned(&combined, secrets);
+    let retry_after_secs = data_val.and_then(|d| {
+        d.get("retryAfterSeconds")
+            .or_else(|| d.get("retry_after_secs"))
+            .or_else(|| d.get("retryAfter"))
+            .and_then(Value::as_u64)
+    });
+    if let Some(quota_err) = crate::port::classify_provider_quota_error(
+        crate::antigravity::ANTIGRAVITY_ADAPTER_ID,
+        code,
+        &safe_detail,
+        retry_after_secs,
+    ) {
+        return Some(quota_err);
+    }
     Some(DennettError::RuntimeProtocol {
         code,
-        detail: redact_secrets_owned(&combined, secrets),
+        detail: safe_detail,
     })
 }
 
@@ -2123,10 +2164,10 @@ mod tests {
             calls: Arc::new(AtomicUsize::new(0)),
         });
 
-        // 1. Partial text + id:null JSON-RPC error frame -> Err(RuntimeProtocol), NOT Succeeded!
+        // 1. Partial text + id:null JSON-RPC quota error frame -> Err(ProviderQuotaExceeded), NOT Succeeded!
         let server_stream = concat!(
             "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"partial answer\"}}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"quota exhausted GEMINI_API_KEY=AIzaSySecretKey1234567890123456\"}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"quota exhausted GEMINI_API_KEY=AIzaSySecretKey1234567890123456\",\"data\":{\"retryAfterSeconds\":45}}}\n"
         );
         let mut reader = BufReader::new(server_stream.as_bytes());
         let mut writer = Vec::new();
@@ -2149,14 +2190,54 @@ mod tests {
             String::new,
         )
         .await;
-        let Err(DennettError::RuntimeProtocol { code, detail }) = res else {
-            panic!("expected RuntimeProtocol error, got {res:?}");
+        let Err(DennettError::ProviderQuotaExceeded {
+            provider,
+            detail,
+            retry_after_secs,
+        }) = res
+        else {
+            panic!("expected ProviderQuotaExceeded error, got {res:?}");
         };
-        assert_eq!(code, Some(-32000));
+        assert_eq!(provider, "antigravity-acp");
+        assert_eq!(retry_after_secs, Some(45));
         assert!(
             !detail.contains("AIzaSySecretKey"),
             "secret leaked in error: {detail}"
         );
+
+        // 1b. Non-quota uncorrelated JSON-RPC error frame -> Err(RuntimeProtocol), NOT Succeeded!
+        let proto_stream = concat!(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"partial\"}}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"upstream transport fault\"}}\n"
+        );
+        let mut reader_proto = BufReader::new(proto_stream.as_bytes());
+        let mut writer_proto = Vec::new();
+        let (_tx_p, rx_p) = watch::channel(false);
+        let res_proto = exchange_prompt_turn_io(
+            &mut reader_proto,
+            &mut writer_proto,
+            PromptTurnIoArgs {
+                req_id: 10,
+                dennett_session_id: sid,
+                provider_session_id: "prov-1",
+                run_id: rid,
+                prompt_text: "hello",
+                timeout: Duration::from_secs(5),
+                secrets: &[],
+            },
+            rx_p,
+            Arc::clone(&policy),
+            None,
+            String::new,
+        )
+        .await;
+        assert!(matches!(
+            res_proto,
+            Err(DennettError::RuntimeProtocol {
+                code: Some(-32000),
+                ..
+            })
+        ));
 
         // 2. Partial text + abrupt EOF -> Err(RuntimeProtocol), NOT Succeeded!
         let eof_stream = "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"truncated\"}}}}\n";

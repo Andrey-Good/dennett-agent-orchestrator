@@ -1,7 +1,7 @@
 //! Isolated profile generation, `agy` version detection, workspace write-policy gate
 //! configuration (`settings.json` + `config/hooks.json`), and explicit rehydration helpers.
 
-use core::fmt;
+use core::fmt::{self, Write as _};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,8 @@ use dennett_contracts::{
 use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::time;
+
+use crate::port::ActiveSkillPayload;
 
 /// Minimum supported `agy` CLI version required for production ACP v1 execution.
 pub const MIN_AGY_VERSION: Semver = Semver::new(1, 5, 0);
@@ -259,6 +261,26 @@ pub fn prepare_isolated_profile(
     auth_profile: RuntimeAuthProfile,
     write_policy: &WorkspaceWritePolicy,
 ) -> Result<IsolatedProfilePaths, DennettError> {
+    prepare_isolated_profile_with_skills(profile_root, session_id, auth_profile, write_policy, &[])
+}
+
+/// Materializes an isolated per-session `agy acp` profile directory on disk including active A08
+/// skills strictly under `<gemini_dir>/config/skills/<dir>/SKILL.md` (NEVER touching `~/.gemini/`).
+///
+/// Removes stale skill folders before materializing `active_skills` so disabling a skill ensures
+/// it is immediately absent from the isolated runtime profile.
+///
+/// # Errors
+///
+/// Returns [`DennettError::InvalidInput`] on unsafe skill slugs or [`DennettError::Internal`]
+/// if filesystem operations fail.
+pub fn prepare_isolated_profile_with_skills(
+    profile_root: &Path,
+    session_id: SessionId,
+    auth_profile: RuntimeAuthProfile,
+    write_policy: &WorkspaceWritePolicy,
+    active_skills: &[ActiveSkillPayload],
+) -> Result<IsolatedProfilePaths, DennettError> {
     let gemini_dir = profile_root.join(format!("session-{session_id}"));
     let app_data_rel = String::from(ISOLATED_APP_DATA_REL);
     let app_data_dir = gemini_dir.join(&app_data_rel);
@@ -305,6 +327,8 @@ pub fn prepare_isolated_profile(
         ),
     })?;
 
+    materialize_isolated_skills(&config_dir, active_skills)?;
+
     Ok(IsolatedProfilePaths {
         gemini_dir,
         app_data_rel,
@@ -312,6 +336,86 @@ pub fn prepare_isolated_profile(
         config_dir,
         log_file,
     })
+}
+
+/// Derives a safe cross-platform directory name for a skill slug (rejects path traversal and maps
+/// `:` to `__` so Windows directory creation always succeeds).
+///
+/// # Errors
+///
+/// Returns [`DennettError::InvalidInput`] if `slug` is empty, contains traversal (`..`, `/`, `\`),
+/// or contains disallowed characters.
+pub fn safe_skill_dir_name(slug: &str) -> Result<String, DennettError> {
+    let trimmed = slug.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed.contains("..")
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.as_bytes().contains(&0)
+        || !trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(DennettError::InvalidInput {
+            field: String::from("skill.slug"),
+            reason: format!("unsafe or invalid skill slug `{trimmed}`"),
+        });
+    }
+    Ok(trimmed.replace(':', "__"))
+}
+
+/// Materializes `active_skills` strictly into `<config_dir>/skills/<safe_slug>/SKILL.md`,
+/// removing any previously materialized skills first so disabled skills never linger.
+///
+/// # Errors
+///
+/// Returns [`DennettError::InvalidInput`] on invalid slugs or [`DennettError::Internal`] on IO error.
+pub fn materialize_isolated_skills(
+    config_dir: &Path,
+    active_skills: &[ActiveSkillPayload],
+) -> Result<(), DennettError> {
+    let skills_root = config_dir.join("skills");
+    if skills_root.exists() {
+        fs::remove_dir_all(&skills_root).map_err(|err| DennettError::Internal {
+            detail: format!(
+                "failed clearing stale isolated skills directory `{}`: {err}",
+                skills_root.display()
+            ),
+        })?;
+    }
+    if active_skills.is_empty() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(&skills_root).map_err(|err| DennettError::Internal {
+        detail: format!(
+            "failed creating isolated skills directory `{}`: {err}",
+            skills_root.display()
+        ),
+    })?;
+
+    for skill in active_skills {
+        let dir_name = safe_skill_dir_name(&skill.slug)?;
+        let skill_dir = skills_root.join(dir_name);
+        fs::create_dir_all(&skill_dir).map_err(|err| DennettError::Internal {
+            detail: format!(
+                "failed creating isolated skill folder `{}`: {err}",
+                skill_dir.display()
+            ),
+        })?;
+        let skill_file = skill_dir.join("SKILL.md");
+        fs::write(&skill_file, skill.skill_markdown.as_bytes()).map_err(|err| {
+            DennettError::Internal {
+                detail: format!(
+                    "failed writing isolated skill file `{}`: {err}",
+                    skill_file.display()
+                ),
+            }
+        })?;
+    }
+
+    Ok(())
 }
 
 /// Normalizes a workspace path into a stable canonical string suitable for `cwd` comparison
@@ -399,6 +503,30 @@ pub fn build_effective_system_prompt(
          {transcript}\
          --- END PERSISTED HISTORY ---"
     )
+}
+
+/// Composes the effective system prompt including active A08 skills (for runtimes without an
+/// on-disk `--gemini-dir` skill folder such as `local-http-runtime`) and optional rehydration
+/// history.
+#[must_use]
+pub fn build_effective_system_prompt_with_skills(
+    base_prompt: &str,
+    active_skills: &[ActiveSkillPayload],
+    history: &[MessageRecord],
+    rehydrate_reason: Option<&str>,
+) -> String {
+    let mut prompt = base_prompt.to_owned();
+    if !active_skills.is_empty() {
+        prompt.push_str("\n\n[Dennett Active Skills]");
+        for skill in active_skills {
+            let _ = write!(
+                prompt,
+                "\n--- SKILL {} (v{}) ---\n{}\n--- END SKILL {} ---",
+                skill.slug, skill.version, skill.skill_markdown, skill.slug
+            );
+        }
+    }
+    build_effective_system_prompt(&prompt, history, rehydrate_reason)
 }
 
 #[cfg(test)]
@@ -543,6 +671,90 @@ mod tests {
                 || hooks2.contains(r#""decision":"force_ask""#)
         );
         assert!(!settings2.contains(r#""deny""#));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a08_isolated_skills_materializes_and_cleans_removed_skills_without_touching_home() {
+        let tmp = std::env::temp_dir().join(format!(
+            "dennett-profile-skills-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sid = SessionId::new();
+        let skill_a = ActiveSkillPayload {
+            slug: String::from("rust-audit"),
+            version: String::from("1.0.0"),
+            content_sha256: "a".repeat(64),
+            skill_markdown: String::from("# Rust Audit\nCheck invariants."),
+        };
+        let skill_b = ActiveSkillPayload {
+            slug: String::from("plugin:db-check"),
+            version: String::from("2.0.0"),
+            content_sha256: "b".repeat(64),
+            skill_markdown: String::from("# DB Check\nVerify PG16."),
+        };
+
+        let p1 = prepare_isolated_profile_with_skills(
+            &tmp,
+            sid,
+            RuntimeAuthProfile::OAuthPersonal,
+            &WorkspaceWritePolicy::DenyAll,
+            &[skill_a.clone(), skill_b],
+        )
+        .expect("profile with two skills");
+        assert_eq!(
+            fs::read_to_string(
+                p1.config_dir
+                    .join("skills")
+                    .join("rust-audit")
+                    .join("SKILL.md")
+            )
+            .expect("read rust-audit"),
+            skill_a.skill_markdown
+        );
+        assert!(
+            p1.config_dir
+                .join("skills")
+                .join("plugin__db-check")
+                .join("SKILL.md")
+                .exists()
+        );
+
+        // Removing `plugin:db-check` must wipe its stale folder on next materialization.
+        let p2 = prepare_isolated_profile_with_skills(
+            &tmp,
+            sid,
+            RuntimeAuthProfile::OAuthPersonal,
+            &WorkspaceWritePolicy::DenyAll,
+            &[skill_a],
+        )
+        .expect("profile with one skill");
+        assert!(
+            p2.config_dir
+                .join("skills")
+                .join("rust-audit")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            !p2.config_dir
+                .join("skills")
+                .join("plugin__db-check")
+                .exists()
+        );
+
+        // Traversal slug MUST be rejected.
+        let bad = ActiveSkillPayload {
+            slug: String::from("../escape"),
+            version: String::from("1.0.0"),
+            content_sha256: "c".repeat(64),
+            skill_markdown: String::from("bad"),
+        };
+        assert!(matches!(
+            materialize_isolated_skills(&p2.config_dir, &[bad]),
+            Err(DennettError::InvalidInput { .. })
+        ));
 
         let _ = fs::remove_dir_all(&tmp);
     }

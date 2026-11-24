@@ -579,6 +579,7 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
     } else {
         None
     };
+    let antigravity_profile_root = opts.profile_root.clone();
     let (runtime, rt_secrets) = build_runtime(
         opts.runtime_kind,
         opts.auth_profile,
@@ -614,6 +615,9 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
                 background_runtime,
                 effect_port: None,
                 effects_ledger_path,
+                antigravity_profile_root,
+                allow_non_loopback_local_runtime: opts.allow_non_loopback,
+                ..HeadServiceExtras::default()
             },
         ) {
             Ok(svc) => {

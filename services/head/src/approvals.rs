@@ -51,13 +51,14 @@ use crate::store::{
     map_pg_err, ms_to_pg_epoch_secs, truncate_utf8,
 };
 
-/// Live PostgreSQL policy inputs refreshed on every tool invocation (`D2-BUG-02`, `D2-SEC-02`).
+/// Live PostgreSQL policy inputs refreshed on every tool invocation (`D2-BUG-02`, `D2-SEC-02`, `A07`).
 pub(crate) struct LivePolicyInputs {
     pub(crate) rules: Vec<dennett_contracts::PolicyRule>,
     pub(crate) grants: Vec<CapabilityGrantRecord>,
     pub(crate) project_lifecycle_state: ProjectLifecycleState,
     pub(crate) workspace_bound: bool,
     pub(crate) parent_write_ceiling: Option<WorkspaceWritePolicy>,
+    pub(crate) task_budget_exhausted: bool,
 }
 
 /// Default timeout for waiting on interactive owner approval before expiring fail-closed.
@@ -196,6 +197,7 @@ impl PolicyEvaluator for InteractivePolicyEvaluator {
             ctx.project_lifecycle_state = live.project_lifecycle_state;
             ctx.workspace_bound = live.workspace_bound;
             ctx.parent_write_ceiling = live.parent_write_ceiling;
+            ctx.task_budget_exhausted = live.task_budget_exhausted;
             let engine = PolicyEngine::new(ctx);
 
             let decision = engine.evaluate_with_grants(req, &live.grants, TimestampMs::now());
@@ -674,6 +676,7 @@ impl HeadService {
                 project_lifecycle_state: ProjectLifecycleState::Detached,
                 workspace_bound: false,
                 parent_write_ceiling: Some(WorkspaceWritePolicy::DenyAll),
+                task_budget_exhausted: false,
             });
         };
         let project = fetch_project(&conn, pid, self.pg_target()).await?;
@@ -681,12 +684,20 @@ impl HeadService {
         let parent_write_ceiling = self
             .compute_parent_write_ceiling_in_tx(&conn, task_id)
             .await?;
+        let task_budget_exhausted = if let Some(tid) = task_id {
+            fetch_task(&conn, tid, self.pg_target())
+                .await
+                .is_ok_and(|t| t.budget.check_before_next_turn(&t.usage).is_some())
+        } else {
+            false
+        };
         Ok(LivePolicyInputs {
             rules,
             grants,
             project_lifecycle_state: project.lifecycle_state,
             workspace_bound: project.workspace_path.is_some(),
             parent_write_ceiling,
+            task_budget_exhausted,
         })
     }
 
@@ -1377,6 +1388,8 @@ impl HeadService {
                         workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
                         parent_write_ceiling,
                         allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
+                        registered_mcp_servers: std::collections::BTreeSet::new(),
+                        task_budget_exhausted: false,
                         rules,
                     });
                     let synthetic_req = PolicyEvaluationRequest {

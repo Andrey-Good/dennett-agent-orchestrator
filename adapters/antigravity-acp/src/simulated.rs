@@ -24,17 +24,18 @@ use tokio::time;
 use uuid::Uuid;
 
 use crate::port::{
-    AgentRuntimePort, BoxFuture, PolicyEvaluationRequest, PolicyEvaluator, RuntimeDescriptor,
-    RuntimeEvent, RuntimeMcpServerSpec, SessionStartOutcome, SessionStartRequest, TurnOutcome,
-    TurnRequest,
+    ActiveSkillPayload, AgentRuntimePort, BoxFuture, PolicyEvaluationRequest, PolicyEvaluator,
+    RuntimeDescriptor, RuntimeEvent, RuntimeMcpServerSpec, SessionStartOutcome,
+    SessionStartRequest, TurnOutcome, TurnRequest, evaluate_binding_resume_compatibility,
 };
-use crate::profile::{normalize_workspace_path, workspace_paths_match};
+use crate::profile::normalize_workspace_path;
 
 /// Canonical adapter identifier for the deterministic CI test double.
 pub const SIMULATED_ADAPTER_ID: &str = "simulated-ci-runtime";
 
 #[derive(Debug, Clone)]
 struct SimSessionState {
+    auth_profile: RuntimeAuthProfile,
     provider_session_id: String,
     workspace_cwd: String,
     system_prompt: String,
@@ -42,6 +43,7 @@ struct SimSessionState {
     thinking_level: Option<ThinkingLevel>,
     write_policy: WorkspaceWritePolicy,
     mcp_servers: Vec<RuntimeMcpServerSpec>,
+    active_skills: Vec<ActiveSkillPayload>,
     turn_history: Vec<String>,
 }
 
@@ -191,25 +193,15 @@ impl AgentRuntimePort for SimulatedRuntime {
             let mut rehydrate_reason: Option<String> = None;
 
             if let Some(ref binding) = req.existing_binding {
-                if !binding.is_simulated {
-                    let msg = String::from(
-                        "cannot resume live antigravity-acp binding inside simulated runtime",
-                    );
-                    if !req.allow_rehydrate {
-                        return Err(DennettError::Conflict {
-                            resource: String::from("runtime_binding"),
-                            expected_revision: None,
-                            actual_revision: None,
-                            reason: msg,
-                        });
-                    }
-                    rehydrated = true;
-                    rehydrate_reason = Some(msg);
-                } else if !workspace_paths_match(&binding.workspace_cwd, &target_cwd) {
-                    let msg = format!(
-                        "workspace cwd mismatch (bound `{}`, requested `{target_cwd}`)",
-                        binding.workspace_cwd
-                    );
+                if let Err(msg) = evaluate_binding_resume_compatibility(
+                    binding,
+                    SIMULATED_ADAPTER_ID,
+                    true,
+                    self.auth_profile,
+                    &target_cwd,
+                    None,
+                    None,
+                ) {
                     if !req.allow_rehydrate {
                         return Err(DennettError::Conflict {
                             resource: String::from("runtime_binding"),
@@ -234,12 +226,14 @@ impl AgentRuntimePort for SimulatedRuntime {
                     if let Some(existing) = guard.get_mut(&req.dennett_session_id)
                         && existing.provider_session_id == *bound_prov_id
                     {
-                        // Live session resume: apply updated model/thinking without creating a new Agent!
+                        // Live session resume: apply updated model/thinking/skills without creating a new Agent!
+                        existing.auth_profile = self.auth_profile;
                         existing.system_prompt = req.system_prompt;
                         existing.model_preference = req.model_preference;
                         existing.thinking_level = req.thinking_level;
                         existing.write_policy = req.workspace_write_policy;
                         existing.mcp_servers = req.mcp_servers;
+                        existing.active_skills = req.active_skills;
                         return Ok(SessionStartOutcome {
                             adapter_id: String::from(SIMULATED_ADAPTER_ID),
                             auth_profile: self.auth_profile,
@@ -254,6 +248,7 @@ impl AgentRuntimePort for SimulatedRuntime {
                                 String::from("sim-model-alpha"),
                                 String::from("sim-model-beta"),
                             ],
+                            endpoint_fingerprint: None,
                         });
                     }
                     // Simulated daemon restarted (in-memory state gone) -> honest rehydrate from Dennett history!
@@ -282,6 +277,7 @@ impl AgentRuntimePort for SimulatedRuntime {
             guard.insert(
                 req.dennett_session_id,
                 SimSessionState {
+                    auth_profile: self.auth_profile,
                     provider_session_id: provider_session_id.clone(),
                     workspace_cwd: target_cwd.clone(),
                     system_prompt: req.system_prompt,
@@ -289,6 +285,7 @@ impl AgentRuntimePort for SimulatedRuntime {
                     thinking_level: req.thinking_level,
                     write_policy: req.workspace_write_policy,
                     mcp_servers: req.mcp_servers,
+                    active_skills: req.active_skills,
                     turn_history,
                 },
             );
@@ -307,6 +304,7 @@ impl AgentRuntimePort for SimulatedRuntime {
                     String::from("sim-model-alpha"),
                     String::from("sim-model-beta"),
                 ],
+                endpoint_fingerprint: None,
             })
         })
     }
@@ -489,6 +487,33 @@ async fn execute_sim_turn(
         });
     }
 
+    if let Some(raw_quota) = find_directive(prompt, "[SIM:QUOTA:") {
+        let (detail, retry_after_secs) = match raw_quota.split_once('|') {
+            Some((d, secs)) => (d.trim().to_owned(), secs.trim().parse::<u64>().ok()),
+            None => (raw_quota.trim().to_owned(), None),
+        };
+        return Err(DennettError::ProviderQuotaExceeded {
+            provider: String::from(SIMULATED_ADAPTER_ID),
+            detail: if detail.is_empty() {
+                String::from("simulated upstream provider quota exceeded")
+            } else {
+                detail
+            },
+            retry_after_secs,
+        });
+    }
+
+    if let Some(detail) = find_directive(prompt, "[SIM:AUTH_REQUIRED:") {
+        return Err(DennettError::AuthRequired {
+            profile: session.auth_profile,
+            detail: if detail.is_empty() {
+                String::from("simulated auth required")
+            } else {
+                detail.to_owned()
+            },
+        });
+    }
+
     if let Some(millis_str) = find_directive(prompt, "[SIM:SLOW:") {
         let millis: u64 = millis_str.parse().unwrap_or(5_000);
         emit(
@@ -647,6 +672,399 @@ async fn execute_sim_turn(
             },
             event_tx,
         );
+    }
+
+    if prompt.contains("[SIM:INSPECT_CAPABILITIES]") {
+        let skills_summary: Vec<String> = session
+            .active_skills
+            .iter()
+            .map(|s| format!("{}@{}", s.slug, s.version))
+            .collect();
+        let mcp_summary: Vec<String> = session
+            .mcp_servers
+            .iter()
+            .map(|srv| {
+                let env_keys: Vec<String> = srv
+                    .env
+                    .iter()
+                    .map(|e| format!("{}[set:{}]", e.name, !e.value.is_empty()))
+                    .collect();
+                format!("{}({})", srv.name, env_keys.join(","))
+            })
+            .collect();
+        let reply = format!(
+            "[simulated capabilities] skills=[{}] mcp=[{}]",
+            skills_summary.join(","),
+            mcp_summary.join(";")
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::TextDelta {
+                text: reply.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text: reply,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
+    }
+
+    if let Some(raw_mcp) = find_directive(prompt, "[SIM:MCP_CALL:") {
+        let mut parts = raw_mcp.splitn(3, '|');
+        let server_name = parts.next().unwrap_or_default().trim();
+        let tool_name = parts.next().unwrap_or_default().trim();
+        let raw_args = parts.next().unwrap_or("{}").trim();
+        let args_json: Value = serde_json::from_str(raw_args).unwrap_or_else(|_| json!({}));
+        let tool_call_id = format!("sim-mcp-{}", &Uuid::new_v4().simple().to_string()[..8]);
+        let eval_req = PolicyEvaluationRequest {
+            session_id: dennett_session_id,
+            run_id,
+            tool_call_id: tool_call_id.clone(),
+            tool_name: tool_name.to_owned(),
+            tool_kind: String::from("other"),
+            title: format!("{server_name}:{tool_name}"),
+            target: args_json
+                .get("project_id")
+                .or_else(|| args_json.get("scope"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            locations: Vec::new(),
+            raw_input: args_json.clone(),
+        };
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionRequested {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.to_owned(),
+                target: eval_req.target.clone(),
+                title: eval_req.title.clone(),
+            },
+            event_tx,
+        );
+        let wait_started = time::Instant::now();
+        let decision = policy.evaluate(&eval_req).await;
+        human_wait_ms = human_wait_ms
+            .saturating_add(u64::try_from(wait_started.elapsed().as_millis()).unwrap_or(u64::MAX));
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionResolved {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.to_owned(),
+                target: eval_req.target.clone(),
+                effect: decision.effect,
+                matched_rule_id: decision.matched_rule_id,
+                reason: decision.reason.clone(),
+                scope: decision.scope.clone(),
+                chosen_option_id: Some(if decision.effect == PolicyEffect::Allow {
+                    String::from("allow_once")
+                } else {
+                    String::from("reject_once")
+                }),
+            },
+            event_tx,
+        );
+
+        let reply = if decision.effect == PolicyEffect::Allow {
+            let spec = session
+                .mcp_servers
+                .iter()
+                .find(|s| s.name == server_name)
+                .ok_or_else(|| DennettError::NotFound {
+                    resource: String::from("mcp_server"),
+                    id: server_name.to_owned(),
+                })?;
+            let mcp_output = invoke_mcp_tool_stdio(spec, tool_name, &args_json).await?;
+            emit(
+                &mut events,
+                RuntimeEvent::ToolObserved {
+                    tool_call_id,
+                    tool_name: tool_name.to_owned(),
+                    title: eval_req.title,
+                    status: String::from("completed"),
+                    output_excerpt: mcp_output.clone(),
+                },
+                event_tx,
+            );
+            format!("[simulated] mcp `{server_name}:{tool_name}` ALLOWED: {mcp_output}")
+        } else {
+            emit(
+                &mut events,
+                RuntimeEvent::ToolObserved {
+                    tool_call_id,
+                    tool_name: tool_name.to_owned(),
+                    title: eval_req.title,
+                    status: String::from("denied"),
+                    output_excerpt: format!("denied: {}", decision.reason),
+                },
+                event_tx,
+            );
+            format!(
+                "[simulated] mcp `{server_name}:{tool_name}` DENIED (policy: {})",
+                decision.reason
+            )
+        };
+        emit(
+            &mut events,
+            RuntimeEvent::TextDelta {
+                text: reply.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text: reply,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
+    }
+
+    if let Some(raw_sub) = find_directive(prompt, "[SIM:SUBAGENT:") {
+        let mut parts = raw_sub.splitn(4, '|');
+        let subagent_name = parts.next().unwrap_or("helper").trim();
+        let child_tool = parts.next().unwrap_or("read_file").trim();
+        let child_target = parts.next().unwrap_or_default().trim();
+        let child_content = parts.next().map(ToOwned::to_owned);
+
+        let spawn_call_id = format!("sim-sub-{}", &Uuid::new_v4().simple().to_string()[..8]);
+        let spawn_req = PolicyEvaluationRequest {
+            session_id: dennett_session_id,
+            run_id,
+            tool_call_id: spawn_call_id.clone(),
+            tool_name: String::from("invoke_subagent"),
+            tool_kind: String::from("other"),
+            title: format!("invoke_subagent {subagent_name}"),
+            target: Some(subagent_name.to_owned()),
+            locations: Vec::new(),
+            raw_input: json!({
+                "subagent_name": subagent_name,
+                "child_tool": child_tool,
+            }),
+        };
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionRequested {
+                tool_call_id: spawn_call_id.clone(),
+                tool_name: String::from("invoke_subagent"),
+                target: spawn_req.target.clone(),
+                title: spawn_req.title.clone(),
+            },
+            event_tx,
+        );
+        let wait_started = time::Instant::now();
+        let spawn_decision = policy.evaluate(&spawn_req).await;
+        human_wait_ms = human_wait_ms
+            .saturating_add(u64::try_from(wait_started.elapsed().as_millis()).unwrap_or(u64::MAX));
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionResolved {
+                tool_call_id: spawn_call_id.clone(),
+                tool_name: String::from("invoke_subagent"),
+                target: spawn_req.target.clone(),
+                effect: spawn_decision.effect,
+                matched_rule_id: spawn_decision.matched_rule_id,
+                reason: spawn_decision.reason.clone(),
+                scope: spawn_decision.scope.clone(),
+                chosen_option_id: Some(if spawn_decision.effect == PolicyEffect::Allow {
+                    String::from("allow_once")
+                } else {
+                    String::from("reject_once")
+                }),
+            },
+            event_tx,
+        );
+
+        let reply = if spawn_decision.effect != PolicyEffect::Allow {
+            emit(
+                &mut events,
+                RuntimeEvent::ToolObserved {
+                    tool_call_id: spawn_call_id,
+                    tool_name: String::from("invoke_subagent"),
+                    title: spawn_req.title,
+                    status: String::from("denied"),
+                    output_excerpt: format!("denied: {}", spawn_decision.reason),
+                },
+                event_tx,
+            );
+            format!(
+                "[simulated] subagent `{subagent_name}` DENIED (policy: {})",
+                spawn_decision.reason
+            )
+        } else if *cancel_rx.borrow() {
+            emit(
+                &mut events,
+                RuntimeEvent::Cancelled {
+                    reason: String::from("cancelled before subagent child tool"),
+                },
+                event_tx,
+            );
+            return Ok(TurnOutcome {
+                status: RunStatus::Cancelled,
+                stop_reason: String::from("cancelled"),
+                assistant_text: String::new(),
+                events,
+                usage: usage_payload,
+                human_wait_ms,
+            });
+        } else {
+            let child_call_id = format!("sim-subc-{}", &Uuid::new_v4().simple().to_string()[..8]);
+            let child_kind = match child_tool {
+                "write_file" | "edit_file" => "edit",
+                "run_command" => "execute",
+                "read_file" | "list_dir" => "read",
+                _ => "other",
+            };
+            let child_locations =
+                if matches!(child_kind, "edit" | "read") && !child_target.is_empty() {
+                    vec![child_target.to_owned()]
+                } else {
+                    Vec::new()
+                };
+            let child_req = PolicyEvaluationRequest {
+                session_id: dennett_session_id,
+                run_id,
+                tool_call_id: child_call_id.clone(),
+                tool_name: child_tool.to_owned(),
+                tool_kind: String::from(child_kind),
+                title: format!("subagent({subagent_name}) {child_tool} {child_target}"),
+                target: if child_target.is_empty() {
+                    None
+                } else {
+                    Some(child_target.to_owned())
+                },
+                locations: child_locations,
+                raw_input: match child_kind {
+                    "execute" => json!({ "CommandLine": child_target }),
+                    "edit" | "read" if !child_target.is_empty() => json!({ "Path": child_target }),
+                    _ => json!({ "target": child_target }),
+                },
+            };
+            emit(
+                &mut events,
+                RuntimeEvent::PermissionRequested {
+                    tool_call_id: child_call_id.clone(),
+                    tool_name: child_tool.to_owned(),
+                    target: child_req.target.clone(),
+                    title: child_req.title.clone(),
+                },
+                event_tx,
+            );
+            let child_wait_started = time::Instant::now();
+            let child_decision = policy.evaluate(&child_req).await;
+            human_wait_ms = human_wait_ms.saturating_add(
+                u64::try_from(child_wait_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
+            emit(
+                &mut events,
+                RuntimeEvent::PermissionResolved {
+                    tool_call_id: child_call_id.clone(),
+                    tool_name: child_tool.to_owned(),
+                    target: child_req.target.clone(),
+                    effect: child_decision.effect,
+                    matched_rule_id: child_decision.matched_rule_id,
+                    reason: child_decision.reason.clone(),
+                    scope: child_decision.scope.clone(),
+                    chosen_option_id: Some(if child_decision.effect == PolicyEffect::Allow {
+                        String::from("allow_once")
+                    } else {
+                        String::from("reject_once")
+                    }),
+                },
+                event_tx,
+            );
+            if child_decision.effect == PolicyEffect::Allow {
+                if child_tool == "write_file" && !child_target.is_empty() {
+                    let p = PathBuf::from(child_target);
+                    let resolved = if p.is_absolute() {
+                        p
+                    } else {
+                        PathBuf::from(&session.workspace_cwd).join(p)
+                    };
+                    if let Some(parent) = resolved.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let body = child_content.as_deref().unwrap_or("subagent output");
+                    fs::write(&resolved, body).map_err(|err| DennettError::Internal {
+                        detail: format!(
+                            "simulated subagent write_file failed for `{}`: {err}",
+                            resolved.display()
+                        ),
+                    })?;
+                }
+                emit(
+                    &mut events,
+                    RuntimeEvent::ToolObserved {
+                        tool_call_id: child_call_id,
+                        tool_name: child_tool.to_owned(),
+                        title: child_req.title,
+                        status: String::from("completed"),
+                        output_excerpt: format!("allowed: {}", child_decision.reason),
+                    },
+                    event_tx,
+                );
+                format!(
+                    "[simulated] subagent `{subagent_name}` executed `{child_tool}` ALLOWED for `{child_target}`"
+                )
+            } else {
+                emit(
+                    &mut events,
+                    RuntimeEvent::ToolObserved {
+                        tool_call_id: child_call_id,
+                        tool_name: child_tool.to_owned(),
+                        title: child_req.title,
+                        status: String::from("denied"),
+                        output_excerpt: format!("denied: {}", child_decision.reason),
+                    },
+                    event_tx,
+                );
+                format!(
+                    "[simulated] subagent `{subagent_name}` child `{child_tool}` DENIED (policy: {})",
+                    child_decision.reason
+                )
+            }
+        };
+        emit(
+            &mut events,
+            RuntimeEvent::TextDelta {
+                text: reply.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text: reply,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
     }
 
     if let Some(raw_event_args) = find_directive(prompt, "[SIM:EVENT:CREATE ") {

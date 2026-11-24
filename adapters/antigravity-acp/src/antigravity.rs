@@ -24,12 +24,13 @@ use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::port::{
-    AgentRuntimePort, BoxFuture, PolicyEvaluator, RuntimeDescriptor, RuntimeEvent,
-    RuntimeMcpServerSpec, SessionStartOutcome, SessionStartRequest, TurnOutcome, TurnRequest,
+    ActiveSkillPayload, AgentRuntimePort, BoxFuture, PolicyEvaluator, RuntimeDescriptor,
+    RuntimeEvent, RuntimeMcpServerSpec, SessionStartOutcome, SessionStartRequest, TurnOutcome,
+    TurnRequest, evaluate_binding_resume_compatibility,
 };
 use crate::profile::{
     Semver, build_effective_system_prompt, detect_agy_version, normalize_workspace_path,
-    prepare_isolated_profile, resolve_agy_binary, workspace_paths_match,
+    prepare_isolated_profile_with_skills, resolve_agy_binary, workspace_paths_match,
 };
 use crate::transport::{
     AcpProcess, AcpProcessConfig, AcpTurnParams, extract_thinking_options_from_config,
@@ -118,6 +119,7 @@ struct ActiveSessionSlot {
     applied_write_policy: dennett_contracts::WorkspaceWritePolicy,
     applied_system_prompt: String,
     applied_mcp_digest: u64,
+    applied_skills_digest: u64,
     mcp_token_expires_at_ms: Option<i64>,
     applied_model: Mutex<Option<String>>,
     applied_thinking: Mutex<Option<ThinkingLevel>>,
@@ -134,7 +136,7 @@ enum SlotReuseAction {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "slot reuse evaluates cwd, prompt, write policy, process health, MCP scope digest, and token expiry margin together"
+    reason = "slot reuse evaluates cwd, prompt, write policy, process health, MCP scope digest, active skills digest, and token expiry margin together"
 )]
 fn decide_slot_reuse(
     slot_cwd: &str,
@@ -145,6 +147,8 @@ fn decide_slot_reuse(
     req_system_prompt: &str,
     slot_mcp_digest: u64,
     req_mcp_digest: u64,
+    slot_skills_digest: u64,
+    req_skills_digest: u64,
     slot_token_expires_at_ms: Option<i64>,
     now_ms: i64,
     process_exited: bool,
@@ -166,11 +170,38 @@ fn decide_slot_reuse(
     if process_exited
         || slot_write_policy != req_write_policy
         || slot_mcp_digest != req_mcp_digest
+        || slot_skills_digest != req_skills_digest
         || token_near_expiry
     {
         return SlotReuseAction::RespawnAndResume;
     }
     SlotReuseAction::ReuseLive
+}
+
+/// Computes a deterministic digest of active A08 skills so adding, updating, or disabling any
+/// skill triggers a clean isolated profile rematerialization and respawn.
+#[must_use]
+pub fn compute_skills_fingerprint(active_skills: &[ActiveSkillPayload]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mix_bytes = |h: &mut u64, bytes: &[u8]| {
+        for &b in bytes {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        *h ^= 0xfe;
+        *h = h.wrapping_mul(0x0100_0000_01b3);
+    };
+
+    let mut sorted: Vec<&ActiveSkillPayload> = active_skills.iter().collect();
+    sorted.sort_by(|a, b| a.slug.cmp(&b.slug).then_with(|| a.version.cmp(&b.version)));
+    for skill in sorted {
+        mix_bytes(&mut hash, b"skill");
+        mix_bytes(&mut hash, skill.slug.as_bytes());
+        mix_bytes(&mut hash, skill.version.as_bytes());
+        mix_bytes(&mut hash, skill.content_sha256.as_bytes());
+        mix_bytes(&mut hash, skill.skill_markdown.as_bytes());
+    }
+    hash
 }
 
 /// Computes a deterministic semantic digest of `mcp_servers` plus the earliest `expires_at` (ms)
@@ -349,13 +380,15 @@ impl AntigravityAcpRuntime {
         session_id: SessionId,
         workspace_cwd: &std::path::Path,
         write_policy: &dennett_contracts::WorkspaceWritePolicy,
+        active_skills: &[ActiveSkillPayload],
         secrets: Vec<String>,
     ) -> Result<AcpProcess, DennettError> {
-        let profile = prepare_isolated_profile(
+        let profile = prepare_isolated_profile_with_skills(
             &self.config.profile_root,
             session_id,
             self.config.auth_profile,
             write_policy,
+            active_skills,
         )?;
 
         let mut extra_args = vec![
@@ -516,6 +549,7 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 probe_session,
                 &probe_ws,
                 &dennett_contracts::WorkspaceWritePolicy::DenyAll,
+                &[],
                 secrets,
             )?;
             let init = proc.initialize(self.config.handshake_timeout).await?;
@@ -601,10 +635,34 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
             let secrets = self.collect_secrets(&req);
             let (req_mcp_digest, req_mcp_token_expires_at_ms) =
                 compute_mcp_fingerprint(&req.mcp_servers);
+            let req_skills_digest = compute_skills_fingerprint(&req.active_skills);
             let now_ms = TimestampMs::now().as_millis();
 
+            // 0. V29 fail-fast static compatibility check before touching any live process or spawning
+            //    `agy acp` when explicit resume is requested with `allow_rehydrate == false`.
+            if !req.allow_rehydrate
+                && let Some(ref binding) = req.existing_binding
+                && let Err(reason) = evaluate_binding_resume_compatibility(
+                    binding,
+                    ANTIGRAVITY_ADAPTER_ID,
+                    false,
+                    self.config.auth_profile,
+                    &target_cwd,
+                    None,
+                    None,
+                )
+            {
+                return Err(DennettError::Conflict {
+                    resource: String::from("runtime_binding"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason,
+                });
+            }
+
             // 1. Check if we already hold a live process for this Dennett session in the exact workspace
-            //    with matching `workspace_write_policy`, `system_prompt`, MCP scope digest, and fresh token.
+            //    with matching `workspace_write_policy`, `system_prompt`, MCP scope digest, active skills
+            //    digest, and fresh token.
             let existing_slot = {
                 let guard = self.sessions.lock().await;
                 guard.get(&req.dennett_session_id).cloned()
@@ -624,6 +682,8 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                     &req.system_prompt,
                     slot.applied_mcp_digest,
                     req_mcp_digest,
+                    slot.applied_skills_digest,
+                    req_skills_digest,
                     slot.mcp_token_expires_at_ms,
                     now_ms,
                     proc.has_exited(),
@@ -710,6 +770,7 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                         rehydrated: false,
                         rehydrate_reason: None,
                         available_models: slot.available_models.clone(),
+                        endpoint_fingerprint: None,
                     });
                 }
 
@@ -738,11 +799,12 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
             }
 
             // 2. Spawn fresh isolated `agy acp` process for this Dennett session (re-materializes
-            //    `settings.json` + `<gemini-dir>/config/hooks.json` for current `workspace_write_policy`).
+            //    `settings.json`, `<gemini-dir>/config/hooks.json`, and `<gemini-dir>/config/skills/*`).
             let mut proc = self.spawn_isolated_process(
                 req.dennett_session_id,
                 &req.workspace_cwd,
                 &req.workspace_write_policy,
+                &req.active_skills,
                 secrets.clone(),
             )?;
             let (_init, version) = self.initialize_and_authenticate(&mut proc).await?;
@@ -753,57 +815,40 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
             let mut session_info = None;
 
             if !rehydrated {
-                let resume_candidate: Option<(String, Option<String>)> = if let Some(ref binding) =
-                    req.existing_binding
-                {
-                    if binding.is_simulated {
-                        let msg = String::from(
-                            "existing runtime binding belonged to simulated runtime; refusing silent cross-runtime resume",
-                        );
-                        if !req.allow_rehydrate {
-                            proc.shutdown().await;
-                            return Err(DennettError::Conflict {
-                                resource: String::from("runtime_binding"),
-                                expected_revision: None,
-                                actual_revision: None,
-                                reason: msg,
-                            });
-                        }
-                        rehydrated = true;
-                        rehydrate_reason = Some(msg);
-                        None
-                    } else if !workspace_paths_match(&binding.workspace_cwd, &target_cwd) {
-                        let msg = format!(
-                            "workspace cwd mismatch (bound `{}`, requested `{target_cwd}`)",
-                            binding.workspace_cwd
-                        );
-                        if !req.allow_rehydrate {
-                            proc.shutdown().await;
-                            return Err(DennettError::Conflict {
-                                resource: String::from("runtime_binding"),
-                                expected_revision: None,
-                                actual_revision: None,
-                                reason: msg,
-                            });
-                        }
-                        rehydrated = true;
-                        rehydrate_reason = Some(msg);
-                        None
-                    } else {
-                        let carried_tier = if binding.auth_profile == self.config.auth_profile {
-                            binding.tier.clone().or(prior_slot_tier)
-                        } else {
+                let resume_candidate: Option<(String, Option<String>)> =
+                    if let Some(ref binding) = req.existing_binding {
+                        if let Err(msg) = evaluate_binding_resume_compatibility(
+                            binding,
+                            ANTIGRAVITY_ADAPTER_ID,
+                            false,
+                            self.config.auth_profile,
+                            &target_cwd,
+                            Some(version),
+                            None,
+                        ) {
+                            if !req.allow_rehydrate {
+                                proc.shutdown().await;
+                                return Err(DennettError::Conflict {
+                                    resource: String::from("runtime_binding"),
+                                    expected_revision: None,
+                                    actual_revision: None,
+                                    reason: msg,
+                                });
+                            }
+                            rehydrated = true;
+                            rehydrate_reason = Some(msg);
                             None
-                        };
-                        binding
-                            .provider_session_id
-                            .clone()
-                            .or(prior_slot_provider_id)
-                            .map(|id| (id, carried_tier))
-                    }
-                } else {
-                    prior_slot_provider_id.map(|id| (id, prior_slot_tier))
-                };
+                        } else {
+                            let carried_tier = binding.tier.clone().or(prior_slot_tier);
+                            binding
+                                .provider_session_id
+                                .clone()
+                                .or(prior_slot_provider_id)
+                                .map(|id| (id, carried_tier))
+                        }
+                    } else {
+                        prior_slot_provider_id.map(|id| (id, prior_slot_tier))
+                    };
 
                 if let Some((prov_id, carried_tier)) = resume_candidate {
                     match proc
@@ -918,6 +963,7 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 applied_write_policy: req.workspace_write_policy,
                 applied_system_prompt: req.system_prompt,
                 applied_mcp_digest: req_mcp_digest,
+                applied_skills_digest: req_skills_digest,
                 mcp_token_expires_at_ms: req_mcp_token_expires_at_ms,
                 applied_model: Mutex::new(applied_model),
                 applied_thinking: Mutex::new(applied_thinking),
@@ -941,6 +987,7 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 rehydrated,
                 rehydrate_reason,
                 available_models,
+                endpoint_fingerprint: None,
             })
         })
     }
@@ -1151,13 +1198,21 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
-    use dennett_contracts::{RuntimeModelOption, ThinkingLevel, WorkspaceWritePolicy};
+    use dennett_contracts::{
+        DennettError, RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, RuntimeModelOption,
+        SessionId, ThinkingLevel, TimestampMs, WorkspaceWritePolicy,
+    };
 
     use super::{
+        ANTIGRAVITY_ADAPTER_ID, AntigravityAcpRuntime, AntigravityRuntimeConfig,
         MCP_TOKEN_EXPIRY_MARGIN_MS, SlotReuseAction, clamp_thinking_level, compute_mcp_fingerprint,
-        decide_slot_reuse, split_model_and_thinking,
+        compute_skills_fingerprint, decide_slot_reuse, split_model_and_thinking,
     };
-    use crate::port::{RuntimeMcpEnvEntry, RuntimeMcpServerSpec};
+    use crate::port::{
+        ActiveSkillPayload, AgentRuntimePort, RuntimeMcpEnvEntry, RuntimeMcpServerSpec,
+        SessionStartRequest, evaluate_binding_resume_compatibility,
+    };
+    use crate::profile::Semver;
 
     #[test]
     fn split_and_clamp_handles_carbon_xhigh_and_claude_builtin_thinking() {
@@ -1239,6 +1294,8 @@ mod tests {
                 "prompt v1",
                 42,
                 42,
+                7,
+                7,
                 fresh_exp,
                 now_ms,
                 false
@@ -1257,6 +1314,8 @@ mod tests {
                 "prompt v1",
                 42,
                 42,
+                7,
+                7,
                 fresh_exp,
                 now_ms,
                 false
@@ -1273,6 +1332,8 @@ mod tests {
                 "prompt v1",
                 42,
                 42,
+                7,
+                7,
                 fresh_exp,
                 now_ms,
                 false
@@ -1291,6 +1352,28 @@ mod tests {
                 "prompt v1",
                 42,
                 99,
+                7,
+                7,
+                fresh_exp,
+                now_ms,
+                false
+            ),
+            SlotReuseAction::RespawnAndResume
+        );
+
+        // A08: Active skills digest change MUST trigger RespawnAndResume!
+        assert_eq!(
+            decide_slot_reuse(
+                "C:/ws",
+                "C:/ws",
+                &allow_docs,
+                &allow_docs,
+                "prompt v1",
+                "prompt v1",
+                42,
+                42,
+                7,
+                8,
                 fresh_exp,
                 now_ms,
                 false
@@ -1309,6 +1392,8 @@ mod tests {
                 "prompt v1",
                 42,
                 42,
+                7,
+                7,
                 expiring_exp,
                 now_ms,
                 false
@@ -1327,6 +1412,8 @@ mod tests {
                 "prompt v1",
                 42,
                 42,
+                7,
+                7,
                 fresh_exp,
                 now_ms,
                 true
@@ -1345,6 +1432,8 @@ mod tests {
                 "prompt v2 (updated)",
                 42,
                 42,
+                7,
+                7,
                 fresh_exp,
                 now_ms,
                 false
@@ -1363,12 +1452,129 @@ mod tests {
                 "prompt v1",
                 42,
                 42,
+                7,
+                7,
                 fresh_exp,
                 now_ms,
                 false
             ),
             SlotReuseAction::RespawnAndRehydrate { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn v29_rejects_adapter_profile_major_version_and_endpoint_mismatches() {
+        let now = TimestampMs::now();
+        let base_binding = RuntimeBinding {
+            binding_id: RuntimeBindingId::new(),
+            session_id: SessionId::new(),
+            adapter_id: String::from(ANTIGRAVITY_ADAPTER_ID),
+            auth_profile: RuntimeAuthProfile::OAuthPersonal,
+            tier: Some(String::from("Google AI Ultra")),
+            agy_version: Some(String::from("1.5.15")),
+            provider_session_id: Some(String::from("prov-v29")),
+            workspace_cwd: String::from("C:/ws"),
+            is_simulated: false,
+            rehydrate_count: 0,
+            connection_id: None,
+            endpoint_fingerprint: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        // Exact match passes (even on minor upgrade 1.5.15 -> 1.6.0).
+        assert!(
+            evaluate_binding_resume_compatibility(
+                &base_binding,
+                ANTIGRAVITY_ADAPTER_ID,
+                false,
+                RuntimeAuthProfile::OAuthPersonal,
+                "C:/ws",
+                Some(Semver::new(1, 6, 0)),
+                None,
+            )
+            .is_ok()
+        );
+
+        // Auth profile mismatch (OAuthPersonal -> GeminiApiKey) MUST fail V29.
+        assert!(
+            evaluate_binding_resume_compatibility(
+                &base_binding,
+                ANTIGRAVITY_ADAPTER_ID,
+                false,
+                RuntimeAuthProfile::GeminiApiKey,
+                "C:/ws",
+                Some(Semver::new(1, 5, 15)),
+                None,
+            )
+            .is_err()
+        );
+
+        // Adapter mismatch (antigravity-acp -> local-http-runtime) MUST fail V29.
+        assert!(
+            evaluate_binding_resume_compatibility(
+                &base_binding,
+                "local-http-runtime",
+                false,
+                RuntimeAuthProfile::LocalEndpoint,
+                "C:/ws",
+                None,
+                Some("http://127.0.0.1:11434"),
+            )
+            .is_err()
+        );
+
+        // Major version change (1.5.15 -> 2.0.0) MUST fail V29.
+        assert!(
+            evaluate_binding_resume_compatibility(
+                &base_binding,
+                ANTIGRAVITY_ADAPTER_ID,
+                false,
+                RuntimeAuthProfile::OAuthPersonal,
+                "C:/ws",
+                Some(Semver::new(2, 0, 0)),
+                None,
+            )
+            .is_err()
+        );
+
+        // AntigravityAcpRuntime must reject mismatched profile/adapter with Conflict before spawning agy!
+        let rt = AntigravityAcpRuntime::new(AntigravityRuntimeConfig::gemini_api_key(
+            std::env::temp_dir(),
+            None,
+        ));
+        let conflict = rt
+            .start_or_resume_session(SessionStartRequest {
+                dennett_session_id: base_binding.session_id,
+                workspace_cwd: std::path::PathBuf::from("C:/ws"),
+                system_prompt: String::from("sys"),
+                model_preference: None,
+                thinking_level: None,
+                workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                mcp_servers: Vec::new(),
+                active_skills: Vec::new(),
+                existing_binding: Some(base_binding),
+                history_for_rehydrate: Vec::new(),
+                allow_rehydrate: false,
+            })
+            .await;
+        assert!(matches!(conflict, Err(DennettError::Conflict { .. })));
+
+        // Active skills digest must change when version or content changes.
+        let s1 = ActiveSkillPayload {
+            slug: String::from("audit"),
+            version: String::from("1.0.0"),
+            content_sha256: "a".repeat(64),
+            skill_markdown: String::from("# v1"),
+        };
+        let s2 = ActiveSkillPayload {
+            version: String::from("1.0.1"),
+            ..s1.clone()
+        };
+        assert_ne!(
+            compute_skills_fingerprint(&[s1]),
+            compute_skills_fingerprint(&[s2])
+        );
     }
 
     #[test]

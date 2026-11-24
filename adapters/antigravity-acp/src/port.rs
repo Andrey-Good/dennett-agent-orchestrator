@@ -45,6 +45,20 @@ pub struct RuntimeMcpServerSpec {
     pub env: Vec<RuntimeMcpEnvEntry>,
 }
 
+/// Active A08 skill payload materialized strictly inside an isolated per-session runtime profile
+/// (never modifying the user's personal `~/.gemini/` directory).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveSkillPayload {
+    /// Normalized capability slug (used to derive `<gemini_dir>/config/skills/<dir>`).
+    pub slug: String,
+    /// Capability version string.
+    pub version: String,
+    /// Lowercase SHA-256 hex digest of the canonical skill content.
+    pub content_sha256: String,
+    /// Full UTF-8 `SKILL.md` markdown document.
+    pub skill_markdown: String,
+}
+
 /// Runtime descriptor returned by [`AgentRuntimePort::probe`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeDescriptor {
@@ -254,6 +268,8 @@ pub struct SessionStartRequest {
     pub workspace_write_policy: WorkspaceWritePolicy,
     /// Scoped MCP servers (e.g. `dennett-memory-mcp`) injected into the runtime session.
     pub mcp_servers: Vec<RuntimeMcpServerSpec>,
+    /// Active A08 skills materialized strictly inside the isolated runtime profile or prompt.
+    pub active_skills: Vec<ActiveSkillPayload>,
     /// Previously persisted runtime binding, when attempting explicit resume (`session/load`).
     pub existing_binding: Option<RuntimeBinding>,
     /// Persisted Dennett conversation history used ONLY if explicit rehydrate is needed.
@@ -266,7 +282,7 @@ pub struct SessionStartRequest {
 /// Result of starting or explicitly resuming a runtime session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionStartOutcome {
-    /// Adapter identifier (`"antigravity-acp"` or `"simulated-ci-runtime"`).
+    /// Adapter identifier (`"antigravity-acp"`, `"local-http-runtime"`, or `"simulated-ci-runtime"`).
     pub adapter_id: String,
     /// Effective authentication profile.
     pub auth_profile: RuntimeAuthProfile,
@@ -278,7 +294,7 @@ pub struct SessionStartOutcome {
     pub provider_session_id: String,
     /// Normalized workspace directory bound to the provider session.
     pub workspace_cwd: String,
-    /// `true` strictly for deterministic CI test doubles; `false` only for real `agy acp`.
+    /// `true` strictly for deterministic CI test doubles; `false` for live runtimes.
     pub is_simulated: bool,
     /// `true` if Dennett explicitly rehydrated context into a fresh provider session.
     pub rehydrated: bool,
@@ -286,6 +302,8 @@ pub struct SessionStartOutcome {
     pub rehydrate_reason: Option<String>,
     /// Available model slugs reported by the runtime.
     pub available_models: Vec<String>,
+    /// Optional normalized endpoint fingerprint (e.g. `http://127.0.0.1:11434`) for V29 reuse checks.
+    pub endpoint_fingerprint: Option<String>,
 }
 
 /// Parameters for executing a single prompt turn on an active runtime session.
@@ -405,8 +423,131 @@ pub trait AgentRuntimePort: Send + Sync {
     ) -> BoxFuture<'_, Result<(), DennettError>>;
 }
 
+/// Classifies upstream provider quota / rate-limit errors into [`DennettError::ProviderQuotaExceeded`],
+/// keeping them strictly distinct from Dennett's own external `TaskBudget` governance caps (A09).
+#[must_use]
+pub fn classify_provider_quota_error(
+    provider: &str,
+    code: Option<i64>,
+    detail: &str,
+    retry_after_secs: Option<u64>,
+) -> Option<DennettError> {
+    let lower = detail.to_ascii_lowercase();
+    let is_quota_code = matches!(code, Some(429 | -32029));
+    let is_quota_message = lower.contains("resource_exhausted")
+        || lower.contains("quota exceeded")
+        || lower.contains("quota exhausted")
+        || lower.contains("exceeded your current quota")
+        || lower.contains("insufficient_quota")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("too many requests");
+
+    if !is_quota_code && !is_quota_message {
+        return None;
+    }
+
+    let parsed_retry = retry_after_secs.or_else(|| parse_retry_after_hint(&lower));
+    Some(DennettError::ProviderQuotaExceeded {
+        provider: provider.to_owned(),
+        detail: detail.to_owned(),
+        retry_after_secs: parsed_retry,
+    })
+}
+
+fn parse_retry_after_hint(lower: &str) -> Option<u64> {
+    for needle in ["retry-after", "retry_after", "retry after"] {
+        if let Some(pos) = lower.find(needle) {
+            let tail = &lower[pos + needle.len()..];
+            let digits: String = tail
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if let Ok(secs) = digits.parse::<u64>() {
+                return Some(secs);
+            }
+        }
+    }
+    None
+}
+
+/// Evaluates V29 resume compatibility between a persisted [`RuntimeBinding`] and the target runtime.
+///
+/// Returns `Ok(())` only when the binding matches the target simulation mode, `adapter_id`,
+/// `auth_profile`, normalized `workspace_cwd`, compatible major `agy` CLI version (when applicable),
+/// and `endpoint_fingerprint` (when applicable).
+///
+/// # Errors
+///
+/// Returns a safe mismatch explanation whenever native `session/load` MUST NOT be attempted so
+/// callers either perform honest rehydration (`allow_rehydrate = true`) or return `Conflict`
+/// (`allow_rehydrate = false`).
+pub fn evaluate_binding_resume_compatibility(
+    binding: &RuntimeBinding,
+    target_adapter_id: &str,
+    target_is_simulated: bool,
+    target_auth_profile: RuntimeAuthProfile,
+    target_cwd: &str,
+    target_agy_version: Option<crate::profile::Semver>,
+    target_endpoint_fingerprint: Option<&str>,
+) -> Result<(), String> {
+    if binding.is_simulated != target_is_simulated {
+        return Err(format!(
+            "existing runtime binding simulation mode mismatch (bound is_simulated={}, target is_simulated={target_is_simulated}); refusing silent cross-runtime resume",
+            binding.is_simulated
+        ));
+    }
+    if binding.adapter_id != target_adapter_id {
+        return Err(format!(
+            "runtime adapter mismatch (bound `{}`, requested `{target_adapter_id}`); refusing silent cross-adapter resume",
+            binding.adapter_id
+        ));
+    }
+    if binding.auth_profile != target_auth_profile {
+        return Err(format!(
+            "runtime auth profile mismatch (bound `{}`, requested `{target_auth_profile}`); refusing silent cross-profile resume",
+            binding.auth_profile
+        ));
+    }
+    if !crate::profile::workspace_paths_match(&binding.workspace_cwd, target_cwd) {
+        return Err(format!(
+            "workspace cwd mismatch (bound `{}`, requested `{target_cwd}`)",
+            binding.workspace_cwd
+        ));
+    }
+    if let (Some(bound_raw), Some(running_ver)) =
+        (binding.agy_version.as_deref(), target_agy_version)
+    {
+        match crate::profile::parse_agy_version(bound_raw) {
+            Ok(bound_ver) if bound_ver.major == running_ver.major => {}
+            Ok(bound_ver) => {
+                return Err(format!(
+                    "agy major version mismatch (bound `{bound_ver}`, running `{running_ver}`); refusing stale session/load"
+                ));
+            }
+            Err(_) => {
+                return Err(format!(
+                    "unparseable bound agy version `{bound_raw}` against running `{running_ver}`; refusing stale session/load"
+                ));
+            }
+        }
+    }
+    if binding.endpoint_fingerprint.as_deref() != target_endpoint_fingerprint
+        && (binding.endpoint_fingerprint.is_some() || target_endpoint_fingerprint.is_some())
+    {
+        return Err(format!(
+            "runtime endpoint fingerprint mismatch (bound `{}`, requested `{}`)",
+            binding.endpoint_fingerprint.as_deref().unwrap_or("none"),
+            target_endpoint_fingerprint.unwrap_or("none"),
+        ));
+    }
+    Ok(())
+}
+
 const _: () = {
     const fn assert_send_sync<T: Send + Sync + 'static>() {}
+    assert_send_sync::<ActiveSkillPayload>();
     assert_send_sync::<RuntimeDescriptor>();
     assert_send_sync::<RuntimeEvent>();
     assert_send_sync::<SessionStartOutcome>();

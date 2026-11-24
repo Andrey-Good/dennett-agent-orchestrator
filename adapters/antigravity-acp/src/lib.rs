@@ -8,22 +8,30 @@
 //!   deterministic CI [`SimulatedRuntime`] (`is_simulated: true`).
 
 pub mod antigravity;
+pub mod conformance;
 pub mod port;
 pub mod profile;
 pub mod simulated;
 pub mod transport;
 
-pub use antigravity::{ANTIGRAVITY_ADAPTER_ID, AntigravityAcpRuntime, AntigravityRuntimeConfig};
+pub use antigravity::{
+    ANTIGRAVITY_ADAPTER_ID, AntigravityAcpRuntime, AntigravityRuntimeConfig,
+    compute_skills_fingerprint,
+};
+pub use conformance::{ConformancePrompts, run_runtime_conformance_suite};
 pub use port::{
-    AgentRuntimePort, BoxFuture, PolicyEvaluationOutcome, PolicyEvaluationRequest, PolicyEvaluator,
-    RuntimeDescriptor, RuntimeEvent, RuntimeMcpEnvEntry, RuntimeMcpServerSpec, SessionStartOutcome,
-    SessionStartRequest, TurnOutcome, TurnRequest,
+    ActiveSkillPayload, AgentRuntimePort, BoxFuture, PolicyEvaluationOutcome,
+    PolicyEvaluationRequest, PolicyEvaluator, RuntimeDescriptor, RuntimeEvent, RuntimeMcpEnvEntry,
+    RuntimeMcpServerSpec, SessionStartOutcome, SessionStartRequest, TurnOutcome, TurnRequest,
+    classify_provider_quota_error, evaluate_binding_resume_compatibility,
 };
 pub use profile::{
     ISOLATED_APP_DATA_REL, IsolatedProfilePaths, MIN_AGY_VERSION, Semver,
-    build_effective_system_prompt, build_settings_json, build_write_gate_hooks_json,
-    detect_agy_version, ensure_agy_version_supported, normalize_workspace_path, parse_agy_version,
-    prepare_isolated_profile, resolve_agy_binary, workspace_paths_match,
+    build_effective_system_prompt, build_effective_system_prompt_with_skills, build_settings_json,
+    build_write_gate_hooks_json, detect_agy_version, ensure_agy_version_supported,
+    materialize_isolated_skills, normalize_workspace_path, parse_agy_version,
+    prepare_isolated_profile, prepare_isolated_profile_with_skills, resolve_agy_binary,
+    safe_skill_dir_name, workspace_paths_match,
 };
 pub use simulated::{SIMULATED_ADAPTER_ID, SimulatedRuntime};
 pub use transport::{

@@ -510,6 +510,8 @@ impl HeadService {
                 workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
                 parent_write_ceiling: None,
                 allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
+                registered_mcp_servers: std::collections::BTreeSet::new(),
+                task_budget_exhausted: false,
                 rules,
             });
             let tool_name = format!("external_effect:{}", req.operation.trim());

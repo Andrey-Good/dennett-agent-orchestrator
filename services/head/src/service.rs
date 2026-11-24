@@ -34,12 +34,12 @@ use dennett_contracts::{
     ListSessionsResponse, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
     MemoryStatus, MessageId, MessageRecord, MessageRole, OrderedOutboxItem, OrderedOutboxStatus,
     OutboxItemId, PermissionDecisionRecord, PermissionRequestId, PolicyRule, PolicyRuleId,
-    PrincipalId, ProfileMode, ProjectId, ProjectLifecycleState, ProjectRecord, RunId, RunRecord,
-    RunStatus, RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse,
-    SearchNotesRequest, SendMessageRequest, SendMessageResponse, ServiceKind,
-    SessionDetailResponse, SessionId, SessionKind, SessionRecord, SessionStatus, Sha256Hex,
-    SimEffectBehavior, TaskId, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
-    UpdateSessionRequest, WorkspaceWritePolicy,
+    PrincipalId, ProfileMode, ProjectId, ProjectLifecycleState, ProjectRecord,
+    ProviderConnectionId, RunId, RunRecord, RunStatus, RuntimeAuthProfile, RuntimeBinding,
+    RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest, SendMessageRequest,
+    SendMessageResponse, ServiceKind, SessionDetailResponse, SessionId, SessionKind, SessionRecord,
+    SessionStatus, Sha256Hex, SimEffectBehavior, TaskId, TimestampMs, UpdateAgentConfigRequest,
+    UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
@@ -57,6 +57,7 @@ use crate::approvals::{
     ApprovalResolutionSignal, CapturedPermissionDecision, DEFAULT_APPROVAL_WAIT_TIMEOUT,
     InteractivePolicyEvaluator,
 };
+use crate::connections::CachedDynamicRuntime;
 use crate::effects::{
     ExternalEffectPort, SIMULATED_EXTERNAL_CONNECTOR_ID, SimulatedExternalConnector,
 };
@@ -70,6 +71,7 @@ use crate::pg_target::ValidatedControlPgTarget;
 use crate::policy::{
     PolicyContext, PolicyEngine, PolicyEvaluationDecision, resolve_within_workspace,
 };
+use crate::secrets::{SecretCipher, VaultMasterKey, default_vault_dir};
 use crate::store::{
     AGENT_JOIN_SELECT, AGENT_MESSAGE_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS,
     ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, RUN_SELECT_COLS, SESSION_SELECT_COLS,
@@ -88,7 +90,7 @@ use crate::workspace_files::{
 };
 
 /// Current implementation milestone label advertised in [`HeadHealth`].
-pub const HEAD_STAGE_LABEL: &str = "D2";
+pub const HEAD_STAGE_LABEL: &str = "D3";
 /// Default PostgreSQL pool size for `dennett-head`.
 pub const DEFAULT_CONTROL_POOL_SIZE: usize = 16;
 /// Default timeout for standard control-plane PostgreSQL queries.
@@ -124,6 +126,20 @@ pub struct HeadServiceExtras {
     pub effect_port: Option<Arc<dyn ExternalEffectPort>>,
     /// Optional JSON ledger path backing the default [`SimulatedExternalConnector`] across restarts.
     pub effects_ledger_path: Option<PathBuf>,
+    /// Optional directory outside PostgreSQL for storing the auto-generated `SecretBroker` `master.key`.
+    pub vault_dir: Option<PathBuf>,
+    /// Optional explicit 32-byte hex/base64 master key override (preferred over `DENNETT_VAULT_MASTER_KEY` and file).
+    pub vault_master_key: Option<String>,
+    /// Optional override for the read-only personal `~/.gemini` directory scanned by A08 discovery.
+    pub personal_profile_dir: Option<PathBuf>,
+    /// Explicitly permits non-loopback `LocalHttpRuntime` endpoints (SSRF guard defaults to `false`).
+    pub allow_non_loopback_local_runtime: bool,
+    /// Optional isolated profile root for dynamically constructed `AntigravityAcpRuntime` connections.
+    pub antigravity_profile_root: Option<PathBuf>,
+    /// Optional override path to the `agy` CLI binary for dynamic Antigravity connections.
+    pub antigravity_binary: Option<PathBuf>,
+    /// Optional deterministic override for `GEMINI_API_KEY` environment fallback (`Some(None)` forces unset in tests).
+    pub gemini_api_key_env_override: Option<Option<String>>,
 }
 
 impl fmt::Debug for HeadServiceExtras {
@@ -136,6 +152,25 @@ impl fmt::Debug for HeadServiceExtras {
             .field("background_runtime", &self.background_runtime.is_some())
             .field("effect_port", &self.effect_port.is_some())
             .field("effects_ledger_path", &self.effects_ledger_path)
+            .field("vault_dir", &self.vault_dir)
+            .field(
+                "vault_master_key",
+                &self.vault_master_key.as_ref().map(|_| REDACTED_PLACEHOLDER),
+            )
+            .field("personal_profile_dir", &self.personal_profile_dir)
+            .field(
+                "allow_non_loopback_local_runtime",
+                &self.allow_non_loopback_local_runtime,
+            )
+            .field("antigravity_profile_root", &self.antigravity_profile_root)
+            .field("antigravity_binary", &self.antigravity_binary)
+            .field(
+                "gemini_api_key_env_override",
+                &self
+                    .gemini_api_key_env_override
+                    .as_ref()
+                    .map(|opt| opt.as_ref().map(|_| REDACTED_PLACEHOLDER)),
+            )
             .finish()
     }
 }
@@ -200,12 +235,29 @@ pub fn d2_head_capabilities() -> Vec<String> {
     caps
 }
 
-/// Compact multi-profile runtime router (`D2-OVER-02`) ensuring cancellation and session
-/// teardown always fan out across EVERY configured auth profile without silent fallback (`A09`).
+/// Returns the complete D3 capability list advertised by `dennett-head`.
+#[must_use]
+pub fn d3_head_capabilities() -> Vec<String> {
+    let mut caps = d2_head_capabilities();
+    caps.extend([
+        String::from("control.secrets.write_only.v1"),
+        String::from("control.runtime_connections.v1"),
+        String::from("control.runtime_local_http.v1"),
+        String::from("control.capabilities_registry.v1"),
+        String::from("control.memory_fabric_proxy.v1"),
+        String::from("control.subagents.policy.v1"),
+    ]);
+    caps
+}
+
+/// Compact multi-profile runtime router (`D2-OVER-02`, expanded in D3 for dynamic connections)
+/// ensuring cancellation and session teardown ALWAYS fan out across EVERY active runtime adapter
+/// without silent fallback (`A09`, `Contract M`).
 #[derive(Clone)]
 pub(crate) struct RuntimeRouter {
     interactive: Arc<dyn AgentRuntimePort>,
     background: Option<Arc<dyn AgentRuntimePort>>,
+    dynamic_runtimes: Arc<Mutex<HashMap<ProviderConnectionId, CachedDynamicRuntime>>>,
 }
 
 impl RuntimeRouter {
@@ -243,6 +295,13 @@ impl RuntimeRouter {
         if let Some(ref bg) = self.background {
             cancelled |= bg.cancel_turn(session_id).await.unwrap_or(false);
         }
+        let dyn_handles: Vec<Arc<dyn AgentRuntimePort>> = {
+            let guard = self.dynamic_runtimes.lock().await;
+            guard.values().map(|e| Arc::clone(&e.runtime)).collect()
+        };
+        for rt in dyn_handles {
+            cancelled |= rt.cancel_turn(session_id).await.unwrap_or(false);
+        }
         cancelled
     }
 
@@ -250,6 +309,13 @@ impl RuntimeRouter {
         let _ = self.interactive.close_session(session_id).await;
         if let Some(ref bg) = self.background {
             let _ = bg.close_session(session_id).await;
+        }
+        let dyn_handles: Vec<Arc<dyn AgentRuntimePort>> = {
+            let guard = self.dynamic_runtimes.lock().await;
+            guard.values().map(|e| Arc::clone(&e.runtime)).collect()
+        };
+        for rt in dyn_handles {
+            let _ = rt.close_session(session_id).await;
         }
     }
 }
@@ -273,6 +339,7 @@ pub(crate) struct CoreTurnInput {
     pub(crate) policy_rules: Vec<PolicyRule>,
     pub(crate) prompt_text: String,
     pub(crate) runtime: Arc<dyn AgentRuntimePort>,
+    pub(crate) connection_id: Option<ProviderConnectionId>,
     pub(crate) turn_timeout: Duration,
     pub(crate) approval_timeout: Duration,
     pub(crate) cancel_rx: watch::Receiver<bool>,
@@ -466,6 +533,7 @@ struct HeadServiceInner {
     startup_recovery_done: Mutex<bool>,
     runtime: Arc<dyn AgentRuntimePort>,
     background_runtime: Option<Arc<dyn AgentRuntimePort>>,
+    dynamic_runtimes: Arc<Mutex<HashMap<ProviderConnectionId, CachedDynamicRuntime>>>,
     effect_port: Arc<dyn ExternalEffectPort>,
     memory_client: Option<MemoryClient>,
     memory_mcp: Option<MemoryMcpWiring>,
@@ -474,6 +542,16 @@ struct HeadServiceInner {
     control_token_signer: ControlTokenSigner,
     self_http_url: StdRwLock<Option<String>>,
     detached_projects_root: PathBuf,
+    secret_cipher: SecretCipher,
+    personal_profile_dir: Option<PathBuf>,
+    allow_non_loopback_local_runtime: bool,
+    antigravity_profile_root: PathBuf,
+    antigravity_binary: Option<PathBuf>,
+    #[expect(
+        clippy::option_option,
+        reason = "tri-state: None reads process env, Some(None) forces unset in tests, Some(Some(v)) injects deterministic key"
+    )]
+    gemini_api_key_env_override: Option<Option<String>>,
     runtime_catalog_cache: Mutex<Option<(time::Instant, RuntimeCatalogResponse)>>,
     last_memory_status: AtomicU8,
     active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
@@ -484,7 +562,7 @@ struct HeadServiceInner {
     session_locks: Arc<Mutex<HashMap<SessionId, Arc<Mutex<()>>>>>,
     in_flight_client_messages: InFlightClientMessageMap,
     profile_mode: ProfileMode,
-    secrets_to_redact: Vec<String>,
+    secrets_to_redact: StdRwLock<Vec<String>>,
 }
 
 /// Canonical orchestration control service backing `dennett-head`.
@@ -527,6 +605,10 @@ impl HeadService {
     /// # Errors
     ///
     /// Returns [`DennettError::Internal`] if PostgreSQL pool construction fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "initializes PG pool, SecretBroker vault key, control/memory signers, and HeadServiceInner atomically"
+    )]
     pub fn new_with_extras(
         pg_target: ValidatedControlPgTarget,
         runtime: Arc<dyn AgentRuntimePort>,
@@ -568,6 +650,36 @@ impl HeadService {
         let detached_projects_root = extras.detached_projects_root.unwrap_or_else(|| {
             std::env::temp_dir().join(format!("dennett-head-detached-{}", std::process::id()))
         });
+        let vault_dir = extras
+            .vault_dir
+            .unwrap_or_else(|| default_vault_dir(&detached_projects_root));
+        if let Some(ref mk) = extras.vault_master_key
+            && !mk.trim().is_empty()
+        {
+            secrets.push(mk.clone());
+        }
+        let vault_master_key =
+            VaultMasterKey::load_or_create(&vault_dir, extras.vault_master_key.as_deref())?;
+        let secret_cipher = SecretCipher::new(vault_master_key);
+
+        if let Some(Some(ref env_key)) = extras.gemini_api_key_env_override
+            && !env_key.trim().is_empty()
+        {
+            secrets.push(env_key.clone());
+        } else if extras.gemini_api_key_env_override.is_none()
+            && let Some(env_key) = std::env::var("DENNETT_GEMINI_API_KEY")
+                .ok()
+                .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+        {
+            secrets.push(env_key);
+        }
+
+        let antigravity_profile_root = extras
+            .antigravity_profile_root
+            .unwrap_or_else(|| detached_projects_root.join("agy-profiles"));
+
         let effect_port: Arc<dyn ExternalEffectPort> = if let Some(custom_port) = extras.effect_port
         {
             custom_port
@@ -589,6 +701,7 @@ impl HeadService {
                 startup_recovery_done: Mutex::new(false),
                 runtime,
                 background_runtime: extras.background_runtime,
+                dynamic_runtimes: Arc::new(Mutex::new(HashMap::new())),
                 effect_port,
                 memory_client,
                 memory_mcp,
@@ -597,6 +710,12 @@ impl HeadService {
                 control_token_signer,
                 self_http_url: StdRwLock::new(None),
                 detached_projects_root,
+                secret_cipher,
+                personal_profile_dir: extras.personal_profile_dir,
+                allow_non_loopback_local_runtime: extras.allow_non_loopback_local_runtime,
+                antigravity_profile_root,
+                antigravity_binary: extras.antigravity_binary,
+                gemini_api_key_env_override: extras.gemini_api_key_env_override,
                 runtime_catalog_cache: Mutex::new(None),
                 last_memory_status: AtomicU8::new(initial_memory_status),
                 active_runs: Arc::new(Mutex::new(HashMap::new())),
@@ -606,7 +725,7 @@ impl HeadService {
                 session_locks: Arc::new(Mutex::new(HashMap::new())),
                 in_flight_client_messages: Arc::new(Mutex::new(HashMap::new())),
                 profile_mode,
-                secrets_to_redact: secrets,
+                secrets_to_redact: StdRwLock::new(secrets),
             }),
         })
     }
@@ -632,11 +751,12 @@ impl HeadService {
         &self.inner.control_token_signer
     }
 
-    /// Returns a [`RuntimeRouter`] spanning both interactive and optional background runtimes.
+    /// Returns a [`RuntimeRouter`] spanning interactive, background, and cached dynamic runtimes.
     pub(crate) fn runtime_router(&self) -> RuntimeRouter {
         RuntimeRouter {
             interactive: Arc::clone(&self.inner.runtime),
             background: self.inner.background_runtime.clone(),
+            dynamic_runtimes: Arc::clone(&self.inner.dynamic_runtimes),
         }
     }
 
@@ -645,8 +765,8 @@ impl HeadService {
         self.detached_project_scratch_dir(project_id)
     }
 
-    /// Probes the active runtime dynamically (`agy acp` or `SimulatedRuntime`) and returns the
-    /// cached or freshly refreshed [`RuntimeCatalogResponse`] (`GET /v1/runtime/catalog`).
+    /// Probes the active runtime dynamically (`agy acp`, `LocalHttpRuntime`, or `SimulatedRuntime`)
+    /// and returns the cached or freshly refreshed [`RuntimeCatalogResponse`] (`GET /v1/runtime/catalog`).
     ///
     /// # Errors
     ///
@@ -663,7 +783,8 @@ impl HeadService {
             return Ok(cached.clone());
         }
 
-        let descriptor = self.inner.runtime.probe().await?;
+        let resolved = self.resolve_runtime_for_turn(None, None).await?;
+        let descriptor = resolved.runtime.probe().await?;
         let catalog = RuntimeCatalogResponse {
             adapter_id: descriptor.adapter_id,
             auth_profile: descriptor.auth_profile,
@@ -676,7 +797,7 @@ impl HeadService {
             models: descriptor.models,
             thinking_options: descriptor.thinking_options,
             quotas: descriptor.quotas,
-            connection_id: None,
+            connection_id: resolved.connection_id,
             quota_error: None,
             probed_at: TimestampMs::now(),
         };
@@ -702,10 +823,29 @@ impl HeadService {
         self.inner.profile_mode
     }
 
+    /// Registers a secret string into Head's live redactor so logs, errors, and diagnostics
+    /// never leak it.
+    pub(crate) fn register_secret_for_redaction(&self, secret: &str) {
+        let trimmed = secret.trim();
+        if trimmed.len() < 3 {
+            return;
+        }
+        if let Ok(mut guard) = self.inner.secrets_to_redact.write()
+            && !guard.iter().any(|existing| existing == trimmed)
+        {
+            guard.push(trimmed.to_owned());
+        }
+    }
+
     /// Redacts configured secrets and generic credential patterns from `text`.
     #[must_use]
     pub fn redact(&self, text: &str) -> String {
-        redact_secrets_owned(text, &self.inner.secrets_to_redact)
+        let snapshot: Vec<String> = self
+            .inner
+            .secrets_to_redact
+            .read()
+            .map_or_default(|g| g.clone());
+        redact_secrets_owned(text, &snapshot)
     }
 
     /// Ensures `dennett_control` PostgreSQL migrations are applied idempotently.
@@ -843,7 +983,7 @@ impl HeadService {
             runtime_adapter_id: self.inner.runtime.adapter_id().to_owned(),
             runtime_is_simulated: self.inner.runtime.is_simulated(),
             pending_outbox_count,
-            capabilities: d2_head_capabilities(),
+            capabilities: d3_head_capabilities(),
             correlation_id,
         })
     }
@@ -896,6 +1036,22 @@ impl HeadService {
                 detail: format!("failed serializing attached_skills: {err}"),
             })?;
         let thinking_str = req.thinking_level.map(|t| t.as_str().to_owned());
+        if let Some(conn_id) = req.preferred_connection_id {
+            let exists: bool = tx
+                .query_one(
+                    "SELECT EXISTS(SELECT 1 FROM provider_connections WHERE connection_id = $1)",
+                    &[&conn_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                .get(0);
+            if !exists {
+                return Err(DennettError::NotFound {
+                    resource: String::from("provider_connection"),
+                    id: conn_id.to_string(),
+                });
+            }
+        }
 
         tx.execute(
             "INSERT INTO agents (agent_id, name, description, current_config_version_id)
@@ -914,8 +1070,9 @@ impl HeadService {
             "INSERT INTO agent_config_versions (
                 config_version_id, agent_id, version_number, system_prompt,
                 model_preference, thinking_level, allowed_memory_scopes,
-                workspace_write_policy, default_budget, attached_skills
-             ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9)",
+                workspace_write_policy, default_budget, attached_skills,
+                preferred_connection_id
+             ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10)",
             &[
                 &config_version_id.as_uuid(),
                 &agent_id.as_uuid(),
@@ -926,6 +1083,8 @@ impl HeadService {
                 &write_policy_json,
                 &default_budget_json,
                 &attached_skills_json,
+                &req.preferred_connection_id
+                    .map(ProviderConnectionId::as_uuid),
             ],
         )
         .await
@@ -1075,13 +1234,30 @@ impl HeadService {
                 detail: format!("failed serializing attached_skills: {err}"),
             })?;
         let thinking_str = req.thinking_level.map(|t| t.as_str().to_owned());
+        if let Some(conn_id) = req.preferred_connection_id {
+            let exists: bool = tx
+                .query_one(
+                    "SELECT EXISTS(SELECT 1 FROM provider_connections WHERE connection_id = $1)",
+                    &[&conn_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                .get(0);
+            if !exists {
+                return Err(DennettError::NotFound {
+                    resource: String::from("provider_connection"),
+                    id: conn_id.to_string(),
+                });
+            }
+        }
 
         tx.execute(
             "INSERT INTO agent_config_versions (
                 config_version_id, agent_id, version_number, system_prompt,
                 model_preference, thinking_level, allowed_memory_scopes,
-                workspace_write_policy, default_budget, attached_skills
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                workspace_write_policy, default_budget, attached_skills,
+                preferred_connection_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
             &[
                 &new_version_id.as_uuid(),
                 &agent_id.as_uuid(),
@@ -1093,6 +1269,8 @@ impl HeadService {
                 &write_policy_json,
                 &default_budget_json,
                 &attached_skills_json,
+                &req.preferred_connection_id
+                    .map(ProviderConnectionId::as_uuid),
             ],
         )
         .await
@@ -1165,7 +1343,8 @@ impl HeadService {
                 "SELECT config_version_id, agent_id, version_number, system_prompt,
                         model_preference, thinking_level, allowed_memory_scopes,
                         workspace_write_policy, default_budget, attached_skills,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
+                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+                        preferred_connection_id
                  FROM agent_config_versions
                  WHERE agent_id = $1
                  ORDER BY version_number ASC",
@@ -2235,6 +2414,24 @@ impl HeadService {
                 }
             }
         }
+        // Resolve active A08 capabilities (trusted & enabled skills + MCP servers with SecretBroker env).
+        let resolved_caps = match self
+            .resolve_active_capabilities_for_session(
+                project_id_opt,
+                &input.agent.current_config.attached_skills,
+            )
+            .await
+        {
+            Ok(caps) => caps,
+            Err(error) => {
+                return Err(CoreTurnFailure {
+                    error,
+                    effective_elapsed_ms: 0,
+                    captured_decisions: Vec::new(),
+                });
+            }
+        };
+        mcp_servers.extend(resolved_caps.extra_mcp_servers);
         let turn_secrets = self.collect_turn_secrets(&mcp_servers);
 
         let start_outcome = match input
@@ -2247,6 +2444,7 @@ impl HeadService {
                 thinking_level: input.agent.current_config.thinking_level,
                 workspace_write_policy: effective_write_policy.clone(),
                 mcp_servers,
+                active_skills: resolved_caps.active_skills,
                 existing_binding: input.existing_binding,
                 history_for_rehydrate: input.prior_history,
                 allow_rehydrate: true,
@@ -2268,6 +2466,7 @@ impl HeadService {
             .upsert_runtime_binding(
                 input.session_id,
                 &start_outcome,
+                input.connection_id,
                 &input.correlation_id,
                 Some(input.run_id),
             )
@@ -2284,14 +2483,15 @@ impl HeadService {
             }
         };
 
-        // Load live lifecycle state + delegated parent ceiling right before turn starts.
-        let (live_rules, live_lifecycle, live_ws_bound, live_parent_ceiling) =
+        // Load live lifecycle state + delegated parent ceiling + budget exhaustion right before turn starts.
+        let (live_rules, live_lifecycle, live_ws_bound, live_parent_ceiling, live_budget_exhausted) =
             match self.load_live_policy_inputs(project_id_opt, task_id).await {
                 Ok(live) => (
                     live.rules,
                     live.project_lifecycle_state,
                     live.workspace_bound,
                     live.parent_write_ceiling,
+                    live.task_budget_exhausted,
                 ),
                 Err(_) => (
                     input.policy_rules,
@@ -2306,6 +2506,7 @@ impl HeadService {
                     project_id_opt
                         .is_none()
                         .then_some(WorkspaceWritePolicy::DenyAll),
+                    false,
                 ),
             };
 
@@ -2320,6 +2521,8 @@ impl HeadService {
             workspace_write_policy: effective_write_policy,
             parent_write_ceiling: live_parent_ceiling,
             allowed_memory_scopes: input.agent.current_config.allowed_memory_scopes.clone(),
+            registered_mcp_servers: resolved_caps.registered_mcp_server_names,
+            task_budget_exhausted: live_budget_exhausted,
             rules: live_rules,
         };
         let (interactive_policy, decisions_buf) = InteractivePolicyEvaluator::new(
@@ -2612,6 +2815,12 @@ impl HeadService {
             (session, agent, project, binding, history, rules)
         };
 
+        // Resolve target runtime strictly before persisting the run (fail closed without silent fallback!).
+        let resolved_runtime = self
+            .resolve_runtime_for_turn(agent.current_config.preferred_connection_id, None)
+            .await?;
+        let runtime_adapter_for_audit = resolved_runtime.runtime.adapter_id().to_owned();
+
         // 2. Acquire unified per-session execution lock + active run slot (`H2-05`).
         let session_lock = self.session_exec_lock(session_id).await;
         let Ok(session_guard) = session_lock.try_lock_owned() else {
@@ -2793,7 +3002,7 @@ impl HeadService {
                             "started run {run_id} for agent `{}` config v{} adapter={}",
                             agent.name,
                             agent.current_config.version_number,
-                            self.inner.runtime.adapter_id()
+                            runtime_adapter_for_audit
                         ),
                     )
                     .await?;
@@ -2885,7 +3094,8 @@ impl HeadService {
         // 4. Spawn the turn in a DETACHED task owned by `HeadService` (`D2-ARCH-01` / `V03`).
         //    HTTP disconnects drop ONLY the awaiter below — the detached worker completes cleanly!
         let svc = self.clone();
-        let runtime = Arc::clone(&self.inner.runtime);
+        let runtime = resolved_runtime.runtime;
+        let connection_id = resolved_runtime.connection_id;
         let session_kind = session.session_kind;
         tokio::spawn(async move {
             let session_guard = session_guard;
@@ -2907,6 +3117,7 @@ impl HeadService {
                     policy_rules,
                     prompt_text: effective_prompt,
                     runtime,
+                    connection_id,
                     turn_timeout,
                     approval_timeout,
                     cancel_rx,
@@ -3429,6 +3640,8 @@ impl HeadService {
             workspace_write_policy,
             parent_write_ceiling: live.parent_write_ceiling,
             allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: live.task_budget_exhausted,
             rules: live.rules,
         };
         let engine = PolicyEngine::new(ctx);
@@ -4026,6 +4239,7 @@ impl HeadService {
         &self,
         session_id: SessionId,
         outcome: &dennett_runtime_antigravity::SessionStartOutcome,
+        connection_id: Option<ProviderConnectionId>,
         correlation_id: &CorrelationId,
         run_id: Option<RunId>,
     ) -> Result<RuntimeBinding, DennettError> {
@@ -4041,8 +4255,9 @@ impl HeadService {
             .query_one(
                 "INSERT INTO runtime_bindings (
                     binding_id, session_id, adapter_id, auth_profile, tier, agy_version,
-                    provider_session_id, workspace_cwd, is_simulated, rehydrate_count
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    provider_session_id, workspace_cwd, is_simulated, rehydrate_count,
+                    connection_id, endpoint_fingerprint
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT (session_id)
                  DO UPDATE SET
                     adapter_id = EXCLUDED.adapter_id,
@@ -4053,11 +4268,14 @@ impl HeadService {
                     workspace_cwd = EXCLUDED.workspace_cwd,
                     is_simulated = EXCLUDED.is_simulated,
                     rehydrate_count = runtime_bindings.rehydrate_count + EXCLUDED.rehydrate_count,
+                    connection_id = EXCLUDED.connection_id,
+                    endpoint_fingerprint = EXCLUDED.endpoint_fingerprint,
                     updated_at = now()
                  RETURNING binding_id, session_id, adapter_id, auth_profile, tier, agy_version,
                            provider_session_id, workspace_cwd, is_simulated, rehydrate_count,
                            TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                           TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint",
+                           TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
+                           connection_id, endpoint_fingerprint",
                 &[
                     &binding_id.as_uuid(),
                     &session_id.as_uuid(),
@@ -4069,6 +4287,8 @@ impl HeadService {
                     &outcome.workspace_cwd,
                     &outcome.is_simulated,
                     &rehydrate_inc,
+                    &connection_id.map(ProviderConnectionId::as_uuid),
+                    &outcome.endpoint_fingerprint.as_deref(),
                 ],
             )
             .await
@@ -4542,25 +4762,33 @@ impl HeadService {
             })
     }
 
-    fn memory_client_for_scopes(
+    pub(crate) fn memory_client_with_capabilities(
         &self,
         scopes: BTreeSet<MemoryScope>,
-        allow_write: bool,
+        caps: BTreeSet<MemoryCapability>,
     ) -> Result<Option<MemoryClient>, DennettError> {
         if let Some(ref signer) = self.inner.memory_hmac_signer
             && let Some(base_url) = self.memory_base_url()
             && !scopes.is_empty()
         {
-            let mut caps = BTreeSet::new();
-            caps.insert(MemoryCapability::Read);
-            if allow_write {
-                caps.insert(MemoryCapability::Write);
-            }
             let principal = PrincipalId::try_new("dennett-head")?;
             let token = signer.mint_scoped_token(principal, scopes, caps)?;
             return Ok(Some(MemoryClient::new(base_url, token)?));
         }
         Ok(self.inner.memory_client.clone())
+    }
+
+    fn memory_client_for_scopes(
+        &self,
+        scopes: BTreeSet<MemoryScope>,
+        allow_write: bool,
+    ) -> Result<Option<MemoryClient>, DennettError> {
+        let mut caps = BTreeSet::new();
+        caps.insert(MemoryCapability::Read);
+        if allow_write {
+            caps.insert(MemoryCapability::Write);
+        }
+        self.memory_client_with_capabilities(scopes, caps)
     }
 
     async fn collect_registered_project_scopes(
@@ -4585,19 +4813,99 @@ impl HeadService {
         Ok(scopes)
     }
 
+    pub(crate) async fn collect_all_known_memory_scopes(
+        &self,
+    ) -> Result<BTreeSet<MemoryScope>, DennettError> {
+        let mut scopes = self.collect_registered_project_scopes().await?;
+        if let Ok(standalone) = MemoryScope::try_new("chat:standalone") {
+            scopes.insert(standalone);
+        }
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let agent_rows = conn
+            .query(
+                "SELECT v.allowed_memory_scopes
+                 FROM agents a
+                 JOIN agent_config_versions v ON v.config_version_id = a.current_config_version_id",
+                &[],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        for row in agent_rows {
+            if let Ok(vec_scopes) =
+                serde_json::from_value::<Vec<MemoryScope>>(row.get::<_, serde_json::Value>(0))
+            {
+                scopes.extend(vec_scopes);
+            }
+        }
+        Ok(scopes)
+    }
+
+    pub(crate) fn secret_cipher(&self) -> &SecretCipher {
+        &self.inner.secret_cipher
+    }
+
+    pub(crate) fn env_gemini_api_key(&self) -> Option<String> {
+        if let Some(ref forced) = self.inner.gemini_api_key_env_override {
+            return forced
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
+        }
+        std::env::var("DENNETT_GEMINI_API_KEY")
+            .ok()
+            .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub(crate) fn dynamic_runtimes_lock(
+        &self,
+    ) -> &Arc<Mutex<HashMap<ProviderConnectionId, CachedDynamicRuntime>>> {
+        &self.inner.dynamic_runtimes
+    }
+
+    pub(crate) fn background_runtime(&self) -> Option<&Arc<dyn AgentRuntimePort>> {
+        self.inner.background_runtime.as_ref()
+    }
+
+    pub(crate) fn allow_non_loopback_local_runtime(&self) -> bool {
+        self.inner.allow_non_loopback_local_runtime
+    }
+
+    pub(crate) fn antigravity_profile_root(&self) -> PathBuf {
+        self.inner.antigravity_profile_root.clone()
+    }
+
+    pub(crate) fn antigravity_binary(&self) -> Option<PathBuf> {
+        self.inner.antigravity_binary.clone()
+    }
+
+    pub(crate) fn resolve_personal_profile_dir(&self) -> Option<PathBuf> {
+        if let Some(ref explicit) = self.inner.personal_profile_dir {
+            return Some(explicit.clone());
+        }
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|v| !v.is_empty())?;
+        Some(PathBuf::from(home).join(".gemini"))
+    }
+
+    pub(crate) async fn invalidate_runtime_catalog_cache(&self) {
+        let mut cache_guard = self.inner.runtime_catalog_cache.lock().await;
+        *cache_guard = None;
+    }
+
+    pub(crate) fn record_memory_status_pub(&self, status: MemoryStatus) {
+        self.record_memory_status(status);
+    }
+
     pub(crate) fn pg_target(&self) -> &ValidatedControlPgTarget {
         &self.inner.pg_target
     }
 
     pub(crate) fn runtime(&self) -> &Arc<dyn AgentRuntimePort> {
         &self.inner.runtime
-    }
-
-    pub(crate) fn runtime_for_profile(
-        &self,
-        override_profile: Option<RuntimeAuthProfile>,
-    ) -> Result<Arc<dyn AgentRuntimePort>, DennettError> {
-        self.runtime_router().for_profile(override_profile)
     }
 
     pub(crate) fn effect_port(&self) -> &Arc<dyn ExternalEffectPort> {
@@ -4756,15 +5064,27 @@ impl HeadService {
     }
 
     pub(crate) fn collect_turn_secrets(&self, mcp_servers: &[RuntimeMcpServerSpec]) -> Vec<String> {
-        let mut turn_secrets = self.inner.secrets_to_redact.clone();
+        let mut turn_secrets: Vec<String> = self
+            .inner
+            .secrets_to_redact
+            .read()
+            .map_or_default(|g| g.clone());
         for server in mcp_servers {
             for entry in &server.env {
-                if matches!(
+                let name_upper = entry.name.to_ascii_uppercase();
+                let is_sensitive = matches!(
                     entry.name.as_str(),
                     "DENNETT_MEMORY_TOKEN" | "DENNETT_CONTROL_TOKEN"
-                ) && !entry.value.trim().is_empty()
+                ) || name_upper.contains("TOKEN")
+                    || name_upper.contains("SECRET")
+                    || name_upper.contains("KEY")
+                    || name_upper.contains("PASS")
+                    || name_upper.contains("AUTH")
+                    || name_upper.contains("CREDENTIAL");
+                let trimmed = entry.value.trim();
+                if is_sensitive && trimmed.len() >= 3 && !turn_secrets.iter().any(|s| s == trimmed)
                 {
-                    turn_secrets.push(entry.value.clone());
+                    turn_secrets.push(trimmed.to_owned());
                 }
             }
         }
@@ -5115,6 +5435,10 @@ fn infer_artifact_mime_type(name: &str) -> &'static str {
         Some("html" | "htm") => "text/html",
         _ => "text/markdown",
     }
+}
+
+pub(crate) fn detect_os_account_label_pub() -> Option<String> {
+    detect_os_account_label()
 }
 
 fn detect_os_account_label() -> Option<String> {
