@@ -461,7 +461,7 @@ impl HeadService {
                 });
             }
             let session = fetch_session(&tx, req.session_id, self.pg_target()).await?;
-            if session.project_id != req.project_id {
+            if session.project_id != Some(req.project_id) {
                 return Err(DennettError::AccessDenied {
                     scope: format!("project:{}", req.project_id),
                     reason: format!(
@@ -500,7 +500,7 @@ impl HeadService {
                 PathBuf::from,
             );
             let engine = PolicyEngine::new(PolicyContext {
-                project_id: project.project_id,
+                project_id: Some(project.project_id),
                 project_lifecycle_state: project.lifecycle_state,
                 workspace_bound: project.workspace_path.is_some(),
                 agent_id: agent.agent_id,

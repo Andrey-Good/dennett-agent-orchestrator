@@ -23,26 +23,34 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use dennett_contracts::{
-    BudgetExceedPolicy, CommitMemoryNoteRequest, CorrelationId, CreateAgentRequest,
-    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
-    DennettError, DispatchEffectRequest, ExternalEffectStatus, IdempotencyKey, InboxCardKind,
-    InboxCardStatus, InboxResolutionAction, ManualEffectResolution, MemoryOutboxStatus,
-    MemoryScope, MissedRunPolicy, PermissionRequestStatus, PermissionResolutionDecision,
-    PolicyEffect, ProfileMode, ProjectLifecycleState, ReconcileEffectRequest, ReplyTaskRequest,
-    ResolveInboxCardRequest, ResolvePermissionRequest, RunStatus, RuntimeAuthProfile, ScheduleKind,
-    SendAgentMessageRequest, SendMessageRequest, SessionKind, SimEffectBehavior, TaskBudget,
+    ArtifactCompleteness, ArtifactLifecycleAction, ArtifactLifecycleRequest,
+    ArtifactLifecycleState, BudgetExceedPolicy, CommitMemoryNoteRequest, CorrelationId,
+    CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest,
+    CreateSessionRequest, CreateTaskRequest, DennettError, DispatchEffectRequest,
+    ExternalEffectStatus, IdempotencyKey, InboxCardKind, InboxCardStatus, InboxResolutionAction,
+    ManualEffectResolution, MemoryOutboxStatus, MemoryScope, MissedRunPolicy,
+    PermissionRequestStatus, PermissionResolutionDecision, PolicyEffect, ProfileMode,
+    ProjectLifecycleState, ReconcileEffectRequest, ReplyTaskRequest, ResolveInboxCardRequest,
+    ResolvePermissionRequest, RunStatus, RuntimeAuthProfile, ScheduleKind, SendAgentMessageRequest,
+    SendMessageRequest, SessionId, SessionKind, SessionStatus, SimEffectBehavior, TaskBudget,
     TaskSchedule, TaskSignalRequest, TaskStatus, TimerPauseReason, TimestampMs,
     UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_head::{
     CONTROL_MIGRATIONS, HeadAppState, HeadService, HeadServiceExtras, MAX_CONCURRENT_REQUESTS,
-    ValidatedControlPgTarget, build_head_router, compute_next_fire_at_pg,
+    MemoryMcpWiring, MemoryTokenSigner, ValidatedControlPgTarget, build_head_router,
+    compute_next_fire_at_pg,
 };
 use dennett_head_client::HeadClient;
 use dennett_memory_client::MemoryClient;
-use dennett_runtime_antigravity::SimulatedRuntime;
+use dennett_runtime_antigravity::{
+    AgentRuntimePort, BoxFuture, PolicyEvaluator, RuntimeDescriptor, RuntimeEvent,
+    SessionStartOutcome, SessionStartRequest, SimulatedRuntime, TurnOutcome, TurnRequest,
+};
 use tokio::net::TcpListener;
 use tokio::sync::{Barrier, Semaphore, watch};
 use tokio::time;
@@ -299,7 +307,7 @@ async fn r1_arch_02_archive_unarchive_pause_reason_and_periodic_task_mid_run() {
         .create_session(
             CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("Active Chat Before Archive"),
                 session_kind: SessionKind::UserChat,
             },
@@ -383,6 +391,7 @@ async fn r1_arch_02_archive_unarchive_pause_reason_and_periodic_task_mid_run() {
             UpdateProjectRequest {
                 name: Some(String::from("Blocked Rename")),
                 workspace_path: None,
+                pinned: None,
             },
             &cid,
         )
@@ -887,7 +896,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
         .create_session(
             CreateSessionRequest {
                 agent_id: no_scope_agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("Zero Scope Chat"),
                 session_kind: SessionKind::UserChat,
             },
@@ -1048,6 +1057,7 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
             UpdateProjectRequest {
                 name: None,
                 workspace_path: Some(ws_dir.to_string_lossy().into_owned()),
+                pinned: None,
             },
             &cid,
         )
@@ -1420,7 +1430,7 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
         .create_session(
             CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("Unrelated User Chat"),
                 session_kind: SessionKind::UserChat,
             },
@@ -1560,7 +1570,8 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
         .update_session(
             wait_task.session_id,
             UpdateSessionRequest {
-                title: String::from("Renamed Session Event Check"),
+                title: Some(String::from("Renamed Session Event Check")),
+                pinned: None,
             },
             &cid,
         )
@@ -1751,10 +1762,10 @@ async fn r1_over_01_v5_to_v6_memory_outbox_migration_and_ordered_drain() {
     )
     .expect("construct HeadService");
     let cid = CorrelationId::generate();
-    let _ = svc.ensure_migrated().await.expect("apply v6 migration");
+    let _ = svc.ensure_migrated().await.expect("apply v7 migration");
 
     let health_before = svc.health_check(cid.clone()).await.expect("health before");
-    assert_eq!(health_before.schema_version, Some(6));
+    assert_eq!(health_before.schema_version, Some(7));
     assert_eq!(
         health_before.pending_outbox_count, 1,
         "D2-OVER-01: legacy v5 row must appear as pending_outbox_count=1 in ordered_outbox"
@@ -1879,7 +1890,7 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
         .create_session(
             &CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj_a.project_id,
+                project_id: Some(proj_a.project_id),
                 title: String::from("Schedule Request Chat"),
                 session_kind: SessionKind::UserChat,
             },
@@ -2036,6 +2047,892 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
     assert!(
         matches!(recursive_create, Err(DennettError::AccessDenied { .. })),
         "dct1. token from TaskRun session must be denied creating new tasks: {recursive_create:?}"
+    );
+
+    let _ = shutdown_tx.send(true);
+    let _ = server_handle.await;
+    drop(svc);
+    drop_isolated_schema(&base_url, &schema).await;
+}
+
+struct InspectingSimulatedRuntime {
+    inner: SimulatedRuntime,
+    captured_starts: Arc<std::sync::Mutex<Vec<SessionStartRequest>>>,
+}
+
+impl InspectingSimulatedRuntime {
+    fn new() -> (Self, Arc<std::sync::Mutex<Vec<SessionStartRequest>>>) {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        (
+            Self {
+                inner: SimulatedRuntime::new(RuntimeAuthProfile::OAuthPersonal),
+                captured_starts: Arc::clone(&captured),
+            },
+            captured,
+        )
+    }
+}
+
+impl AgentRuntimePort for InspectingSimulatedRuntime {
+    fn adapter_id(&self) -> &str {
+        self.inner.adapter_id()
+    }
+
+    fn auth_profile(&self) -> RuntimeAuthProfile {
+        self.inner.auth_profile()
+    }
+
+    fn is_simulated(&self) -> bool {
+        self.inner.is_simulated()
+    }
+
+    fn probe(&self) -> BoxFuture<'_, Result<RuntimeDescriptor, DennettError>> {
+        self.inner.probe()
+    }
+
+    fn start_or_resume_session(
+        &self,
+        req: SessionStartRequest,
+    ) -> BoxFuture<'_, Result<SessionStartOutcome, DennettError>> {
+        if let Ok(mut guard) = self.captured_starts.lock() {
+            guard.push(req.clone());
+        }
+        self.inner.start_or_resume_session(req)
+    }
+
+    fn send_prompt_turn(
+        &self,
+        req: TurnRequest,
+        policy: Arc<dyn PolicyEvaluator>,
+        event_tx: Option<tokio::sync::mpsc::Sender<RuntimeEvent>>,
+    ) -> BoxFuture<'_, Result<TurnOutcome, DennettError>> {
+        self.inner.send_prompt_turn(req, policy, event_tx)
+    }
+
+    fn cancel_turn(&self, session_id: SessionId) -> BoxFuture<'_, Result<bool, DennettError>> {
+        self.inner.cancel_turn(session_id)
+    }
+
+    fn close_session(&self, session_id: SessionId) -> BoxFuture<'_, Result<(), DennettError>> {
+        self.inner.close_session(session_id)
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies standalone chat creation, DenyAll runtime isolation, memory MCP scoping, auto-title, inline artifacts, task rejection, running snapshot visibility, and survival across project archive/delete against real PG16"
+)]
+async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_project_delete() {
+    let (base_url, _) = require_control_pg_target();
+    let short = &Uuid::new_v4().simple().to_string()[..12];
+    let schema = format!("r1_standalone_{short}");
+    let (pg_client, pg_conn) = tokio_postgres::connect(&base_url, NoTls)
+        .await
+        .expect("connect PG");
+    tokio::spawn(async move {
+        let _ = pg_conn.await;
+    });
+    pg_client
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .expect("create schema");
+    drop(pg_client);
+
+    let iso_url = with_isolated_schema_url(&base_url, &schema);
+    let iso_target = ValidatedControlPgTarget::resolve_from_sources(
+        None,
+        Some(&iso_url),
+        None,
+        ProfileMode::TestIsolated,
+    )
+    .expect("resolve")
+    .expect("target");
+
+    let managed_root = env::temp_dir().join(format!("dennett-standalone-root-{short}"));
+    let proj_ws = env::temp_dir().join(format!("dennett-standalone-projws-{short}"));
+    fs::create_dir_all(&proj_ws).expect("create proj ws");
+    fs::write(proj_ws.join("readme.txt"), "hello").expect("write readme");
+
+    let (inspecting_rt, captured_starts) = InspectingSimulatedRuntime::new();
+    let hmac_signer =
+        MemoryTokenSigner::new(b"standalone-chat-hmac-secret-32-bytes!".to_vec()).expect("signer");
+    let control_mcp_bin = locate_control_mcp_bin();
+    let svc = HeadService::new_with_extras(
+        iso_target,
+        Arc::new(inspecting_rt),
+        None,
+        Some(MemoryMcpWiring {
+            binary_path: PathBuf::from("dennett-memory-mcp"),
+            memory_url: String::from("http://127.0.0.1:18080"),
+            memory_token: String::new(),
+        }),
+        ProfileMode::TestIsolated,
+        Vec::new(),
+        HeadServiceExtras {
+            memory_hmac_signer: Some(hmac_signer),
+            control_mcp_bin: Some(control_mcp_bin),
+            detached_projects_root: Some(managed_root.clone()),
+            ..HeadServiceExtras::default()
+        },
+    )
+    .expect("construct HeadService");
+    let _ = svc.ensure_migrated().await.expect("migrate v7");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let head_url = format!("http://{}", listener.local_addr().expect("addr"));
+    svc.set_self_http_url(&head_url);
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let app = build_head_router(HeadAppState {
+        service: Some(svc.clone()),
+        profile_mode: ProfileMode::TestIsolated,
+        runtime_adapter_id: String::from("simulated"),
+        runtime_is_simulated: true,
+        allow_non_loopback: false,
+        shutdown_tx: shutdown_tx.clone(),
+        request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+    });
+    let server_handle = tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            while !*shutdown_rx.borrow() {
+                if shutdown_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await;
+    });
+
+    let client = HeadClient::new(&head_url).expect("client");
+    let health = client.healthz(None).await.expect("healthz");
+    assert_eq!(health.schema_version, Some(7));
+
+    let project_scope = unique_scope("standalone-proj");
+    let standalone_scope = MemoryScope::try_new("chat:standalone").expect("standalone scope");
+    let project = client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Disposable Project"),
+                workspace_path: Some(proj_ws.to_string_lossy().into_owned()),
+                memory_scope: Some(project_scope.clone()),
+            },
+            None,
+        )
+        .await
+        .expect("create project");
+
+    // Deliberately give the standalone agent `AllowWorkspace` to prove Head FORCES `DenyAll`!
+    let standalone_agent = client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("Standalone Assistant"),
+                description: String::from("General chat without bound project"),
+                system_prompt: String::from("Answer questions concisely."),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::from([standalone_scope.clone()]),
+                workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+                default_budget: None,
+                attached_skills: Vec::new(),
+            },
+            None,
+        )
+        .await
+        .expect("create standalone agent");
+
+    // 1. Standalone chat creation with `project_id: None` succeeds; `TaskRun` with `project_id: None` fails.
+    let bad_task_run = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: standalone_agent.agent_id,
+                project_id: None,
+                title: String::from("Illegal Standalone TaskRun"),
+                session_kind: SessionKind::TaskRun,
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(bad_task_run, Err(DennettError::InvalidInput { .. })),
+        "standalone TaskRun session must be rejected: {bad_task_run:?}"
+    );
+
+    let standalone_session = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: standalone_agent.agent_id,
+                project_id: None,
+                title: String::from("Новый чат"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("create standalone session");
+    assert!(standalone_session.project_id.is_none());
+    assert!(!standalone_session.pinned);
+    assert!(standalone_session.pinned_at.is_none());
+
+    // Project chat in the disposable project (will be closed when project is deleted).
+    let project_session = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: standalone_agent.agent_id,
+                project_id: Some(project.project_id),
+                title: String::from("Project Bound Chat"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("create project session");
+    assert_eq!(project_session.project_id, Some(project.project_id));
+
+    // 2. Creating a durable task on a standalone session MUST be rejected with InvalidInput!
+    let bad_task = client
+        .create_task(
+            &CreateTaskRequest {
+                project_id: project.project_id,
+                agent_id: standalone_agent.agent_id,
+                session_id: Some(standalone_session.session_id),
+                parent_task_id: None,
+                title: Some(String::from("Blocked Task")),
+                goal: String::from("Must fail"),
+                schedule: None,
+                wait_for_signal: None,
+                budget: None,
+                attached_skills: Vec::new(),
+                auth_profile_override: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(bad_task, Err(DennettError::InvalidInput { .. })),
+        "create_task on standalone session must fail with InvalidInput: {bad_task:?}"
+    );
+
+    // 3. Live turn on standalone chat:
+    //    - Auto-titles from first user message;
+    //    - Forces `DenyAll` and isolated `<managed_root>/standalone-sessions/<session_id>` cwd;
+    //    - Mounts ONLY `dennett-memory` scoped to `chat:standalone` (NO `dennett-control-mcp`!);
+    //    - Emits partial inline artifact cleanly with `project_id = None`;
+    //    - Denies `write_file` outside the model even though agent config says `AllowWorkspace`!
+    let turn1 = client
+        .send_message(
+            standalone_session.session_id,
+            &SendMessageRequest {
+                content: String::from(
+                    "План архитектуры кэширования\n[SIM:TOOL:write_file:escape.txt|blocked]\n[SIM:PARTIAL_ARTIFACT:draft.md|# Draft Note]",
+                ),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("standalone turn 1");
+    assert_eq!(turn1.run.status, RunStatus::Succeeded);
+    assert_eq!(turn1.session_title, "План архитектуры кэширования");
+    assert!(
+        turn1
+            .permission_decisions
+            .iter()
+            .any(|d| d.tool_name == "write_file" && d.effect == PolicyEffect::Deny),
+        "standalone chat must deny write_file outside model even if agent has AllowWorkspace: {:?}",
+        turn1.permission_decisions
+    );
+    assert!(
+        turn1
+            .artifacts
+            .iter()
+            .any(|a| a.name == "draft.md" && a.project_id.is_none()),
+        "emitted partial artifact must be persisted with project_id=None: {:?}",
+        turn1.artifacts
+    );
+
+    // Inspect exact runtime start request captured by InspectingSimulatedRuntime!
+    let starts = captured_starts.lock().expect("lock captured").clone();
+    assert_eq!(starts.len(), 1);
+    let expected_suffix =
+        PathBuf::from("standalone-sessions").join(standalone_session.session_id.to_string());
+    assert!(
+        starts[0].workspace_cwd.ends_with(&expected_suffix),
+        "expected cwd under standalone-sessions/<session_id>, got: {:?}",
+        starts[0].workspace_cwd
+    );
+    assert_eq!(
+        starts[0].workspace_write_policy,
+        WorkspaceWritePolicy::DenyAll
+    );
+    assert!(
+        !starts[0]
+            .mcp_servers
+            .iter()
+            .any(|m| m.name == "dennett-control"),
+        "dennett-control-mcp MUST NOT be mounted on standalone chats: {:?}",
+        starts[0].mcp_servers
+    );
+    let mem_mcp = starts[0]
+        .mcp_servers
+        .iter()
+        .find(|m| m.name == "dennett-memory")
+        .expect("dennett-memory MCP must still be mounted for standalone agent scopes");
+    let mem_token = mem_mcp
+        .env
+        .iter()
+        .find(|e| e.name == "DENNETT_MEMORY_TOKEN")
+        .map(|e| e.value.as_str())
+        .expect("DENNETT_MEMORY_TOKEN");
+    let payload_b64 = mem_token.split('.').nth(1).expect("dnt1 payload segment");
+    let claims_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .expect("decode dnt1 claims");
+    let claims_json: serde_json::Value =
+        serde_json::from_slice(&claims_bytes).expect("parse claims JSON");
+    assert_eq!(
+        claims_json["allowed_scopes"],
+        serde_json::json!(["chat:standalone"]),
+        "standalone memory token must carry strictly agent's own scopes without leaking project scopes"
+    );
+
+    // 4. Inline artifact creation + lifecycle work cleanly; workspace-backed `relative_path` is rejected!
+    let bad_file_artifact = client
+        .create_artifact(
+            standalone_session.session_id,
+            &CreateArtifactRequest {
+                run_id: None,
+                name: String::from("readme.txt"),
+                mime_type: String::from("text/plain"),
+                content: None,
+                relative_path: Some(String::from("readme.txt")),
+                completeness_status: ArtifactCompleteness::Final,
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(bad_file_artifact, Err(DennettError::InvalidInput { .. })),
+        "workspace-backed relative_path artifact must be rejected on standalone chat: {bad_file_artifact:?}"
+    );
+
+    let inline_art = client
+        .create_artifact(
+            standalone_session.session_id,
+            &CreateArtifactRequest {
+                run_id: Some(turn1.run.run_id),
+                name: String::from("summary.md"),
+                mime_type: String::from("text/markdown"),
+                content: Some(String::from("# Standalone Summary")),
+                relative_path: None,
+                completeness_status: ArtifactCompleteness::Partial,
+            },
+            None,
+        )
+        .await
+        .expect("create inline artifact on standalone session");
+    assert!(inline_art.project_id.is_none());
+    let finalized = client
+        .apply_artifact_lifecycle(
+            standalone_session.session_id,
+            inline_art.artifact_id,
+            &ArtifactLifecycleRequest {
+                action: ArtifactLifecycleAction::Finalize,
+                reason: Some(String::from("done")),
+            },
+            None,
+        )
+        .await
+        .expect("finalize standalone artifact");
+    assert_eq!(
+        finalized.artifact.completeness_status,
+        ArtifactCompleteness::Final
+    );
+    assert!(finalized.artifact.project_id.is_none());
+
+    // 5. While a slow standalone turn is running, `get_state_snapshot(None, false)` MUST include it in `running_session_ids`!
+    let slow_client = HeadClient::new(&head_url).expect("slow client");
+    let slow_sid = standalone_session.session_id;
+    let slow_handle = tokio::spawn(async move {
+        slow_client
+            .send_message(
+                slow_sid,
+                &SendMessageRequest {
+                    content: String::from("[SIM:SLOW:700] check running snapshot"),
+                    timeout_ms: Some(15_000),
+                    client_message_id: None,
+                },
+                None,
+            )
+            .await
+    });
+    let mut observed_running = false;
+    for _ in 0..20 {
+        let snap = client
+            .get_state_snapshot(None, false, None)
+            .await
+            .expect("snapshot during slow standalone run");
+        if snap
+            .running_session_ids
+            .contains(&standalone_session.session_id)
+        {
+            observed_running = true;
+            break;
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        observed_running,
+        "get_state_snapshot must include active standalone session in running_session_ids"
+    );
+    let slow_res = slow_handle
+        .await
+        .expect("join slow")
+        .expect("slow standalone turn succeeded");
+    assert_eq!(slow_res.run.status, RunStatus::Succeeded);
+
+    // 6. Archive then delete the project -> project session disappears from snapshot, standalone chat + artifacts survive 100%!
+    let _ = client
+        .archive_project(project.project_id, None)
+        .await
+        .expect("archive project");
+    let _ = client
+        .delete_project(project.project_id, true, None)
+        .await
+        .expect("delete project");
+
+    let snap_after = client
+        .get_state_snapshot(None, true, None)
+        .await
+        .expect("snapshot after project delete");
+    assert!(
+        !snap_after
+            .sessions
+            .iter()
+            .any(|s| s.session_id == project_session.session_id),
+        "deleted project's session must be excluded from snapshot"
+    );
+    let surviving = snap_after
+        .sessions
+        .iter()
+        .find(|s| s.session_id == standalone_session.session_id)
+        .expect("standalone chat must survive project archive & delete");
+    assert!(surviving.project_id.is_none());
+    assert_eq!(surviving.status, SessionStatus::Active);
+
+    let detail_after = client
+        .get_session_detail(standalone_session.session_id, None)
+        .await
+        .expect("standalone session detail after project delete");
+    assert_eq!(detail_after.session.status, SessionStatus::Active);
+    assert!(
+        detail_after
+            .artifacts
+            .iter()
+            .any(|a| a.artifact_id == inline_art.artifact_id
+                && a.lifecycle_state == ArtifactLifecycleState::Active),
+        "standalone artifacts must survive project deletion untouched"
+    );
+
+    // Standalone chat still executes new turns after project deletion!
+    let turn_after = client
+        .send_message(
+            standalone_session.session_id,
+            &SendMessageRequest {
+                content: String::from("Still alive after project deletion"),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("standalone chat still works after project delete");
+    assert_eq!(turn_after.run.status, RunStatus::Succeeded);
+
+    let _ = shutdown_tx.send(true);
+    let _ = server_handle.await;
+    drop(svc);
+    let _ = fs::remove_dir_all(&managed_root);
+    let _ = fs::remove_dir_all(&proj_ws);
+    drop_isolated_schema(&base_url, &schema).await;
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies deterministic pinned-first sorting, pinned_at lifecycle, PATCH pin-only/title-only/combined/empty semantics, and live control_events for projects and sessions against PG16"
+)]
+async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_events() {
+    let (_iso_url, _target, svc, base_url, schema) =
+        make_isolated_schema_service_with_extras("pins", None, HeadServiceExtras::default()).await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let head_url = format!("http://{}", listener.local_addr().expect("addr"));
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let app = build_head_router(HeadAppState {
+        service: Some(svc.clone()),
+        profile_mode: ProfileMode::TestIsolated,
+        runtime_adapter_id: String::from("simulated"),
+        runtime_is_simulated: true,
+        allow_non_loopback: false,
+        shutdown_tx: shutdown_tx.clone(),
+        request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+    });
+    let server_handle = tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            while !*shutdown_rx.borrow() {
+                if shutdown_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await;
+    });
+
+    let client = HeadClient::new(&head_url).expect("client");
+    let p1 = client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Project 1"),
+                workspace_path: None,
+                memory_scope: None,
+            },
+            None,
+        )
+        .await
+        .expect("p1");
+    time::sleep(Duration::from_millis(15)).await;
+    let p2 = client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Project 2"),
+                workspace_path: None,
+                memory_scope: None,
+            },
+            None,
+        )
+        .await
+        .expect("p2");
+    time::sleep(Duration::from_millis(15)).await;
+    let p3 = client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Project 3"),
+                workspace_path: None,
+                memory_scope: None,
+            },
+            None,
+        )
+        .await
+        .expect("p3");
+
+    let initial_projects = client.list_projects(None).await.expect("list projects");
+    let initial_ids: Vec<_> = initial_projects
+        .projects
+        .iter()
+        .map(|p| p.project_id)
+        .collect();
+    assert_eq!(
+        initial_ids,
+        vec![p3.project_id, p2.project_id, p1.project_id]
+    );
+
+    let cursor_before_pin = client
+        .get_state_snapshot(None, false, None)
+        .await
+        .expect("snap before pin")
+        .snapshot_cursor
+        .committed_seq;
+
+    // 1. Pin P1 then P2 (pin-only PATCH) -> order must be [P2, P1, P3] in both list_projects and snapshot!
+    let p1_pinned = client
+        .update_project(
+            p1.project_id,
+            &UpdateProjectRequest {
+                name: None,
+                workspace_path: None,
+                pinned: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("pin p1");
+    assert!(p1_pinned.pinned);
+    let p1_pinned_at = p1_pinned.pinned_at.expect("p1 pinned_at set");
+
+    time::sleep(Duration::from_millis(15)).await;
+    let p2_pinned = client
+        .update_project(
+            p2.project_id,
+            &UpdateProjectRequest {
+                name: None,
+                workspace_path: None,
+                pinned: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("pin p2");
+    assert!(p2_pinned.pinned);
+    assert!(p2_pinned.pinned_at.expect("p2 pinned_at") > p1_pinned_at);
+
+    let after_pin_list = client.list_projects(None).await.expect("list after pin");
+    assert_eq!(
+        after_pin_list
+            .projects
+            .iter()
+            .map(|p| p.project_id)
+            .collect::<Vec<_>>(),
+        vec![p2.project_id, p1.project_id, p3.project_id]
+    );
+    let after_pin_snap = client
+        .get_state_snapshot(None, false, None)
+        .await
+        .expect("snap after pin");
+    assert_eq!(
+        after_pin_snap
+            .projects
+            .iter()
+            .map(|p| p.project_id)
+            .collect::<Vec<_>>(),
+        vec![p2.project_id, p1.project_id, p3.project_id]
+    );
+
+    // 2. Rename pinned P1 without specifying `pinned` -> preserves `pinned = true` and original `pinned_at`!
+    let p1_renamed = client
+        .update_project(
+            p1.project_id,
+            &UpdateProjectRequest {
+                name: Some(String::from("Project 1 Renamed")),
+                workspace_path: None,
+                pinned: None,
+            },
+            None,
+        )
+        .await
+        .expect("rename pinned p1");
+    assert!(p1_renamed.pinned);
+    assert_eq!(p1_renamed.pinned_at, Some(p1_pinned_at));
+    assert_eq!(p1_renamed.name, "Project 1 Renamed");
+
+    // 3. Unpin P2 -> pinned=false, pinned_at=None, P1 becomes first!
+    let p2_unpinned = client
+        .update_project(
+            p2.project_id,
+            &UpdateProjectRequest {
+                name: None,
+                workspace_path: None,
+                pinned: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("unpin p2");
+    assert!(!p2_unpinned.pinned);
+    assert!(p2_unpinned.pinned_at.is_none());
+    let after_unpin_projects = client.list_projects(None).await.expect("list after unpin");
+    assert_eq!(
+        after_unpin_projects
+            .projects
+            .iter()
+            .map(|p| p.project_id)
+            .collect::<Vec<_>>(),
+        vec![p1.project_id, p3.project_id, p2.project_id]
+    );
+
+    // 4. Sessions (both standalone & project chats): pin-only, title-only, combined, and empty rejection!
+    let agent = client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("Pin Test Agent"),
+                description: String::from("Test"),
+                system_prompt: String::from("Test"),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::new(),
+                workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                default_budget: None,
+                attached_skills: Vec::new(),
+            },
+            None,
+        )
+        .await
+        .expect("agent");
+
+    let c1 = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: agent.agent_id,
+                project_id: None,
+                title: String::from("Chat 1"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("c1");
+    time::sleep(Duration::from_millis(15)).await;
+    let c2 = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: agent.agent_id,
+                project_id: None,
+                title: String::from("Chat 2"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("c2");
+    time::sleep(Duration::from_millis(15)).await;
+    let c3 = client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: agent.agent_id,
+                project_id: None,
+                title: String::from("Chat 3"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("c3");
+
+    // Empty PATCH /v1/sessions/{id} fails with InvalidInput!
+    let empty_patch = client
+        .update_session(
+            c1.session_id,
+            &UpdateSessionRequest {
+                title: None,
+                pinned: None,
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(empty_patch, Err(DennettError::InvalidInput { .. })),
+        "empty PATCH /v1/sessions/{{id}} must fail with InvalidInput: {empty_patch:?}"
+    );
+
+    // Pin-only on C1, then pin-only on C2 -> order becomes [C2, C1, C3]!
+    let c1_pinned = client
+        .update_session(
+            c1.session_id,
+            &UpdateSessionRequest {
+                title: None,
+                pinned: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("pin c1");
+    assert!(c1_pinned.pinned);
+    assert_eq!(c1_pinned.title, "Chat 1");
+    let c1_pinned_at = c1_pinned.pinned_at.expect("c1 pinned_at");
+
+    time::sleep(Duration::from_millis(15)).await;
+    let c2_pinned = client
+        .update_session(
+            c2.session_id,
+            &UpdateSessionRequest {
+                title: None,
+                pinned: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("pin c2");
+    assert!(c2_pinned.pinned);
+    assert!(c2_pinned.pinned_at.expect("c2 pinned_at") > c1_pinned_at);
+
+    // Title-only on C1 preserves pin & pinned_at!
+    let c1_renamed = client
+        .update_session(
+            c1.session_id,
+            &UpdateSessionRequest {
+                title: Some(String::from("Chat 1 Renamed")),
+                pinned: None,
+            },
+            None,
+        )
+        .await
+        .expect("rename c1");
+    assert_eq!(c1_renamed.title, "Chat 1 Renamed");
+    assert!(c1_renamed.pinned);
+    assert_eq!(c1_renamed.pinned_at, Some(c1_pinned_at));
+
+    let ordered_sessions = client.list_sessions(None).await.expect("list sessions");
+    assert_eq!(
+        ordered_sessions
+            .sessions
+            .iter()
+            .map(|s| s.session_id)
+            .collect::<Vec<_>>(),
+        vec![c2.session_id, c1.session_id, c3.session_id]
+    );
+    let snap_sessions = client
+        .get_state_snapshot(None, false, None)
+        .await
+        .expect("snap sessions");
+    assert_eq!(
+        snap_sessions
+            .sessions
+            .iter()
+            .map(|s| s.session_id)
+            .collect::<Vec<_>>(),
+        vec![c2.session_id, c1.session_id, c3.session_id]
+    );
+
+    // Combined title + unpin on C2 -> unpinned and renamed; C1 stays #1!
+    let c2_unpinned = client
+        .update_session(
+            c2.session_id,
+            &UpdateSessionRequest {
+                title: Some(String::from("Chat 2 Unpinned")),
+                pinned: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("unpin and rename c2");
+    assert_eq!(c2_unpinned.title, "Chat 2 Unpinned");
+    assert!(!c2_unpinned.pinned);
+    assert!(c2_unpinned.pinned_at.is_none());
+
+    let final_sessions = client.list_sessions(None).await.expect("final sessions");
+    assert_eq!(final_sessions.sessions[0].session_id, c1.session_id);
+    assert!(final_sessions.sessions[0].pinned);
+
+    // 5. Verify live `project.updated` and `session.updated` control events were emitted with pin metadata!
+    let ev_stream = client
+        .get_events(cursor_before_pin, None, None, Some(200), None)
+        .await
+        .expect("get_events");
+    assert!(
+        ev_stream.events.iter().any(|e| {
+            e.event_type == "project.updated"
+                && e.project_id == Some(p1.project_id)
+                && e.payload_json.contains(r#""pinned":true"#)
+        }),
+        "expected project.updated control event with pinned=true"
+    );
+    assert!(
+        ev_stream.events.iter().any(|e| {
+            e.event_type == "session.updated"
+                && e.session_id == Some(c1.session_id)
+                && e.project_id.is_none()
+                && e.payload_json.contains(r#""pinned":true"#)
+        }),
+        "expected session.updated control event for standalone session with pinned=true"
     );
 
     let _ = shutdown_tx.send(true);

@@ -206,7 +206,7 @@ pub async fn list_sessions(
     bridge.list_sessions().await
 }
 
-/// Creates a new conversation session bound to an existing project and agent.
+/// Creates a new conversation session (project-bound or standalone when `project_id` is omitted/null).
 #[tauri::command]
 pub async fn create_session(
     state: State<'_, SharedBridge>,
@@ -322,7 +322,7 @@ pub async fn get_runtime_catalog(
     bridge.get_runtime_catalog(refresh.unwrap_or(false)).await
 }
 
-/// Renames a project or attaches/rebinds its workspace folder (`PATCH /v1/projects/{project_id}`).
+/// Renames a project, attaches/rebinds its workspace folder, and/or toggles pin state (`PATCH /v1/projects/{project_id}`).
 #[tauri::command]
 pub async fn update_project(
     state: State<'_, SharedBridge>,
@@ -348,7 +348,7 @@ pub async fn list_project_files(
         .await
 }
 
-/// Renames an existing conversation session inline (`PATCH /v1/sessions/{session_id}`).
+/// Renames an existing conversation session inline and/or toggles pin state (`PATCH /v1/sessions/{session_id}`).
 #[tauri::command]
 pub async fn update_session(
     state: State<'_, SharedBridge>,

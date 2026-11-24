@@ -228,7 +228,7 @@ async fn d2_timers_survive_head_restart_misfire_policies_and_concurrent_idempote
     let c1 = HeadClient::new(&head1.base_url).expect("head client 1");
     let health1 = c1.healthz(None).await.expect("health1");
     assert_eq!(health1.stage, "D2");
-    assert_eq!(health1.schema_version, Some(6));
+    assert_eq!(health1.schema_version, Some(7));
     assert!(health1.capabilities.iter().any(|c| c == "control.tasks.v1"));
 
     let proj = c1
@@ -994,7 +994,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .create_session(
             &CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("Approval Chat"),
                 session_kind: SessionKind::UserChat,
             },
@@ -1605,7 +1605,7 @@ async fn d2_clarification_budgets_client_idempotency_strict_lifecycle_and_dennet
         .create_session(
             &CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("Idempotency Session"),
                 session_kind: SessionKind::UserChat,
             },

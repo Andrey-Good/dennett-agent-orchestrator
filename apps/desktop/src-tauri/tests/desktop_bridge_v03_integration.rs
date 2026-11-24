@@ -19,7 +19,7 @@ use dennett_contracts::{
     PermissionResolutionDecision, PolicyEffect, ProjectLifecycleState, RebindProjectRequest,
     ReconcileEffectRequest, ResolvePermissionRequest, RevokeGrantRequest, SendMessageRequest,
     SessionKind, SimEffectBehavior, TaskStatus, ThinkingLevel, UpdateAgentConfigRequest,
-    UpdateTaskRequest, WorkspaceWritePolicy,
+    UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest, WorkspaceWritePolicy,
 };
 use dennett_desktop_lib::{BridgeError, HeadBridge, HeadEndpointPolicy};
 use serde_json::json;
@@ -322,7 +322,7 @@ async fn run_v03_session_and_drop_bridge(
     let session = bridge
         .create_session(&CreateSessionRequest {
             agent_id: agent.agent_id,
-            project_id: project.project_id,
+            project_id: Some(project.project_id),
             title: String::from("V03 Persistence Chat"),
             session_kind: SessionKind::UserChat,
         })
@@ -503,7 +503,7 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
     let session = bridge
         .create_session(&CreateSessionRequest {
             agent_id: agent.agent_id,
-            project_id: project.project_id,
+            project_id: Some(project.project_id),
             title: String::from("V02 Outage Session"),
             session_kind: SessionKind::UserChat,
         })
@@ -636,7 +636,7 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
     let session = bridge
         .create_session(&CreateSessionRequest {
             agent_id: agent.agent_id,
-            project_id: project.project_id,
+            project_id: Some(project.project_id),
             title: String::from("D2 Interactive Approval Chat"),
             session_kind: SessionKind::UserChat,
         })
@@ -1174,7 +1174,7 @@ async fn d2_desktop_bridge_client_message_id_dedup_project_lifecycle_and_artifac
     let session = bridge
         .create_session(&CreateSessionRequest {
             agent_id: agent.agent_id,
-            project_id: project.project_id,
+            project_id: Some(project.project_id),
             title: String::from("D2 Dedup Session"),
             session_kind: SessionKind::UserChat,
         })
@@ -1370,4 +1370,158 @@ async fn d2_desktop_bridge_client_message_id_dedup_project_lifecycle_and_artifac
     memoryd.shutdown().await;
     let _ = fs::remove_dir_all(&ws_a);
     let _ = fs::remove_dir_all(&ws_b);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end HeadBridge test covering standalone chats, inline artifacts, and project/session pinning against live dennett-head + PG16"
+)]
+async fn desktop_bridge_standalone_chats_and_pinning_roundtrip() {
+    let (mem_pg_base, ctrl_pg_base) = require_pg_urls();
+    let ctrl_pg = with_isolated_control_schema(&ctrl_pg_base, "v7bridge");
+    let scope = MemoryScope::try_new("chat:standalone").expect("scope");
+    let mem_token = "v7-bridge-standalone-token";
+
+    let memoryd = RunningDaemon::spawn_memoryd(&mem_pg_base, mem_token, scope.as_str()).await;
+    let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
+
+    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
+        .expect("construct HeadBridge");
+
+    let agent = bridge
+        .create_agent(&CreateAgentRequest {
+            name: String::from("Bridge Standalone Agent"),
+            description: String::from("Desktop bridge standalone chat verification"),
+            system_prompt: String::from("Respond clearly."),
+            model_preference: None,
+            thinking_level: None,
+            allowed_memory_scopes: BTreeSet::from([scope]),
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            default_budget: None,
+            attached_skills: Vec::new(),
+        })
+        .await
+        .expect("create_agent");
+
+    let proj_a = bridge
+        .create_project(&CreateProjectRequest {
+            name: String::from("Bridge Project A"),
+            workspace_path: None,
+            memory_scope: None,
+        })
+        .await
+        .expect("create proj A");
+    time::sleep(Duration::from_millis(15)).await;
+    let proj_b = bridge
+        .create_project(&CreateProjectRequest {
+            name: String::from("Bridge Project B"),
+            workspace_path: None,
+            memory_scope: None,
+        })
+        .await
+        .expect("create proj B");
+
+    // Pin Project A via HeadBridge -> Project A rises above Project B!
+    let pinned_a = bridge
+        .update_project(
+            proj_a.project_id,
+            &UpdateProjectRequest {
+                name: None,
+                workspace_path: None,
+                pinned: Some(true),
+            },
+        )
+        .await
+        .expect("pin proj A");
+    assert!(pinned_a.pinned);
+    assert!(pinned_a.pinned_at.is_some());
+
+    // Create standalone chat 1, run a live message + inline artifact on it, then create newer chat 2.
+    let chat_1 = bridge
+        .create_session(&CreateSessionRequest {
+            agent_id: agent.agent_id,
+            project_id: None,
+            title: String::from("Новый чат"),
+            session_kind: SessionKind::UserChat,
+        })
+        .await
+        .expect("standalone chat 1");
+    assert!(chat_1.project_id.is_none());
+
+    let turn = bridge
+        .send_message(
+            chat_1.session_id,
+            &SendMessageRequest {
+                content: String::from("Быстрый вопрос без проекта"),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+        )
+        .await
+        .expect("standalone send_message");
+    assert_eq!(turn.session_title, "Быстрый вопрос без проекта");
+
+    let art = bridge
+        .create_artifact(
+            chat_1.session_id,
+            &CreateArtifactRequest {
+                run_id: Some(turn.run.run_id),
+                name: String::from("note.md"),
+                mime_type: String::from("text/markdown"),
+                content: Some(String::from("# Note")),
+                relative_path: None,
+                completeness_status: ArtifactCompleteness::Final,
+            },
+        )
+        .await
+        .expect("standalone inline artifact");
+    assert!(art.project_id.is_none());
+
+    time::sleep(Duration::from_millis(15)).await;
+    let chat_2 = bridge
+        .create_session(&CreateSessionRequest {
+            agent_id: agent.agent_id,
+            project_id: None,
+            title: String::from("Второй одиночный чат"),
+            session_kind: SessionKind::UserChat,
+        })
+        .await
+        .expect("standalone chat 2");
+
+    // Before pinning, newer chat 2 is ahead of older chat 1.
+    let snap_before_pin = bridge
+        .get_state_snapshot(None, false)
+        .await
+        .expect("snapshot before pin");
+    assert_eq!(snap_before_pin.sessions[0].session_id, chat_2.session_id);
+    assert_eq!(snap_before_pin.sessions[1].session_id, chat_1.session_id);
+
+    // Pin older standalone chat 1 via pin-only `update_session` -> rises above chat 2!
+    let pinned_chat_1 = bridge
+        .update_session(
+            chat_1.session_id,
+            &UpdateSessionRequest {
+                title: None,
+                pinned: Some(true),
+            },
+        )
+        .await
+        .expect("pin chat 1");
+    assert!(pinned_chat_1.pinned);
+    assert!(pinned_chat_1.pinned_at.is_some());
+
+    let snap = bridge
+        .get_state_snapshot(None, false)
+        .await
+        .expect("snapshot");
+    assert_eq!(snap.projects[0].project_id, proj_a.project_id);
+    assert_eq!(snap.projects[1].project_id, proj_b.project_id);
+    assert_eq!(snap.sessions[0].session_id, chat_1.session_id);
+    assert!(snap.sessions[0].project_id.is_none());
+    assert!(snap.sessions[0].pinned);
+    assert_eq!(snap.sessions[1].session_id, chat_2.session_id);
+
+    head.shutdown().await;
+    memoryd.shutdown().await;
 }

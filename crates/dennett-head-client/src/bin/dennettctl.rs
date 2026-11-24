@@ -1152,17 +1152,40 @@ fn parse_project_subcommand(
             let mut id = None;
             let mut name = None;
             let mut workspace = None;
+            let mut pinned: Option<bool> = None;
             while let Some(flag) = iter.next() {
                 match flag.as_str() {
                     "--id" => id = Some(ProjectId::from_str(&next_val(iter, "--id")?)?),
                     "--name" => name = Some(next_val(iter, "--name")?),
                     "--workspace" => workspace = Some(next_val(iter, "--workspace")?),
+                    "--pin" => {
+                        if pinned == Some(false) {
+                            return Err(DennettError::InvalidInput {
+                                field: String::from("pinned"),
+                                reason: String::from("cannot specify both `--pin` and `--unpin`"),
+                            });
+                        }
+                        pinned = Some(true);
+                    }
+                    "--unpin" => {
+                        if pinned == Some(true) {
+                            return Err(DennettError::InvalidInput {
+                                field: String::from("pinned"),
+                                reason: String::from("cannot specify both `--pin` and `--unpin`"),
+                            });
+                        }
+                        pinned = Some(false);
+                    }
+                    other if id.is_none() && !other.starts_with("--") => {
+                        id = Some(ProjectId::from_str(other)?);
+                    }
                     other => return Err(unknown_flag(other)),
                 }
             }
             let req = UpdateProjectRequest {
                 name,
                 workspace_path: workspace,
+                pinned,
             };
             req.validate()?;
             Ok(Action::ProjectUpdate {
@@ -1276,8 +1299,8 @@ fn parse_session_subcommand(
             }
             let req = CreateSessionRequest {
                 agent_id: req_opt(agent_id, "--agent")?,
-                project_id: req_opt(project_id, "--project")?,
-                title: req_opt(title, "--title")?,
+                project_id,
+                title: title.unwrap_or_else(|| String::from("Новый чат")),
                 session_kind,
             };
             req.validate()?;
@@ -1299,16 +1322,36 @@ fn parse_session_subcommand(
         "update" => {
             let mut id = None;
             let mut title = None;
+            let mut pinned: Option<bool> = None;
             while let Some(flag) = iter.next() {
                 match flag.as_str() {
                     "--id" => id = Some(SessionId::from_str(&next_val(iter, "--id")?)?),
                     "--title" => title = Some(next_val(iter, "--title")?),
+                    "--pin" => {
+                        if pinned == Some(false) {
+                            return Err(DennettError::InvalidInput {
+                                field: String::from("pinned"),
+                                reason: String::from("cannot specify both `--pin` and `--unpin`"),
+                            });
+                        }
+                        pinned = Some(true);
+                    }
+                    "--unpin" => {
+                        if pinned == Some(true) {
+                            return Err(DennettError::InvalidInput {
+                                field: String::from("pinned"),
+                                reason: String::from("cannot specify both `--pin` and `--unpin`"),
+                            });
+                        }
+                        pinned = Some(false);
+                    }
+                    other if id.is_none() && !other.starts_with("--") => {
+                        id = Some(SessionId::from_str(other)?);
+                    }
                     other => return Err(unknown_flag(other)),
                 }
             }
-            let req = UpdateSessionRequest {
-                title: req_opt(title, "--title")?,
-            };
+            let req = UpdateSessionRequest { title, pinned };
             req.validate()?;
             Ok(Action::SessionUpdate {
                 g,
@@ -2663,16 +2706,16 @@ fn print_usage() {
            agent inbox --id <uuid> [--undelivered]\n\
            project create --name <n> [--workspace <dir>] [--scope <s>]\n\
            project list [--include-archived]\n\
-           project update --id <uuid> [--name <n>] [--workspace <dir>]\n\
+           project update --id <uuid> [--name <n>] [--workspace <dir>] [--pin | --unpin]\n\
            project files --id <uuid> [--subpath <rel>]\n\
            project rebind --id <uuid> --workspace <dir> [--reason <r>]\n\
            project detach --id <uuid>\n\
            project archive|unarchive|remove --id <uuid>\n\
            project delete --id <uuid> --confirm\n\
-           session create --agent <uuid> --project <uuid> --title <t> [--kind user_chat|task_run]\n\
+           session create --agent <uuid> [--project <uuid>] [--title <t>] [--kind user_chat|task_run]\n\
            session list\n\
            session show --id <uuid>\n\
-           session update --id <uuid> --title <t>\n\
+           session update --id <uuid> [--title <t>] [--pin | --unpin]\n\
            send --session <uuid> --message <text> [--client-message-id <k>] [--timeout-ms <ms>]\n\
            cancel --session <uuid>\n\
            artifact create --session <uuid> --name <n> [--mime-type <m>] [--status partial|final] (--content <c> | --path <rel>)\n\
@@ -2810,6 +2853,70 @@ mod tests {
         ));
 
         assert!(parse_write_policy("paths:../escape").is_err());
+    }
+
+    #[test]
+    fn cli_parses_standalone_sessions_and_pinning() {
+        let pid = ProjectId::new();
+        let sid = SessionId::new();
+        let aid = AgentId::new();
+        assert!(matches!(
+            parse_cli(
+                ["session", "create", "--agent", &aid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse standalone session create"),
+            Action::SessionCreate { ref req, .. }
+                if req.project_id.is_none() && req.title == "Новый чат"
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["session", "update", &sid.to_string(), "--pin"].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse session pin"),
+            Action::SessionUpdate { ref req, .. }
+                if req.title.is_none() && req.pinned == Some(true)
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["project", "update", &pid.to_string(), "--unpin"].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse project unpin"),
+            Action::ProjectUpdate { ref req, .. }
+                if req.name.is_none() && req.workspace_path.is_none() && req.pinned == Some(false)
+        ));
+        assert!(
+            parse_cli(
+                [
+                    "session",
+                    "update",
+                    "--id",
+                    &sid.to_string(),
+                    "--pin",
+                    "--unpin"
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_cli(
+                [
+                    "project",
+                    "update",
+                    "--id",
+                    &pid.to_string(),
+                    "--pin",
+                    "--unpin"
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .is_err()
+        );
     }
 
     #[test]

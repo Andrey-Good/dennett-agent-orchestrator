@@ -267,7 +267,7 @@ pub(crate) struct CoreTurnInput {
     pub(crate) session_kind: SessionKind,
     pub(crate) run_id: RunId,
     pub(crate) agent: AgentRecord,
-    pub(crate) project: ProjectRecord,
+    pub(crate) project: Option<ProjectRecord>,
     pub(crate) existing_binding: Option<RuntimeBinding>,
     pub(crate) prior_history: Vec<MessageRecord>,
     pub(crate) policy_rules: Vec<PolicyRule>,
@@ -1354,6 +1354,7 @@ impl HeadService {
                 ),
             });
         }
+        let bump_updated_at = req.name.is_some() || validated_workspace.is_some();
         let next_name = req
             .name
             .as_deref()
@@ -1375,7 +1376,13 @@ impl HeadService {
              SET name = $2,
                  workspace_path = $3,
                  lifecycle_state = $4,
-                 updated_at = now()
+                 pinned = COALESCE($5, pinned),
+                 pinned_at = CASE
+                     WHEN $5 IS TRUE THEN COALESCE(pinned_at, now())
+                     WHEN $5 IS FALSE THEN NULL
+                     ELSE pinned_at
+                 END,
+                 updated_at = CASE WHEN $6 THEN now() ELSE updated_at END
              WHERE project_id = $1
              RETURNING {PROJECT_SELECT_COLS}"
         );
@@ -1387,6 +1394,8 @@ impl HeadService {
                     &next_name,
                     &next_workspace,
                     &next_lifecycle.as_str(),
+                    &req.pinned,
+                    &bump_updated_at,
                 ],
             )
             .await
@@ -1406,6 +1415,7 @@ impl HeadService {
             Vec::new()
         };
 
+        let record = decode_project_row(&row)?;
         let _ = append_audit_event(
             &tx,
             &self.inner.pg_target,
@@ -1415,14 +1425,14 @@ impl HeadService {
             "head",
             "project_updated",
             &format!(
-                "updated project `{next_name}` ({project_id}) state={} bound={}",
+                "updated project `{next_name}` ({project_id}) state={} bound={} pinned={}",
                 next_lifecycle,
-                next_workspace.is_some()
+                next_workspace.is_some(),
+                record.pinned
             ),
         )
         .await?;
 
-        let record = decode_project_row(&row)?;
         let _ = append_control_event_in_tx(
             &tx,
             &self.inner.pg_target,
@@ -1438,6 +1448,8 @@ impl HeadService {
                     "name": record.name,
                     "lifecycle_state": record.lifecycle_state,
                     "bound": record.workspace_path.is_some(),
+                    "pinned": record.pinned,
+                    "pinned_at": record.pinned_at,
                 }),
             },
         )
@@ -1510,14 +1522,14 @@ impl HeadService {
                 "SELECT {PROJECT_SELECT_COLS}
                  FROM projects
                  WHERE lifecycle_state <> 'deleted_record'
-                 ORDER BY created_at DESC"
+                 ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             )
         } else {
             format!(
                 "SELECT {PROJECT_SELECT_COLS}
                  FROM projects
                  WHERE lifecycle_state NOT IN ('archived', 'deleted_record')
-                 ORDER BY created_at DESC"
+                 ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             )
         };
         let rows = conn
@@ -1563,20 +1575,22 @@ impl HeadService {
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         let _ = fetch_agent(&tx, req.agent_id, &self.inner.pg_target).await?;
-        let project = fetch_project(&tx, req.project_id, &self.inner.pg_target).await?;
-        if matches!(
-            project.lifecycle_state,
-            ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
-        ) {
-            return Err(DennettError::Conflict {
-                resource: String::from("project"),
-                expected_revision: None,
-                actual_revision: None,
-                reason: format!(
-                    "project `{}` is `{}` and does not accept new sessions",
-                    project.project_id, project.lifecycle_state
-                ),
-            });
+        if let Some(pid) = req.project_id {
+            let project = fetch_project(&tx, pid, &self.inner.pg_target).await?;
+            if matches!(
+                project.lifecycle_state,
+                ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+            ) {
+                return Err(DennettError::Conflict {
+                    resource: String::from("project"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "project `{}` is `{}` and does not accept new sessions",
+                        project.project_id, project.lifecycle_state
+                    ),
+                });
+            }
         }
 
         let session_id = SessionId::new();
@@ -1591,7 +1605,7 @@ impl HeadService {
                 &[
                     &session_id.as_uuid(),
                     &req.agent_id.as_uuid(),
-                    &req.project_id.as_uuid(),
+                    &req.project_id.map(ProjectId::as_uuid),
                     &req.title.trim(),
                     &req.session_kind.as_str(),
                 ],
@@ -1608,9 +1622,10 @@ impl HeadService {
             "head",
             "session_created",
             &format!(
-                "created session `{}` ({session_id}) kind={}",
+                "created session `{}` ({session_id}) kind={} standalone={}",
                 req.title.trim(),
-                req.session_kind
+                req.session_kind,
+                req.project_id.is_none()
             ),
         )
         .await?;
@@ -1622,7 +1637,7 @@ impl HeadService {
             ControlEventAppend {
                 entity_key: &format!("session:{session_id}"),
                 event_type: "session.created",
-                project_id: Some(req.project_id),
+                project_id: req.project_id,
                 session_id: Some(session_id),
                 task_id: None,
                 correlation_id,
@@ -1632,6 +1647,8 @@ impl HeadService {
                     "agent_id": req.agent_id,
                     "title": record.title,
                     "session_kind": record.session_kind,
+                    "pinned": record.pinned,
+                    "pinned_at": record.pinned_at,
                 }),
             },
         )
@@ -1643,7 +1660,8 @@ impl HeadService {
         Ok(record)
     }
 
-    /// Renames an existing conversation session (`PATCH /v1/sessions/{session_id}`).
+    /// Updates an existing conversation session's title and/or pin state
+    /// (`PATCH /v1/sessions/{session_id}`).
     ///
     /// # Errors
     ///
@@ -1663,16 +1681,31 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
-        let trimmed_title = req.title.trim();
+        let trimmed_title = req.title.as_deref().map(str::trim);
+        let bump_updated_at = trimmed_title.is_some();
         let update_sql = format!(
             "UPDATE sessions
-             SET title = $2,
-                 updated_at = now()
+             SET title = COALESCE($2, title),
+                 pinned = COALESCE($3, pinned),
+                 pinned_at = CASE
+                     WHEN $3 IS TRUE THEN COALESCE(pinned_at, now())
+                     WHEN $3 IS FALSE THEN NULL
+                     ELSE pinned_at
+                 END,
+                 updated_at = CASE WHEN $4 THEN now() ELSE updated_at END
              WHERE session_id = $1
              RETURNING {SESSION_SELECT_COLS}"
         );
         let row = tx
-            .query_opt(&update_sql, &[&session_id.as_uuid(), &trimmed_title])
+            .query_opt(
+                &update_sql,
+                &[
+                    &session_id.as_uuid(),
+                    &trimmed_title,
+                    &req.pinned,
+                    &bump_updated_at,
+                ],
+            )
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
@@ -1683,6 +1716,13 @@ impl HeadService {
             });
         };
 
+        let binding = fetch_runtime_binding(&tx, session_id, &self.inner.pg_target).await?;
+        let record = decode_session_row(&row, binding)?;
+        let audit_kind = if trimmed_title.is_some() && req.pinned.is_none() {
+            "session_renamed"
+        } else {
+            "session_updated"
+        };
         let _ = append_audit_event(
             &tx,
             &self.inner.pg_target,
@@ -1690,20 +1730,21 @@ impl HeadService {
             Some(session_id),
             None,
             "head",
-            "session_renamed",
-            &format!("renamed session {session_id} to `{trimmed_title}`"),
+            audit_kind,
+            &format!(
+                "updated session {session_id} title=`{}` pinned={}",
+                record.title, record.pinned
+            ),
         )
         .await?;
 
-        let binding = fetch_runtime_binding(&tx, session_id, &self.inner.pg_target).await?;
-        let record = decode_session_row(&row, binding)?;
         let _ = append_control_event_in_tx(
             &tx,
             &self.inner.pg_target,
             ControlEventAppend {
                 entity_key: &format!("session:{session_id}"),
                 event_type: "session.updated",
-                project_id: Some(record.project_id),
+                project_id: record.project_id,
                 session_id: Some(session_id),
                 task_id: None,
                 correlation_id,
@@ -1712,6 +1753,8 @@ impl HeadService {
                     "project_id": record.project_id,
                     "title": record.title,
                     "session_kind": record.session_kind,
+                    "pinned": record.pinned,
+                    "pinned_at": record.pinned_at,
                 }),
             },
         )
@@ -1731,7 +1774,11 @@ impl HeadService {
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let mut bindings = fetch_all_runtime_bindings(&conn, &self.inner.pg_target).await?;
-        let sql = format!("SELECT {SESSION_SELECT_COLS} FROM sessions ORDER BY updated_at DESC");
+        let sql = format!(
+            "SELECT {SESSION_SELECT_COLS}
+             FROM sessions
+             ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC"
+        );
         let rows = conn
             .query(&sql, &[])
             .await
@@ -1867,41 +1914,55 @@ impl HeadService {
         req.validate()?;
         let _ = self.ensure_migrated().await?;
 
-        // Fetch session + project metadata first and release the pooled connection BEFORE any
-        // blocking filesystem validation or streaming SHA-256 disk I/O.
+        // Fetch session + optional project metadata first and release the pooled connection BEFORE
+        // any blocking filesystem validation or streaming SHA-256 disk I/O.
         let (project_id, workspace_path) = {
             let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
             let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
-            let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
-            if matches!(
-                project.lifecycle_state,
-                ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
-            ) {
-                return Err(DennettError::Conflict {
-                    resource: String::from("project"),
-                    expected_revision: None,
-                    actual_revision: None,
-                    reason: format!(
-                        "project `{}` is `{}` and does not accept new artifacts",
-                        project.project_id, project.lifecycle_state
-                    ),
-                });
+            if let Some(pid) = session.project_id {
+                let project = fetch_project(&conn, pid, &self.inner.pg_target).await?;
+                if matches!(
+                    project.lifecycle_state,
+                    ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+                ) {
+                    return Err(DennettError::Conflict {
+                        resource: String::from("project"),
+                        expected_revision: None,
+                        actual_revision: None,
+                        reason: format!(
+                            "project `{}` is `{}` and does not accept new artifacts",
+                            project.project_id, project.lifecycle_state
+                        ),
+                    });
+                }
+                (Some(project.project_id), project.workspace_path)
+            } else {
+                (None, None)
             }
-            (project.project_id, project.workspace_path)
         };
 
         let (normalized_rel_path, digest) = if let Some(ref rel) = req.relative_path {
             let Some(ws_path) = workspace_path else {
+                let reason = if project_id.is_none() {
+                    String::from(
+                        "cannot attach workspace-relative file artifact to a standalone chat session without a bound project folder",
+                    )
+                } else {
+                    String::from(
+                        "cannot attach workspace-relative file artifact to a project without a bound workspace folder",
+                    )
+                };
                 return Err(DennettError::InvalidInput {
                     field: String::from("relative_path"),
-                    reason: String::from(
-                        "cannot attach workspace-relative file artifact to a project without a bound workspace folder",
-                    ),
+                    reason,
                 });
             };
             let rel_owned = rel.clone();
             let inline_owned = req.content.clone();
-            let scope_label = format!("project:{project_id}");
+            let scope_label = project_id.map_or_else(
+                || format!("session:{session_id}"),
+                |pid| format!("project:{pid}"),
+            );
             let (safe_rel, file_digest) = tokio::task::spawn_blocking(move || {
                 let ws_root = PathBuf::from(&ws_path);
                 let safe_rel =
@@ -1978,7 +2039,7 @@ impl HeadService {
                 &[
                     &artifact_id.as_uuid(),
                     &session_id.as_uuid(),
-                    &project_id.as_uuid(),
+                    &project_id.map(ProjectId::as_uuid),
                     &req.run_id.map(RunId::as_uuid),
                     &req.name.trim(),
                     &req.mime_type.trim(),
@@ -2014,7 +2075,7 @@ impl HeadService {
             ControlEventAppend {
                 entity_key: &format!("artifact:{artifact_id}"),
                 event_type: "artifact.created",
-                project_id: Some(project_id),
+                project_id,
                 session_id: Some(session_id),
                 task_id: None,
                 correlation_id,
@@ -2105,14 +2166,30 @@ impl HeadService {
         };
         let started_instant = Instant::now();
 
-        // Resolve effective workspace directory & write policy: folderless projects get an
-        // isolated scratch directory and mandatory `DenyAll` write policy until a real folder is bound.
-        let (effective_workspace_cwd, effective_write_policy) = match input.project.workspace_path {
-            Some(ref ws_path) => (
-                PathBuf::from(ws_path),
-                input.agent.current_config.workspace_write_policy.clone(),
-            ),
-            None => match self.ensure_detached_project_dir(input.project.project_id) {
+        // Resolve effective workspace directory & write policy:
+        // - Folder-bound projects use their canonical workspace + agent write policy.
+        // - Folderless projects use an isolated detached scratch directory + mandatory `DenyAll`.
+        // - Standalone chats (`project = None`) use `<managed_root>/standalone-sessions/<session_id>`
+        //   and mandatory `DenyAll`, with NO `dennett-control-mcp` mounted.
+        let project_id_opt = input.project.as_ref().map(|p| p.project_id);
+        let (effective_workspace_cwd, effective_write_policy) = match input.project {
+            Some(ref proj) => match proj.workspace_path {
+                Some(ref ws_path) => (
+                    PathBuf::from(ws_path),
+                    input.agent.current_config.workspace_write_policy.clone(),
+                ),
+                None => match self.ensure_detached_project_dir(proj.project_id) {
+                    Ok(dir) => (dir, WorkspaceWritePolicy::DenyAll),
+                    Err(error) => {
+                        return Err(CoreTurnFailure {
+                            error,
+                            effective_elapsed_ms: 0,
+                            captured_decisions: Vec::new(),
+                        });
+                    }
+                },
+            },
+            None => match self.ensure_standalone_session_dir(input.session_id) {
                 Ok(dir) => (dir, WorkspaceWritePolicy::DenyAll),
                 Err(error) => {
                     return Err(CoreTurnFailure {
@@ -2124,7 +2201,10 @@ impl HeadService {
             },
         };
 
-        // Build dynamically scoped MCP server specs (`dennett-memory` + `dennett-control`).
+        // Build dynamically scoped MCP server specs:
+        // - Always preserve `build_memory_mcp_specs` using the agent's own `allowed_memory_scopes`
+        //   (e.g. `chat:standalone` for standalone chats — never leaking project scopes!).
+        // - Mount `dennett-control-mcp` ONLY for project-bound sessions (`project = Some(...)`).
         let mut mcp_servers = match self.build_memory_mcp_specs(&input.agent) {
             Ok(specs) => specs,
             Err(error) => {
@@ -2135,20 +2215,22 @@ impl HeadService {
                 });
             }
         };
-        match self.build_control_mcp_spec(
-            input.project.project_id,
-            input.agent.agent_id,
-            input.session_id,
-            input.session_kind,
-        ) {
-            Ok(Some(ctrl_spec)) => mcp_servers.push(ctrl_spec),
-            Ok(None) => {}
-            Err(error) => {
-                return Err(CoreTurnFailure {
-                    error,
-                    effective_elapsed_ms: 0,
-                    captured_decisions: Vec::new(),
-                });
+        if let Some(pid) = project_id_opt {
+            match self.build_control_mcp_spec(
+                pid,
+                input.agent.agent_id,
+                input.session_id,
+                input.session_kind,
+            ) {
+                Ok(Some(ctrl_spec)) => mcp_servers.push(ctrl_spec),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(CoreTurnFailure {
+                        error,
+                        effective_elapsed_ms: 0,
+                        captured_decisions: Vec::new(),
+                    });
+                }
             }
         }
         let turn_secrets = self.collect_turn_secrets(&mcp_servers);
@@ -2201,26 +2283,32 @@ impl HeadService {
         };
 
         // Load live lifecycle state + delegated parent ceiling right before turn starts.
-        let (live_rules, live_lifecycle, live_ws_bound, live_parent_ceiling) = match self
-            .load_live_policy_inputs(input.project.project_id, task_id)
-            .await
-        {
-            Ok(live) => (
-                live.rules,
-                live.project_lifecycle_state,
-                live.workspace_bound,
-                live.parent_write_ceiling,
-            ),
-            Err(_) => (
-                input.policy_rules,
-                input.project.lifecycle_state,
-                input.project.workspace_path.is_some(),
-                None,
-            ),
-        };
+        let (live_rules, live_lifecycle, live_ws_bound, live_parent_ceiling) =
+            match self.load_live_policy_inputs(project_id_opt, task_id).await {
+                Ok(live) => (
+                    live.rules,
+                    live.project_lifecycle_state,
+                    live.workspace_bound,
+                    live.parent_write_ceiling,
+                ),
+                Err(_) => (
+                    input.policy_rules,
+                    input
+                        .project
+                        .as_ref()
+                        .map_or(ProjectLifecycleState::Detached, |p| p.lifecycle_state),
+                    input
+                        .project
+                        .as_ref()
+                        .is_some_and(|p| p.workspace_path.is_some()),
+                    project_id_opt
+                        .is_none()
+                        .then_some(WorkspaceWritePolicy::DenyAll),
+                ),
+            };
 
         let policy_ctx = PolicyContext {
-            project_id: input.project.project_id,
+            project_id: project_id_opt,
             agent_id: input.agent.agent_id,
             session_id: input.session_id,
             task_id,
@@ -2312,13 +2400,15 @@ impl HeadService {
                     if cancelled {
                         break;
                     }
-                    if let Ok(idem) = IdempotencyKey::try_new(idempotency_key.clone()) {
+                    if let Some(pid) = project_id_opt
+                        && let Ok(idem) = IdempotencyKey::try_new(idempotency_key.clone())
+                    {
                         let sim_behavior = SimEffectBehavior::from_str(behavior)
                             .unwrap_or(SimEffectBehavior::Success);
                         if let Ok(eff_resp) = self
                             .dispatch_external_effect(
                                 DispatchEffectRequest {
-                                    project_id: input.project.project_id,
+                                    project_id: pid,
                                     session_id: input.session_id,
                                     task_id,
                                     run_id: Some(input.run_id),
@@ -2494,21 +2584,26 @@ impl HeadService {
                 });
             }
             let agent = fetch_agent(&conn, session.agent_id, &self.inner.pg_target).await?;
-            let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
-            if matches!(
-                project.lifecycle_state,
-                ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
-            ) {
-                return Err(DennettError::Conflict {
-                    resource: String::from("project"),
-                    expected_revision: None,
-                    actual_revision: None,
-                    reason: format!(
-                        "project `{}` is `{}` and does not accept new messages",
-                        project.project_id, project.lifecycle_state
-                    ),
-                });
-            }
+            let project = if let Some(pid) = session.project_id {
+                let proj = fetch_project(&conn, pid, &self.inner.pg_target).await?;
+                if matches!(
+                    proj.lifecycle_state,
+                    ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+                ) {
+                    return Err(DennettError::Conflict {
+                        resource: String::from("project"),
+                        expected_revision: None,
+                        actual_revision: None,
+                        reason: format!(
+                            "project `{}` is `{}` and does not accept new messages",
+                            proj.project_id, proj.lifecycle_state
+                        ),
+                    });
+                }
+                Some(proj)
+            } else {
+                None
+            };
             let binding = fetch_runtime_binding(&conn, session_id, &self.inner.pg_target).await?;
             let history = fetch_session_messages(&conn, session_id, &self.inner.pg_target).await?;
             let rules = fetch_policy_rules(&conn, &self.inner.pg_target).await?;
@@ -2645,41 +2740,44 @@ impl HeadService {
 
             match msg_insert {
                 Ok(msg_row) => {
-                    let agent_msg_sql = format!(
-                        "SELECT {AGENT_MESSAGE_SELECT_COLS}
-                         FROM agent_messages
-                         WHERE recipient_agent_id = $1
-                           AND project_id = $2
-                           AND related_task_id IS NULL
-                           AND delivered_in_run_id IS NULL
-                         ORDER BY created_at ASC
-                         FOR UPDATE"
-                    );
-                    let agent_msg_rows = tx
-                        .query(
-                            &agent_msg_sql,
-                            &[&agent.agent_id.as_uuid(), &project.project_id.as_uuid()],
-                        )
-                        .await
-                        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-                    let mut inbox_msgs = Vec::with_capacity(agent_msg_rows.len());
-                    for row in &agent_msg_rows {
-                        inbox_msgs.push(decode_agent_message_row(row)?);
-                    }
-                    if !inbox_msgs.is_empty() {
-                        let ids: Vec<uuid::Uuid> = inbox_msgs
-                            .iter()
-                            .map(|m| m.agent_message_id.as_uuid())
-                            .collect();
-                        tx.execute(
-                            "UPDATE agent_messages
-                             SET delivered_in_run_id = $2, delivered_at = now()
-                             WHERE agent_message_id = ANY($1)",
-                            &[&ids, &run_id.as_uuid()],
-                        )
-                        .await
-                        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-                    }
+                    let project_id_opt = project.as_ref().map(|p| p.project_id);
+                    let inbox_msgs = if let Some(pid) = project_id_opt {
+                        let agent_msg_sql = format!(
+                            "SELECT {AGENT_MESSAGE_SELECT_COLS}
+                             FROM agent_messages
+                             WHERE recipient_agent_id = $1
+                               AND project_id = $2
+                               AND related_task_id IS NULL
+                               AND delivered_in_run_id IS NULL
+                             ORDER BY created_at ASC
+                             FOR UPDATE"
+                        );
+                        let agent_msg_rows = tx
+                            .query(&agent_msg_sql, &[&agent.agent_id.as_uuid(), &pid.as_uuid()])
+                            .await
+                            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                        let mut claimed = Vec::with_capacity(agent_msg_rows.len());
+                        for row in &agent_msg_rows {
+                            claimed.push(decode_agent_message_row(row)?);
+                        }
+                        if !claimed.is_empty() {
+                            let ids: Vec<uuid::Uuid> = claimed
+                                .iter()
+                                .map(|m| m.agent_message_id.as_uuid())
+                                .collect();
+                            tx.execute(
+                                "UPDATE agent_messages
+                                 SET delivered_in_run_id = $2, delivered_at = now()
+                                 WHERE agent_message_id = ANY($1)",
+                                &[&ids, &run_id.as_uuid()],
+                            )
+                            .await
+                            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                        }
+                        claimed
+                    } else {
+                        Vec::new()
+                    };
 
                     let _ = append_audit_event(
                         &tx,
@@ -2705,7 +2803,7 @@ impl HeadService {
                         ControlEventAppend {
                             entity_key: &format!("session:{session_id}"),
                             event_type: "session.run_started",
-                            project_id: Some(project.project_id),
+                            project_id: project_id_opt,
                             session_id: Some(session_id),
                             task_id: None,
                             correlation_id: &correlation_id,
@@ -2832,7 +2930,7 @@ impl HeadService {
                     match svc
                         .finalize_turn(
                             session_id,
-                            project.project_id,
+                            project.as_ref().map(|p| p.project_id),
                             run_id,
                             &agent,
                             user_message.message_id,
@@ -3173,7 +3271,7 @@ impl HeadService {
         pending_events.push(PendingControlEvent {
             entity_key: format!("session:{session_id}"),
             event_type: "session.run_cancel_requested",
-            project_id: Some(session.project_id),
+            project_id: session.project_id,
             session_id: Some(session_id),
             task_id: None,
             payload: json!({
@@ -3295,26 +3393,36 @@ impl HeadService {
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
         let agent = fetch_agent(&conn, session.agent_id, &self.inner.pg_target).await?;
-        let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
+        let project = match session.project_id {
+            Some(pid) => Some(fetch_project(&conn, pid, &self.inner.pg_target).await?),
+            None => None,
+        };
         drop(conn);
 
-        let live = self
-            .load_live_policy_inputs(project.project_id, None)
-            .await?;
-        let workspace_root = project.workspace_path.as_deref().map_or_else(
-            || self.fallback_workspace_root(project.project_id),
-            PathBuf::from,
-        );
+        let project_id = project.as_ref().map(|p| p.project_id);
+        let live = self.load_live_policy_inputs(project_id, None).await?;
+        let workspace_root = match project {
+            Some(ref proj) => proj.workspace_path.as_deref().map_or_else(
+                || self.fallback_workspace_root(proj.project_id),
+                PathBuf::from,
+            ),
+            None => self.standalone_session_scratch_dir(session_id),
+        };
+        let workspace_write_policy = if project_id.is_some() {
+            agent.current_config.workspace_write_policy.clone()
+        } else {
+            WorkspaceWritePolicy::DenyAll
+        };
         let ctx = PolicyContext {
-            project_id: project.project_id,
+            project_id,
             agent_id: agent.agent_id,
             session_id,
             task_id: None,
             project_lifecycle_state: live.project_lifecycle_state,
             workspace_bound: live.workspace_bound,
             workspace_root,
-            workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
-            parent_write_ceiling: None,
+            workspace_write_policy,
+            parent_write_ceiling: live.parent_write_ceiling,
             allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
             rules: live.rules,
         };
@@ -3991,7 +4099,7 @@ impl HeadService {
     async fn finalize_turn(
         &self,
         session_id: SessionId,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         run_id: RunId,
         agent: &AgentRecord,
         user_message_id: MessageId,
@@ -4203,7 +4311,7 @@ impl HeadService {
         pending_events.push(PendingControlEvent {
             entity_key: format!("session:{session_id}"),
             event_type: "session.message_completed",
-            project_id: Some(project_id),
+            project_id,
             session_id: Some(session_id),
             task_id: None,
             payload: json!({
@@ -4498,6 +4606,24 @@ impl HeadService {
         let dir = self.detached_project_scratch_dir(project_id);
         fs::create_dir_all(&dir).map_err(|err| DennettError::Internal {
             detail: format!("failed creating isolated detached project workspace: {err}"),
+        })?;
+        Ok(dir)
+    }
+
+    pub(crate) fn standalone_session_scratch_dir(&self, session_id: SessionId) -> PathBuf {
+        self.inner
+            .detached_projects_root
+            .join("standalone-sessions")
+            .join(session_id.to_string())
+    }
+
+    pub(crate) fn ensure_standalone_session_dir(
+        &self,
+        session_id: SessionId,
+    ) -> Result<PathBuf, DennettError> {
+        let dir = self.standalone_session_scratch_dir(session_id);
+        fs::create_dir_all(&dir).map_err(|err| DennettError::Internal {
+            detail: format!("failed creating isolated standalone session workspace: {err}"),
         })?;
         Ok(dir)
     }

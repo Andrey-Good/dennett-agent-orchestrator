@@ -23,7 +23,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_INTEGRATION_TESTS = 46
+MIN_INTEGRATION_TESTS = 49
 MIN_DESKTOP_FRONTEND_TESTS = 41
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
@@ -1779,7 +1779,7 @@ def run_demo_d2(
         plan = {
             "mode": "demo-d2-dry-run",
             "stage": "D2",
-            "control_schema_version": 6,
+            "control_schema_version": 7,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
             "compose_file": str(compose_file),

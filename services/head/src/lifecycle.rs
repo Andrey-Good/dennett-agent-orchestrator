@@ -1311,7 +1311,7 @@ impl HeadService {
             ControlEventAppend {
                 entity_key: &format!("session:{session_id}"),
                 event_type,
-                project_id: Some(updated.project_id),
+                project_id: updated.project_id,
                 session_id: Some(session_id),
                 task_id: None,
                 correlation_id,

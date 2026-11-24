@@ -275,7 +275,7 @@ impl HeadService {
 
         let session_id = if let Some(sid) = req.session_id {
             let sess = fetch_session(&tx, sid, self.pg_target()).await?;
-            if sess.project_id != req.project_id {
+            if sess.project_id != Some(req.project_id) {
                 return Err(DennettError::InvalidInput {
                     field: String::from("session_id"),
                     reason: String::from("session does not belong to the specified project"),
@@ -2688,7 +2688,7 @@ impl HeadService {
                 session_kind: session.session_kind,
                 run_id,
                 agent,
-                project,
+                project: Some(project),
                 existing_binding,
                 prior_history,
                 policy_rules,

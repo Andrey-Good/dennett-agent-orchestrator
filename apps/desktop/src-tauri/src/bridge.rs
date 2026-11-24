@@ -373,7 +373,7 @@ impl HeadBridge {
             .map_err(BridgeError::from)
     }
 
-    /// Renames a project and/or attaches/rebinds its workspace folder (`PATCH /v1/projects/{id}`).
+    /// Renames a project, attaches/rebinds its workspace folder, and/or toggles pin state (`PATCH /v1/projects/{id}`).
     ///
     /// # Errors
     ///
@@ -483,7 +483,7 @@ impl HeadBridge {
             .map_err(BridgeError::from)
     }
 
-    /// Renames a conversation session inline (`PATCH /v1/sessions/{id}`).
+    /// Renames a conversation session inline and/or toggles pin state (`PATCH /v1/sessions/{id}`).
     ///
     /// # Errors
     ///

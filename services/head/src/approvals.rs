@@ -176,11 +176,15 @@ impl PolicyEvaluator for InteractivePolicyEvaluator {
             {
                 Ok(inputs) => inputs,
                 Err(err) => {
+                    let scope = self.base_ctx.project_id.map_or_else(
+                        || format!("session:{}", self.base_ctx.session_id),
+                        |pid| format!("project:{pid}"),
+                    );
                     let outcome = PolicyEvaluationOutcome {
                         effect: PolicyEffect::Deny,
                         matched_rule_id: None,
                         reason: format!("fail-closed: could not query live policy state ({err})"),
-                        scope: format!("project:{}", self.base_ctx.project_id),
+                        scope,
                     };
                     self.record_decision(req, &outcome, None);
                     return outcome;
@@ -294,11 +298,24 @@ impl InteractivePolicyEvaluator {
         let preview_snippet =
             extract_redacted_preview_snippet(&req.raw_input, &self.secrets_to_redact);
 
+        let Some(project_id) = self.base_ctx.project_id else {
+            let outcome = PolicyEvaluationOutcome {
+                effect: PolicyEffect::Deny,
+                matched_rule_id: None,
+                reason: String::from(
+                    "denied: standalone chat sessions enforce deny_all and do not support workspace approvals",
+                ),
+                scope,
+            };
+            self.record_decision(req, &outcome, None);
+            return outcome;
+        };
+
         let (tx, rx) = oneshot::channel::<ApprovalResolutionSignal>();
         let request_id = match self
             .service
             .create_pending_permission_request(
-                self.base_ctx.project_id,
+                project_id,
                 self.base_ctx.session_id,
                 req.run_id,
                 self.task_id,
@@ -645,13 +662,22 @@ impl HeadService {
 
     pub(crate) async fn load_live_policy_inputs(
         &self,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         task_id: Option<TaskId>,
     ) -> Result<LivePolicyInputs, DennettError> {
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-        let project = fetch_project(&conn, project_id, self.pg_target()).await?;
         let rules = fetch_policy_rules(&conn, self.pg_target()).await?;
-        let grants = fetch_active_project_grants(&conn, project_id, self.pg_target()).await?;
+        let Some(pid) = project_id else {
+            return Ok(LivePolicyInputs {
+                rules,
+                grants: Vec::new(),
+                project_lifecycle_state: ProjectLifecycleState::Detached,
+                workspace_bound: false,
+                parent_write_ceiling: Some(WorkspaceWritePolicy::DenyAll),
+            });
+        };
+        let project = fetch_project(&conn, pid, self.pg_target()).await?;
+        let grants = fetch_active_project_grants(&conn, pid, self.pg_target()).await?;
         let parent_write_ceiling = self
             .compute_parent_write_ceiling_in_tx(&conn, task_id)
             .await?;
@@ -1341,7 +1367,7 @@ impl HeadService {
                 }
                 if err_msg.is_none() {
                     let reverify_engine = PolicyEngine::new(PolicyContext {
-                        project_id: project.project_id,
+                        project_id: Some(project.project_id),
                         project_lifecycle_state: project.lifecycle_state,
                         workspace_bound: true,
                         agent_id: agent.agent_id,

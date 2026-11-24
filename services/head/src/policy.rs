@@ -28,8 +28,8 @@ use dennett_runtime_antigravity::{
 /// Context snapshot evaluated by [`PolicyEngine`] for one session or task turn.
 #[derive(Debug, Clone)]
 pub struct PolicyContext {
-    /// Owning project identifier.
-    pub project_id: ProjectId,
+    /// Owning project identifier (`None` for standalone chat sessions).
+    pub project_id: Option<ProjectId>,
     /// Current lifecycle state of the owning project (`Active` required for live tool execution; D2-BUG-02).
     pub project_lifecycle_state: ProjectLifecycleState,
     /// Whether the project currently has a bound workspace directory on disk (D2-BUG-02).
@@ -146,18 +146,20 @@ impl PolicyEngine {
             .collect();
 
         // 0. Live project lifecycle guard (closes mid-turn TOCTOU after archive/delete/detach; D2-BUG-02).
-        if matches!(
-            self.ctx.project_lifecycle_state,
-            ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
-        ) {
+        if let Some(project_id) = self.ctx.project_id
+            && matches!(
+                self.ctx.project_lifecycle_state,
+                ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+            )
+        {
             return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Deny,
                 matched_rule_id: None,
                 reason: format!(
-                    "denied tool `{}`: project `{}` is in `{}` lifecycle state",
-                    req.tool_name, self.ctx.project_id, self.ctx.project_lifecycle_state
+                    "denied tool `{}`: project `{project_id}` is in `{}` lifecycle state",
+                    req.tool_name, self.ctx.project_lifecycle_state
                 ),
-                scope: format!("project:{}", self.ctx.project_id),
+                scope: format!("project:{project_id}"),
             });
         }
 
@@ -178,17 +180,25 @@ impl PolicyEngine {
             };
 
         if (is_file_write || is_file_read)
-            && (self.ctx.project_lifecycle_state == ProjectLifecycleState::Detached
+            && (self.ctx.project_id.is_none()
+                || self.ctx.project_lifecycle_state == ProjectLifecycleState::Detached
                 || !self.ctx.workspace_bound)
         {
+            let reason = match self.ctx.project_id {
+                Some(project_id) => format!(
+                    "denied workspace file tool `{}`: project `{project_id}` has no bound active workspace (state={})",
+                    req.tool_name, self.ctx.project_lifecycle_state
+                ),
+                None => format!(
+                    "denied workspace file tool `{}`: standalone session `{}` has no bound project workspace",
+                    req.tool_name, self.ctx.session_id
+                ),
+            };
             return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Deny,
                 matched_rule_id: None,
-                reason: format!(
-                    "denied workspace file tool `{}`: project `{}` has no bound active workspace (state={})",
-                    req.tool_name, self.ctx.project_id, self.ctx.project_lifecycle_state
-                ),
-                scope: format!("project:{}", self.ctx.project_id),
+                reason,
+                scope: self.primary_scope_label(),
             });
         }
 
@@ -225,7 +235,7 @@ impl PolicyEngine {
                             effect: PolicyEffect::Deny,
                             matched_rule_id: None,
                             reason,
-                            scope: format!("project:{}", self.ctx.project_id),
+                            scope: self.primary_scope_label(),
                         });
                     }
                 }
@@ -398,7 +408,7 @@ impl PolicyEngine {
                     return PolicyEvaluationDecision::NeedsInteractiveApproval {
                         normalized_targets: normalized_rel_targets,
                         target_summary: target_summary.clone(),
-                        scope: format!("project:{}", self.ctx.project_id),
+                        scope: self.primary_scope_label(),
                         reason: format!(
                             "workspace_write_policy=ask_before_write requires owner approval to run `{}` on `{target_summary}`",
                             req.tool_name
@@ -489,26 +499,38 @@ impl PolicyEngine {
         }
 
         // 4b. Scoped `dennett-control-mcp` tools (Agent-Native Events):
-        //     Step 2 explicit `Deny` rules already ran above; reject foreign `project_id`, and
+        //     Step 2 explicit `Deny` rules already ran above; standalone sessions have no project
+        //     context and deny control MCP unconditionally; reject foreign `project_id`, and
         //     block recursive `dennett_event_create` inside background `task_run` turns unless
         //     explicitly allowed by policy rule.
         if let Some(ctrl_op) = control_mcp_op {
+            let Some(owning_project_id) = self.ctx.project_id else {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "denied control MCP tool `{}`: standalone session `{}` has no owning project",
+                        req.tool_name, self.ctx.session_id
+                    ),
+                    scope: format!("session:{}", self.ctx.session_id),
+                });
+            };
             if let Some(requested_pid) = req
                 .raw_input
                 .get("project_id")
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                && requested_pid != self.ctx.project_id.to_string()
+                && requested_pid != owning_project_id.to_string()
             {
                 return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                     effect: PolicyEffect::Deny,
                     matched_rule_id: None,
                     reason: format!(
-                        "denied control MCP tool `{}`: cross-project target `{requested_pid}` does not match owning project `{}`",
-                        req.tool_name, self.ctx.project_id
+                        "denied control MCP tool `{}`: cross-project target `{requested_pid}` does not match owning project `{owning_project_id}`",
+                        req.tool_name
                     ),
-                    scope: format!("project:{}", self.ctx.project_id),
+                    scope: format!("project:{owning_project_id}"),
                 });
             }
 
@@ -541,7 +563,7 @@ impl PolicyEngine {
                     "allowed scoped Dennett control MCP tool `{}`",
                     req.tool_name
                 ),
-                scope: format!("project:{}", self.ctx.project_id),
+                scope: format!("project:{owning_project_id}"),
             });
         }
 
@@ -588,7 +610,7 @@ impl PolicyEngine {
                 effect: PolicyEffect::Allow,
                 matched_rule_id: None,
                 reason: format!("allowed read-only workspace inspection of `{joined_rel}`"),
-                scope: format!("project:{}", self.ctx.project_id),
+                scope: self.primary_scope_label(),
             });
         }
 
@@ -604,6 +626,13 @@ impl PolicyEngine {
         })
     }
 
+    fn primary_scope_label(&self) -> String {
+        self.ctx.project_id.map_or_else(
+            || format!("session:{}", self.ctx.session_id),
+            |pid| format!("project:{pid}"),
+        )
+    }
+
     fn find_matching_grant<'a>(
         &self,
         grants: &'a [CapabilityGrantRecord],
@@ -612,11 +641,12 @@ impl PolicyEngine {
         is_file_write: bool,
         normalized_rel_targets: &[String],
     ) -> Option<&'a CapabilityGrantRecord> {
+        let owning_project_id = self.ctx.project_id?;
         grants.iter().find(|grant| {
             if !grant.is_active_at(now) {
                 return false;
             }
-            if grant.project_id != self.ctx.project_id {
+            if grant.project_id != owning_project_id {
                 return false;
             }
             if grant.agent_id.is_some_and(|a| a != self.ctx.agent_id) {
@@ -641,13 +671,15 @@ impl PolicyEngine {
         })
     }
 
-    fn active_scopes(&self) -> [String; 4] {
-        [
-            format!("session:{}", self.ctx.session_id),
-            format!("agent:{}", self.ctx.agent_id),
-            format!("project:{}", self.ctx.project_id),
-            String::from("global"),
-        ]
+    fn active_scopes(&self) -> Vec<String> {
+        let mut scopes = Vec::with_capacity(4);
+        scopes.push(format!("session:{}", self.ctx.session_id));
+        scopes.push(format!("agent:{}", self.ctx.agent_id));
+        if let Some(pid) = self.ctx.project_id {
+            scopes.push(format!("project:{pid}"));
+        }
+        scopes.push(String::from("global"));
+        scopes
     }
 }
 
@@ -1284,7 +1316,7 @@ mod tests {
         };
 
         let engine = PolicyEngine::new(PolicyContext {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1348,7 +1380,7 @@ mod tests {
     fn policy_engine_default_denies_unknown_dangerous_tools() {
         let ws = temp_workspace("default-deny");
         let engine = PolicyEngine::new(PolicyContext {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1388,7 +1420,7 @@ mod tests {
         let ws = temp_workspace("defect1");
         let scope_alpha = MemoryScope::try_new("project-alpha").expect("scope");
         let engine = PolicyEngine::new(PolicyContext {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1489,7 +1521,7 @@ mod tests {
             created_at: TimestampMs::now(),
         };
         let engine = PolicyEngine::new(PolicyContext {
-            project_id: ProjectId::new(),
+            project_id: Some(ProjectId::new()),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1565,7 +1597,7 @@ mod tests {
         let now = TimestampMs::from_millis(1_760_000_000_000);
 
         let engine = PolicyEngine::new(PolicyContext {
-            project_id,
+            project_id: Some(project_id),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id,
@@ -1668,7 +1700,7 @@ mod tests {
         };
 
         let engine = PolicyEngine::new(PolicyContext {
-            project_id,
+            project_id: Some(project_id),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1699,7 +1731,7 @@ mod tests {
         //     require ALL targets to match (`rule_matches_all_for_allow`) — mixing one allowed
         //     target (`docs/a.txt`) with an unpermitted target (`src/escape.txt`) MUST be denied!
         let allow_only_engine = PolicyEngine::new(PolicyContext {
-            project_id,
+            project_id: Some(project_id),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1782,7 +1814,7 @@ mod tests {
 
         // 5. Archived & detached project lifecycle guards (D2-BUG-02).
         let archived_engine = PolicyEngine::new(PolicyContext {
-            project_id,
+            project_id: Some(project_id),
             project_lifecycle_state: ProjectLifecycleState::Archived,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1804,7 +1836,7 @@ mod tests {
         // 6. Control MCP Step 4b: chat allows same-project event creation, denies cross-project,
         //    and background `task_run` denies recursive `dennett_event_create` by default.
         let chat_ctrl_engine = PolicyEngine::new(PolicyContext {
-            project_id,
+            project_id: Some(project_id),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1831,7 +1863,7 @@ mod tests {
         );
 
         let task_ctrl_engine = PolicyEngine::new(PolicyContext {
-            project_id,
+            project_id: Some(project_id),
             project_lifecycle_state: ProjectLifecycleState::Active,
             workspace_bound: true,
             agent_id: AgentId::new(),
@@ -1860,6 +1892,57 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn standalone_session_policy_denies_fs_and_control_mcp_but_allows_own_memory_scope() {
+        let scratch = temp_workspace("standalone");
+        let standalone_scope = MemoryScope::try_new("chat:standalone").expect("scope");
+        let engine = PolicyEngine::new(PolicyContext {
+            project_id: None,
+            project_lifecycle_state: ProjectLifecycleState::Detached,
+            workspace_bound: false,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: None,
+            workspace_root: scratch.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: Some(WorkspaceWritePolicy::DenyAll),
+            allowed_memory_scopes: BTreeSet::from([standalone_scope]),
+            rules: vec![],
+        });
+
+        // File write and read must both fail closed on standalone sessions.
+        assert_eq!(
+            engine
+                .evaluate_request(&make_req("write_file", "edit", Some("note.txt")))
+                .effect,
+            PolicyEffect::Deny
+        );
+        assert_eq!(
+            engine
+                .evaluate_request(&make_req("read_file", "read", Some("note.txt")))
+                .effect,
+            PolicyEffect::Deny
+        );
+        // Control MCP is denied on standalone sessions.
+        let mut ctrl = make_req("dennett_event_create", "other", None);
+        ctrl.raw_input = json!({ "title": "Reminder", "goal": "Ping" });
+        assert_eq!(engine.evaluate_request(&ctrl).effect, PolicyEffect::Deny);
+
+        // Agent's own standalone memory scope is allowed; project scope is denied.
+        let mut ok_mem = make_req("memory_write_note", "other", None);
+        ok_mem.raw_input = json!({ "scope": "chat:standalone", "title": "T", "body": "B" });
+        assert_eq!(engine.evaluate_request(&ok_mem).effect, PolicyEffect::Allow);
+
+        let mut foreign_mem = make_req("memory_write_note", "other", None);
+        foreign_mem.raw_input = json!({ "scope": "project:secret", "title": "T", "body": "B" });
+        assert_eq!(
+            engine.evaluate_request(&foreign_mem).effect,
+            PolicyEffect::Deny
+        );
+
+        let _ = fs::remove_dir_all(&scratch);
     }
 
     proptest! {

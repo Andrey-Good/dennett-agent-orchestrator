@@ -792,7 +792,7 @@ async fn handle_create_session(
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
     if let Some(claims) = control_claims {
-        if req.project_id != claims.project_id {
+        if req.project_id != Some(claims.project_id) {
             return domain_error_response(
                 DennettError::AccessDenied {
                     scope: format!("project:{}", claims.project_id),

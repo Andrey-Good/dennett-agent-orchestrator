@@ -507,7 +507,7 @@ impl ControlMcpServer {
             .create_session(
                 &CreateSessionRequest {
                     agent_id: self.agent_id,
-                    project_id: self.project_id,
+                    project_id: Some(self.project_id),
                     title: title.clone(),
                     session_kind: SessionKind::TaskRun,
                 },

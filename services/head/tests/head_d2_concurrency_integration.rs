@@ -722,7 +722,7 @@ async fn v07_direct_late_complete_task_run_fenced_and_auth_profile_override_fail
         .create_session(
             CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("V07 Direct Session"),
                 session_kind: SessionKind::UserChat,
             },
@@ -943,7 +943,7 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
         .create_session(
             CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("H2-01 Session"),
                 session_kind: SessionKind::UserChat,
             },
@@ -1741,7 +1741,7 @@ async fn h2_03_h2_07_project_remove_delete_cleanup_deleted_filtering_and_artifac
         .create_session(
             CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj_a.project_id,
+                project_id: Some(proj_a.project_id),
                 title: String::from("Session A"),
                 session_kind: SessionKind::UserChat,
             },
@@ -2238,7 +2238,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
         .create_session(
             CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("Shared Serialized Session"),
                 session_kind: SessionKind::UserChat,
             },
@@ -2448,7 +2448,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
         .create_session(
             CreateSessionRequest {
                 agent_id: agent.agent_id,
-                project_id: proj.project_id,
+                project_id: Some(proj.project_id),
                 title: String::from("Interactive OAuth Session"),
                 session_kind: SessionKind::UserChat,
             },

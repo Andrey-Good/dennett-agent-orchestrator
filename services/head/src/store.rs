@@ -212,11 +212,15 @@ pub(crate) const AGENT_JOIN_SELECT: &str = "
 pub(crate) const PROJECT_SELECT_COLS: &str = "
     project_id, name, workspace_path, memory_scope, lifecycle_state,
     TRUNC(EXTRACT(EPOCH FROM archived_at) * 1000)::bigint,
+    pinned,
+    TRUNC(EXTRACT(EPOCH FROM pinned_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
 ";
 
 pub(crate) const SESSION_SELECT_COLS: &str = "
     session_id, agent_id, project_id, title, session_kind, status,
+    pinned,
+    TRUNC(EXTRACT(EPOCH FROM pinned_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
 ";
@@ -719,7 +723,9 @@ pub(crate) fn decode_project_row(row: &Row) -> Result<ProjectRecord, DennettErro
         memory_scope: MemoryScope::try_new(row.get::<_, String>(3))?,
         lifecycle_state: ProjectLifecycleState::from_str(&row.get::<_, String>(4))?,
         archived_at: row.get::<_, Option<i64>>(5).map(TimestampMs::from_millis),
-        created_at: TimestampMs::from_millis(row.get(6)),
+        pinned: row.get(6),
+        pinned_at: row.get::<_, Option<i64>>(7).map(TimestampMs::from_millis),
+        created_at: TimestampMs::from_millis(row.get(8)),
     })
 }
 
@@ -730,13 +736,15 @@ pub(crate) fn decode_session_row(
     Ok(SessionRecord {
         session_id: SessionId::from_uuid(row.get(0)),
         agent_id: AgentId::from_uuid(row.get(1)),
-        project_id: ProjectId::from_uuid(row.get(2)),
+        project_id: row.get::<_, Option<Uuid>>(2).map(ProjectId::from_uuid),
         title: row.get(3),
         session_kind: SessionKind::from_str(&row.get::<_, String>(4))?,
         status: SessionStatus::from_str(&row.get::<_, String>(5))?,
         runtime_binding,
-        created_at: TimestampMs::from_millis(row.get(6)),
-        updated_at: TimestampMs::from_millis(row.get(7)),
+        pinned: row.get(6),
+        pinned_at: row.get::<_, Option<i64>>(7).map(TimestampMs::from_millis),
+        created_at: TimestampMs::from_millis(row.get(8)),
+        updated_at: TimestampMs::from_millis(row.get(9)),
     })
 }
 
@@ -813,7 +821,7 @@ pub(crate) fn decode_artifact_row(row: &Row) -> Result<ArtifactRecord, DennettEr
     Ok(ArtifactRecord {
         artifact_id: ArtifactId::from_uuid(row.get(0)),
         session_id: SessionId::from_uuid(row.get(1)),
-        project_id: ProjectId::from_uuid(row.get(2)),
+        project_id: row.get::<_, Option<Uuid>>(2).map(ProjectId::from_uuid),
         run_id: row.get::<_, Option<Uuid>>(3).map(RunId::from_uuid),
         name: row.get(4),
         mime_type: row.get(5),

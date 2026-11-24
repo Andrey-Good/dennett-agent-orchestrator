@@ -463,6 +463,12 @@ pub struct ProjectRecord {
     /// UTC archival timestamp in epoch milliseconds when `lifecycle_state == Archived`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<TimestampMs>,
+    /// Whether this project is pinned to the top of the project list.
+    #[serde(default)]
+    pub pinned: bool,
+    /// UTC timestamp in epoch milliseconds when this project was pinned (`None` when unpinned).
+    #[serde(default)]
+    pub pinned_at: Option<TimestampMs>,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
 }
@@ -593,15 +599,16 @@ impl FromStr for SessionKind {
     }
 }
 
-/// Persisted conversation session tying together an agent, project, and optional [`RuntimeBinding`].
+/// Persisted conversation session tying together an agent, optional project, and optional [`RuntimeBinding`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRecord {
     /// Stable session identifier.
     pub session_id: SessionId,
     /// Assigned Dennett agent identifier.
     pub agent_id: AgentId,
-    /// Bound project workspace identifier.
-    pub project_id: ProjectId,
+    /// Bound project workspace identifier (`None` for standalone chats).
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     /// Human-readable session title.
     pub title: String,
     /// Whether this session is an interactive user chat or a dedicated task run session.
@@ -612,6 +619,12 @@ pub struct SessionRecord {
     pub runtime_binding: Option<RuntimeBinding>,
     /// Current session lifecycle status.
     pub status: SessionStatus,
+    /// Whether this session is pinned to the top of its list.
+    #[serde(default)]
+    pub pinned: bool,
+    /// UTC timestamp in epoch milliseconds when this session was pinned (`None` when unpinned).
+    #[serde(default)]
+    pub pinned_at: Option<TimestampMs>,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
     /// UTC timestamp of latest session activity.
@@ -808,8 +821,9 @@ pub struct ArtifactRecord {
     pub artifact_id: ArtifactId,
     /// Owning session identifier.
     pub session_id: SessionId,
-    /// Owning project identifier.
-    pub project_id: ProjectId,
+    /// Owning project identifier (`None` for standalone session artifacts).
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     /// Optional run identifier that produced this artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
@@ -1226,7 +1240,7 @@ impl CreateProjectRequest {
     }
 }
 
-/// Request payload for `PATCH /v1/projects/{project_id}` (inline rename and attach/rebind folder).
+/// Request payload for `PATCH /v1/projects/{project_id}` (inline rename, attach/rebind folder, and pin/unpin).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateProjectRequest {
     /// Optional updated human-readable project name.
@@ -1235,6 +1249,9 @@ pub struct UpdateProjectRequest {
     /// Optional bound workspace folder path (attach or rebind folder).
     #[serde(default)]
     pub workspace_path: Option<String>,
+    /// Optional pin state toggle (`Some(true)` pins, `Some(false)` unpins).
+    #[serde(default)]
+    pub pinned: Option<bool>,
 }
 
 impl UpdateProjectRequest {
@@ -1242,12 +1259,14 @@ impl UpdateProjectRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`] if neither field is set or any provided value is invalid.
+    /// Returns [`DennettError::InvalidInput`] if no field is set or any provided value is invalid.
     pub fn validate(&self) -> Result<(), DennettError> {
-        if self.name.is_none() && self.workspace_path.is_none() {
+        if self.name.is_none() && self.workspace_path.is_none() && self.pinned.is_none() {
             return Err(DennettError::InvalidInput {
                 field: String::from("body"),
-                reason: String::from("must specify at least one of `name` or `workspace_path`"),
+                reason: String::from(
+                    "must specify at least one of `name`, `workspace_path`, or `pinned`",
+                ),
             });
         }
         if let Some(ref name) = self.name {
@@ -1314,8 +1333,9 @@ pub struct ListProjectsResponse {
 pub struct CreateSessionRequest {
     /// Existing agent assigned to this session.
     pub agent_id: AgentId,
-    /// Existing project workspace bound to this session.
-    pub project_id: ProjectId,
+    /// Optional project workspace bound to this session (`None` creates a standalone chat).
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     /// Human-readable session title.
     pub title: String,
     /// Session semantic kind (defaults to [`SessionKind::UserChat`]).
@@ -1328,27 +1348,51 @@ impl CreateSessionRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`] if `title` is empty, oversized, or contains NUL.
+    /// Returns [`DennettError::InvalidInput`] if `title` is empty, oversized, or contains NUL,
+    /// or if a standalone session (`project_id = None`) requests a non-`user_chat` kind.
     pub fn validate(&self) -> Result<(), DennettError> {
-        validate_non_empty_text(&self.title, "title", MAX_SESSION_TITLE_LEN)
+        validate_non_empty_text(&self.title, "title", MAX_SESSION_TITLE_LEN)?;
+        if self.project_id.is_none() && self.session_kind != SessionKind::UserChat {
+            return Err(DennettError::InvalidInput {
+                field: String::from("session_kind"),
+                reason: String::from(
+                    "standalone sessions (`project_id = null`) must use `session_kind = user_chat`",
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
-/// Request payload for `PATCH /v1/sessions/{session_id}` (inline session rename).
+/// Request payload for `PATCH /v1/sessions/{session_id}` (inline session rename and/or pin/unpin).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateSessionRequest {
-    /// Updated human-readable session title.
-    pub title: String,
+    /// Optional updated human-readable session title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Optional pin state toggle (`Some(true)` pins, `Some(false)` unpins).
+    #[serde(default)]
+    pub pinned: Option<bool>,
 }
 
 impl UpdateSessionRequest {
-    /// Validates session rename input.
+    /// Validates session update input (at least one of `title` or `pinned` must be set).
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`] if `title` is empty, oversized, or contains NUL.
+    /// Returns [`DennettError::InvalidInput`] if neither field is provided or `title` is empty,
+    /// oversized, or contains NUL.
     pub fn validate(&self) -> Result<(), DennettError> {
-        validate_non_empty_text(&self.title, "title", MAX_SESSION_TITLE_LEN)
+        if self.title.is_none() && self.pinned.is_none() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("body"),
+                reason: String::from("must specify at least one of `title` or `pinned`"),
+            });
+        }
+        if let Some(ref title) = self.title {
+            validate_non_empty_text(title, "title", MAX_SESSION_TITLE_LEN)?;
+        }
+        Ok(())
     }
 }
 
@@ -1955,5 +1999,105 @@ mod tests {
             completeness_status: ArtifactCompleteness::Partial,
         };
         assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn standalone_session_and_pinning_wire_contracts_validate_and_roundtrip() {
+        let agent_id = AgentId::new();
+        let standalone_null: CreateSessionRequest = serde_json::from_str(&format!(
+            r#"{{"agent_id":"{agent_id}","project_id":null,"title":"Новый чат"}}"#
+        ))
+        .expect("deserialize standalone null project_id");
+        assert!(standalone_null.project_id.is_none());
+        assert_eq!(standalone_null.session_kind, SessionKind::UserChat);
+        assert!(standalone_null.validate().is_ok());
+
+        let standalone_omitted: CreateSessionRequest = serde_json::from_str(&format!(
+            r#"{{"agent_id":"{agent_id}","title":"Новый чат"}}"#
+        ))
+        .expect("deserialize standalone omitted project_id");
+        assert!(standalone_omitted.project_id.is_none());
+        assert!(standalone_omitted.validate().is_ok());
+
+        let invalid_standalone_task = CreateSessionRequest {
+            agent_id,
+            project_id: None,
+            title: String::from("Task"),
+            session_kind: SessionKind::TaskRun,
+        };
+        assert!(invalid_standalone_task.validate().is_err());
+
+        let empty_proj = UpdateProjectRequest {
+            name: None,
+            workspace_path: None,
+            pinned: None,
+        };
+        assert!(empty_proj.validate().is_err());
+        let pin_only_proj = UpdateProjectRequest {
+            name: None,
+            workspace_path: None,
+            pinned: Some(true),
+        };
+        assert!(pin_only_proj.validate().is_ok());
+
+        let empty_sess = UpdateSessionRequest {
+            title: None,
+            pinned: None,
+        };
+        assert!(empty_sess.validate().is_err());
+        let pin_only_sess = UpdateSessionRequest {
+            title: None,
+            pinned: Some(true),
+        };
+        assert!(pin_only_sess.validate().is_ok());
+        let title_only_sess = UpdateSessionRequest {
+            title: Some(String::from("Переименованный чат")),
+            pinned: None,
+        };
+        assert!(title_only_sess.validate().is_ok());
+        let blank_title_sess = UpdateSessionRequest {
+            title: Some(String::from("   ")),
+            pinned: Some(true),
+        };
+        assert!(blank_title_sess.validate().is_err());
+
+        let now = TimestampMs::now();
+        let session = SessionRecord {
+            session_id: SessionId::new(),
+            agent_id,
+            project_id: None,
+            title: String::from("Новый чат"),
+            session_kind: SessionKind::UserChat,
+            runtime_binding: None,
+            status: SessionStatus::Active,
+            pinned: false,
+            pinned_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let encoded_session = serde_json::to_string(&session).expect("serialize session");
+        assert!(encoded_session.contains(r#""project_id":null"#));
+        assert!(encoded_session.contains(r#""pinned":false"#));
+        assert!(encoded_session.contains(r#""pinned_at":null"#));
+        let decoded_session: SessionRecord =
+            serde_json::from_str(&encoded_session).expect("deserialize session");
+        assert_eq!(decoded_session, session);
+
+        let project = ProjectRecord {
+            project_id: ProjectId::new(),
+            name: String::from("Demo"),
+            workspace_path: None,
+            memory_scope: MemoryScope::try_new("project:demo").expect("scope"),
+            lifecycle_state: ProjectLifecycleState::Active,
+            archived_at: None,
+            pinned: true,
+            pinned_at: Some(now),
+            created_at: now,
+        };
+        let encoded_proj = serde_json::to_string(&project).expect("serialize project");
+        assert!(encoded_proj.contains(r#""pinned":true"#));
+        let decoded_proj: ProjectRecord =
+            serde_json::from_str(&encoded_proj).expect("deserialize project");
+        assert_eq!(decoded_proj, project);
     }
 }

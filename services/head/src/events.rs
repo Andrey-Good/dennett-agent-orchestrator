@@ -355,7 +355,7 @@ impl HeadService {
             let sql = format!(
                 "SELECT {PROJECT_SELECT_COLS} FROM projects
                  WHERE lifecycle_state <> 'deleted_record'
-                 ORDER BY created_at DESC"
+                 ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             );
             tx.query(&sql, &[])
                 .await
@@ -364,7 +364,7 @@ impl HeadService {
             let sql = format!(
                 "SELECT {PROJECT_SELECT_COLS} FROM projects
                  WHERE lifecycle_state IN ('active', 'detached')
-                 ORDER BY created_at DESC"
+                 ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             );
             tx.query(&sql, &[])
                 .await
@@ -396,7 +396,7 @@ impl HeadService {
                        WHERE p.project_id = sessions.project_id
                          AND p.lifecycle_state <> 'deleted_record'
                    )
-                 ORDER BY updated_at DESC"
+                 ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC"
             );
             tx.query(&sql, &[&pid.as_uuid()])
                 .await
@@ -405,12 +405,13 @@ impl HeadService {
             let sql = format!(
                 "SELECT {SESSION_SELECT_COLS}
                  FROM sessions
-                 WHERE EXISTS (
-                     SELECT 1 FROM projects p
-                     WHERE p.project_id = sessions.project_id
-                       AND p.lifecycle_state <> 'deleted_record'
-                 )
-                 ORDER BY updated_at DESC"
+                 WHERE sessions.project_id IS NULL
+                    OR EXISTS (
+                        SELECT 1 FROM projects p
+                        WHERE p.project_id = sessions.project_id
+                          AND p.lifecycle_state <> 'deleted_record'
+                    )
+                 ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC"
             );
             tx.query(&sql, &[])
                 .await
@@ -552,9 +553,9 @@ impl HeadService {
                 "SELECT DISTINCT r.session_id
                  FROM runs r
                  JOIN sessions s ON s.session_id = r.session_id
-                 JOIN projects p ON p.project_id = s.project_id
+                 LEFT JOIN projects p ON p.project_id = s.project_id
                  WHERE r.status = 'running'
-                   AND p.lifecycle_state <> 'deleted_record'",
+                   AND (s.project_id IS NULL OR p.lifecycle_state <> 'deleted_record')",
                 &[],
             )
             .await
