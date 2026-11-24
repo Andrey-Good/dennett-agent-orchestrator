@@ -187,6 +187,7 @@ pub fn parse_tool_call(
                 scope,
                 query: parsed.query,
                 limit: parsed.limit,
+                include_history: false,
             };
             let _ = req.validated_limit()?;
             Ok(Some(ParsedToolCall::Search(req)))
@@ -216,6 +217,9 @@ pub fn parse_tool_call(
                 observed_at: None,
                 evidence_links: parsed.evidence_links,
                 author_label: parsed.author_label,
+                admission_status: None,
+                salience: None,
+                topic_key: None,
                 idempotency_key,
             };
             req.validate()?;

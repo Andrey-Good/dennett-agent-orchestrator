@@ -202,6 +202,9 @@ async fn execute_action(action: CliAction, token: Option<String>) -> Result<(), 
                 observed_at: None,
                 evidence_links,
                 author_label: agent_label,
+                admission_status: None,
+                salience: None,
+                topic_key: None,
                 idempotency_key,
             };
             exec_write(&global, token, req).await
@@ -249,6 +252,7 @@ async fn execute_action(action: CliAction, token: Option<String>) -> Result<(), 
                     scope,
                     query,
                     limit,
+                    include_history: false,
                 },
             )
             .await

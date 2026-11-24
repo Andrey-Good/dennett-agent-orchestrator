@@ -241,6 +241,9 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 evidence_links: Vec::new(),
                 author_label: Some(String::from("external-preseed")),
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
             None,
         )
@@ -301,6 +304,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 },
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -411,6 +415,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 scope: Some(scope.clone()),
                 query: Some(updated_decision_marker.clone()),
                 limit: Some(10),
+                include_history: false,
             },
             None,
         )
@@ -527,6 +532,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 scope: Some(scope),
                 query: Some(updated_decision_marker.clone()),
                 limit: Some(10),
+                include_history: false,
             },
             None,
         )
@@ -677,6 +683,7 @@ async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )

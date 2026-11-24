@@ -676,6 +676,8 @@ impl HeadService {
             models: descriptor.models,
             thinking_options: descriptor.thinking_options,
             quotas: descriptor.quotas,
+            connection_id: None,
+            quota_error: None,
             probed_at: TimestampMs::now(),
         };
         *cache_guard = Some((time::Instant::now(), catalog.clone()));
@@ -3347,6 +3349,9 @@ impl HeadService {
             observed_at: None,
             evidence_links: Vec::new(),
             author_label: Some(String::from("dennett-head")),
+            admission_status: None,
+            salience: None,
+            topic_key: None,
             idempotency_key: idempotency_key.clone(),
         };
         create_note_req.validate()?;
@@ -3743,6 +3748,8 @@ impl HeadService {
                     "memoryd client is not configured on dennett-head",
                 )),
                 notes: Vec::new(),
+                index_status: dennett_contracts::IndexStatus::Degraded,
+                stale_warning: None,
             });
         };
 
@@ -3750,6 +3757,7 @@ impl HeadService {
             scope: req.scope,
             query: req.query,
             limit: req.limit,
+            include_history: req.include_history,
         };
         match client.search_notes(&search_req, Some(correlation_id)).await {
             Ok(resp) => {
@@ -3758,6 +3766,8 @@ impl HeadService {
                     memory_status: MemoryStatus::Healthy,
                     degraded_reason: None,
                     notes: resp.notes,
+                    index_status: resp.index_status,
+                    stale_warning: resp.stale_warning,
                 })
             }
             Err(
@@ -3769,6 +3779,8 @@ impl HeadService {
                     memory_status: MemoryStatus::DegradedUnreachable,
                     degraded_reason: Some(self.redact(&format!("memoryd unavailable: {detail}"))),
                     notes: Vec::new(),
+                    index_status: dennett_contracts::IndexStatus::Degraded,
+                    stale_warning: None,
                 })
             }
             Err(other) => Err(other),

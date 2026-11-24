@@ -297,6 +297,7 @@ async fn run_v03_session_and_drop_bridge(
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
             default_budget: None,
             attached_skills: Vec::new(),
+            preferred_connection_id: None,
         })
         .await
         .expect("create_agent");
@@ -312,6 +313,7 @@ async fn run_v03_session_and_drop_bridge(
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
         )
         .await
@@ -496,6 +498,7 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             default_budget: None,
             attached_skills: Vec::new(),
+            preferred_connection_id: None,
         })
         .await
         .expect("create_agent");
@@ -629,6 +632,7 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
             default_budget: None,
             attached_skills: Vec::new(),
+            preferred_connection_id: None,
         })
         .await
         .expect("create_agent");
@@ -855,6 +859,7 @@ async fn d2_desktop_bridge_targeted_task_stop_leaves_sibling_alive_and_updates_g
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             default_budget: None,
             attached_skills: Vec::new(),
+            preferred_connection_id: None,
         })
         .await
         .expect("create_agent");
@@ -998,6 +1003,7 @@ async fn d2_desktop_bridge_lost_ack_unknown_external_visibility_honest_stop_and_
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             default_budget: None,
             attached_skills: Vec::new(),
+            preferred_connection_id: None,
         })
         .await
         .expect("create_agent");
@@ -1167,6 +1173,7 @@ async fn d2_desktop_bridge_client_message_id_dedup_project_lifecycle_and_artifac
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             default_budget: None,
             attached_skills: Vec::new(),
+            preferred_connection_id: None,
         })
         .await
         .expect("create_agent");
@@ -1400,6 +1407,7 @@ async fn desktop_bridge_standalone_chats_and_pinning_roundtrip() {
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             default_budget: None,
             attached_skills: Vec::new(),
+            preferred_connection_id: None,
         })
         .await
         .expect("create_agent");

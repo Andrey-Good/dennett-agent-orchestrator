@@ -111,6 +111,7 @@ FORBIDDEN_HEAD_CLIENT_DEPS = (
     "dennett-memory-client",
     "dennett-memory-mcp",
     "dennett-runtime-antigravity",
+    "dennett-runtime-local",
     "dennett-testkit",
     "tokio-postgres",
     "deadpool-postgres",
@@ -147,6 +148,7 @@ FORBIDDEN_DESKTOP_EXACT_DEPS = (
     "dennett-memory-mcp",
     "dennett-control-mcp",
     "dennett-runtime-antigravity",
+    "dennett-runtime-local",
     "dennett-testkit",
 )
 
@@ -629,13 +631,14 @@ def check_deps(repo_root: Path) -> None:
                     f"`{head_thin_pkg}` violates thin-client boundary by depending on: {', '.join(sorted(hits))}"
                 )
 
-    runtime_trans = {n.lower() for n in transitive_prod_dep_names("dennett-runtime-antigravity")}
-    for forbidden in FORBIDDEN_RUNTIME_ANTIGRAVITY_DEPS:
-        hits = [name for name in runtime_trans if name == forbidden or forbidden in name]
-        if hits:
-            raise CheckError(
-                f"`dennett-runtime-antigravity` violates adapter boundary by depending on: {', '.join(sorted(hits))}"
-            )
+    for runtime_pkg in ("dennett-runtime-antigravity", "dennett-runtime-local"):
+        runtime_trans = {n.lower() for n in transitive_prod_dep_names(runtime_pkg)}
+        for forbidden in FORBIDDEN_RUNTIME_ANTIGRAVITY_DEPS:
+            hits = [name for name in runtime_trans if name == forbidden or forbidden in name]
+            if hits:
+                raise CheckError(
+                    f"`{runtime_pkg}` violates adapter boundary by depending on: {', '.join(sorted(hits))}"
+                )
 
     desktop_trans = {n.lower() for n in transitive_prod_dep_names("dennett-desktop")}
     exact_hits = sorted(name for name in desktop_trans if name in FORBIDDEN_DESKTOP_EXACT_DEPS)

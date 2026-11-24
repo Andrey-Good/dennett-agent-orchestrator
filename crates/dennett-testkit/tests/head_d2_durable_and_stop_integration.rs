@@ -254,6 +254,7 @@ async fn d2_timers_survive_head_restart_misfire_policies_and_concurrent_idempote
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -626,6 +627,7 @@ async fn d2_goal_update_generation_fence_targeted_stop_delegation_and_agent_mess
                     exceed_policy: BudgetExceedPolicy::AskApproval,
                 }),
                 attached_skills: vec![String::from("research")],
+                preferred_connection_id: None,
             },
             None,
         )
@@ -765,6 +767,7 @@ async fn d2_goal_update_generation_fence_targeted_stop_delegation_and_agent_mess
                 workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -785,6 +788,7 @@ async fn d2_goal_update_generation_fence_targeted_stop_delegation_and_agent_mess
                 },
                 default_budget: None,
                 attached_skills: vec![String::from("research")],
+                preferred_connection_id: None,
             },
             None,
         )
@@ -985,6 +989,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -1251,6 +1256,7 @@ async fn d2_lost_ack_unknown_external_effect_survives_restart_honest_stop_and_re
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -1445,6 +1451,7 @@ async fn d2_clarification_budgets_client_idempotency_strict_lifecycle_and_dennet
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )

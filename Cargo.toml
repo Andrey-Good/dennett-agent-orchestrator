@@ -11,6 +11,7 @@ members = [
     "adapters/memory-mcp",
     "adapters/control-mcp",
     "adapters/antigravity-acp",
+    "adapters/local-runtime",
     "apps/desktop/src-tauri",
 ]
 
@@ -23,12 +24,14 @@ publish = false
 [workspace.dependencies]
 axum = "0.8"
 base64 = "0.22"
+chacha20poly1305 = "0.10"
 deadpool-postgres = "0.14"
 dennett-contracts = { path = "crates/dennett-contracts" }
 dennett-head-client = { path = "crates/dennett-head-client" }
 dennett-memory-client = { path = "crates/dennett-memory-client" }
 dennett-memory-core = { path = "crates/dennett-memory-core" }
 dennett-runtime-antigravity = { path = "adapters/antigravity-acp" }
+dennett-runtime-local = { path = "adapters/local-runtime" }
 hex = "0.4"
 hmac = "0.12"
 proptest = "1.6"
@@ -41,6 +44,7 @@ thiserror = "2.0"
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "net", "io-util", "process", "time", "signal", "sync"] }
 tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-serde_json-1"] }
 uuid = { version = "1.16", features = ["v4", "serde"] }
+zeroize = "1.8"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

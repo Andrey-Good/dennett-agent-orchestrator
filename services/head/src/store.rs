@@ -656,6 +656,7 @@ pub(crate) fn decode_agent_join_row(row: &Row) -> Result<AgentRecord, DennettErr
         workspace_write_policy: write_policy,
         default_budget,
         attached_skills,
+        preferred_connection_id: None,
         created_at: TimestampMs::from_millis(row.get(15)),
     };
 
@@ -711,6 +712,7 @@ pub(crate) fn decode_config_version_row(row: &Row) -> Result<AgentConfigVersion,
         workspace_write_policy: write_policy,
         default_budget,
         attached_skills,
+        preferred_connection_id: None,
         created_at: TimestampMs::from_millis(row.get(10)),
     })
 }
@@ -762,6 +764,8 @@ pub(crate) fn decode_runtime_binding_row(row: &Row) -> Result<RuntimeBinding, De
         workspace_cwd: row.get(7),
         is_simulated: row.get(8),
         rehydrate_count: row.get(9),
+        connection_id: None,
+        endpoint_fingerprint: None,
         created_at: TimestampMs::from_millis(row.get(10)),
         updated_at: TimestampMs::from_millis(row.get(11)),
     })
@@ -771,6 +775,7 @@ pub(crate) fn decode_auth_profile(raw: &str) -> Result<RuntimeAuthProfile, Denne
     match raw {
         "oauth-personal" => Ok(RuntimeAuthProfile::OAuthPersonal),
         "gemini-api-key" => Ok(RuntimeAuthProfile::GeminiApiKey),
+        "local-endpoint" => Ok(RuntimeAuthProfile::LocalEndpoint),
         other => Err(DennettError::Internal {
             detail: format!("unknown runtime auth_profile in DB: `{other}`"),
         }),

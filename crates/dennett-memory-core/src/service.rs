@@ -776,6 +776,8 @@ impl MemoryService {
                 notes: Vec::new(),
                 total_matched: 0,
                 truncated: false,
+                index_status: dennett_contracts::IndexStatus::Healthy,
+                stale_warning: None,
             });
         }
 
@@ -821,6 +823,8 @@ impl MemoryService {
                 notes,
                 total_matched,
                 truncated: total_matched > returned_count,
+                index_status: dennett_contracts::IndexStatus::Healthy,
+                stale_warning: None,
             })
         };
 
@@ -1749,6 +1753,11 @@ fn decode_note_row(
         author_label: row.get(10),
         created_at: TimestampMs::from_millis(row.get(11)),
         updated_at: TimestampMs::from_millis(row.get(12)),
+        admission_status: dennett_contracts::AdmissionStatus::Admitted,
+        salience: dennett_contracts::DEFAULT_NOTE_SALIENCE,
+        topic_key: None,
+        trust_level: dennett_contracts::TrustLevel::Native,
+        instruction_active: false,
         evidence_links,
     })
 }

@@ -1,0 +1,13 @@
+[package]
+name = "dennett-runtime-local"
+description = "Local loopback HTTP AgentRuntimePort adapter for Ollama, LM Studio, and llama.cpp servers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dennett-contracts.workspace = true
+
+[lints]
+workspace = true

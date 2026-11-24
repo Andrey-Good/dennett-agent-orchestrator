@@ -3,8 +3,11 @@
 //! This crate intentionally stays free of SQL drivers, HTTP stacks, UI layers,
 //! and model-provider SDKs so that all services share stable boundary types.
 
+#![warn(missing_docs)]
+
 pub mod control;
 pub mod d2;
+pub mod d3;
 pub mod memory;
 pub mod redact;
 
@@ -66,19 +69,50 @@ pub use d2::{
     validate_iana_timezone_syntax, write_policy_is_subset_of,
 };
 
+pub use d3::{
+    ActivateConnectionRequest, CapabilityActivation, CapabilityId, CapabilityKind,
+    CapabilityOrigin, CapabilityOwnership, CapabilityPossession, CapabilityProjectBinding,
+    CapabilityRecord, CapabilityScopeKind, CapabilitySpec, CapabilityTrust, CompatibilityStatus,
+    ConnectionActivationRole, CreateCapabilityRequest, DeleteCapabilityResponse,
+    DeleteProviderConnectionResponse, DiscoverCapabilitiesRequest, DiscoverCapabilitiesResponse,
+    ListCapabilitiesResponse, ListProviderConnectionsResponse, ListSecretsResponse,
+    MAX_CAPABILITY_DESCRIPTION_BYTES, MAX_CAPABILITY_LIST_ITEMS, MAX_CAPABILITY_MARKDOWN_BYTES,
+    MAX_CAPABILITY_NAME_LEN, MAX_CAPABILITY_SLUG_LEN, MAX_CAPABILITY_VERSION_LEN,
+    MAX_CONNECTION_NAME_LEN, MAX_ENDPOINT_URL_LEN, MAX_SECRET_DESCRIPTION_BYTES,
+    MAX_SECRET_SLOT_KEY_LEN, MAX_SECRET_VALUE_BYTES, MemoryOverviewResponse, PlannedProviderInfo,
+    PluginMcpServerEntry, ProbeConnectionResponse, ProviderConnectionId, ProviderConnectionRecord,
+    ProviderHealthStatus, ProviderKind, ProviderQuotaError, SecretMetadataRecord, SecretSource,
+    SetProjectCapabilityBindingRequest, SetSecretRequest, UpdateCapabilityRequest,
+    UpsertProviderConnectionRequest, validate_secret_slot_key,
+};
+
 pub use memory::{
-    AuthPrincipal, CorrectNoteRequest, CreateNoteRequest, DEFAULT_SEARCH_LIMIT, EventEvidenceLink,
-    EvidenceAnchor, EvidenceId, EvidenceLinkId, EvidenceLinkInput, EvidenceObject,
-    EvidenceRelationship, IdempotencyKey, IngestEvidenceRequest, IngestEvidenceResponse,
+    AdmissionStatus, AuthPrincipal, ClaimId, ConflictId, ConflictStatus, ConflictType,
+    ConsolidationJob, ConsolidationJobId, ConsolidationJobStatus, ConsolidationJobType,
+    CorrectNoteRequest, CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
+    CreateNoteRequest, DEFAULT_NOTE_SALIENCE, DEFAULT_SEARCH_LIMIT, DocumentId, DocumentVersion,
+    DocumentVersionId, EpistemicStatus, EventEvidenceLink, EvidenceAnchor, EvidenceId,
+    EvidenceLinkId, EvidenceLinkInput, EvidenceObject, EvidenceRelationship, ExportPackageId,
+    ExportRequest, ExportResponse, ForgetPropagationStatus, ForgetRequest, ForgetResponse,
+    ForgetTargetType, ForgetTombstone, GetDocumentVersionsResponse, IdempotencyKey, ImportRecordId,
+    ImportRequest, ImportResponse, IndexState, IndexStatus, IngestEvidenceRequest,
+    IngestEvidenceResponse, ListClaimsResponse, ListConflictsResponse,
+    ListConsolidationJobsResponse, ListDocumentsResponse, ListTombstonesResponse,
     MAX_ANCHOR_ATTRIBUTES, MAX_ANCHOR_KIND_LEN, MAX_ANCHOR_LOCATOR_LEN, MAX_AUTHOR_LABEL_BYTES,
-    MAX_EVIDENCE_CONTENT_BYTES, MAX_IDEMPOTENCY_KEY_LEN, MAX_LINKS_PER_EVENT, MAX_MEDIA_TYPE_LEN,
-    MAX_METADATA_ENTRIES, MAX_METADATA_KEY_LEN, MAX_METADATA_VALUE_LEN, MAX_NOTE_BODY_BYTES,
-    MAX_NOTE_TITLE_BYTES, MAX_PRINCIPAL_ID_LEN, MAX_RATIONALE_BYTES, MAX_RELATIONSHIP_LEN,
-    MAX_SCOPE_LEN, MAX_SEARCH_LIMIT, MAX_SEARCH_QUERY_BYTES, MAX_SOURCE_URI_LEN, MAX_TAG_LEN,
-    MAX_TAGS_PER_NOTE, MAX_TIMESTAMP_MS, MIN_TIMESTAMP_MS, MemoryCapability, MemoryEvent,
-    MemoryEventId, MemoryEventKind, MemoryNote, MemoryNoteId, MemoryScope, NoteHistoryResponse,
-    NoteMutationResponse, NoteRevision, NoteRevisionId, PrincipalId, SHA256_HEX_LEN,
-    SearchNotesRequest, SearchNotesResponse, Sha256Hex, TimestampMs,
+    MAX_CAVEAT_BYTES, MAX_CAVEATS_PER_CLAIM, MAX_CLAIM_KEY_LEN, MAX_CLAIM_TEXT_BYTES,
+    MAX_DOCUMENT_BODY_BYTES, MAX_DOCUMENT_KEY_LEN, MAX_DOCUMENT_TITLE_BYTES,
+    MAX_EVIDENCE_CONTENT_BYTES, MAX_FORGET_REASON_BYTES, MAX_IDEMPOTENCY_KEY_LEN,
+    MAX_LINKS_PER_EVENT, MAX_MEDIA_TYPE_LEN, MAX_METADATA_ENTRIES, MAX_METADATA_KEY_LEN,
+    MAX_METADATA_VALUE_LEN, MAX_NOTE_BODY_BYTES, MAX_NOTE_SALIENCE, MAX_NOTE_TITLE_BYTES,
+    MAX_PACKAGE_JSON_BYTES, MAX_PRINCIPAL_ID_LEN, MAX_PROVENANCE_IDS, MAX_RATIONALE_BYTES,
+    MAX_RELATIONSHIP_LEN, MAX_SCOPE_LEN, MAX_SEARCH_LIMIT, MAX_SEARCH_QUERY_BYTES,
+    MAX_SOURCE_URI_LEN, MAX_TAG_LEN, MAX_TAGS_PER_NOTE, MAX_TIMESTAMP_MS, MAX_TOPIC_KEY_LEN,
+    MIN_TIMESTAMP_MS, MemoryCapability, MemoryClaim, MemoryConflict, MemoryDocument, MemoryEvent,
+    MemoryEventId, MemoryEventKind, MemoryNote, MemoryNoteId, MemoryScope, MemoryStatsSummary,
+    NoteHistoryResponse, NoteMutationResponse, NoteRevision, NoteRevisionId, PrincipalId,
+    ResolveConflictRequest, SHA256_HEX_LEN, SearchNotesRequest, SearchNotesResponse, Sha256Hex,
+    SupersedeClaimRequest, TimestampMs, TombstoneId, TriggerIndexRebuildRequest,
+    TriggerIndexRebuildResponse, TrustLevel, UpdateDocumentRequest,
 };
 pub use redact::{
     REDACTED_PLACEHOLDER, extract_connection_secrets, redact_secrets, redact_secrets_owned,
@@ -115,7 +149,7 @@ impl fmt::Display for ProfileMode {
     }
 }
 
-/// Explicitly separated authentication profiles for the Google Antigravity (`agy acp`) runtime.
+/// Explicitly separated authentication profiles for Dennett runtime adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -126,15 +160,19 @@ pub enum RuntimeAuthProfile {
     /// Headless background profile authenticated with `GEMINI_API_KEY` (`gemini-api-key`).
     #[serde(rename = "gemini-api-key")]
     GeminiApiKey,
+    /// Local loopback HTTP runtime server profile (`local-endpoint`, e.g. Ollama / LM Studio / `llama.cpp`).
+    #[serde(rename = "local-endpoint")]
+    LocalEndpoint,
 }
 
 impl RuntimeAuthProfile {
-    /// Returns the ACP `authenticate` method identifier defined by `agy acp`.
+    /// Returns the canonical kebab-case profile identifier (`oauth-personal`, `gemini-api-key`, or `local-endpoint`).
     #[must_use]
     pub const fn as_method_id(self) -> &'static str {
         match self {
             Self::OAuthPersonal => "oauth-personal",
             Self::GeminiApiKey => "gemini-api-key",
+            Self::LocalEndpoint => "local-endpoint",
         }
     }
 }
@@ -142,6 +180,24 @@ impl RuntimeAuthProfile {
 impl fmt::Display for RuntimeAuthProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_method_id())
+    }
+}
+
+impl FromStr for RuntimeAuthProfile {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "oauth-personal" => Ok(Self::OAuthPersonal),
+            "gemini-api-key" => Ok(Self::GeminiApiKey),
+            "local-endpoint" => Ok(Self::LocalEndpoint),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("auth_profile"),
+                reason: format!(
+                    "unsupported auth profile `{other}` (expected oauth-personal|gemini-api-key|local-endpoint)"
+                ),
+            }),
+        }
     }
 }
 
@@ -423,6 +479,18 @@ pub enum DennettError {
         /// Minimum supported version.
         minimum: String,
     },
+    /// Upstream runtime provider rejected a request due to provider-side quota or rate limits
+    /// (explicitly distinct from Dennett's own external [`TaskBudget`] / [`BudgetViolation`] caps).
+    #[error("provider quota exceeded for `{provider}`: {detail}")]
+    ProviderQuotaExceeded {
+        /// Provider or adapter identifier that reported quota exhaustion.
+        provider: String,
+        /// Redacted diagnostic detail from the upstream provider.
+        detail: String,
+        /// Optional upstream retry delay hint in seconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_secs: Option<u64>,
+    },
     /// Operation exceeded its configured time limit.
     #[error("operation timed out: {operation}")]
     Timeout {
@@ -460,6 +528,7 @@ impl DennettError {
             Self::AuthRequired { .. } => "AUTH_REQUIRED",
             Self::RuntimeProtocol { .. } => "RUNTIME_PROTOCOL",
             Self::RuntimeVersionUnsupported { .. } => "RUNTIME_VERSION_UNSUPPORTED",
+            Self::ProviderQuotaExceeded { .. } => "PROVIDER_QUOTA_EXCEEDED",
             Self::Timeout { .. } => "TIMEOUT",
             Self::Cancelled { .. } => "CANCELLED",
             Self::Internal { .. } => "INTERNAL",
@@ -530,6 +599,16 @@ mod tests {
         assert_eq!(serialized.ok().as_deref(), Some("\"oauth-personal\""));
         let serialized_api = serde_json::to_string(&RuntimeAuthProfile::GeminiApiKey);
         assert_eq!(serialized_api.ok().as_deref(), Some("\"gemini-api-key\""));
+        assert_eq!(
+            RuntimeAuthProfile::LocalEndpoint.as_method_id(),
+            "local-endpoint"
+        );
+        let serialized_local = serde_json::to_string(&RuntimeAuthProfile::LocalEndpoint);
+        assert_eq!(serialized_local.ok().as_deref(), Some("\"local-endpoint\""));
+        assert_eq!(
+            "local-endpoint".parse::<RuntimeAuthProfile>(),
+            Ok(RuntimeAuthProfile::LocalEndpoint)
+        );
     }
 
     #[test]

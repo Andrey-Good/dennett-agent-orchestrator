@@ -957,6 +957,7 @@ fn parse_agent_subcommand(
                 workspace_write_policy: write_policy,
                 default_budget,
                 attached_skills,
+                preferred_connection_id: None,
             };
             req.validate()?;
             Ok(Action::AgentCreate { g, req })
@@ -1025,6 +1026,7 @@ fn parse_agent_subcommand(
                 workspace_write_policy: write_policy,
                 default_budget,
                 attached_skills,
+                preferred_connection_id: None,
             };
             req.validate()?;
             Ok(Action::AgentUpdateConfig {
@@ -2360,6 +2362,7 @@ fn parse_memory_subcommand(
                     scope,
                     query,
                     limit,
+                    include_history: false,
                 },
             })
         }

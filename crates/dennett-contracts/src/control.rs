@@ -16,9 +16,11 @@ use crate::d2::{
     ArtifactCompleteness, ArtifactLifecycleState, EffectClaimRecord, ProjectLifecycleState,
     TaskBudget, TaskId, validate_attached_skills, validate_client_message_id,
 };
+use crate::d3::{ProviderConnectionId, ProviderQuotaError};
 use crate::{
-    CorrelationId, DennettError, IdempotencyKey, MemoryEventId, MemoryNote, MemoryNoteId,
-    MemoryScope, ProfileMode, RuntimeAuthProfile, ServiceKind, Sha256Hex, TimestampMs,
+    CorrelationId, DennettError, IdempotencyKey, IndexStatus, MemoryEventId, MemoryNote,
+    MemoryNoteId, MemoryScope, ProfileMode, RuntimeAuthProfile, ServiceKind, Sha256Hex,
+    TimestampMs,
 };
 
 /// Maximum permitted byte length of an agent display name.
@@ -291,6 +293,12 @@ pub struct RuntimeCatalogResponse {
     /// Optional machine-readable quota windows (empty when the runtime does not publish quotas).
     #[serde(default)]
     pub quotas: Vec<RuntimeQuotaWindow>,
+    /// Optional persisted [`ProviderConnectionId`] that produced this catalog snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<ProviderConnectionId>,
+    /// Optional upstream provider quota error (distinct from Dennett's own [`TaskBudget`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_error: Option<ProviderQuotaError>,
     /// UTC timestamp when this catalog snapshot was probed.
     pub probed_at: TimestampMs,
 }
@@ -422,6 +430,9 @@ pub struct AgentConfigVersion {
     /// Shared skill metadata identifiers attached to this agent configuration (A07).
     #[serde(default)]
     pub attached_skills: Vec<String>,
+    /// Optional preferred provider connection identifier selected for this agent configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_connection_id: Option<ProviderConnectionId>,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
 }
@@ -502,6 +513,12 @@ pub struct RuntimeBinding {
     pub is_simulated: bool,
     /// Number of explicit Dennett-side context rehydrations performed on this binding.
     pub rehydrate_count: i64,
+    /// Optional persisted [`ProviderConnectionId`] that created this runtime binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<ProviderConnectionId>,
+    /// Optional normalized endpoint fingerprint (e.g. host:port) for safe V29 reuse checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_fingerprint: Option<String>,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
     /// UTC last-updated timestamp in epoch milliseconds.
@@ -1119,6 +1136,9 @@ pub struct CreateAgentRequest {
     /// Shared skill metadata identifiers attached to this agent (A07).
     #[serde(default)]
     pub attached_skills: Vec<String>,
+    /// Optional preferred provider connection identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_connection_id: Option<ProviderConnectionId>,
 }
 
 impl CreateAgentRequest {
@@ -1172,6 +1192,9 @@ pub struct UpdateAgentConfigRequest {
     /// Shared skill metadata identifiers attached to this configuration version (A07).
     #[serde(default)]
     pub attached_skills: Vec<String>,
+    /// Optional preferred provider connection identifier (switching runtime preserves [`AgentId`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_connection_id: Option<ProviderConnectionId>,
 }
 
 impl UpdateAgentConfigRequest {
@@ -1691,6 +1714,9 @@ pub struct HeadMemorySearchRequest {
     /// Optional maximum result count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// When `true`, requests historical/superseded matches alongside current state where supported.
+    #[serde(default)]
+    pub include_history: bool,
 }
 
 /// Honest response payload for `POST /v1/memory/search` via Head (V02).
@@ -1706,6 +1732,12 @@ pub struct HeadMemorySearchResponse {
     pub degraded_reason: Option<String>,
     /// Matching notes returned by `memoryd` (always empty when degraded).
     pub notes: Vec<MemoryNote>,
+    /// Live health/freshness status of `memoryd`'s separable search index.
+    #[serde(default)]
+    pub index_status: IndexStatus,
+    /// Optional honest warning when `memoryd`'s search index is lagging, rebuilding, or degraded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_warning: Option<String>,
 }
 
 /// Machine-readable health snapshot exposed by `dennett-head` (`GET /healthz`).
@@ -1959,6 +1991,8 @@ mod tests {
             workspace_cwd: String::from("C:/tmp/project"),
             is_simulated: false,
             rehydrate_count: 0,
+            connection_id: None,
+            endpoint_fingerprint: None,
             created_at: TimestampMs::now(),
             updated_at: TimestampMs::now(),
         };

@@ -66,6 +66,32 @@ pub const MAX_SEARCH_QUERY_BYTES: usize = 512;
 pub const MIN_TIMESTAMP_MS: i64 = -62_135_596_800_000;
 /// Maximum valid UTC timestamp in milliseconds (`9999-12-31T23:59:59.999Z`), safely within PostgreSQL `TIMESTAMPTZ`.
 pub const MAX_TIMESTAMP_MS: i64 = 253_402_300_799_999;
+/// Default salience score assigned to newly admitted notes (`0..=100`).
+pub const DEFAULT_NOTE_SALIENCE: u8 = 50;
+/// Maximum permitted salience score (`0..=100`).
+pub const MAX_NOTE_SALIENCE: u8 = 100;
+/// Maximum permitted byte length of a normalized topic key.
+pub const MAX_TOPIC_KEY_LEN: usize = 128;
+/// Maximum permitted byte length of an optional claim predicate sub-key.
+pub const MAX_CLAIM_KEY_LEN: usize = 128;
+/// Maximum permitted byte length of a natural-language claim statement (16 KiB).
+pub const MAX_CLAIM_TEXT_BYTES: usize = 16 * 1024;
+/// Maximum number of explicit caveats attached to a single [`MemoryClaim`].
+pub const MAX_CAVEATS_PER_CLAIM: usize = 32;
+/// Maximum byte length of a single claim caveat string.
+pub const MAX_CAVEAT_BYTES: usize = 1024;
+/// Maximum permitted byte length of a logical [`MemoryDocument`] key.
+pub const MAX_DOCUMENT_KEY_LEN: usize = 128;
+/// Maximum permitted byte length of a [`MemoryDocument`] title.
+pub const MAX_DOCUMENT_TITLE_BYTES: usize = 256;
+/// Maximum permitted byte length of a [`MemoryDocument`] body (512 KiB).
+pub const MAX_DOCUMENT_BODY_BYTES: usize = 512 * 1024;
+/// Maximum permitted byte length of a forget/conflict resolution rationale.
+pub const MAX_FORGET_REASON_BYTES: usize = 4 * 1024;
+/// Maximum permitted byte length of an imported/exported memory package JSON payload (16 MiB).
+pub const MAX_PACKAGE_JSON_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum number of provenance claim or note identifiers attached to a single document version.
+pub const MAX_PROVENANCE_IDS: usize = 256;
 
 macro_rules! define_uuid_id {
     (
@@ -152,6 +178,54 @@ define_uuid_id! {
     /// Stable UUID identifying an immutable [`NoteRevision`] snapshot.
     pub struct NoteRevisionId;
     field = "revision_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying a structured [`MemoryClaim`].
+    pub struct ClaimId;
+    field = "claim_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying a tracked [`MemoryConflict`].
+    pub struct ConflictId;
+    field = "conflict_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying a versioned [`MemoryDocument`] dossier.
+    pub struct DocumentId;
+    field = "document_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying one immutable [`DocumentVersion`] snapshot.
+    pub struct DocumentVersionId;
+    field = "version_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying an interruptible [`ConsolidationJob`].
+    pub struct ConsolidationJobId;
+    field = "job_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying a content-free [`ForgetTombstone`] audit record.
+    pub struct TombstoneId;
+    field = "tombstone_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying a recorded [`ExportResponse`] package.
+    pub struct ExportPackageId;
+    field = "package_id";
+}
+
+define_uuid_id! {
+    /// Stable UUID identifying a recorded [`ImportResponse`] ingestion audit row.
+    pub struct ImportRecordId;
+    field = "import_id";
 }
 
 /// UTC timestamp stored as signed milliseconds since Unix epoch (`1970-01-01T00:00:00Z`).
@@ -624,10 +698,16 @@ impl<'de> Deserialize<'de> for EvidenceRelationship {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum MemoryCapability {
-    /// Allows reading notes, history, events, evidence, and scoped search.
+    /// Allows reading notes, claims, conflicts, documents, history, events, evidence, stats, and scoped search.
     Read,
-    /// Allows ingesting evidence, creating notes, and appending corrections.
+    /// Allows ingesting evidence, creating/correcting notes, claims, conflicts, documents, consolidation jobs, and untrusted imports.
     Write,
+    /// Allows administrative memory maintenance operations such as full search-index rebuilds.
+    Admin,
+    /// Allows exporting deterministic, secret-stripped memory packages (Contract J).
+    Export,
+    /// Allows forgetting/deleting memory entities with search-index purge and audit tombstones.
+    Forget,
 }
 
 impl MemoryCapability {
@@ -637,6 +717,9 @@ impl MemoryCapability {
         match self {
             Self::Read => "read",
             Self::Write => "write",
+            Self::Admin => "admin",
+            Self::Export => "export",
+            Self::Forget => "forget",
         }
     }
 }
@@ -645,6 +728,132 @@ impl fmt::Display for MemoryCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+impl FromStr for MemoryCapability {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "read" => Ok(Self::Read),
+            "write" => Ok(Self::Write),
+            "admin" => Ok(Self::Admin),
+            "export" => Ok(Self::Export),
+            "forget" => Ok(Self::Forget),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("capability"),
+                reason: format!("unknown memory capability `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Admission disposition assigned to a [`MemoryNote`] upon ingestion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AdmissionStatus {
+    /// Admitted into durable long-term memory projections.
+    #[default]
+    Admitted,
+    /// Ephemeral short-lived note subject to retention sweeping.
+    Ephemeral,
+    /// Rejected from active retrieval projections while preserving audit lineage.
+    Rejected,
+}
+
+impl AdmissionStatus {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::Ephemeral => "ephemeral",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+impl fmt::Display for AdmissionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AdmissionStatus {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "admitted" => Ok(Self::Admitted),
+            "ephemeral" => Ok(Self::Ephemeral),
+            "rejected" => Ok(Self::Rejected),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("admission_status"),
+                reason: format!("unknown admission status `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Provenance trust tier distinguishing native memory from imported external material (Contract J).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TrustLevel {
+    /// Authored directly inside this Dennett instance.
+    #[default]
+    Native,
+    /// Imported from an external package and untrusted by default (`instruction_active = false`).
+    ExternalUntrusted,
+    /// External material explicitly reviewed by the owner.
+    Reviewed,
+    /// Explicitly promoted to trusted material by the owner.
+    Trusted,
+}
+
+impl TrustLevel {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::ExternalUntrusted => "external_untrusted",
+            Self::Reviewed => "reviewed",
+            Self::Trusted => "trusted",
+        }
+    }
+}
+
+impl fmt::Display for TrustLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for TrustLevel {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "native" => Ok(Self::Native),
+            "external_untrusted" => Ok(Self::ExternalUntrusted),
+            "reviewed" => Ok(Self::Reviewed),
+            "trusted" => Ok(Self::Trusted),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("trust_level"),
+                reason: format!("unknown trust level `{other}`"),
+            }),
+        }
+    }
+}
+
+const fn default_note_salience() -> u8 {
+    DEFAULT_NOTE_SALIENCE
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Authenticated principal verified by `AuthVerifier` from a bearer credential.
@@ -951,20 +1160,40 @@ pub struct CreateNoteRequest {
     /// Optional untrusted display label (for example CLI `--agent`); never used for authorization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_label: Option<String>,
+    /// Optional admission disposition (defaults to [`AdmissionStatus::Admitted`] on the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_status: Option<AdmissionStatus>,
+    /// Optional salience score in `0..=100` (defaults to [`DEFAULT_NOTE_SALIENCE`] on the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub salience: Option<u8>,
+    /// Optional normalized topic key grouping related notes and claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_key: Option<String>,
     /// Caller idempotency key preventing duplicate creation on retries.
     pub idempotency_key: IdempotencyKey,
 }
 
 impl CreateNoteRequest {
-    /// Validates note creation fields, tags, observed timestamp, and evidence link inputs.
+    /// Validates note creation fields, admission/salience bounds, topic key, observed timestamp, and evidence link inputs.
     ///
     /// # Errors
     ///
     /// Returns [`DennettError::InvalidInput`] on empty/oversized/NUL-containing fields,
-    /// out-of-range timestamps, or invalid links.
+    /// out-of-range salience or timestamps, or invalid links.
     pub fn validate(&self) -> Result<(), DennettError> {
         if let Some(ts) = self.observed_at {
             ts.validate("observed_at")?;
+        }
+        if let Some(salience) = self.salience
+            && salience > MAX_NOTE_SALIENCE
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("salience"),
+                reason: format!("must be between 0 and {MAX_NOTE_SALIENCE}"),
+            });
+        }
+        if let Some(ref topic_key) = self.topic_key {
+            validate_bounded_key(topic_key, "topic_key", MAX_TOPIC_KEY_LEN)?;
         }
         validate_note_fields(
             &self.title,
@@ -1067,6 +1296,21 @@ pub struct MemoryNote {
     pub created_at: TimestampMs,
     /// Timestamp when `current_revision` was committed.
     pub updated_at: TimestampMs,
+    /// Admission disposition of this note (`admitted`, `ephemeral`, or `rejected`).
+    #[serde(default)]
+    pub admission_status: AdmissionStatus,
+    /// Salience score in `0..=100` (defaults to [`DEFAULT_NOTE_SALIENCE`]).
+    #[serde(default = "default_note_salience")]
+    pub salience: u8,
+    /// Optional normalized topic key grouping related notes and claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_key: Option<String>,
+    /// Provenance trust tier (`native` vs `external_untrusted`/`reviewed`/`trusted`).
+    #[serde(default)]
+    pub trust_level: TrustLevel,
+    /// Whether this note is permitted to act as executable instructions (always `false` on untrusted imports).
+    #[serde(default)]
+    pub instruction_active: bool,
     /// Evidence links attached to `last_event_id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence_links: Vec<EventEvidenceLink>,
@@ -1141,6 +1385,9 @@ pub struct SearchNotesRequest {
     /// Optional maximum number of results (`1..=MAX_SEARCH_LIMIT`, defaults to [`DEFAULT_SEARCH_LIMIT`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// When `true`, includes historical/superseded matches alongside current state where supported.
+    #[serde(default)]
+    pub include_history: bool,
 }
 
 impl SearchNotesRequest {
@@ -1171,7 +1418,7 @@ impl SearchNotesRequest {
     }
 }
 
-/// Scoped search response containing current notes and truncation metadata.
+/// Scoped search response containing current notes, truncation metadata, and live index status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchNotesResponse {
     /// Matching current notes visible within the principal's authorized scopes.
@@ -1180,6 +1427,12 @@ pub struct SearchNotesResponse {
     pub total_matched: u64,
     /// `true` when additional matching notes exist beyond `notes.len()`.
     pub truncated: bool,
+    /// Live freshness/health status of the separable search index at query time.
+    #[serde(default)]
+    pub index_status: IndexStatus,
+    /// Honest notice when the index is lagging, rebuilding, or degraded (fresh tail overlay active).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_warning: Option<String>,
 }
 
 /// Discriminator for append-only rows in `memory_events`.
@@ -1193,6 +1446,30 @@ pub enum MemoryEventKind {
     NoteCreated,
     /// An existing memory note received a new immutable correction revision.
     NoteCorrected,
+    /// A structured [`MemoryClaim`] was created.
+    ClaimCreated,
+    /// An existing [`MemoryClaim`] was superseded by a newer claim.
+    ClaimSuperseded,
+    /// A contradiction between candidate claims was recorded as a [`MemoryConflict`].
+    ConflictDetected,
+    /// An open [`MemoryConflict`] was resolved or explicitly adjudicated.
+    ConflictResolved,
+    /// A new versioned [`MemoryDocument`] dossier was created.
+    DocumentCreated,
+    /// An existing [`MemoryDocument`] received a new version.
+    DocumentUpdated,
+    /// A [`MemoryNote`] was forgotten with tombstone and search-index purge.
+    NoteForgotten,
+    /// An [`EvidenceObject`] was forgotten with tombstone and search-index purge.
+    EvidenceForgotten,
+    /// A [`MemoryClaim`] was forgotten with tombstone and search-index purge.
+    ClaimForgotten,
+    /// A [`MemoryDocument`] was forgotten with tombstone and search-index purge.
+    DocumentForgotten,
+    /// A deterministic, secret-free memory package was exported (Contract J).
+    PackageExported,
+    /// An external memory package was imported as `external_untrusted` data (Contract J).
+    PackageImported,
 }
 
 impl MemoryEventKind {
@@ -1203,6 +1480,18 @@ impl MemoryEventKind {
             Self::EvidenceIngested => "evidence_ingested",
             Self::NoteCreated => "note_created",
             Self::NoteCorrected => "note_corrected",
+            Self::ClaimCreated => "claim_created",
+            Self::ClaimSuperseded => "claim_superseded",
+            Self::ConflictDetected => "conflict_detected",
+            Self::ConflictResolved => "conflict_resolved",
+            Self::DocumentCreated => "document_created",
+            Self::DocumentUpdated => "document_updated",
+            Self::NoteForgotten => "note_forgotten",
+            Self::EvidenceForgotten => "evidence_forgotten",
+            Self::ClaimForgotten => "claim_forgotten",
+            Self::DocumentForgotten => "document_forgotten",
+            Self::PackageExported => "package_exported",
+            Self::PackageImported => "package_imported",
         }
     }
 }
@@ -1221,6 +1510,18 @@ impl FromStr for MemoryEventKind {
             "evidence_ingested" => Ok(Self::EvidenceIngested),
             "note_created" => Ok(Self::NoteCreated),
             "note_corrected" => Ok(Self::NoteCorrected),
+            "claim_created" => Ok(Self::ClaimCreated),
+            "claim_superseded" => Ok(Self::ClaimSuperseded),
+            "conflict_detected" => Ok(Self::ConflictDetected),
+            "conflict_resolved" => Ok(Self::ConflictResolved),
+            "document_created" => Ok(Self::DocumentCreated),
+            "document_updated" => Ok(Self::DocumentUpdated),
+            "note_forgotten" => Ok(Self::NoteForgotten),
+            "evidence_forgotten" => Ok(Self::EvidenceForgotten),
+            "claim_forgotten" => Ok(Self::ClaimForgotten),
+            "document_forgotten" => Ok(Self::DocumentForgotten),
+            "package_exported" => Ok(Self::PackageExported),
+            "package_imported" => Ok(Self::PackageImported),
             other => Err(DennettError::InvalidInput {
                 field: String::from("event_kind"),
                 reason: format!("unknown memory event kind `{other}`"),
@@ -1263,6 +1564,1254 @@ pub struct MemoryEvent {
     /// Evidence links associated with this event.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence_links: Vec<EventEvidenceLink>,
+}
+
+// ============================================================================
+// Phase D3 Memory Fabric: Claims, Conflicts, Documents, Consolidation,
+// Separable Search Index, Forgetting, and Portable Export/Import (Contract J)
+// ============================================================================
+
+/// Epistemic lifecycle status of a structured [`MemoryClaim`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum EpistemicStatus {
+    /// Directly observed from primary evidence.
+    Observed,
+    /// Explicitly asserted as current best-known state.
+    #[default]
+    Asserted,
+    /// Derived or synthesized from multiple observations.
+    Inferred,
+    /// Tentative hypothesis awaiting confirmation.
+    Hypothesis,
+    /// Actively disputed by an open [`MemoryConflict`].
+    Contested,
+    /// Replaced by a newer claim in a supersession chain.
+    Superseded,
+    /// Explicitly withdrawn without a replacement claim.
+    Retracted,
+}
+
+impl EpistemicStatus {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Asserted => "asserted",
+            Self::Inferred => "inferred",
+            Self::Hypothesis => "hypothesis",
+            Self::Contested => "contested",
+            Self::Superseded => "superseded",
+            Self::Retracted => "retracted",
+        }
+    }
+}
+
+impl fmt::Display for EpistemicStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for EpistemicStatus {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "observed" => Ok(Self::Observed),
+            "asserted" => Ok(Self::Asserted),
+            "inferred" => Ok(Self::Inferred),
+            "hypothesis" => Ok(Self::Hypothesis),
+            "contested" => Ok(Self::Contested),
+            "superseded" => Ok(Self::Superseded),
+            "retracted" => Ok(Self::Retracted),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("epistemic_status"),
+                reason: format!("unknown epistemic status `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Structured claim representing best-known current or historical state for a topic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryClaim {
+    /// Stable claim identifier.
+    pub claim_id: ClaimId,
+    /// Scope isolating this claim.
+    pub scope: MemoryScope,
+    /// Normalized topic key grouping related claims.
+    pub topic_key: String,
+    /// Optional predicate sub-key within `topic_key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_key: Option<String>,
+    /// Natural-language statement of the claim.
+    pub natural_language: String,
+    /// Current epistemic status of this claim.
+    pub epistemic_status: EpistemicStatus,
+    /// Previous claim explicitly superseded by this claim, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_claim_id: Option<ClaimId>,
+    /// Optional start of the claim's validity interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<TimestampMs>,
+    /// Optional end of the claim's validity interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<TimestampMs>,
+    /// Append-only event that created this claim.
+    pub source_event_id: MemoryEventId,
+    /// Optional source note from which this claim was derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_note_id: Option<MemoryNoteId>,
+    /// Essential caveats, exceptions, or qualifiers that consolidation must preserve.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caveats: Vec<String>,
+    /// Deterministic provenance metadata map (supporting evidence ids, confidence, model version).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provenance: BTreeMap<String, String>,
+    /// Provenance trust tier (`native` vs `external_untrusted`/`reviewed`/`trusted`).
+    #[serde(default)]
+    pub trust_level: TrustLevel,
+    /// Whether this claim may act as executable instructions (strictly `false` on untrusted imports).
+    #[serde(default)]
+    pub instruction_active: bool,
+    /// Evidence links attached to `source_event_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_links: Vec<EventEvidenceLink>,
+    /// Server commit timestamp.
+    pub created_at: TimestampMs,
+}
+
+/// Request to create a new structured [`MemoryClaim`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateClaimRequest {
+    /// Scope owning the claim.
+    pub scope: MemoryScope,
+    /// Normalized topic key grouping related claims.
+    pub topic_key: String,
+    /// Optional predicate sub-key within `topic_key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_key: Option<String>,
+    /// Natural-language statement of the claim.
+    pub natural_language: String,
+    /// Initial epistemic status (defaults to [`EpistemicStatus::Asserted`]).
+    #[serde(default)]
+    pub epistemic_status: EpistemicStatus,
+    /// Optional earlier claim superseded by this claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_claim_id: Option<ClaimId>,
+    /// Optional start of the claim's validity interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<TimestampMs>,
+    /// Optional end of the claim's validity interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<TimestampMs>,
+    /// Optional source note from which this claim was extracted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_note_id: Option<MemoryNoteId>,
+    /// Essential caveats or exceptions attached to this claim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caveats: Vec<String>,
+    /// Optional provenance metadata map.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provenance: BTreeMap<String, String>,
+    /// Optional links to supporting evidence objects in the same scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_links: Vec<EvidenceLinkInput>,
+    /// Caller idempotency key preventing duplicate claim creation on retries.
+    pub idempotency_key: IdempotencyKey,
+}
+
+impl CreateClaimRequest {
+    /// Validates claim creation fields, validity interval, caveats, provenance, and evidence links.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] on empty/oversized/NUL-containing fields,
+    /// invalid timestamps (`valid_from > valid_to`), or invalid caveats/links.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        validate_bounded_key(&self.topic_key, "topic_key", MAX_TOPIC_KEY_LEN)?;
+        if let Some(ref key) = self.claim_key {
+            validate_bounded_key(key, "claim_key", MAX_CLAIM_KEY_LEN)?;
+        }
+        reject_nul(&self.natural_language, "natural_language")?;
+        if self.natural_language.trim().is_empty()
+            || self.natural_language.len() > MAX_CLAIM_TEXT_BYTES
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("natural_language"),
+                reason: format!("must be non-empty and at most {MAX_CLAIM_TEXT_BYTES} bytes"),
+            });
+        }
+        if let Some(vf) = self.valid_from {
+            vf.validate("valid_from")?;
+        }
+        if let Some(vt) = self.valid_to {
+            vt.validate("valid_to")?;
+        }
+        if let (Some(vf), Some(vt)) = (self.valid_from, self.valid_to)
+            && vf > vt
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("valid_to"),
+                reason: String::from("valid_to must be greater than or equal to valid_from"),
+            });
+        }
+        if self.caveats.len() > MAX_CAVEATS_PER_CLAIM {
+            return Err(DennettError::InvalidInput {
+                field: String::from("caveats"),
+                reason: format!("exceeds maximum of {MAX_CAVEATS_PER_CLAIM} caveats"),
+            });
+        }
+        for caveat in &self.caveats {
+            reject_nul(caveat, "caveats")?;
+            if caveat.trim().is_empty() || caveat.len() > MAX_CAVEAT_BYTES {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("caveats"),
+                    reason: format!(
+                        "each caveat must be non-empty and at most {MAX_CAVEAT_BYTES} bytes"
+                    ),
+                });
+            }
+        }
+        validate_metadata_map(&self.provenance)?;
+        if self.evidence_links.len() > MAX_LINKS_PER_EVENT {
+            return Err(DennettError::InvalidInput {
+                field: String::from("evidence_links"),
+                reason: format!("exceeds maximum of {MAX_LINKS_PER_EVENT} links"),
+            });
+        }
+        for link in &self.evidence_links {
+            link.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Request to supersede an existing [`MemoryClaim`] with a newer replacement claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupersedeClaimRequest {
+    /// Existing claim identifier to be superseded.
+    pub claim_id: ClaimId,
+    /// Expected owning scope of both the superseded claim and `new_claim`.
+    pub scope: MemoryScope,
+    /// Replacement claim payload.
+    pub new_claim: CreateClaimRequest,
+    /// Optional explicit conflict resolution event authorizing supersession across older timestamps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_event_id: Option<MemoryEventId>,
+}
+
+impl SupersedeClaimRequest {
+    /// Validates replacement claim fields and scope consistency.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `new_claim` is invalid or targets a different scope.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        if self.new_claim.scope != self.scope {
+            return Err(DennettError::InvalidInput {
+                field: String::from("new_claim.scope"),
+                reason: String::from("replacement claim scope must match target scope"),
+            });
+        }
+        self.new_claim.validate()
+    }
+}
+
+/// Response listing [`MemoryClaim`] records for a scope or topic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListClaimsResponse {
+    /// Matching claims visible within authorized scopes.
+    pub claims: Vec<MemoryClaim>,
+}
+
+/// Category of contradiction tracked by [`MemoryConflict`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ConflictType {
+    /// Claims disagree across overlapping or inverted validity intervals.
+    Temporal,
+    /// Distinct evidence sources contradict one another.
+    Source,
+    /// Concurrent writers updated the same topic or predicate simultaneously.
+    ConcurrentEdit,
+    /// Semantically incompatible statements on the same topic.
+    Semantic,
+    /// Policy or constraint contradiction requiring explicit adjudication.
+    Policy,
+}
+
+impl ConflictType {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Temporal => "temporal",
+            Self::Source => "source",
+            Self::ConcurrentEdit => "concurrent_edit",
+            Self::Semantic => "semantic",
+            Self::Policy => "policy",
+        }
+    }
+}
+
+impl fmt::Display for ConflictType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ConflictType {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "temporal" => Ok(Self::Temporal),
+            "source" => Ok(Self::Source),
+            "concurrent_edit" => Ok(Self::ConcurrentEdit),
+            "semantic" => Ok(Self::Semantic),
+            "policy" => Ok(Self::Policy),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("conflict_type"),
+                reason: format!("unknown conflict type `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Lifecycle state of a tracked [`MemoryConflict`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ConflictStatus {
+    /// Unresolved conflict actively marking candidate claims as `contested`.
+    #[default]
+    Open,
+    /// Explicitly resolved with an audit event and optional winning claim.
+    Resolved,
+    /// Ambiguity intentionally accepted while keeping candidate positions documented.
+    AcceptedAmbiguity,
+    /// Conflict became moot because underlying claims were retracted or forgotten.
+    Invalidated,
+}
+
+impl ConflictStatus {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Resolved => "resolved",
+            Self::AcceptedAmbiguity => "accepted_ambiguity",
+            Self::Invalidated => "invalidated",
+        }
+    }
+}
+
+impl fmt::Display for ConflictStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ConflictStatus {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "open" => Ok(Self::Open),
+            "resolved" => Ok(Self::Resolved),
+            "accepted_ambiguity" => Ok(Self::AcceptedAmbiguity),
+            "invalidated" => Ok(Self::Invalidated),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("conflict_status"),
+                reason: format!("unknown conflict status `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Explicit tracked contradiction between candidate claims in a [`MemoryScope`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryConflict {
+    /// Stable conflict identifier.
+    pub conflict_id: ConflictId,
+    /// Scope isolating this conflict.
+    pub scope: MemoryScope,
+    /// Optional normalized topic key shared by the conflicting claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_key: Option<String>,
+    /// Category of contradiction detected.
+    pub conflict_type: ConflictType,
+    /// Candidate claim identifiers participating in this conflict.
+    pub candidate_claim_ids: Vec<ClaimId>,
+    /// Whether this conflict blocks automatic decisions until resolved.
+    #[serde(default)]
+    pub blocking: bool,
+    /// Current lifecycle status of the conflict.
+    pub status: ConflictStatus,
+    /// Append-only event that resolved or adjudicated this conflict, if resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_event_id: Option<MemoryEventId>,
+    /// Optional human- or operator-supplied resolution rationale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_note: Option<String>,
+    /// UTC timestamp when the conflict was detected.
+    pub detected_at: TimestampMs,
+    /// UTC timestamp when the conflict was resolved, if terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at: Option<TimestampMs>,
+}
+
+/// Response listing [`MemoryConflict`] records for a scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListConflictsResponse {
+    /// Matching conflict records visible within authorized scopes.
+    pub conflicts: Vec<MemoryConflict>,
+}
+
+/// Request to resolve or adjudicate an open [`MemoryConflict`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolveConflictRequest {
+    /// Target conflict identifier.
+    pub conflict_id: ConflictId,
+    /// Expected owning scope of the conflict.
+    pub scope: MemoryScope,
+    /// Required human-readable rationale documenting the resolution.
+    pub resolution_note: String,
+    /// Optional winning claim identifier whose competitors become `superseded`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub winning_claim_id: Option<ClaimId>,
+    /// Optional explicit target status (defaults to [`ConflictStatus::Resolved`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_status: Option<ConflictStatus>,
+    /// Caller idempotency key preventing duplicate resolution events on retries.
+    pub idempotency_key: IdempotencyKey,
+}
+
+impl ResolveConflictRequest {
+    /// Validates conflict resolution rationale and target status.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `resolution_note` is empty/oversized/contains NUL,
+    /// or if `target_status` attempts to transition back to `Open`.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        reject_nul(&self.resolution_note, "resolution_note")?;
+        if self.resolution_note.trim().is_empty()
+            || self.resolution_note.len() > MAX_FORGET_REASON_BYTES
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("resolution_note"),
+                reason: format!("must be non-empty and at most {MAX_FORGET_REASON_BYTES} bytes"),
+            });
+        }
+        if matches!(self.target_status, Some(ConflictStatus::Open)) {
+            return Err(DennettError::InvalidInput {
+                field: String::from("target_status"),
+                reason: String::from("cannot resolve a conflict into `open` status"),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Human-readable versioned dossier synthesized from claims and notes in a [`MemoryScope`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryDocument {
+    /// Stable document identifier.
+    pub document_id: DocumentId,
+    /// Scope isolating this document.
+    pub scope: MemoryScope,
+    /// Scope-unique logical key (e.g. `"dossier:user-preferences"`).
+    pub document_key: String,
+    /// Human-readable dossier title.
+    pub title: String,
+    /// Current monotonically increasing version number (`>= 1`).
+    pub current_version: i32,
+    /// Current markdown/text body of the dossier.
+    pub current_body: String,
+    /// Provenance claim identifiers backing this dossier version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_claim_ids: Vec<ClaimId>,
+    /// Provenance note identifiers backing this dossier version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_note_ids: Vec<MemoryNoteId>,
+    /// Append-only event that produced `current_version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_event_id: Option<MemoryEventId>,
+    /// Verified principal who wrote `current_version`.
+    pub principal_id: PrincipalId,
+    /// Provenance trust tier (`native` vs `external_untrusted`/`reviewed`/`trusted`).
+    #[serde(default)]
+    pub trust_level: TrustLevel,
+    /// Whether this document may act as executable instructions (always `false` on untrusted imports).
+    #[serde(default)]
+    pub instruction_active: bool,
+    /// UTC creation timestamp.
+    pub created_at: TimestampMs,
+    /// UTC timestamp of the latest version update.
+    pub updated_at: TimestampMs,
+}
+
+/// One immutable historical version snapshot of a [`MemoryDocument`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentVersion {
+    /// Stable version row identifier.
+    pub version_id: DocumentVersionId,
+    /// Parent logical document identifier.
+    pub document_id: DocumentId,
+    /// Monotonic version number (`1`, `2`, ...).
+    pub version: i32,
+    /// Full dossier body captured at this version.
+    pub body: String,
+    /// Provenance claim identifiers recorded for this version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_claim_ids: Vec<ClaimId>,
+    /// Optional summary of changes compared to the previous version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_summary: Option<String>,
+    /// Append-only event that committed this version.
+    pub event_id: MemoryEventId,
+    /// UTC commit timestamp.
+    pub created_at: TimestampMs,
+}
+
+/// Request to create a version-1 [`MemoryDocument`] dossier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateDocumentRequest {
+    /// Scope owning the document.
+    pub scope: MemoryScope,
+    /// Scope-unique logical document key (e.g. `"dossier:project-architecture"`).
+    pub document_key: String,
+    /// Human-readable document title.
+    pub title: String,
+    /// Markdown/text body for version 1.
+    pub body: String,
+    /// Optional provenance claim identifiers supporting this dossier.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_claim_ids: Vec<ClaimId>,
+    /// Optional provenance note identifiers supporting this dossier.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_note_ids: Vec<MemoryNoteId>,
+    /// Caller idempotency key preventing duplicate creation on retries.
+    pub idempotency_key: IdempotencyKey,
+}
+
+impl CreateDocumentRequest {
+    /// Validates document key, title, body, and provenance list bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] on empty/oversized/NUL-containing fields.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        validate_bounded_key(&self.document_key, "document_key", MAX_DOCUMENT_KEY_LEN)?;
+        validate_document_fields(
+            &self.title,
+            &self.body,
+            &self.provenance_claim_ids,
+            &self.provenance_note_ids,
+        )
+    }
+}
+
+/// Request to update an existing [`MemoryDocument`] with optimistic version concurrency.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateDocumentRequest {
+    /// Target document identifier.
+    pub document_id: DocumentId,
+    /// Expected owning scope of the document.
+    pub scope: MemoryScope,
+    /// Optimistic concurrency version expected on `memory_documents.current_version`.
+    pub expected_version: i32,
+    /// Updated human-readable title.
+    pub title: String,
+    /// Updated markdown/text body for the new version.
+    pub body: String,
+    /// Provenance claim identifiers supporting the new version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_claim_ids: Vec<ClaimId>,
+    /// Provenance note identifiers supporting the new version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_note_ids: Vec<MemoryNoteId>,
+    /// Optional human-readable diff summary explaining the revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_summary: Option<String>,
+    /// Caller idempotency key preventing duplicate version commits on retries.
+    pub idempotency_key: IdempotencyKey,
+}
+
+impl UpdateDocumentRequest {
+    /// Validates optimistic version bound, title, body, diff summary, and provenance bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `expected_version < 1` or any field fails validation.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        if self.expected_version < 1 {
+            return Err(DennettError::InvalidInput {
+                field: String::from("expected_version"),
+                reason: String::from("must be at least 1"),
+            });
+        }
+        if let Some(ref summary) = self.diff_summary {
+            reject_nul(summary, "diff_summary")?;
+            if summary.len() > MAX_RATIONALE_BYTES {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("diff_summary"),
+                    reason: format!("exceeds maximum length of {MAX_RATIONALE_BYTES} bytes"),
+                });
+            }
+        }
+        validate_document_fields(
+            &self.title,
+            &self.body,
+            &self.provenance_claim_ids,
+            &self.provenance_note_ids,
+        )
+    }
+}
+
+/// Response listing [`MemoryDocument`] dossiers for a scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListDocumentsResponse {
+    /// Matching documents visible within authorized scopes.
+    pub documents: Vec<MemoryDocument>,
+}
+
+/// Full immutable version history of a [`MemoryDocument`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetDocumentVersionsResponse {
+    /// Logical document identifier.
+    pub document_id: DocumentId,
+    /// Scope owning this document.
+    pub scope: MemoryScope,
+    /// Latest committed version number.
+    pub current_version: i32,
+    /// Ordered list of immutable document versions (`1..=current_version`).
+    pub versions: Vec<DocumentVersion>,
+}
+
+/// Kind of interruptible background memory consolidation job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ConsolidationJobType {
+    /// Summarizes raw episode events while preserving caveats and provenance.
+    EpisodeSummary,
+    /// Refreshes versioned dossiers from active claims and notes.
+    DossierUpdate,
+    /// Extracts structured claims from admitted notes and evidence.
+    ClaimExtraction,
+    /// Rebuilds the separable search index from canonical tables.
+    IndexRebuild,
+    /// Scans active claims for temporal, source, or semantic contradictions.
+    ConflictScan,
+    /// Sweeps expired ephemeral notes according to retention policy.
+    RetentionSweep,
+}
+
+impl ConsolidationJobType {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EpisodeSummary => "episode_summary",
+            Self::DossierUpdate => "dossier_update",
+            Self::ClaimExtraction => "claim_extraction",
+            Self::IndexRebuild => "index_rebuild",
+            Self::ConflictScan => "conflict_scan",
+            Self::RetentionSweep => "retention_sweep",
+        }
+    }
+}
+
+impl fmt::Display for ConsolidationJobType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ConsolidationJobType {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "episode_summary" => Ok(Self::EpisodeSummary),
+            "dossier_update" => Ok(Self::DossierUpdate),
+            "claim_extraction" => Ok(Self::ClaimExtraction),
+            "index_rebuild" => Ok(Self::IndexRebuild),
+            "conflict_scan" => Ok(Self::ConflictScan),
+            "retention_sweep" => Ok(Self::RetentionSweep),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("job_type"),
+                reason: format!("unknown consolidation job type `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Lifecycle state of an interruptible [`ConsolidationJob`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ConsolidationJobStatus {
+    /// Queued and awaiting execution.
+    #[default]
+    Pending,
+    /// Actively executing against canonical memory storage.
+    Running,
+    /// Explicitly paused at a durable checkpoint for later resume.
+    Paused,
+    /// Finished cleanly without losing canonical data or caveats.
+    Completed,
+    /// Terminated due to a runtime or database fault (checkpoint preserved for recovery).
+    Failed,
+    /// Explicitly cancelled before completion.
+    Cancelled,
+}
+
+impl ConsolidationJobStatus {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl fmt::Display for ConsolidationJobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ConsolidationJobStatus {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "paused" => Ok(Self::Paused),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("job_status"),
+                reason: format!("unknown consolidation job status `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Interruptible background memory consolidation job with durable checkpoint/resume state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsolidationJob {
+    /// Stable consolidation job identifier.
+    pub job_id: ConsolidationJobId,
+    /// Scope targeted by this consolidation job.
+    pub scope: MemoryScope,
+    /// Kind of consolidation pass to run.
+    pub job_type: ConsolidationJobType,
+    /// Current lifecycle status.
+    pub status: ConsolidationJobStatus,
+    /// Optional serialized JSON checkpoint payload enabling clean pause/resume recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_json: Option<String>,
+    /// Last canonical memory event incorporated into this job's watermark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark_event_id: Option<MemoryEventId>,
+    /// Confirms whether compression/summarization preserved essential source caveats.
+    #[serde(default = "default_true")]
+    pub caveats_preserved: bool,
+    /// Secret-redacted failure diagnostic when `status == ConsolidationJobStatus::Failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<String>,
+    /// UTC creation timestamp.
+    pub created_at: TimestampMs,
+    /// UTC timestamp of latest status or checkpoint update.
+    pub updated_at: TimestampMs,
+    /// UTC timestamp when execution started, if started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<TimestampMs>,
+    /// UTC timestamp when execution finished, if terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<TimestampMs>,
+}
+
+/// Request to schedule or start an interruptible [`ConsolidationJob`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateConsolidationJobRequest {
+    /// Target memory scope.
+    pub scope: MemoryScope,
+    /// Consolidation job type to execute.
+    pub job_type: ConsolidationJobType,
+    /// Optional caller idempotency key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<IdempotencyKey>,
+}
+
+/// Response listing [`ConsolidationJob`] records for a scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListConsolidationJobsResponse {
+    /// Consolidation jobs ordered newest first.
+    pub jobs: Vec<ConsolidationJob>,
+}
+
+/// Live health and freshness state of the separable, rebuildable search index.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum IndexStatus {
+    /// Search index watermark is caught up with canonical memory events.
+    #[default]
+    Healthy,
+    /// Index watermark trails the canonical stream head; fresh tail overlay bridges the gap.
+    Lagging,
+    /// Full index rebuild is actively running; fresh tail overlay keeps recent writes searchable.
+    Rebuilding,
+    /// Search index is degraded or truncated; fresh tail overlay keeps memory honestly searchable.
+    Degraded,
+}
+
+impl IndexStatus {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Lagging => "lagging",
+            Self::Rebuilding => "rebuilding",
+            Self::Degraded => "degraded",
+        }
+    }
+}
+
+impl fmt::Display for IndexStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for IndexStatus {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "healthy" => Ok(Self::Healthy),
+            "lagging" => Ok(Self::Lagging),
+            "rebuilding" => Ok(Self::Rebuilding),
+            "degraded" => Ok(Self::Degraded),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("index_status"),
+                reason: format!("unknown index status `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Persisted state of the separable search index for one [`MemoryScope`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexState {
+    /// Scope covered by this index state row.
+    pub scope: MemoryScope,
+    /// Optional identifier of the latest indexed canonical event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark_event_id: Option<MemoryEventId>,
+    /// Highest canonical stream sequence reflected in `memory_search_index`.
+    pub watermark_seq: i64,
+    /// Search tokenizer/ranking model version (e.g. `"fts-v1"`).
+    pub model_version: String,
+    /// Current health/freshness status of the search index.
+    pub status: IndexStatus,
+    /// UTC timestamp of the latest completed full rebuild, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_rebuild_at: Option<TimestampMs>,
+    /// UTC timestamp of the latest state update, if recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<TimestampMs>,
+}
+
+/// Request to trigger a full rebuild of `memory_search_index` for a scope (`Admin` capability).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerIndexRebuildRequest {
+    /// Scope whose separable search index should be rebuilt from canonical storage.
+    pub scope: MemoryScope,
+}
+
+/// Result of triggering or completing a full search index rebuild.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerIndexRebuildResponse {
+    /// Updated search index state after rebuild.
+    pub index_state: IndexState,
+    /// Number of search index entries materialized during the rebuild.
+    pub entries_rebuilt: u64,
+}
+
+/// Live scoped summary statistics returned by `GET /v1/memory/stats` for UI and diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryStatsSummary {
+    /// Optional scope represented by these counters (`None` when aggregated across authorized scopes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<MemoryScope>,
+    /// Number of stored evidence source objects.
+    pub sources_count: u64,
+    /// Number of active (non-forgotten, non-rejected) notes.
+    pub active_notes_count: u64,
+    /// Number of active (non-superseded, non-retracted) claims.
+    pub active_claims_count: u64,
+    /// Number of versioned dossiers/documents.
+    pub documents_count: u64,
+    /// Number of currently open conflicts requiring attention.
+    pub open_conflicts_count: u64,
+    /// Number of items tagged `external_untrusted` from external package imports.
+    pub imported_untrusted_count: u64,
+    /// Worst-case or scope-specific search index status.
+    #[serde(default)]
+    pub index_status: IndexStatus,
+    /// Highest indexed stream sequence watermark.
+    #[serde(default)]
+    pub watermark_seq: i64,
+    /// UTC timestamp of the last full search index rebuild, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_rebuild_at: Option<TimestampMs>,
+}
+
+/// Target entity kind accepted by [`ForgetRequest`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ForgetTargetType {
+    /// Active memory note (`memory_notes`).
+    Note,
+    /// Immutable evidence object (`evidence_objects`).
+    Evidence,
+    /// Structured claim (`memory_claims`).
+    Claim,
+    /// Versioned dossier document (`memory_documents`).
+    Document,
+}
+
+impl ForgetTargetType {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Evidence => "evidence",
+            Self::Claim => "claim",
+            Self::Document => "document",
+        }
+    }
+}
+
+impl fmt::Display for ForgetTargetType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ForgetTargetType {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "note" => Ok(Self::Note),
+            "evidence" => Ok(Self::Evidence),
+            "claim" => Ok(Self::Claim),
+            "document" => Ok(Self::Document),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("target_type"),
+                reason: format!("unknown forget target type `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Propagation progress of a forget operation across active projections and search indexes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ForgetPropagationStatus {
+    /// Tombstone recorded; purge still pending.
+    #[default]
+    Pending,
+    /// Target removed from `memory_search_index`.
+    IndexCleared,
+    /// Target removed from active projections (`notes`/`claims`/`documents`).
+    ProjectionsCleared,
+    /// Target fully purged from active projections and search indexes.
+    Completed,
+    /// Propagation encountered an error and requires administrative retry.
+    Failed,
+}
+
+impl ForgetPropagationStatus {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::IndexCleared => "index_cleared",
+            Self::ProjectionsCleared => "projections_cleared",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl fmt::Display for ForgetPropagationStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ForgetPropagationStatus {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "pending" => Ok(Self::Pending),
+            "index_cleared" => Ok(Self::IndexCleared),
+            "projections_cleared" => Ok(Self::ProjectionsCleared),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("propagation_status"),
+                reason: format!("unknown forget propagation status `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Request to forget/delete a memory entity with search-index purge and audit tombstone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgetRequest {
+    /// Scope owning the target entity.
+    pub scope: MemoryScope,
+    /// Kind of entity being forgotten.
+    pub target_type: ForgetTargetType,
+    /// UUID of the target entity (`note_id`, `evidence_id`, `claim_id`, or `document_id`).
+    pub target_id: Uuid,
+    /// Required human-readable audit reason (never stores the forgotten content).
+    pub reason: String,
+    /// Caller idempotency key preventing duplicate forget tombstones on retries.
+    pub idempotency_key: IdempotencyKey,
+}
+
+impl ForgetRequest {
+    /// Validates forget audit reason bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `reason` is empty, oversized, or contains NUL.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        reject_nul(&self.reason, "reason")?;
+        if self.reason.trim().is_empty() || self.reason.len() > MAX_FORGET_REASON_BYTES {
+            return Err(DennettError::InvalidInput {
+                field: String::from("reason"),
+                reason: format!("must be non-empty and at most {MAX_FORGET_REASON_BYTES} bytes"),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Result of forgetting a memory entity, including honest backup-retention disclosure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgetResponse {
+    /// Stable identifier of the recorded content-free audit tombstone.
+    pub tombstone_id: TombstoneId,
+    /// Append-only forget event identifier.
+    pub forget_event_id: MemoryEventId,
+    /// Honest disclosure noting that forgotten content may still exist in offline backups until rotated.
+    pub residual_backup_notice: String,
+    /// Propagation status across active projections and separable search indexes.
+    pub propagation_status: ForgetPropagationStatus,
+    /// `true` when this response was served from an existing matching idempotency record.
+    #[serde(default)]
+    pub idempotent_replay: bool,
+}
+
+/// Content-free audit tombstone proving a memory entity was forgotten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgetTombstone {
+    /// Stable tombstone identifier.
+    pub tombstone_id: TombstoneId,
+    /// Scope from which the entity was forgotten.
+    pub scope: MemoryScope,
+    /// Entity kind that was forgotten.
+    pub target_type: ForgetTargetType,
+    /// UUID of the forgotten entity.
+    pub target_id: Uuid,
+    /// Append-only event recording the forget action.
+    pub forget_event_id: MemoryEventId,
+    /// Verified principal who initiated the forget action.
+    pub principal_id: PrincipalId,
+    /// Audit reason for forgetting (must NEVER contain the forgotten payload).
+    pub reason: String,
+    /// Honest disclosure regarding offline backup retention.
+    pub residual_backup_notice: String,
+    /// Current propagation status across projections and search indexes.
+    pub propagation_status: ForgetPropagationStatus,
+    /// UTC timestamp when the tombstone was recorded.
+    pub created_at: TimestampMs,
+}
+
+/// Response listing [`ForgetTombstone`] audit records for a scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListTombstonesResponse {
+    /// Recorded content-free tombstones ordered newest first.
+    pub tombstones: Vec<ForgetTombstone>,
+}
+
+/// Request to export a deterministic, secret-free memory package for one [`MemoryScope`] (Contract J).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportRequest {
+    /// Scope whose memory records should be exported.
+    pub scope: MemoryScope,
+    /// Optional requested export format version (defaults to `"1.0"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_version: Option<String>,
+}
+
+/// Deterministic, secret-stripped exported memory package (Contract J).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportResponse {
+    /// Stable export package audit identifier.
+    pub package_id: ExportPackageId,
+    /// Scope covered by this export.
+    pub scope: MemoryScope,
+    /// Export format version (e.g. `"1.0"`).
+    pub format_version: String,
+    /// Deterministic lowercase SHA-256 hex digest of `package_json`.
+    pub manifest_sha256: Sha256Hex,
+    /// Total number of exported domain items (notes, claims, documents, etc.).
+    pub item_count: u64,
+    /// Exact UTF-8 byte length of `package_json`.
+    pub byte_size: u64,
+    /// Confirms secret patterns were stripped prior to export (always `true`).
+    #[serde(default = "default_true")]
+    pub secrets_stripped: bool,
+    /// Deterministic canonical UTF-8 JSON representation of the exported package.
+    pub package_json: String,
+}
+
+/// Request to import an external memory package into a [`MemoryScope`] as untrusted data (Contract J).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportRequest {
+    /// Destination scope for imported items.
+    pub scope: MemoryScope,
+    /// Canonical UTF-8 JSON package payload to validate and import.
+    pub package_json: String,
+}
+
+impl ImportRequest {
+    /// Validates non-empty bounded UTF-8 package JSON payload without NUL bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `package_json` is empty, exceeds
+    /// [`MAX_PACKAGE_JSON_BYTES`], or contains NUL bytes.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        reject_nul(&self.package_json, "package_json")?;
+        if self.package_json.trim().is_empty() || self.package_json.len() > MAX_PACKAGE_JSON_BYTES {
+            return Err(DennettError::InvalidInput {
+                field: String::from("package_json"),
+                reason: format!("must be non-empty and at most {MAX_PACKAGE_JSON_BYTES} bytes"),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Result of importing an external memory package (Contract J).
+///
+/// Imported material ALWAYS enters with `trust_level = TrustLevel::ExternalUntrusted`
+/// and `instruction_active = false`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportResponse {
+    /// Stable import audit record identifier.
+    pub import_id: ImportRecordId,
+    /// Destination scope.
+    pub scope: MemoryScope,
+    /// SHA-256 digest of the submitted package payload.
+    pub source_package_sha256: Sha256Hex,
+    /// Assigned provenance trust tier (always [`TrustLevel::ExternalUntrusted`] on import).
+    pub trust_level: TrustLevel,
+    /// Confirms imported content cannot execute as instructions (always `false` on import).
+    pub instruction_active: bool,
+    /// Number of valid items accepted into storage.
+    pub items_imported: u64,
+    /// Number of invalid or unsafe items rejected during validation.
+    pub items_rejected: u64,
+    /// Safe, bounded validation errors explaining rejected items.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation_errors: Vec<String>,
+}
+
+fn validate_bounded_key(value: &str, field: &str, max_len: usize) -> Result<(), DennettError> {
+    reject_nul(value, field)?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() || value.len() > max_len {
+        return Err(DennettError::InvalidInput {
+            field: field.to_owned(),
+            reason: format!("must be non-empty and at most {max_len} bytes"),
+        });
+    }
+    if value.bytes().any(|b| b.is_ascii_control()) {
+        return Err(DennettError::InvalidInput {
+            field: field.to_owned(),
+            reason: String::from("must not contain ASCII control characters"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_document_fields(
+    title: &str,
+    body: &str,
+    provenance_claim_ids: &[ClaimId],
+    provenance_note_ids: &[MemoryNoteId],
+) -> Result<(), DennettError> {
+    reject_nul(title, "title")?;
+    if title.trim().is_empty() || title.len() > MAX_DOCUMENT_TITLE_BYTES {
+        return Err(DennettError::InvalidInput {
+            field: String::from("title"),
+            reason: format!("must be non-empty and at most {MAX_DOCUMENT_TITLE_BYTES} bytes"),
+        });
+    }
+    reject_nul(body, "body")?;
+    if body.trim().is_empty() || body.len() > MAX_DOCUMENT_BODY_BYTES {
+        return Err(DennettError::InvalidInput {
+            field: String::from("body"),
+            reason: format!("must be non-empty and at most {MAX_DOCUMENT_BODY_BYTES} bytes"),
+        });
+    }
+    if provenance_claim_ids.len() > MAX_PROVENANCE_IDS {
+        return Err(DennettError::InvalidInput {
+            field: String::from("provenance_claim_ids"),
+            reason: format!("exceeds maximum of {MAX_PROVENANCE_IDS} claim IDs"),
+        });
+    }
+    if provenance_note_ids.len() > MAX_PROVENANCE_IDS {
+        return Err(DennettError::InvalidInput {
+            field: String::from("provenance_note_ids"),
+            reason: format!("exceeds maximum of {MAX_PROVENANCE_IDS} note IDs"),
+        });
+    }
+    Ok(())
 }
 
 fn reject_nul(value: &str, field: &str) -> Result<(), DennettError> {
@@ -1389,6 +2938,52 @@ const _: () = {
     assert_send_sync::<SearchNotesResponse>();
     assert_send_sync::<MemoryEventKind>();
     assert_send_sync::<MemoryEvent>();
+    assert_send_sync::<AdmissionStatus>();
+    assert_send_sync::<TrustLevel>();
+    assert_send_sync::<ClaimId>();
+    assert_send_sync::<EpistemicStatus>();
+    assert_send_sync::<MemoryClaim>();
+    assert_send_sync::<CreateClaimRequest>();
+    assert_send_sync::<SupersedeClaimRequest>();
+    assert_send_sync::<ListClaimsResponse>();
+    assert_send_sync::<ConflictId>();
+    assert_send_sync::<ConflictType>();
+    assert_send_sync::<ConflictStatus>();
+    assert_send_sync::<MemoryConflict>();
+    assert_send_sync::<ListConflictsResponse>();
+    assert_send_sync::<ResolveConflictRequest>();
+    assert_send_sync::<DocumentId>();
+    assert_send_sync::<DocumentVersionId>();
+    assert_send_sync::<MemoryDocument>();
+    assert_send_sync::<DocumentVersion>();
+    assert_send_sync::<CreateDocumentRequest>();
+    assert_send_sync::<UpdateDocumentRequest>();
+    assert_send_sync::<ListDocumentsResponse>();
+    assert_send_sync::<GetDocumentVersionsResponse>();
+    assert_send_sync::<ConsolidationJobId>();
+    assert_send_sync::<ConsolidationJobType>();
+    assert_send_sync::<ConsolidationJobStatus>();
+    assert_send_sync::<ConsolidationJob>();
+    assert_send_sync::<CreateConsolidationJobRequest>();
+    assert_send_sync::<ListConsolidationJobsResponse>();
+    assert_send_sync::<IndexStatus>();
+    assert_send_sync::<IndexState>();
+    assert_send_sync::<TriggerIndexRebuildRequest>();
+    assert_send_sync::<TriggerIndexRebuildResponse>();
+    assert_send_sync::<MemoryStatsSummary>();
+    assert_send_sync::<TombstoneId>();
+    assert_send_sync::<ForgetTargetType>();
+    assert_send_sync::<ForgetPropagationStatus>();
+    assert_send_sync::<ForgetRequest>();
+    assert_send_sync::<ForgetResponse>();
+    assert_send_sync::<ForgetTombstone>();
+    assert_send_sync::<ListTombstonesResponse>();
+    assert_send_sync::<ExportPackageId>();
+    assert_send_sync::<ImportRecordId>();
+    assert_send_sync::<ExportRequest>();
+    assert_send_sync::<ExportResponse>();
+    assert_send_sync::<ImportRequest>();
+    assert_send_sync::<ImportResponse>();
 };
 
 #[cfg(test)]
@@ -1592,6 +3187,9 @@ mod tests {
             observed_at: None,
             evidence_links: vec![],
             author_label: Some(String::from("ok")),
+            admission_status: None,
+            salience: None,
+            topic_key: None,
             idempotency_key: key.clone(),
         };
         assert!(base_note.validate().is_ok());
@@ -1659,11 +3257,73 @@ mod tests {
             scope: None,
             query: Some(String::from("bad\0query")),
             limit: Some(10),
+            include_history: false,
         };
         assert!(matches!(
             bad_search.validated_limit(),
             Err(DennettError::InvalidInput { .. })
         ));
+    }
+
+    #[test]
+    fn d3_memory_fabric_contracts_default_and_validate_cleanly() {
+        let scope = MemoryScope::try_new("project-d3").expect("valid scope");
+        let key = IdempotencyKey::try_new("op-d3-1").expect("valid key");
+
+        // Backward-compatible deserialization of D1 CreateNoteRequest / SearchNotesRequest / SearchNotesResponse.
+        let legacy_note_json =
+            format!(r#"{{"scope":"{scope}","title":"T","body":"B","idempotency_key":"{key}"}}"#);
+        let decoded_note: CreateNoteRequest =
+            serde_json::from_str(&legacy_note_json).expect("legacy CreateNoteRequest");
+        assert!(decoded_note.admission_status.is_none());
+        assert!(decoded_note.salience.is_none());
+        assert!(decoded_note.topic_key.is_none());
+        assert!(decoded_note.validate().is_ok());
+
+        let bad_salience = CreateNoteRequest {
+            salience: Some(101),
+            ..decoded_note
+        };
+        assert!(bad_salience.validate().is_err());
+
+        let legacy_search_resp: SearchNotesResponse =
+            serde_json::from_str(r#"{"notes":[],"total_matched":0,"truncated":false}"#)
+                .expect("legacy SearchNotesResponse");
+        assert_eq!(legacy_search_resp.index_status, IndexStatus::Healthy);
+        assert!(legacy_search_resp.stale_warning.is_none());
+
+        let claim_req = CreateClaimRequest {
+            scope: scope.clone(),
+            topic_key: String::from("architecture:memory"),
+            claim_key: Some(String::from("search_backend")),
+            natural_language: String::from("Stock PG16 FTS is used without pgvector"),
+            epistemic_status: EpistemicStatus::Observed,
+            supersedes_claim_id: None,
+            valid_from: Some(TimestampMs::from_millis(1_700_000_000_000)),
+            valid_to: None,
+            source_note_id: None,
+            caveats: vec![String::from("Fresh tail overlay bridges lagging indexes")],
+            provenance: BTreeMap::from([(String::from("source"), String::from("spec-10"))]),
+            evidence_links: vec![],
+            idempotency_key: key.clone(),
+        };
+        assert!(claim_req.validate().is_ok());
+
+        let inverted_claim = CreateClaimRequest {
+            valid_from: Some(TimestampMs::from_millis(2_000)),
+            valid_to: Some(TimestampMs::from_millis(1_000)),
+            ..claim_req
+        };
+        assert!(inverted_claim.validate().is_err());
+
+        let forget_req = ForgetRequest {
+            scope,
+            target_type: ForgetTargetType::Note,
+            target_id: Uuid::new_v4(),
+            reason: String::from("Owner requested removal"),
+            idempotency_key: key,
+        };
+        assert!(forget_req.validate().is_ok());
     }
 
     proptest! {

@@ -481,6 +481,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -533,6 +534,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
                 scope: Some(scope.clone()),
                 query: Some(String::from("anything")),
                 limit: Some(5),
+                include_history: false,
             },
             None,
         )
@@ -737,6 +739,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
                 scope: Some(scope),
                 query: Some(String::from("Decision During Memory Outage")),
                 limit: Some(10),
+                include_history: false,
             },
             None,
         )
@@ -795,6 +798,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
                 },
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -1118,6 +1122,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -1193,6 +1198,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -1475,6 +1481,7 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
                 scope: Some(project.memory_scope.clone()),
                 query: Some(String::from("Dynamic scope")),
                 limit: Some(5),
+                include_history: false,
             },
             None,
         )
@@ -1496,6 +1503,7 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
                 workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )

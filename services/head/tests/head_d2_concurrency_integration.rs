@@ -712,6 +712,7 @@ async fn v07_direct_late_complete_task_run_fenced_and_auth_profile_override_fail
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -934,6 +935,7 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -1343,6 +1345,7 @@ async fn h2_02_startup_crash_recovery_and_scheduler_queued_dispatch() {
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -1732,6 +1735,7 @@ async fn h2_03_h2_07_project_remove_delete_cleanup_deleted_filtering_and_artifac
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -2045,6 +2049,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )

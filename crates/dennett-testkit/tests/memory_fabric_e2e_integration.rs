@@ -447,6 +447,9 @@ async fn v01_v06_v19_standalone_memoryd_consistent_across_client_cli_and_mcp() {
         // Forged display label must NEVER override verified principal `agent:signed-alpha`!
         author_label: Some(String::from("spoofed-super-admin")),
         idempotency_key: create_key.clone(),
+        admission_status: None,
+        salience: None,
+        topic_key: None,
     };
 
     let created = signed_client
@@ -626,6 +629,7 @@ async fn v01_v06_v19_standalone_memoryd_consistent_across_client_cli_and_mcp() {
                 scope: Some(scope_alpha.clone()),
                 query: Some(String::from("полный цикл")),
                 limit: Some(10),
+                include_history: false,
             },
             None,
         )
@@ -645,6 +649,7 @@ async fn v01_v06_v19_standalone_memoryd_consistent_across_client_cli_and_mcp() {
                 scope: Some(scope_alpha.clone()),
                 query: Some(String::from("консистентность")),
                 limit: Some(10),
+                include_history: false,
             },
             None,
         )
@@ -807,6 +812,9 @@ async fn v01_v06_v19_standalone_memoryd_consistent_across_client_cli_and_mcp() {
                 evidence_links: vec![],
                 author_label: None,
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
             None,
         )
@@ -835,6 +843,7 @@ async fn v01_v06_v19_standalone_memoryd_consistent_across_client_cli_and_mcp() {
                 scope: None,
                 query: Some(String::from("PG16")),
                 limit: Some(50),
+                include_history: false,
             },
             None,
         )
@@ -903,6 +912,9 @@ async fn v01_v06_v19_standalone_memoryd_consistent_across_client_cli_and_mcp() {
                 evidence_links: vec![],
                 author_label: None,
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
             None,
         )
@@ -1001,6 +1013,9 @@ async fn memoryd_restart_durability_preserves_notes_history_and_evidence_links()
                 }],
                 author_label: None,
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
             None,
         )
@@ -1114,6 +1129,9 @@ async fn memoryd_fault_path_pg_down_reports_honest_errors_without_leaking_secret
                 evidence_links: vec![],
                 author_label: None,
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
             None,
         )

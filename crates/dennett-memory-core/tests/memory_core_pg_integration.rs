@@ -302,6 +302,9 @@ async fn v19_multiple_anchors_null_ordinal_and_cross_scope_link_denial() {
                 ],
                 author_label: None,
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
         )
         .await
@@ -357,6 +360,9 @@ async fn v19_multiple_anchors_null_ordinal_and_cross_scope_link_denial() {
                 }],
                 author_label: None,
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
         )
         .await;
@@ -390,6 +396,9 @@ async fn idempotency_replay_mismatch_and_concurrent_optimistic_lock_races() {
         evidence_links: vec![],
         author_label: None,
         idempotency_key: shared_key.clone(),
+        admission_status: None,
+        salience: None,
+        topic_key: None,
     };
 
     let mut create_tasks = JoinSet::new();
@@ -592,6 +601,9 @@ async fn nul_bytes_and_extreme_timestamps_return_invalid_input_and_valid_bounds_
                 evidence_links: vec![],
                 author_label: None,
                 idempotency_key: IdempotencyKey::generate(),
+                admission_status: None,
+                salience: None,
+                topic_key: None,
             },
         )
         .await;

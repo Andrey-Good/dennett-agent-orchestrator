@@ -223,6 +223,7 @@ async fn r1_arch_02_archive_unarchive_pause_reason_and_periodic_task_mid_run() {
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -547,6 +548,7 @@ async fn r1_arch_03_effect_policy_stop_guard_delete_preservation_and_concurrent_
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -811,6 +813,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -830,6 +833,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 },
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -847,6 +851,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -866,6 +871,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 },
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -1077,6 +1083,7 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             &cid,
         )
@@ -1670,6 +1677,9 @@ async fn r1_over_01_v5_to_v6_memory_outbox_migration_and_ordered_drain() {
             observed_at: None,
             evidence_links: Vec::new(),
             author_label: Some(String::from("dennett-head")),
+            admission_status: None,
+            salience: None,
+            topic_key: None,
             idempotency_key: legacy_idem.clone(),
         };
         let payload_str = serde_json::to_string(&note_req).expect("serialize note");
@@ -1735,6 +1745,11 @@ async fn r1_over_01_v5_to_v6_memory_outbox_migration_and_ordered_drain() {
                             author_label: req.author_label,
                             created_at: now,
                             updated_at: now,
+                            admission_status: dennett_contracts::AdmissionStatus::Admitted,
+                            salience: dennett_contracts::DEFAULT_NOTE_SALIENCE,
+                            topic_key: None,
+                            trust_level: dennett_contracts::TrustLevel::Native,
+                            instruction_active: false,
                             evidence_links: Vec::new(),
                         },
                         event_id,
@@ -1881,6 +1896,7 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -2238,6 +2254,7 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
                 workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )
@@ -2762,6 +2779,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
                 default_budget: None,
                 attached_skills: Vec::new(),
+                preferred_connection_id: None,
             },
             None,
         )

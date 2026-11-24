@@ -8,10 +8,17 @@ use std::time::Duration;
 
 use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets};
 use dennett_contracts::{
-    ApiErrorResponse, CorrectNoteRequest, CorrelationId, CreateNoteRequest, DennettError,
-    EvidenceId, EvidenceObject, IngestEvidenceRequest, IngestEvidenceResponse, MemoryEvent,
-    MemoryEventId, MemoryNote, MemoryNoteId, NoteHistoryResponse, NoteMutationResponse,
-    SearchNotesRequest, SearchNotesResponse, ServiceHealth,
+    ApiErrorResponse, ClaimId, ConsolidationJob, ConsolidationJobId, CorrectNoteRequest,
+    CorrelationId, CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
+    CreateNoteRequest, DennettError, DocumentId, EvidenceId, EvidenceObject, ExportRequest,
+    ExportResponse, ForgetRequest, ForgetResponse, GetDocumentVersionsResponse, ImportRequest,
+    ImportResponse, IndexState, IngestEvidenceRequest, IngestEvidenceResponse, ListClaimsResponse,
+    ListConflictsResponse, ListConsolidationJobsResponse, ListDocumentsResponse,
+    ListTombstonesResponse, MemoryClaim, MemoryConflict, MemoryDocument, MemoryEvent,
+    MemoryEventId, MemoryNote, MemoryNoteId, MemoryScope, MemoryStatsSummary, NoteHistoryResponse,
+    NoteMutationResponse, ResolveConflictRequest, SearchNotesRequest, SearchNotesResponse,
+    ServiceHealth, SupersedeClaimRequest, TriggerIndexRebuildRequest, TriggerIndexRebuildResponse,
+    UpdateDocumentRequest,
 };
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
@@ -294,6 +301,371 @@ impl MemoryClient {
             .await
     }
 
+    // ------------------------------------------------------------------------
+    // Phase D3 Memory Fabric Endpoints
+    // ------------------------------------------------------------------------
+
+    /// Calls `POST /v1/memory/claims` to create a structured [`MemoryClaim`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn create_claim(
+        &self,
+        req: &CreateClaimRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryClaim, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/claims", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/claims/{claim_id}` to fetch a single [`MemoryClaim`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn get_claim(
+        &self,
+        claim_id: ClaimId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryClaim, DennettError> {
+        let path = format!("/v1/memory/claims/{claim_id}");
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/claims/{claim_id}/supersede` to supersede an existing claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn supersede_claim(
+        &self,
+        req: &SupersedeClaimRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryClaim, DennettError> {
+        let path = format!("/v1/memory/claims/{}/supersede", req.claim_id);
+        self.request_json(Method::POST, &path, req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/claims` with optional `scope` and `topic_key` filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn list_claims(
+        &self,
+        scope: Option<&MemoryScope>,
+        topic_key: Option<&str>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListClaimsResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(sc) = scope {
+            params.push(format!("scope={}", encode_query_component(sc.as_str())));
+        }
+        if let Some(topic) = topic_key.map(str::trim).filter(|t| !t.is_empty()) {
+            params.push(format!("topic_key={}", encode_query_component(topic)));
+        }
+        let path = build_query_path("/v1/memory/claims", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/claims/by-topic?scope=...&topic_key=...` to list claims for one topic.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn list_claims_by_topic(
+        &self,
+        scope: &MemoryScope,
+        topic_key: &str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListClaimsResponse, DennettError> {
+        let params = [
+            format!("scope={}", encode_query_component(scope.as_str())),
+            format!("topic_key={}", encode_query_component(topic_key)),
+        ];
+        let path = build_query_path("/v1/memory/claims/by-topic", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/conflicts` with an optional `scope` filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn list_open_conflicts(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListConflictsResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/conflicts", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/conflicts/{conflict_id}/resolve` to adjudicate an open conflict.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn resolve_conflict(
+        &self,
+        req: &ResolveConflictRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryConflict, DennettError> {
+        let path = format!("/v1/memory/conflicts/{}/resolve", req.conflict_id);
+        self.request_json(Method::POST, &path, req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/documents` with an optional `scope` filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn list_documents(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListDocumentsResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/documents", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/documents` to create a version-1 [`MemoryDocument`] dossier.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn create_document(
+        &self,
+        req: &CreateDocumentRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryDocument, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/documents", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/documents/{document_id}` to fetch a [`MemoryDocument`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn get_document(
+        &self,
+        document_id: DocumentId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryDocument, DennettError> {
+        let path = format!("/v1/memory/documents/{document_id}");
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `PUT /v1/memory/documents/{document_id}` to update a dossier with optimistic concurrency.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn update_document(
+        &self,
+        req: &UpdateDocumentRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryDocument, DennettError> {
+        let path = format!("/v1/memory/documents/{}", req.document_id);
+        self.request_json(Method::PUT, &path, req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/documents/{document_id}/versions` to fetch full immutable version history.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn get_document_versions(
+        &self,
+        document_id: DocumentId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<GetDocumentVersionsResponse, DennettError> {
+        let path = format!("/v1/memory/documents/{document_id}/versions");
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/forget` to forget a memory entity with search purge and audit tombstone.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn forget(
+        &self,
+        req: &ForgetRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ForgetResponse, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/forget", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/forget/tombstones` with an optional `scope` filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn list_tombstones(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListTombstonesResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/forget/tombstones", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/export` to export a deterministic, secret-stripped package (Contract J).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn export_package(
+        &self,
+        req: &ExportRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ExportResponse, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/export", req, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/import` to import an external memory package as `external_untrusted` data.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn import_package(
+        &self,
+        req: &ImportRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ImportResponse, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/import", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/index/status` with an optional `scope` filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn get_index_status(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<IndexState, DennettError> {
+        let path = scoped_query_path("/v1/memory/index/status", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/index/rebuild` to rebuild the separable search index (`Admin` capability).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn trigger_index_rebuild(
+        &self,
+        req: &TriggerIndexRebuildRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TriggerIndexRebuildResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            "/v1/memory/index/rebuild",
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/stats` with an optional `scope` filter for live UI/diagnostics summary counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn get_stats(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryStatsSummary, DennettError> {
+        let path = scoped_query_path("/v1/memory/stats", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/consolidation/jobs` with an optional `scope` filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn list_consolidation_jobs(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListConsolidationJobsResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/consolidation/jobs", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/consolidation/jobs` to create an interruptible consolidation job.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn create_consolidation_job(
+        &self,
+        req: &CreateConsolidationJobRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ConsolidationJob, DennettError> {
+        self.request_json(
+            Method::POST,
+            "/v1/memory/consolidation/jobs",
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/memory/consolidation/jobs/{job_id}/pause` to pause a job at its checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn pause_consolidation_job(
+        &self,
+        job_id: ConsolidationJobId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ConsolidationJob, DennettError> {
+        let path = format!("/v1/memory/consolidation/jobs/{job_id}/pause");
+        self.request_no_body(Method::POST, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/consolidation/jobs/{job_id}/resume` to resume a paused or failed job.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn resume_consolidation_job(
+        &self,
+        job_id: ConsolidationJobId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ConsolidationJob, DennettError> {
+        let path = format!("/v1/memory/consolidation/jobs/{job_id}/resume");
+        self.request_no_body(Method::POST, &path, correlation_id)
+            .await
+    }
+
     async fn request_no_body<Resp: DeserializeOwned>(
         &self,
         method: Method,
@@ -492,6 +864,34 @@ impl MemoryClient {
             None => redact_secrets(text, &[]),
         }
     }
+}
+
+fn scoped_query_path(base: &str, scope: Option<&MemoryScope>) -> String {
+    match scope {
+        Some(sc) => format!("{base}?scope={}", encode_query_component(sc.as_str())),
+        None => base.to_owned(),
+    }
+}
+
+fn build_query_path(base: &str, params: &[String]) -> String {
+    if params.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base}?{}", params.join("&"))
+    }
+}
+
+fn encode_query_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            out.push(char::from(byte));
+        } else {
+            use core::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 const _: () = {

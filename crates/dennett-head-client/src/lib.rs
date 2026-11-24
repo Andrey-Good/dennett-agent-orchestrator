@@ -9,25 +9,40 @@ use std::time::Duration;
 
 use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets};
 use dennett_contracts::{
-    AgentConfigHistoryResponse, AgentId, AgentRecord, ApiErrorResponse, ArtifactId,
-    ArtifactLifecycleRequest, ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse,
-    CancelTaskResponse, CapabilityGrantId, CapabilityGrantRecord, CommitMemoryNoteRequest,
-    CommitMemoryNoteResponse, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
-    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
-    DennettError, DiagnosticsResponse, DispatchEffectRequest, DispatchEffectResponse,
-    EffectClaimId, EventStreamResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
-    HeadMemorySearchResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
-    ListArtifactsResponse, ListCapabilityGrantsResponse, ListEffectsResponse, ListInboxResponse,
-    ListOutboxResponse, ListPermissionRequestsResponse, ListPolicyRulesResponse,
-    ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse, ListTasksResponse,
-    PermissionRequestId, PolicyRule, ProjectId, ProjectLifecycleResponse, ProjectRecord,
+    ActivateConnectionRequest, AgentConfigHistoryResponse, AgentId, AgentRecord, ApiErrorResponse,
+    ArtifactId, ArtifactLifecycleRequest, ArtifactLifecycleResponse, ArtifactRecord,
+    CancelRunResponse, CancelTaskResponse, CapabilityGrantId, CapabilityGrantRecord, CapabilityId,
+    CapabilityKind, CapabilityProjectBinding, CapabilityRecord, CapabilityScopeKind,
+    CommitMemoryNoteRequest, CommitMemoryNoteResponse, ConsolidationJob, ConsolidationJobId,
+    CorrectNoteRequest, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
+    CreateCapabilityRequest, CreateClaimRequest, CreateConsolidationJobRequest,
+    CreateDocumentRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
+    CreateTaskRequest, DeleteCapabilityResponse, DeleteProviderConnectionResponse, DennettError,
+    DiagnosticsResponse, DiscoverCapabilitiesRequest, DiscoverCapabilitiesResponse,
+    DispatchEffectRequest, DispatchEffectResponse, DocumentId, EffectClaimId, EventStreamResponse,
+    ExportRequest, ExportResponse, FlushOutboxResponse, ForgetRequest, ForgetResponse,
+    GetDocumentVersionsResponse, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
+    ImportRequest, ImportResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
+    ListArtifactsResponse, ListCapabilitiesResponse, ListCapabilityGrantsResponse,
+    ListClaimsResponse, ListConflictsResponse, ListConsolidationJobsResponse,
+    ListDocumentsResponse, ListEffectsResponse, ListInboxResponse, ListOutboxResponse,
+    ListPermissionRequestsResponse, ListPolicyRulesResponse, ListProjectFilesResponse,
+    ListProjectsResponse, ListProviderConnectionsResponse, ListSecretsResponse,
+    ListSessionsResponse, ListTasksResponse, ListTombstonesResponse, MemoryClaim, MemoryConflict,
+    MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope, NoteHistoryResponse,
+    NoteMutationResponse, PermissionRequestId, PolicyRule, ProbeConnectionResponse, ProjectId,
+    ProjectLifecycleResponse, ProjectRecord, ProviderConnectionId, ProviderConnectionRecord,
     RebindProjectRequest, ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest,
-    ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
-    ResolvePermissionResponse, RevokeGrantRequest, RuntimeCatalogResponse, SchedulerTickRequest,
-    SchedulerTickResponse, SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest,
-    SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord, StateSnapshotResponse,
-    TaskDetailResponse, TaskId, TaskRecord, TaskSignalRequest, TaskSignalResponse,
-    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    ResolveConflictRequest, ResolveInboxCardRequest, ResolveInboxCardResponse,
+    ResolvePermissionRequest, ResolvePermissionResponse, RevokeGrantRequest,
+    RuntimeCatalogResponse, SchedulerTickRequest, SchedulerTickResponse, SecretMetadataRecord,
+    SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest, SendMessageResponse,
+    SessionDetailResponse, SessionId, SessionRecord, SetProjectCapabilityBindingRequest,
+    SetSecretRequest, StateSnapshotResponse, SupersedeClaimRequest, TaskDetailResponse, TaskId,
+    TaskRecord, TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest,
+    TriggerIndexRebuildResponse, UpdateAgentConfigRequest, UpdateCapabilityRequest,
+    UpdateDocumentRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    UpsertProviderConnectionRequest,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
@@ -1170,6 +1185,675 @@ impl HeadClient {
         .await
     }
 
+    // ------------------------------------------------------------------------
+    // Phase D3: SecretBroker, Provider Connections, Capabilities, Memory Proxy
+    // ------------------------------------------------------------------------
+
+    /// Calls `GET /v1/secrets` to list write-only secret slot metadata (never plaintext values).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_secrets(
+        &self,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListSecretsResponse, DennettError> {
+        self.request_no_body(Method::GET, "/v1/secrets", correlation_id)
+            .await
+    }
+
+    /// Calls `PUT /v1/secrets/{slot_key}` to store or rotate an encrypted secret value.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn set_secret(
+        &self,
+        slot_key: &str,
+        req: &SetSecretRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SecretMetadataRecord, DennettError> {
+        let encoded = encode_path_segment(slot_key);
+        self.request_json(
+            Method::PUT,
+            &format!("/v1/secrets/{encoded}"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/secrets/{slot_key}` to remove a persisted secret from the vault.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_secret(
+        &self,
+        slot_key: &str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SecretMetadataRecord, DennettError> {
+        let encoded = encode_path_segment(slot_key);
+        self.request_no_body(
+            Method::DELETE,
+            &format!("/v1/secrets/{encoded}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/runtime/connections` to list active provider connections and planned descriptors.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_provider_connections(
+        &self,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListProviderConnectionsResponse, DennettError> {
+        self.request_no_body(Method::GET, "/v1/runtime/connections", correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/runtime/connections` to create a new runtime provider connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn create_provider_connection(
+        &self,
+        req: &UpsertProviderConnectionRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProviderConnectionRecord, DennettError> {
+        self.request_json(Method::POST, "/v1/runtime/connections", req, correlation_id)
+            .await
+    }
+
+    /// Calls `PATCH /v1/runtime/connections/{connection_id}` to update a runtime provider connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+        req: &UpsertProviderConnectionRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProviderConnectionRecord, DennettError> {
+        self.request_json(
+            Method::PATCH,
+            &format!("/v1/runtime/connections/{connection_id}"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/runtime/connections/{connection_id}` to remove a runtime provider connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<DeleteProviderConnectionResponse, DennettError> {
+        self.request_no_body(
+            Method::DELETE,
+            &format!("/v1/runtime/connections/{connection_id}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/runtime/connections/{connection_id}/probe` to verify reachability and discover live models.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn probe_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProbeConnectionResponse, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/runtime/connections/{connection_id}/probe"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/runtime/connections/{connection_id}/activate` to promote a connection as active default.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn activate_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+        req: &ActivateConnectionRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProviderConnectionRecord, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/runtime/connections/{connection_id}/activate"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/capabilities` with optional `project_id`, `scope_kind`, and `kind` filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_capabilities(
+        &self,
+        project_id: Option<ProjectId>,
+        scope_kind: Option<CapabilityScopeKind>,
+        kind: Option<CapabilityKind>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListCapabilitiesResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(pid) = project_id {
+            params.push(format!("project_id={pid}"));
+        }
+        if let Some(sk) = scope_kind {
+            params.push(format!("scope_kind={}", sk.as_str()));
+        }
+        if let Some(k) = kind {
+            params.push(format!("kind={}", k.as_str()));
+        }
+        let path = build_query_path("/v1/capabilities", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/capabilities` to register a skill, MCP server, or plugin capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn create_capability(
+        &self,
+        req: &CreateCapabilityRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<CapabilityRecord, DennettError> {
+        self.request_json(Method::POST, "/v1/capabilities", req, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/capabilities/discover` to scan project-local and read-only personal candidates.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn discover_capabilities(
+        &self,
+        req: &DiscoverCapabilitiesRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<DiscoverCapabilitiesResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            "/v1/capabilities/discover",
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `PATCH /v1/capabilities/{capability_id}` to update metadata, version/spec, scope, trust, or activation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_capability(
+        &self,
+        capability_id: CapabilityId,
+        req: &UpdateCapabilityRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<CapabilityRecord, DennettError> {
+        self.request_json(
+            Method::PATCH,
+            &format!("/v1/capabilities/{capability_id}"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/capabilities/{capability_id}` to remove a capability from Dennett's registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_capability(
+        &self,
+        capability_id: CapabilityId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<DeleteCapabilityResponse, DennettError> {
+        self.request_no_body(
+            Method::DELETE,
+            &format!("/v1/capabilities/{capability_id}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/capabilities/{capability_id}/rollback` to restore the previous capability snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn rollback_capability(
+        &self,
+        capability_id: CapabilityId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<CapabilityRecord, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/capabilities/{capability_id}/rollback"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `PUT /v1/projects/{project_id}/capabilities/{capability_id}` to set a per-project activation binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn set_project_capability_binding(
+        &self,
+        project_id: ProjectId,
+        capability_id: CapabilityId,
+        req: &SetProjectCapabilityBindingRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<CapabilityProjectBinding, DennettError> {
+        self.request_json(
+            Method::PUT,
+            &format!("/v1/projects/{project_id}/capabilities/{capability_id}"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/overview` (V02-safe Head proxy returning `DegradedUnreachable` when `memoryd` is down).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_memory_overview(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryOverviewResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/overview", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/notes/{note_id}/correct` via Head's Memory Fabric proxy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn correct_memory_note(
+        &self,
+        req: &CorrectNoteRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<NoteMutationResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/memory/notes/{}/correct", req.note_id),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/notes/{note_id}/history` via Head's Memory Fabric proxy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_memory_note_history(
+        &self,
+        note_id: MemoryNoteId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<NoteHistoryResponse, DennettError> {
+        self.request_no_body(
+            Method::GET,
+            &format!("/v1/memory/notes/{note_id}/history"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/claims` with optional `scope` and `topic_key` filters via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_memory_claims(
+        &self,
+        scope: Option<&MemoryScope>,
+        topic_key: Option<&str>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListClaimsResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(sc) = scope {
+            params.push(format!("scope={}", encode_query_component(sc.as_str())));
+        }
+        if let Some(topic) = topic_key.map(str::trim).filter(|t| !t.is_empty()) {
+            params.push(format!("topic_key={}", encode_query_component(topic)));
+        }
+        let path = build_query_path("/v1/memory/claims", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/claims` via Head's Memory Fabric proxy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn create_memory_claim(
+        &self,
+        req: &CreateClaimRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryClaim, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/claims", req, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/claims/{claim_id}/supersede` via Head's Memory Fabric proxy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn supersede_memory_claim(
+        &self,
+        req: &SupersedeClaimRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryClaim, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/memory/claims/{}/supersede", req.claim_id),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/conflicts` with an optional `scope` filter via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_memory_conflicts(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListConflictsResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/conflicts", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/conflicts/{conflict_id}/resolve` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn resolve_memory_conflict(
+        &self,
+        req: &ResolveConflictRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryConflict, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/memory/conflicts/{}/resolve", req.conflict_id),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/documents` with an optional `scope` filter via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_memory_documents(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListDocumentsResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/documents", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/documents` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn create_memory_document(
+        &self,
+        req: &CreateDocumentRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryDocument, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/documents", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/documents/{document_id}` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_memory_document(
+        &self,
+        document_id: DocumentId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryDocument, DennettError> {
+        self.request_no_body(
+            Method::GET,
+            &format!("/v1/memory/documents/{document_id}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `PUT /v1/memory/documents/{document_id}` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_memory_document(
+        &self,
+        req: &UpdateDocumentRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<MemoryDocument, DennettError> {
+        self.request_json(
+            Method::PUT,
+            &format!("/v1/memory/documents/{}", req.document_id),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/documents/{document_id}/versions` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_memory_document_versions(
+        &self,
+        document_id: DocumentId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<GetDocumentVersionsResponse, DennettError> {
+        self.request_no_body(
+            Method::GET,
+            &format!("/v1/memory/documents/{document_id}/versions"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/memory/forget` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn forget_memory_item(
+        &self,
+        req: &ForgetRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ForgetResponse, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/forget", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/forget/tombstones` with an optional `scope` filter via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_memory_tombstones(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListTombstonesResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/forget/tombstones", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/export` via Head (Contract J).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn export_memory_package(
+        &self,
+        req: &ExportRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ExportResponse, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/export", req, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/import` via Head (Contract J).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn import_memory_package(
+        &self,
+        req: &ImportRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ImportResponse, DennettError> {
+        self.request_json(Method::POST, "/v1/memory/import", req, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/index/rebuild` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn trigger_memory_index_rebuild(
+        &self,
+        req: &TriggerIndexRebuildRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TriggerIndexRebuildResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            "/v1/memory/index/rebuild",
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/consolidation/jobs` with an optional `scope` filter via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_memory_consolidation_jobs(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListConsolidationJobsResponse, DennettError> {
+        let path = scoped_query_path("/v1/memory/consolidation/jobs", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/memory/consolidation/jobs` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn create_memory_consolidation_job(
+        &self,
+        req: &CreateConsolidationJobRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ConsolidationJob, DennettError> {
+        self.request_json(
+            Method::POST,
+            "/v1/memory/consolidation/jobs",
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/memory/consolidation/jobs/{job_id}/pause` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn pause_memory_consolidation_job(
+        &self,
+        job_id: ConsolidationJobId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ConsolidationJob, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/memory/consolidation/jobs/{job_id}/pause"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/memory/consolidation/jobs/{job_id}/resume` via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn resume_memory_consolidation_job(
+        &self,
+        job_id: ConsolidationJobId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ConsolidationJob, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/memory/consolidation/jobs/{job_id}/resume"),
+            correlation_id,
+        )
+        .await
+    }
+
     async fn request_no_body<Resp: DeserializeOwned>(
         &self,
         method: Method,
@@ -1206,6 +1890,13 @@ impl HeadClient {
             .await
             .map_err(|err| map_transport_error(&err))?;
         decode_response_with_limit(resp, MAX_RESPONSE_BODY_BYTES).await
+    }
+}
+
+fn scoped_query_path(base: &str, scope: Option<&MemoryScope>) -> String {
+    match scope {
+        Some(sc) => format!("{base}?scope={}", encode_query_component(sc.as_str())),
+        None => base.to_owned(),
     }
 }
 
@@ -1315,6 +2006,11 @@ async fn decode_response_with_limit<Resp: DeserializeOwned>(
             expected_revision: None,
             actual_revision: None,
             reason: safe_body,
+        },
+        StatusCode::TOO_MANY_REQUESTS => DennettError::ProviderQuotaExceeded {
+            provider: String::from("head"),
+            detail: safe_body,
+            retry_after_secs: None,
         },
         StatusCode::SERVICE_UNAVAILABLE => DennettError::DatabaseUnavailable { detail: safe_body },
         StatusCode::GATEWAY_TIMEOUT | StatusCode::REQUEST_TIMEOUT => DennettError::Timeout {

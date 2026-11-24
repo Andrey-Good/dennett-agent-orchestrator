@@ -211,6 +211,9 @@ mod tests {
             observed_at: None,
             evidence_links: vec![],
             author_label: None,
+            admission_status: None,
+            salience: None,
+            topic_key: None,
             idempotency_key: key.clone(),
         };
         let req_b = CreateNoteRequest {
@@ -324,6 +327,9 @@ mod tests {
                 observed_at: None,
                 evidence_links: vec![],
                 author_label: None,
+                admission_status: None,
+                salience: None,
+                topic_key: None,
                 idempotency_key: key.clone(),
             };
             let req_b = CreateNoteRequest {
