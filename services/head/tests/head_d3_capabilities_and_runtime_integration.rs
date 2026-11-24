@@ -1702,8 +1702,8 @@ async fn d3_v02_memory_fabric_proxy_degrades_honestly_and_keeps_stop_unblocked()
             .send_message(
                 sid,
                 &SendMessageRequest {
-                    content: String::from("[SIM:SLEEP_MS:10000]"),
-                    timeout_ms: Some(15_000),
+                    content: String::from("[SIM:SLOW:15000]"),
+                    timeout_ms: Some(20_000),
                     client_message_id: None,
                 },
                 None,
@@ -1711,7 +1711,23 @@ async fn d3_v02_memory_fabric_proxy_degrades_honestly_and_keeps_stop_unblocked()
             .await
     });
 
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    let wait_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snap = harness
+            .client
+            .get_state_snapshot(None, false, None)
+            .await
+            .expect("poll state snapshot for active V02 run");
+        if snap.running_session_ids.contains(&session.session_id) {
+            break;
+        }
+        assert!(
+            Instant::now() < wait_deadline,
+            "V02: timed out waiting for slow simulated turn to enter running_session_ids"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
     let cancel_started = Instant::now();
     let cancel_resp = harness
         .client
@@ -1724,7 +1740,14 @@ async fn d3_v02_memory_fabric_proxy_degrades_honestly_and_keeps_stop_unblocked()
         "V02: Stop must not block on unreachable memoryd"
     );
 
-    let _ = turn_handle.await;
+    let turn_outcome = turn_handle
+        .await
+        .expect("join cancelled V02 turn")
+        .expect("cancelled turn completes cleanly");
+    assert_eq!(
+        turn_outcome.run.status,
+        dennett_contracts::RunStatus::Cancelled
+    );
     harness.cleanup().await;
 }
 

@@ -563,7 +563,21 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
             )
             .await
     });
-    time::sleep(Duration::from_millis(250)).await;
+    let wait_deadline = time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let snap = head_client
+            .get_state_snapshot(None, false, None)
+            .await
+            .expect("poll snapshot for active slow V02 run");
+        if snap.running_session_ids.contains(&session.session_id) {
+            break;
+        }
+        assert!(
+            time::Instant::now() < wait_deadline,
+            "timed out waiting for slow V02 run to register"
+        );
+        time::sleep(Duration::from_millis(25)).await;
+    }
     let cancel_started = time::Instant::now();
     let cancel_resp = head_client
         .cancel_run(session.session_id, None)

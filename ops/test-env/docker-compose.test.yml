@@ -1,6 +1,7 @@
 services:
   postgres-test:
     image: postgres:16-alpine
+    command: ["postgres", "-c", "max_connections=300"]
     restart: "no"
     environment:
       POSTGRES_USER: dennett_bootstrap
