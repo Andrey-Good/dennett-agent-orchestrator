@@ -14,24 +14,40 @@ use std::time::Duration;
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    AgentId, AgentRecord, ArtifactId, ArtifactLifecycleRequest, ArtifactLifecycleResponse,
-    ArtifactRecord, CancelRunResponse, CancelTaskResponse, CapabilityGrantId,
-    CapabilityGrantRecord, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
-    CreateProjectRequest, CreateSessionRequest, CreateTaskRequest, DennettError,
-    DiagnosticsResponse, DispatchEffectRequest, DispatchEffectResponse, EffectClaimId,
-    EventStreamResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
-    HeadMemorySearchResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
-    ListArtifactsResponse, ListCapabilityGrantsResponse, ListEffectsResponse, ListInboxResponse,
-    ListPermissionRequestsResponse, ListProjectFilesResponse, ListProjectsResponse,
-    ListSessionsResponse, ListTasksResponse, PermissionRequestId, ProjectId,
-    ProjectLifecycleResponse, ProjectRecord, RebindProjectRequest, ReconcileEffectRequest,
-    ReconcileEffectResponse, ReplyTaskRequest, ResolveInboxCardRequest, ResolveInboxCardResponse,
-    ResolvePermissionRequest, ResolvePermissionResponse, RevokeGrantRequest,
-    RuntimeCatalogResponse, SchedulerTickRequest, SchedulerTickResponse, SendAgentMessageRequest,
-    SendAgentMessageResponse, SendMessageRequest, SendMessageResponse, SessionDetailResponse,
-    SessionId, SessionRecord, StateSnapshotResponse, TaskDetailResponse, TaskId, TaskRecord,
-    TaskSignalRequest, TaskSignalResponse, UpdateAgentConfigRequest, UpdateProjectRequest,
-    UpdateSessionRequest, UpdateTaskRequest,
+    ActivateConnectionRequest, AgentId, AgentRecord, ArtifactId, ArtifactLifecycleRequest,
+    ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse, CancelTaskResponse,
+    CapabilityGrantId, CapabilityGrantRecord, CapabilityId, CapabilityKind,
+    CapabilityProjectBinding, CapabilityRecord, CapabilityScopeKind, CommitMemoryNoteRequest,
+    CommitMemoryNoteResponse, ConsolidationJob, ConsolidationJobId, CorrectNoteRequest,
+    CorrelationId, CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest,
+    CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest, CreateProjectRequest,
+    CreateSessionRequest, CreateTaskRequest, DeleteCapabilityResponse,
+    DeleteProviderConnectionResponse, DennettError, DiagnosticsResponse,
+    DiscoverCapabilitiesRequest, DiscoverCapabilitiesResponse, DispatchEffectRequest,
+    DispatchEffectResponse, DocumentId, EffectClaimId, EventStreamResponse, ExportRequest,
+    ExportResponse, FlushOutboxResponse, ForgetRequest, ForgetResponse,
+    GetDocumentVersionsResponse, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
+    ImportRequest, ImportResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
+    ListArtifactsResponse, ListCapabilitiesResponse, ListCapabilityGrantsResponse,
+    ListClaimsResponse, ListConflictsResponse, ListConsolidationJobsResponse,
+    ListDocumentsResponse, ListEffectsResponse, ListInboxResponse, ListPermissionRequestsResponse,
+    ListProjectFilesResponse, ListProjectsResponse, ListProviderConnectionsResponse,
+    ListSecretsResponse, ListSessionsResponse, ListTasksResponse, ListTombstonesResponse,
+    MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope,
+    NoteHistoryResponse, NoteMutationResponse, PermissionRequestId, ProbeConnectionResponse,
+    ProjectId, ProjectLifecycleResponse, ProjectRecord, ProviderConnectionId,
+    ProviderConnectionRecord, RebindProjectRequest, ReconcileEffectRequest,
+    ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest,
+    ResolveInboxCardResponse, ResolvePermissionRequest, ResolvePermissionResponse,
+    RevokeGrantRequest, RuntimeCatalogResponse, SchedulerTickRequest, SchedulerTickResponse,
+    SecretMetadataRecord, SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest,
+    SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
+    SetProjectCapabilityBindingRequest, SetSecretRequest, StateSnapshotResponse,
+    SupersedeClaimRequest, TaskDetailResponse, TaskId, TaskRecord, TaskSignalRequest,
+    TaskSignalResponse, TriggerIndexRebuildRequest, TriggerIndexRebuildResponse,
+    UpdateAgentConfigRequest, UpdateCapabilityRequest, UpdateDocumentRequest, UpdateProjectRequest,
+    UpdateSessionRequest, UpdateTaskRequest, UpsertProviderConnectionRequest,
+    validate_secret_slot_key,
 };
 use dennett_head_client::HeadClient;
 use serde::{Deserialize, Serialize};
@@ -1156,6 +1172,651 @@ impl HeadBridge {
         let cid = CorrelationId::generate();
         self.client
             .reconcile_effect(effect_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    // ========================================================================
+    // Phase D3: SecretBroker, Provider Connections, Capabilities, Memory Fabric
+    // ========================================================================
+
+    /// Lists write-only `SecretBroker` slot metadata without ever exposing plaintext values (`GET /v1/secrets`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_secrets(&self) -> Result<ListSecretsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_secrets(Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Stores or rotates an encrypted write-only secret in `SecretBroker` (`PUT /v1/secrets/{slot_key}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn set_secret(
+        &self,
+        slot_key: &str,
+        req: &SetSecretRequest,
+    ) -> Result<SecretMetadataRecord, BridgeError> {
+        validate_secret_slot_key(slot_key)?;
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .set_secret(slot_key, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Deletes a stored secret from `SecretBroker` (`DELETE /v1/secrets/{slot_key}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn delete_secret(&self, slot_key: &str) -> Result<SecretMetadataRecord, BridgeError> {
+        validate_secret_slot_key(slot_key)?;
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_secret(slot_key, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists configured runtime provider connections and read-only planned provider descriptors (`GET /v1/runtime/connections`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_provider_connections(
+        &self,
+    ) -> Result<ListProviderConnectionsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_provider_connections(Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Creates a new runtime provider connection (`POST /v1/runtime/connections`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn create_provider_connection(
+        &self,
+        req: &UpsertProviderConnectionRequest,
+    ) -> Result<ProviderConnectionRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .create_provider_connection(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Updates an existing runtime provider connection (`PATCH /v1/runtime/connections/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing connection, or unreachable Head.
+    pub async fn update_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+        req: &UpsertProviderConnectionRequest,
+    ) -> Result<ProviderConnectionRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_provider_connection(connection_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Deletes a runtime provider connection (`DELETE /v1/runtime/connections/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the connection is missing or Head is unreachable.
+    pub async fn delete_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+    ) -> Result<DeleteProviderConnectionResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_provider_connection(connection_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Probes a runtime provider connection and loads its live model catalog (`POST /v1/runtime/connections/{id}/probe`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the connection is missing or Head is unreachable.
+    pub async fn probe_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+    ) -> Result<ProbeConnectionResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .probe_provider_connection(connection_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Activates a runtime provider connection as default interactive/background runtime (`POST /v1/runtime/connections/{id}/activate`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the connection is missing or Head is unreachable.
+    pub async fn activate_provider_connection(
+        &self,
+        connection_id: ProviderConnectionId,
+        req: &ActivateConnectionRequest,
+    ) -> Result<ProviderConnectionRecord, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .activate_provider_connection(connection_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists registered skills, MCP servers, and plugins (`GET /v1/capabilities`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_capabilities(
+        &self,
+        project_id: Option<ProjectId>,
+        scope_kind: Option<CapabilityScopeKind>,
+        kind: Option<CapabilityKind>,
+    ) -> Result<ListCapabilitiesResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_capabilities(project_id, scope_kind, kind, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Registers a skill, MCP server, or plugin capability (`POST /v1/capabilities`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn create_capability(
+        &self,
+        req: &CreateCapabilityRequest,
+    ) -> Result<CapabilityRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .create_capability(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Discovers project-local and read-only personal capability candidates (`POST /v1/capabilities/discover`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn discover_capabilities(
+        &self,
+        req: &DiscoverCapabilitiesRequest,
+    ) -> Result<DiscoverCapabilitiesResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .discover_capabilities(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Updates capability metadata, activation, scope, trust, or spec (`PATCH /v1/capabilities/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing capability, or unreachable Head.
+    pub async fn update_capability(
+        &self,
+        capability_id: CapabilityId,
+        req: &UpdateCapabilityRequest,
+    ) -> Result<CapabilityRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_capability(capability_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Removes a capability from Dennett's registry (`DELETE /v1/capabilities/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the capability is missing or Head is unreachable.
+    pub async fn delete_capability(
+        &self,
+        capability_id: CapabilityId,
+    ) -> Result<DeleteCapabilityResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_capability(capability_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Rolls back a capability to its previous saved snapshot (`POST /v1/capabilities/{id}/rollback`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if rollback is unavailable or Head is unreachable.
+    pub async fn rollback_capability(
+        &self,
+        capability_id: CapabilityId,
+    ) -> Result<CapabilityRecord, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .rollback_capability(capability_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Sets a per-project activation override for a capability (`PUT /v1/projects/{project_id}/capabilities/{capability_id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the project/capability is missing or Head is unreachable.
+    pub async fn set_project_capability_binding(
+        &self,
+        project_id: ProjectId,
+        capability_id: CapabilityId,
+        req: &SetProjectCapabilityBindingRequest,
+    ) -> Result<CapabilityProjectBinding, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .set_project_capability_binding(project_id, capability_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Commits a memory note via `Head`'s durable outbox (`POST /v1/memory/commits`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn commit_memory_note(
+        &self,
+        req: &CommitMemoryNoteRequest,
+    ) -> Result<CommitMemoryNoteResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .commit_memory_note(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Fetches the V02-safe aggregated Memory Fabric overview (`GET /v1/memory/overview`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn get_memory_overview(
+        &self,
+        scope: Option<&MemoryScope>,
+    ) -> Result<MemoryOverviewResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_memory_overview(scope, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Appends an immutable correction revision to a memory note (`POST /v1/memory/notes/{id}/correct`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, conflict, or unreachable Head.
+    pub async fn correct_memory_note(
+        &self,
+        req: &CorrectNoteRequest,
+    ) -> Result<NoteMutationResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .correct_memory_note(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Fetches the immutable revision history of a memory note (`GET /v1/memory/notes/{id}/history`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the note is missing or Head is unreachable.
+    pub async fn get_memory_note_history(
+        &self,
+        note_id: MemoryNoteId,
+    ) -> Result<NoteHistoryResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_memory_note_history(note_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists structured memory claims filtered by optional `scope` and `topic_key` (`GET /v1/memory/claims`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_memory_claims(
+        &self,
+        scope: Option<&MemoryScope>,
+        topic_key: Option<&str>,
+    ) -> Result<ListClaimsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_memory_claims(scope, topic_key, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Creates a structured memory claim (`POST /v1/memory/claims`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn create_memory_claim(
+        &self,
+        req: &CreateClaimRequest,
+    ) -> Result<MemoryClaim, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .create_memory_claim(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Supersedes an existing memory claim with a newer claim (`POST /v1/memory/claims/{id}/supersede`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, conflict, or unreachable Head.
+    pub async fn supersede_memory_claim(
+        &self,
+        req: &SupersedeClaimRequest,
+    ) -> Result<MemoryClaim, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .supersede_memory_claim(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists memory conflicts for an optional scope (`GET /v1/memory/conflicts`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_memory_conflicts(
+        &self,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListConflictsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_memory_conflicts(scope, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Resolves an open memory conflict (`POST /v1/memory/conflicts/{id}/resolve`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing conflict, or unreachable Head.
+    pub async fn resolve_memory_conflict(
+        &self,
+        req: &ResolveConflictRequest,
+    ) -> Result<MemoryConflict, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .resolve_memory_conflict(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists versioned memory dossier documents for an optional scope (`GET /v1/memory/documents`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_memory_documents(
+        &self,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListDocumentsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_memory_documents(scope, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Creates a new version-1 memory dossier document (`POST /v1/memory/documents`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn create_memory_document(
+        &self,
+        req: &CreateDocumentRequest,
+    ) -> Result<MemoryDocument, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .create_memory_document(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Retrieves a memory dossier document by identifier (`GET /v1/memory/documents/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the document is missing or Head is unreachable.
+    pub async fn get_memory_document(
+        &self,
+        document_id: DocumentId,
+    ) -> Result<MemoryDocument, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_memory_document(document_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Updates a memory dossier document with optimistic `expected_version` concurrency (`PUT /v1/memory/documents/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, version conflict, or unreachable Head.
+    pub async fn update_memory_document(
+        &self,
+        req: &UpdateDocumentRequest,
+    ) -> Result<MemoryDocument, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_memory_document(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Fetches all immutable versions of a memory dossier document (`GET /v1/memory/documents/{id}/versions`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the document is missing or Head is unreachable.
+    pub async fn get_memory_document_versions(
+        &self,
+        document_id: DocumentId,
+    ) -> Result<GetDocumentVersionsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_memory_document_versions(document_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Forgets a memory entity with search-index purge and content-free tombstone (`POST /v1/memory/forget`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing item, or unreachable Head.
+    pub async fn forget_memory_item(
+        &self,
+        req: &ForgetRequest,
+    ) -> Result<ForgetResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .forget_memory_item(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists content-free forget audit tombstones for an optional scope (`GET /v1/memory/forget/tombstones`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_memory_tombstones(
+        &self,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListTombstonesResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_memory_tombstones(scope, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Exports a deterministic, secret-free memory package for one scope (`POST /v1/memory/export`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn export_memory_package(
+        &self,
+        req: &ExportRequest,
+    ) -> Result<ExportResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .export_memory_package(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Imports an external memory package strictly as `external_untrusted` data (`POST /v1/memory/import`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn import_memory_package(
+        &self,
+        req: &ImportRequest,
+    ) -> Result<ImportResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .import_memory_package(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Triggers a full rebuild of `memoryd`'s separable search index (`POST /v1/memory/index/rebuild`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn trigger_memory_index_rebuild(
+        &self,
+        req: &TriggerIndexRebuildRequest,
+    ) -> Result<TriggerIndexRebuildResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .trigger_memory_index_rebuild(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists background memory consolidation jobs for an optional scope (`GET /v1/memory/consolidation/jobs`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn list_memory_consolidation_jobs(
+        &self,
+        scope: Option<&MemoryScope>,
+    ) -> Result<ListConsolidationJobsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_memory_consolidation_jobs(scope, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Creates a new interruptible memory consolidation job (`POST /v1/memory/consolidation/jobs`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if `dennett-head` is unreachable or rejects the request.
+    pub async fn create_memory_consolidation_job(
+        &self,
+        req: &CreateConsolidationJobRequest,
+    ) -> Result<ConsolidationJob, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .create_memory_consolidation_job(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Pauses an active memory consolidation job at its checkpoint (`POST /v1/memory/consolidation/jobs/{id}/pause`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the job is missing or Head is unreachable.
+    pub async fn pause_memory_consolidation_job(
+        &self,
+        job_id: ConsolidationJobId,
+    ) -> Result<ConsolidationJob, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .pause_memory_consolidation_job(job_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Resumes a paused memory consolidation job from its checkpoint (`POST /v1/memory/consolidation/jobs/{id}/resume`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the job is missing or Head is unreachable.
+    pub async fn resume_memory_consolidation_job(
+        &self,
+        job_id: ConsolidationJobId,
+    ) -> Result<ConsolidationJob, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .resume_memory_consolidation_job(job_id, Some(&cid))
             .await
             .map_err(BridgeError::from)
     }

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  Brain,
   Browsers,
   ChatsCircle,
   FolderDashed,
@@ -223,6 +224,17 @@ export function CommandPalette() {
         run: () => {
           close();
           actions.setActiveView("tasks");
+        },
+      },
+      {
+        id: "action:open-memory",
+        section: "actions",
+        label: "Открыть Память и досье",
+        kbd: "Alt 4",
+        icon: <Brain size={15} aria-hidden="true" />,
+        run: () => {
+          close();
+          actions.setActiveView("memory");
         },
       },
       {

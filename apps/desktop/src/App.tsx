@@ -14,6 +14,7 @@ import { ChatCard } from "./components/ChatCard";
 import { CommandPalette } from "./components/CommandPalette";
 import { DevFolderPickerModal } from "./components/DevFolderPickerModal";
 import { InboxRadarCard } from "./components/InboxRadarCard";
+import { MemoryCard } from "./components/MemoryCard";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { Sidebar } from "./components/Sidebar";
 import { TasksCard } from "./components/TasksCard";
@@ -46,6 +47,8 @@ function DesktopShell() {
           <InboxRadarCard />
         ) : state.activeView === "tasks" ? (
           <TasksCard />
+        ) : state.activeView === "memory" ? (
+          <MemoryCard />
         ) : (
           <ChatCard />
         )}

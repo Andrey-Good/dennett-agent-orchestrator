@@ -88,7 +88,16 @@ export function DevFolderPickerModal() {
       ? "Привязать рабочую папку"
       : state.folderPickerIntent.mode === "rebind-project"
         ? "Перепривязать рабочую папку"
-        : "Выбрать папку проекта";
+        : state.folderPickerIntent.mode === "add-capability"
+          ? state.folderPickerIntent.kind === "plugin"
+            ? "Выбрать папку плагина"
+            : "Выбрать папку навыка"
+          : "Выбрать папку проекта";
+
+  const subtitle =
+    state.folderPickerIntent.mode === "add-capability"
+      ? "Выберите локальный каталог навыка или плагина (только чтение)"
+      : "Выберите локальный каталог для привязки к проекту";
 
   const handleNavigateSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -136,7 +145,7 @@ export function DevFolderPickerModal() {
         <header className="settings-sheet__header">
           <div>
             <h2>{title}</h2>
-            <p>Выберите локальный каталог для привязки к проекту</p>
+            <p>{subtitle}</p>
           </div>
           <button
             type="button"

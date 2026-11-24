@@ -50,6 +50,7 @@ impl MicaAvailability {
 ///
 /// Panics if the default loopback bridge URL cannot be initialized or if the Tauri
 /// application runtime fails to start.
+#[allow(clippy::too_many_lines)]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let bridge = match HeadBridge::from_env() {
@@ -153,6 +154,45 @@ pub fn run() {
             commands::list_diagnostics,
             commands::flush_memory_outbox,
             commands::search_memory,
+            commands::list_secrets,
+            commands::set_secret,
+            commands::delete_secret,
+            commands::list_provider_connections,
+            commands::create_provider_connection,
+            commands::update_provider_connection,
+            commands::delete_provider_connection,
+            commands::probe_provider_connection,
+            commands::activate_provider_connection,
+            commands::list_capabilities,
+            commands::create_capability,
+            commands::discover_capabilities,
+            commands::update_capability,
+            commands::delete_capability,
+            commands::rollback_capability,
+            commands::set_project_capability_binding,
+            commands::commit_memory_note,
+            commands::get_memory_overview,
+            commands::correct_memory_note,
+            commands::get_memory_note_history,
+            commands::list_memory_claims,
+            commands::create_memory_claim,
+            commands::supersede_memory_claim,
+            commands::list_memory_conflicts,
+            commands::resolve_memory_conflict,
+            commands::list_memory_documents,
+            commands::create_memory_document,
+            commands::get_memory_document,
+            commands::update_memory_document,
+            commands::get_memory_document_versions,
+            commands::forget_memory_item,
+            commands::list_memory_tombstones,
+            commands::export_memory_package,
+            commands::import_memory_package,
+            commands::trigger_memory_index_rebuild,
+            commands::list_memory_consolidation_jobs,
+            commands::create_memory_consolidation_job,
+            commands::pause_memory_consolidation_job,
+            commands::resume_memory_consolidation_job,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dennett desktop application");

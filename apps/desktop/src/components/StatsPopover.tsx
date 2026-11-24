@@ -1,29 +1,68 @@
-import { ArrowsClockwise, Database, ShieldCheck, Sparkle } from "@phosphor-icons/react";
+import { useState } from "react";
+import {
+  ArrowsClockwise,
+  Brain,
+  Database,
+  ShieldCheck,
+  Sparkle,
+  WarningCircle,
+} from "@phosphor-icons/react";
 
+import type { IndexStatus } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
 
 export interface StatsPopoverProps {
   onClose(): void;
 }
 
+function indexStatusLabel(status: IndexStatus): { text: string; className: string } {
+  switch (status) {
+    case "healthy":
+      return { text: "Актуален", className: "text-ok" };
+    case "lagging":
+      return { text: "Догоняет", className: "text-warn" };
+    case "rebuilding":
+      return { text: "Перестроение", className: "text-warn" };
+    case "degraded":
+      return { text: "Деградирован", className: "text-warn" };
+  }
+}
+
 export function StatsPopover({ onClose }: StatsPopoverProps) {
   const { state, actions, meta } = useWorkspace();
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+
   const health = state.healthSnapshot?.health;
   const catalog = state.runtimeCatalog;
   const binding = state.activeDetail?.session.runtime_binding;
+  const connected = Boolean(state.healthSnapshot?.connected);
 
   const isSimulated = Boolean(health?.runtime_is_simulated ?? catalog?.is_simulated);
   const agyVersion = catalog?.agy_version ?? binding?.agy_version;
   const engineTitle = isSimulated
     ? "Simulated Runtime (CI)"
-    : agyVersion
-      ? `Antigravity ACP ${agyVersion}`
-      : "Antigravity ACP";
+    : catalog?.auth_profile === "local-endpoint"
+      ? catalog.adapter_id || "Local HTTP Runtime"
+      : agyVersion
+        ? `Antigravity ACP ${agyVersion}`
+        : "Antigravity ACP";
+
+  const activeConnection =
+    state.providerConnections.find(
+      (c) => c.connection_id === meta.activeAgent?.current_config.preferred_connection_id,
+    ) ??
+    state.providerConnections.find((c) => c.is_default_interactive) ??
+    null;
 
   const tierText =
+    activeConnection?.display_name ??
     catalog?.tier ??
     binding?.tier ??
-    (catalog?.auth_profile === "gemini-api-key" ? "Gemini API key" : "Google AI Ultra");
+    (catalog?.auth_profile === "local-endpoint"
+      ? "Локальный сервер"
+      : catalog?.auth_profile === "gemini-api-key"
+        ? "Gemini API key"
+        : "Google AI Ultra");
 
   const quotasText =
     catalog && catalog.quotas.length > 0
@@ -35,6 +74,40 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
   const runsCount = state.activeDetail?.runs.length ?? 0;
   const policyCount = state.activeDetail?.permission_decisions.length ?? 0;
 
+  const memoryStats =
+    state.memoryOverview?.memory_status === "healthy" ? (state.memoryOverview.stats ?? null) : null;
+  const indexBadge = memoryStats ? indexStatusLabel(memoryStats.index_status) : null;
+  const openConflictsCount = meta.openMemoryConflictsCount;
+  const notesDisplayValue =
+    state.activeScopeNoteCount !== null
+      ? state.activeScopeNoteCount
+      : memoryStats
+        ? memoryStats.active_notes_count
+        : "—";
+
+  const targetScope = meta.activeProject?.memory_scope ?? "chat:standalone";
+
+  const handleRebuildIndex = async () => {
+    setActionFeedback(null);
+    const resp = await actions.triggerMemoryIndexRebuild(targetScope);
+    if (resp) {
+      setActionFeedback(`Индекс пересобран: ${resp.entries_rebuilt} зап.`);
+    }
+  };
+
+  const handleConsolidate = async () => {
+    setActionFeedback(null);
+    const job = await actions.createMemoryConsolidationJob(targetScope, "dossier_update");
+    if (job) {
+      setActionFeedback(`Консолидация: ${job.status}`);
+    }
+  };
+
+  const openMemoryView = () => {
+    onClose();
+    actions.setActiveView("memory");
+  };
+
   return (
     <div className="stats-popover__inner">
       <div className="popover-header">
@@ -45,6 +118,7 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
           onClick={() => {
             void actions.refreshAll();
             void actions.refreshMemoryStats();
+            void actions.refreshMemoryOverview(null);
           }}
         >
           Обновить
@@ -68,6 +142,14 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
           <span>Квоты</span>
           <strong>{quotasText}</strong>
         </div>
+        {catalog?.quota_error && (
+          <div className="stats-quota-warn" data-testid="stats-quota-error">
+            <WarningCircle size={13} aria-hidden="true" />
+            <span>
+              Квота {catalog.quota_error.provider}: {catalog.quota_error.detail}
+            </span>
+          </div>
+        )}
       </section>
 
       <section className="stats-section">
@@ -78,27 +160,60 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
         <div className="stats-kv">
           <span>Статус</span>
           <strong className={memoryHealthy ? "text-ok" : "text-warn"}>
-            {!state.healthSnapshot?.connected
-              ? "Нет связи с Head"
-              : memoryHealthy
-                ? "Активна"
-                : "Недоступна"}
+            {!connected ? "Нет связи с Head" : memoryHealthy ? "Активна" : "Недоступна"}
           </strong>
         </div>
-        {meta.activeProject && (
+        {indexBadge && (
           <div className="stats-kv">
-            <span>Заметки в проекте</span>
-            <strong data-testid="stats-memory-notes-count">
-              {state.activeScopeNoteCount !== null ? state.activeScopeNoteCount : "—"}
+            <span>Индекс</span>
+            <strong className={indexBadge.className} data-testid="stats-memory-index-status">
+              {indexBadge.text}
             </strong>
           </div>
+        )}
+        {memoryStats && (
+          <div className="stats-kv">
+            <span>Источники</span>
+            <strong data-testid="stats-memory-sources-count">{memoryStats.sources_count}</strong>
+          </div>
+        )}
+        {(meta.activeProject || memoryStats) && (
+          <div className="stats-kv">
+            <span>{meta.activeProject ? "Заметки в проекте" : "Заметки"}</span>
+            <strong data-testid="stats-memory-notes-count">{notesDisplayValue}</strong>
+          </div>
+        )}
+        {memoryStats && (
+          <>
+            <div className="stats-kv">
+              <span>Утверждения</span>
+              <strong data-testid="stats-memory-claims-count">
+                {memoryStats.active_claims_count}
+              </strong>
+            </div>
+            <div className="stats-kv">
+              <span>Досье</span>
+              <strong data-testid="stats-memory-docs-count">{memoryStats.documents_count}</strong>
+            </div>
+            <div className="stats-kv">
+              <span>Открытые конфликты</span>
+              <button
+                type="button"
+                className={`stats-conflict-link ${openConflictsCount > 0 ? "text-warn" : ""}`}
+                onClick={openMemoryView}
+                data-testid="stats-memory-conflicts-link"
+              >
+                {openConflictsCount}
+              </button>
+            </div>
+          </>
         )}
         <div className="stats-kv">
           <span>Очередь outbox</span>
           <strong>{pendingOutbox}</strong>
         </div>
 
-        {(pendingOutbox > 0 || !memoryHealthy) && state.healthSnapshot?.connected && (
+        {(pendingOutbox > 0 || !memoryHealthy) && connected && (
           <button
             type="button"
             className="popover-primary-btn"
@@ -113,6 +228,41 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
             />
             {state.isFlushingOutbox ? "Отправка очереди…" : "Отправить очередь"}
           </button>
+        )}
+
+        {memoryHealthy && connected && (
+          <div className="stats-actions-row">
+            <button
+              type="button"
+              className="popover-secondary-btn stats-mini-btn"
+              onClick={() => void handleRebuildIndex()}
+              disabled={state.isRebuildingIndex}
+              data-testid="stats-rebuild-index-btn"
+            >
+              <ArrowsClockwise
+                size={12}
+                className={state.isRebuildingIndex ? "spin" : ""}
+                aria-hidden="true"
+              />
+              {state.isRebuildingIndex ? "Индекс…" : "Пересобрать индекс"}
+            </button>
+            <button
+              type="button"
+              className="popover-secondary-btn stats-mini-btn"
+              onClick={() => void handleConsolidate()}
+              disabled={state.isConsolidatingMemory}
+              data-testid="stats-consolidate-btn"
+            >
+              <Brain size={12} aria-hidden="true" />
+              {state.isConsolidatingMemory ? "Запуск…" : "Консолидировать"}
+            </button>
+          </div>
+        )}
+
+        {actionFeedback && (
+          <p className="stats-note" data-testid="stats-action-feedback">
+            {actionFeedback}
+          </p>
         )}
         {state.lastFlushSummary && <p className="stats-note">{state.lastFlushSummary}</p>}
       </section>
@@ -133,6 +283,14 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
       </section>
 
       <div className="stats-footer">
+        <button
+          type="button"
+          className="popover-secondary-btn"
+          onClick={openMemoryView}
+          data-testid="stats-open-memory-btn"
+        >
+          Открыть раздел «Память»
+        </button>
         <button
           type="button"
           className="popover-secondary-btn"

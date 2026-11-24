@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { CaretDown, Check, FolderDashed, FolderSimple, SquaresFour } from "@phosphor-icons/react";
+import {
+  CaretDown,
+  ChatsCircle,
+  Check,
+  FolderDashed,
+  FolderSimple,
+  SquaresFour,
+} from "@phosphor-icons/react";
 
 import type { ProjectRecord } from "../api/contracts";
 import { PortalPopover } from "./PortalPopover";
+
+export const STANDALONE_SCOPE_VALUE = "chat:standalone";
 
 export interface ProjectScopeFilterProps {
   projects: ProjectRecord[];
@@ -10,6 +19,9 @@ export interface ProjectScopeFilterProps {
   onChange: (next: string | "all") => void;
   totalCount?: number;
   countByProjectId?: Map<string, number>;
+  standaloneCount?: number;
+  includeStandalone?: boolean;
+  allLabel?: string;
   ariaLabel?: string;
 }
 
@@ -19,6 +31,9 @@ export function ProjectScopeFilter({
   onChange,
   totalCount,
   countByProjectId,
+  standaloneCount,
+  includeStandalone = false,
+  allLabel = "Все проекты",
   ariaLabel = "Фильтр по проектам",
 }: ProjectScopeFilterProps) {
   const [open, setOpen] = useState(false);
@@ -28,18 +43,24 @@ export function ProjectScopeFilter({
   useEffect(() => {
     if (
       selectedProjectId !== "all" &&
+      !(includeStandalone && selectedProjectId === STANDALONE_SCOPE_VALUE) &&
       !projects.some((p) => p.project_id === selectedProjectId)
     ) {
       onChange("all");
     }
-  }, [onChange, projects, selectedProjectId]);
+  }, [includeStandalone, onChange, projects, selectedProjectId]);
 
+  const isStandaloneSelected = includeStandalone && selectedProjectId === STANDALONE_SCOPE_VALUE;
   const selectedProject =
-    selectedProjectId === "all"
+    selectedProjectId === "all" || isStandaloneSelected
       ? null
       : (projects.find((p) => p.project_id === selectedProjectId) ?? null);
 
-  const labelText = selectedProject ? selectedProject.name : "Все проекты";
+  const labelText = isStandaloneSelected
+    ? "Одиночные чаты"
+    : selectedProject
+      ? selectedProject.name
+      : allLabel;
 
   return (
     <div className="project-scope-filter">
@@ -53,7 +74,9 @@ export function ProjectScopeFilter({
         data-testid="project-scope-filter-trigger"
         onClick={() => setOpen((prev) => !prev)}
       >
-        {selectedProject ? (
+        {isStandaloneSelected ? (
+          <ChatsCircle size={14} aria-hidden="true" />
+        ) : selectedProject ? (
           selectedProject.workspace_path ? (
             <FolderSimple size={14} aria-hidden="true" />
           ) : (
@@ -89,7 +112,7 @@ export function ProjectScopeFilter({
         >
           <span className="project-scope-filter__opt-copy">
             <SquaresFour size={14} aria-hidden="true" />
-            <span>Все проекты</span>
+            <span>{allLabel}</span>
           </span>
           <span className="project-scope-filter__opt-meta">
             {totalCount !== undefined && (
@@ -98,6 +121,31 @@ export function ProjectScopeFilter({
             {selectedProjectId === "all" && <Check size={13} aria-hidden="true" />}
           </span>
         </button>
+
+        {includeStandalone && (
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={isStandaloneSelected}
+            className={isStandaloneSelected ? "is-selected" : ""}
+            data-testid="project-scope-option-standalone"
+            onClick={() => {
+              onChange(STANDALONE_SCOPE_VALUE);
+              setOpen(false);
+            }}
+          >
+            <span className="project-scope-filter__opt-copy">
+              <ChatsCircle size={14} aria-hidden="true" />
+              <span>Одиночные чаты</span>
+            </span>
+            <span className="project-scope-filter__opt-meta">
+              {standaloneCount !== undefined && (
+                <small className="project-scope-filter__count">{standaloneCount}</small>
+              )}
+              {isStandaloneSelected && <Check size={13} aria-hidden="true" />}
+            </span>
+          </button>
+        )}
 
         {projects.length > 0 && <div className="popover-divider" role="separator" />}
 

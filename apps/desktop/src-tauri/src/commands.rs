@@ -7,22 +7,38 @@
 use std::str::FromStr;
 
 use dennett_contracts::{
-    AgentId, AgentRecord, ArtifactId, ArtifactLifecycleRequest, ArtifactLifecycleResponse,
-    ArtifactRecord, CancelRunResponse, CancelTaskResponse, CapabilityGrantId,
-    CapabilityGrantRecord, CreateAgentRequest, CreateArtifactRequest, CreateProjectRequest,
-    CreateSessionRequest, CreateTaskRequest, DiagnosticsResponse, DispatchEffectRequest,
-    DispatchEffectResponse, EffectClaimId, EventStreamResponse, FlushOutboxResponse,
-    HeadMemorySearchRequest, HeadMemorySearchResponse, InboxCardId, ListAgentMessagesResponse,
-    ListAgentsResponse, ListArtifactsResponse, ListCapabilityGrantsResponse, ListEffectsResponse,
-    ListInboxResponse, ListPermissionRequestsResponse, ListProjectFilesResponse,
-    ListProjectsResponse, ListSessionsResponse, ListTasksResponse, PermissionRequestId, ProjectId,
-    ProjectLifecycleResponse, ProjectRecord, RebindProjectRequest, ReconcileEffectRequest,
-    ReconcileEffectResponse, ReplyTaskRequest, ResolveInboxCardRequest, ResolveInboxCardResponse,
-    ResolvePermissionRequest, ResolvePermissionResponse, RevokeGrantRequest,
-    RuntimeCatalogResponse, SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest,
-    SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord, StateSnapshotResponse,
-    TaskDetailResponse, TaskId, TaskRecord, TaskSignalRequest, TaskSignalResponse,
-    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    ActivateConnectionRequest, AgentId, AgentRecord, ArtifactId, ArtifactLifecycleRequest,
+    ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse, CancelTaskResponse,
+    CapabilityGrantId, CapabilityGrantRecord, CapabilityId, CapabilityKind,
+    CapabilityProjectBinding, CapabilityRecord, CapabilityScopeKind, CommitMemoryNoteRequest,
+    CommitMemoryNoteResponse, ConsolidationJob, ConsolidationJobId, CorrectNoteRequest,
+    CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest, CreateClaimRequest,
+    CreateConsolidationJobRequest, CreateDocumentRequest, CreateProjectRequest,
+    CreateSessionRequest, CreateTaskRequest, DeleteCapabilityResponse,
+    DeleteProviderConnectionResponse, DiagnosticsResponse, DiscoverCapabilitiesRequest,
+    DiscoverCapabilitiesResponse, DispatchEffectRequest, DispatchEffectResponse, DocumentId,
+    EffectClaimId, EventStreamResponse, ExportRequest, ExportResponse, FlushOutboxResponse,
+    ForgetRequest, ForgetResponse, GetDocumentVersionsResponse, HeadMemorySearchRequest,
+    HeadMemorySearchResponse, ImportRequest, ImportResponse, InboxCardId,
+    ListAgentMessagesResponse, ListAgentsResponse, ListArtifactsResponse, ListCapabilitiesResponse,
+    ListCapabilityGrantsResponse, ListClaimsResponse, ListConflictsResponse,
+    ListConsolidationJobsResponse, ListDocumentsResponse, ListEffectsResponse, ListInboxResponse,
+    ListPermissionRequestsResponse, ListProjectFilesResponse, ListProjectsResponse,
+    ListProviderConnectionsResponse, ListSecretsResponse, ListSessionsResponse, ListTasksResponse,
+    ListTombstonesResponse, MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId,
+    MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
+    PermissionRequestId, ProbeConnectionResponse, ProjectId, ProjectLifecycleResponse,
+    ProjectRecord, ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest,
+    ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest,
+    ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
+    ResolvePermissionResponse, RevokeGrantRequest, RuntimeCatalogResponse, SecretMetadataRecord,
+    SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest, SendMessageResponse,
+    SessionDetailResponse, SessionId, SessionRecord, SetProjectCapabilityBindingRequest,
+    SetSecretRequest, StateSnapshotResponse, SupersedeClaimRequest, TaskDetailResponse, TaskId,
+    TaskRecord, TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest,
+    TriggerIndexRebuildResponse, UpdateAgentConfigRequest, UpdateCapabilityRequest,
+    UpdateDocumentRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    UpsertProviderConnectionRequest,
 };
 use tauri::State;
 use tokio::sync::RwLock;
@@ -112,6 +128,51 @@ fn parse_optional_task_id(raw: Option<&str>) -> Result<Option<TaskId>, BridgeErr
     raw.map(str::trim)
         .filter(|s| !s.is_empty())
         .map(parse_task_id)
+        .transpose()
+}
+
+fn parse_provider_connection_id(raw: &str) -> Result<ProviderConnectionId, BridgeError> {
+    ProviderConnectionId::from_str(raw.trim()).map_err(BridgeError::from)
+}
+
+fn parse_capability_id(raw: &str) -> Result<CapabilityId, BridgeError> {
+    CapabilityId::from_str(raw.trim()).map_err(BridgeError::from)
+}
+
+fn parse_memory_note_id(raw: &str) -> Result<MemoryNoteId, BridgeError> {
+    MemoryNoteId::from_str(raw.trim()).map_err(BridgeError::from)
+}
+
+fn parse_document_id(raw: &str) -> Result<DocumentId, BridgeError> {
+    DocumentId::from_str(raw.trim()).map_err(BridgeError::from)
+}
+
+fn parse_consolidation_job_id(raw: &str) -> Result<ConsolidationJobId, BridgeError> {
+    ConsolidationJobId::from_str(raw.trim()).map_err(BridgeError::from)
+}
+
+fn parse_optional_memory_scope(raw: Option<&str>) -> Result<Option<MemoryScope>, BridgeError> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| MemoryScope::try_new(s).map_err(BridgeError::from))
+        .transpose()
+}
+
+fn parse_optional_capability_scope_kind(
+    raw: Option<&str>,
+) -> Result<Option<CapabilityScopeKind>, BridgeError> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| CapabilityScopeKind::from_str(s).map_err(BridgeError::from))
+        .transpose()
+}
+
+fn parse_optional_capability_kind(
+    raw: Option<&str>,
+) -> Result<Option<CapabilityKind>, BridgeError> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| CapabilityKind::from_str(s).map_err(BridgeError::from))
         .transpose()
 }
 
@@ -731,4 +792,438 @@ pub async fn reconcile_effect(
     bridge
         .reconcile_effect(parsed_id, &request.unwrap_or_default())
         .await
+}
+
+// ============================================================================
+// Phase D3 IPC Commands: SecretBroker, Providers, Capabilities, Memory Fabric
+// ============================================================================
+
+/// Lists write-only `SecretBroker` slot metadata without exposing secret values (`GET /v1/secrets`).
+#[tauri::command]
+pub async fn list_secrets(
+    state: State<'_, SharedBridge>,
+) -> Result<ListSecretsResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.list_secrets().await
+}
+
+/// Stores or rotates a write-only secret in `SecretBroker` (`PUT /v1/secrets/{slot_key}`).
+#[tauri::command]
+pub async fn set_secret(
+    state: State<'_, SharedBridge>,
+    slot_key: String,
+    request: SetSecretRequest,
+) -> Result<SecretMetadataRecord, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.set_secret(&slot_key, &request).await
+}
+
+/// Deletes a secret slot from `SecretBroker` (`DELETE /v1/secrets/{slot_key}`).
+#[tauri::command]
+pub async fn delete_secret(
+    state: State<'_, SharedBridge>,
+    slot_key: String,
+) -> Result<SecretMetadataRecord, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.delete_secret(&slot_key).await
+}
+
+/// Lists configured provider connections and read-only planned provider descriptors (`GET /v1/runtime/connections`).
+#[tauri::command]
+pub async fn list_provider_connections(
+    state: State<'_, SharedBridge>,
+) -> Result<ListProviderConnectionsResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.list_provider_connections().await
+}
+
+/// Creates a runtime provider connection (`POST /v1/runtime/connections`).
+#[tauri::command]
+pub async fn create_provider_connection(
+    state: State<'_, SharedBridge>,
+    request: UpsertProviderConnectionRequest,
+) -> Result<ProviderConnectionRecord, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.create_provider_connection(&request).await
+}
+
+/// Updates an existing runtime provider connection (`PATCH /v1/runtime/connections/{id}`).
+#[tauri::command]
+pub async fn update_provider_connection(
+    state: State<'_, SharedBridge>,
+    connection_id: String,
+    request: UpsertProviderConnectionRequest,
+) -> Result<ProviderConnectionRecord, BridgeError> {
+    let parsed_id = parse_provider_connection_id(&connection_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.update_provider_connection(parsed_id, &request).await
+}
+
+/// Deletes a runtime provider connection (`DELETE /v1/runtime/connections/{id}`).
+#[tauri::command]
+pub async fn delete_provider_connection(
+    state: State<'_, SharedBridge>,
+    connection_id: String,
+) -> Result<DeleteProviderConnectionResponse, BridgeError> {
+    let parsed_id = parse_provider_connection_id(&connection_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.delete_provider_connection(parsed_id).await
+}
+
+/// Probes a runtime provider connection and loads live models (`POST /v1/runtime/connections/{id}/probe`).
+#[tauri::command]
+pub async fn probe_provider_connection(
+    state: State<'_, SharedBridge>,
+    connection_id: String,
+) -> Result<ProbeConnectionResponse, BridgeError> {
+    let parsed_id = parse_provider_connection_id(&connection_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.probe_provider_connection(parsed_id).await
+}
+
+/// Activates a runtime provider connection as active default (`POST /v1/runtime/connections/{id}/activate`).
+#[tauri::command]
+pub async fn activate_provider_connection(
+    state: State<'_, SharedBridge>,
+    connection_id: String,
+    request: Option<ActivateConnectionRequest>,
+) -> Result<ProviderConnectionRecord, BridgeError> {
+    let parsed_id = parse_provider_connection_id(&connection_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .activate_provider_connection(parsed_id, &request.unwrap_or_default())
+        .await
+}
+
+/// Lists registered skills, plugins, and MCP servers (`GET /v1/capabilities`).
+#[tauri::command]
+pub async fn list_capabilities(
+    state: State<'_, SharedBridge>,
+    project_id: Option<String>,
+    scope_kind: Option<String>,
+    kind: Option<String>,
+) -> Result<ListCapabilitiesResponse, BridgeError> {
+    let parsed_project = parse_optional_project_id(project_id.as_deref())?;
+    let parsed_scope_kind = parse_optional_capability_scope_kind(scope_kind.as_deref())?;
+    let parsed_kind = parse_optional_capability_kind(kind.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .list_capabilities(parsed_project, parsed_scope_kind, parsed_kind)
+        .await
+}
+
+/// Registers a new skill, MCP server, or plugin capability (`POST /v1/capabilities`).
+#[tauri::command]
+pub async fn create_capability(
+    state: State<'_, SharedBridge>,
+    request: CreateCapabilityRequest,
+) -> Result<CapabilityRecord, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.create_capability(&request).await
+}
+
+/// Scans project directories and read-only personal profile candidates (`POST /v1/capabilities/discover`).
+#[tauri::command]
+pub async fn discover_capabilities(
+    state: State<'_, SharedBridge>,
+    request: DiscoverCapabilitiesRequest,
+) -> Result<DiscoverCapabilitiesResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.discover_capabilities(&request).await
+}
+
+/// Updates a registered capability (`PATCH /v1/capabilities/{id}`).
+#[tauri::command]
+pub async fn update_capability(
+    state: State<'_, SharedBridge>,
+    capability_id: String,
+    request: UpdateCapabilityRequest,
+) -> Result<CapabilityRecord, BridgeError> {
+    let parsed_id = parse_capability_id(&capability_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.update_capability(parsed_id, &request).await
+}
+
+/// Removes a capability from Dennett's registry (`DELETE /v1/capabilities/{id}`).
+#[tauri::command]
+pub async fn delete_capability(
+    state: State<'_, SharedBridge>,
+    capability_id: String,
+) -> Result<DeleteCapabilityResponse, BridgeError> {
+    let parsed_id = parse_capability_id(&capability_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.delete_capability(parsed_id).await
+}
+
+/// Rolls back a capability to its previous snapshot (`POST /v1/capabilities/{id}/rollback`).
+#[tauri::command]
+pub async fn rollback_capability(
+    state: State<'_, SharedBridge>,
+    capability_id: String,
+) -> Result<CapabilityRecord, BridgeError> {
+    let parsed_id = parse_capability_id(&capability_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.rollback_capability(parsed_id).await
+}
+
+/// Sets a per-project capability activation binding (`PUT /v1/projects/{project_id}/capabilities/{capability_id}`).
+#[tauri::command]
+pub async fn set_project_capability_binding(
+    state: State<'_, SharedBridge>,
+    project_id: String,
+    capability_id: String,
+    request: SetProjectCapabilityBindingRequest,
+) -> Result<CapabilityProjectBinding, BridgeError> {
+    let parsed_project = parse_project_id(&project_id)?;
+    let parsed_cap = parse_capability_id(&capability_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .set_project_capability_binding(parsed_project, parsed_cap, &request)
+        .await
+}
+
+/// Commits a memory note via `Head`'s durable outbox (`POST /v1/memory/commits`).
+#[tauri::command]
+pub async fn commit_memory_note(
+    state: State<'_, SharedBridge>,
+    request: CommitMemoryNoteRequest,
+) -> Result<CommitMemoryNoteResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.commit_memory_note(&request).await
+}
+
+/// Fetches the V02-safe aggregated Memory Fabric overview (`GET /v1/memory/overview`).
+#[tauri::command]
+pub async fn get_memory_overview(
+    state: State<'_, SharedBridge>,
+    scope: Option<String>,
+) -> Result<MemoryOverviewResponse, BridgeError> {
+    let parsed_scope = parse_optional_memory_scope(scope.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_memory_overview(parsed_scope.as_ref()).await
+}
+
+/// Appends a correction revision to a memory note (`POST /v1/memory/notes/{id}/correct`).
+#[tauri::command]
+pub async fn correct_memory_note(
+    state: State<'_, SharedBridge>,
+    request: CorrectNoteRequest,
+) -> Result<NoteMutationResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.correct_memory_note(&request).await
+}
+
+/// Fetches immutable revision history for a memory note (`GET /v1/memory/notes/{id}/history`).
+#[tauri::command]
+pub async fn get_memory_note_history(
+    state: State<'_, SharedBridge>,
+    note_id: String,
+) -> Result<NoteHistoryResponse, BridgeError> {
+    let parsed_id = parse_memory_note_id(&note_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_memory_note_history(parsed_id).await
+}
+
+/// Lists memory claims filtered optionally by scope and topic (`GET /v1/memory/claims`).
+#[tauri::command]
+pub async fn list_memory_claims(
+    state: State<'_, SharedBridge>,
+    scope: Option<String>,
+    topic_key: Option<String>,
+) -> Result<ListClaimsResponse, BridgeError> {
+    let parsed_scope = parse_optional_memory_scope(scope.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .list_memory_claims(parsed_scope.as_ref(), topic_key.as_deref())
+        .await
+}
+
+/// Creates a structured memory claim (`POST /v1/memory/claims`).
+#[tauri::command]
+pub async fn create_memory_claim(
+    state: State<'_, SharedBridge>,
+    request: CreateClaimRequest,
+) -> Result<MemoryClaim, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.create_memory_claim(&request).await
+}
+
+/// Supersedes an existing memory claim (`POST /v1/memory/claims/{id}/supersede`).
+#[tauri::command]
+pub async fn supersede_memory_claim(
+    state: State<'_, SharedBridge>,
+    request: SupersedeClaimRequest,
+) -> Result<MemoryClaim, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.supersede_memory_claim(&request).await
+}
+
+/// Lists memory conflicts (`GET /v1/memory/conflicts`).
+#[tauri::command]
+pub async fn list_memory_conflicts(
+    state: State<'_, SharedBridge>,
+    scope: Option<String>,
+) -> Result<ListConflictsResponse, BridgeError> {
+    let parsed_scope = parse_optional_memory_scope(scope.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.list_memory_conflicts(parsed_scope.as_ref()).await
+}
+
+/// Resolves an open memory conflict (`POST /v1/memory/conflicts/{id}/resolve`).
+#[tauri::command]
+pub async fn resolve_memory_conflict(
+    state: State<'_, SharedBridge>,
+    request: ResolveConflictRequest,
+) -> Result<MemoryConflict, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.resolve_memory_conflict(&request).await
+}
+
+/// Lists memory dossier documents (`GET /v1/memory/documents`).
+#[tauri::command]
+pub async fn list_memory_documents(
+    state: State<'_, SharedBridge>,
+    scope: Option<String>,
+) -> Result<ListDocumentsResponse, BridgeError> {
+    let parsed_scope = parse_optional_memory_scope(scope.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.list_memory_documents(parsed_scope.as_ref()).await
+}
+
+/// Creates a version-1 memory dossier document (`POST /v1/memory/documents`).
+#[tauri::command]
+pub async fn create_memory_document(
+    state: State<'_, SharedBridge>,
+    request: CreateDocumentRequest,
+) -> Result<MemoryDocument, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.create_memory_document(&request).await
+}
+
+/// Retrieves a single memory dossier document (`GET /v1/memory/documents/{id}`).
+#[tauri::command]
+pub async fn get_memory_document(
+    state: State<'_, SharedBridge>,
+    document_id: String,
+) -> Result<MemoryDocument, BridgeError> {
+    let parsed_id = parse_document_id(&document_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_memory_document(parsed_id).await
+}
+
+/// Updates a memory dossier document with optimistic `expected_version` concurrency (`PUT /v1/memory/documents/{id}`).
+#[tauri::command]
+pub async fn update_memory_document(
+    state: State<'_, SharedBridge>,
+    request: UpdateDocumentRequest,
+) -> Result<MemoryDocument, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.update_memory_document(&request).await
+}
+
+/// Fetches immutable version history for a memory dossier document (`GET /v1/memory/documents/{id}/versions`).
+#[tauri::command]
+pub async fn get_memory_document_versions(
+    state: State<'_, SharedBridge>,
+    document_id: String,
+) -> Result<GetDocumentVersionsResponse, BridgeError> {
+    let parsed_id = parse_document_id(&document_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_memory_document_versions(parsed_id).await
+}
+
+/// Forgets a memory entity with search-index purge and tombstone (`POST /v1/memory/forget`).
+#[tauri::command]
+pub async fn forget_memory_item(
+    state: State<'_, SharedBridge>,
+    request: ForgetRequest,
+) -> Result<ForgetResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.forget_memory_item(&request).await
+}
+
+/// Lists content-free forget audit tombstones (`GET /v1/memory/forget/tombstones`).
+#[tauri::command]
+pub async fn list_memory_tombstones(
+    state: State<'_, SharedBridge>,
+    scope: Option<String>,
+) -> Result<ListTombstonesResponse, BridgeError> {
+    let parsed_scope = parse_optional_memory_scope(scope.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.list_memory_tombstones(parsed_scope.as_ref()).await
+}
+
+/// Exports a deterministic, secret-free memory package (`POST /v1/memory/export`).
+#[tauri::command]
+pub async fn export_memory_package(
+    state: State<'_, SharedBridge>,
+    request: ExportRequest,
+) -> Result<ExportResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.export_memory_package(&request).await
+}
+
+/// Imports an external memory package strictly as `external_untrusted` (`POST /v1/memory/import`).
+#[tauri::command]
+pub async fn import_memory_package(
+    state: State<'_, SharedBridge>,
+    request: ImportRequest,
+) -> Result<ImportResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.import_memory_package(&request).await
+}
+
+/// Triggers a full search index rebuild for a memory scope (`POST /v1/memory/index/rebuild`).
+#[tauri::command]
+pub async fn trigger_memory_index_rebuild(
+    state: State<'_, SharedBridge>,
+    request: TriggerIndexRebuildRequest,
+) -> Result<TriggerIndexRebuildResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.trigger_memory_index_rebuild(&request).await
+}
+
+/// Lists memory consolidation jobs (`GET /v1/memory/consolidation/jobs`).
+#[tauri::command]
+pub async fn list_memory_consolidation_jobs(
+    state: State<'_, SharedBridge>,
+    scope: Option<String>,
+) -> Result<ListConsolidationJobsResponse, BridgeError> {
+    let parsed_scope = parse_optional_memory_scope(scope.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .list_memory_consolidation_jobs(parsed_scope.as_ref())
+        .await
+}
+
+/// Creates a background memory consolidation job (`POST /v1/memory/consolidation/jobs`).
+#[tauri::command]
+pub async fn create_memory_consolidation_job(
+    state: State<'_, SharedBridge>,
+    request: CreateConsolidationJobRequest,
+) -> Result<ConsolidationJob, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.create_memory_consolidation_job(&request).await
+}
+
+/// Pauses a memory consolidation job at its durable checkpoint (`POST /v1/memory/consolidation/jobs/{id}/pause`).
+#[tauri::command]
+pub async fn pause_memory_consolidation_job(
+    state: State<'_, SharedBridge>,
+    job_id: String,
+) -> Result<ConsolidationJob, BridgeError> {
+    let parsed_id = parse_consolidation_job_id(&job_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.pause_memory_consolidation_job(parsed_id).await
+}
+
+/// Resumes a paused memory consolidation job (`POST /v1/memory/consolidation/jobs/{id}/resume`).
+#[tauri::command]
+pub async fn resume_memory_consolidation_job(
+    state: State<'_, SharedBridge>,
+    job_id: String,
+) -> Result<ConsolidationJob, BridgeError> {
+    let parsed_id = parse_consolidation_job_id(&job_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.resume_memory_consolidation_job(parsed_id).await
 }

@@ -1,5 +1,6 @@
 import type { DesktopBridge } from "./bridge";
 import type {
+  ActivateConnectionRequest,
   AgentRecord,
   ArtifactLifecycleRequest,
   ArtifactLifecycleResponse,
@@ -7,58 +8,107 @@ import type {
   CancelRunResponse,
   CancelTaskResponse,
   CapabilityGrantRecord,
+  CapabilityKind,
+  CapabilityProjectBinding,
+  CapabilityRecord,
+  CapabilityScopeKind,
+  CommitMemoryNoteRequest,
+  CommitMemoryNoteResponse,
+  ConsolidationJob,
+  CorrectNoteRequest,
   CreateAgentRequest,
   CreateArtifactRequest,
+  CreateCapabilityRequest,
+  CreateClaimRequest,
+  CreateConsolidationJobRequest,
+  CreateDocumentRequest,
   CreateProjectRequest,
   CreateSessionRequest,
   CreateTaskRequest,
+  DeleteCapabilityResponse,
+  DeleteProviderConnectionResponse,
   DesktopHealthSnapshot,
   DiagnosticsResponse,
+  DiscoverCapabilitiesRequest,
+  DiscoverCapabilitiesResponse,
   DispatchEffectRequest,
   DispatchEffectResponse,
   EventStreamResponse,
+  ExportRequest,
+  ExportResponse,
   FlushOutboxResponse,
+  ForgetRequest,
+  ForgetResponse,
+  GetDocumentVersionsResponse,
   HeadHealth,
   HeadMemorySearchRequest,
   HeadMemorySearchResponse,
+  ImportRequest,
+  ImportResponse,
   ListAgentMessagesResponse,
   ListAgentsResponse,
   ListArtifactsResponse,
+  ListCapabilitiesResponse,
   ListCapabilityGrantsResponse,
+  ListClaimsResponse,
+  ListConflictsResponse,
+  ListConsolidationJobsResponse,
+  ListDocumentsResponse,
   ListEffectsResponse,
   ListInboxResponse,
   ListPermissionRequestsResponse,
   ListProjectFilesResponse,
   ListProjectsResponse,
+  ListProviderConnectionsResponse,
+  ListSecretsResponse,
   ListSessionsResponse,
   ListTasksResponse,
+  ListTombstonesResponse,
+  MemoryClaim,
+  MemoryConflict,
+  MemoryDocument,
+  MemoryOverviewResponse,
+  NoteHistoryResponse,
+  NoteMutationResponse,
+  ProbeConnectionResponse,
   ProjectLifecycleResponse,
   ProjectRecord,
+  ProviderConnectionRecord,
   RebindProjectRequest,
   ReconcileEffectRequest,
   ReconcileEffectResponse,
   ReplyTaskRequest,
+  ResolveConflictRequest,
   ResolveInboxCardRequest,
   ResolveInboxCardResponse,
   ResolvePermissionRequest,
   ResolvePermissionResponse,
   RevokeGrantRequest,
   RuntimeCatalogResponse,
+  SecretMetadataRecord,
   SendAgentMessageRequest,
   SendAgentMessageResponse,
   SendMessageRequest,
   SendMessageResponse,
   SessionDetailResponse,
   SessionRecord,
+  SetProjectCapabilityBindingRequest,
+  SetSecretRequest,
   StateSnapshotResponse,
+  SupersedeClaimRequest,
   TaskDetailResponse,
   TaskRecord,
   TaskSignalRequest,
   TaskSignalResponse,
+  TriggerIndexRebuildRequest,
+  TriggerIndexRebuildResponse,
   UpdateAgentConfigRequest,
+  UpdateCapabilityRequest,
+  UpdateDocumentRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateTaskRequest,
+  UpsertProviderConnectionRequest,
 } from "./contracts";
 
 async function parseErrorResponse(resp: Response): Promise<{ code: string; message: string }> {
@@ -441,5 +491,201 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
 
     searchMemory: (request: HeadMemorySearchRequest) =>
       requestJson<HeadMemorySearchResponse>("POST", "/v1/memory/search", request),
+
+    listSecrets: () => requestJson<ListSecretsResponse>("GET", "/v1/secrets"),
+
+    setSecret: (slotKey: string, request: SetSecretRequest) =>
+      requestJson<SecretMetadataRecord>(
+        "PUT",
+        `/v1/secrets/${encodeURIComponent(slotKey)}`,
+        request,
+      ),
+
+    deleteSecret: (slotKey: string) =>
+      requestJson<SecretMetadataRecord>("DELETE", `/v1/secrets/${encodeURIComponent(slotKey)}`),
+
+    listProviderConnections: () =>
+      requestJson<ListProviderConnectionsResponse>("GET", "/v1/runtime/connections"),
+
+    createProviderConnection: (request: UpsertProviderConnectionRequest) =>
+      requestJson<ProviderConnectionRecord>("POST", "/v1/runtime/connections", request),
+
+    updateProviderConnection: (
+      connectionId: string,
+      request: UpsertProviderConnectionRequest,
+    ) =>
+      requestJson<ProviderConnectionRecord>(
+        "PATCH",
+        `/v1/runtime/connections/${connectionId}`,
+        request,
+      ),
+
+    deleteProviderConnection: (connectionId: string) =>
+      requestJson<DeleteProviderConnectionResponse>(
+        "DELETE",
+        `/v1/runtime/connections/${connectionId}`,
+      ),
+
+    probeProviderConnection: (connectionId: string) =>
+      requestJson<ProbeConnectionResponse>(
+        "POST",
+        `/v1/runtime/connections/${connectionId}/probe`,
+      ),
+
+    activateProviderConnection: (connectionId: string, request?: ActivateConnectionRequest) =>
+      requestJson<ProviderConnectionRecord>(
+        "POST",
+        `/v1/runtime/connections/${connectionId}/activate`,
+        request ?? {},
+      ),
+
+    listCapabilities: (
+      projectId?: string | null,
+      scopeKind?: CapabilityScopeKind | null,
+      kind?: CapabilityKind | null,
+    ) =>
+      requestJson<ListCapabilitiesResponse>(
+        "GET",
+        `/v1/capabilities${buildQuery([
+          ["project_id", projectId],
+          ["scope_kind", scopeKind],
+          ["kind", kind],
+        ])}`,
+      ),
+
+    createCapability: (request: CreateCapabilityRequest) =>
+      requestJson<CapabilityRecord>("POST", "/v1/capabilities", request),
+
+    discoverCapabilities: (request: DiscoverCapabilitiesRequest) =>
+      requestJson<DiscoverCapabilitiesResponse>("POST", "/v1/capabilities/discover", request),
+
+    updateCapability: (capabilityId: string, request: UpdateCapabilityRequest) =>
+      requestJson<CapabilityRecord>("PATCH", `/v1/capabilities/${capabilityId}`, request),
+
+    deleteCapability: (capabilityId: string) =>
+      requestJson<DeleteCapabilityResponse>("DELETE", `/v1/capabilities/${capabilityId}`),
+
+    rollbackCapability: (capabilityId: string) =>
+      requestJson<CapabilityRecord>("POST", `/v1/capabilities/${capabilityId}/rollback`),
+
+    setProjectCapabilityBinding: (
+      projectId: string,
+      capabilityId: string,
+      request: SetProjectCapabilityBindingRequest,
+    ) =>
+      requestJson<CapabilityProjectBinding>(
+        "PUT",
+        `/v1/projects/${projectId}/capabilities/${capabilityId}`,
+        request,
+      ),
+
+    commitMemoryNote: (request: CommitMemoryNoteRequest) =>
+      requestJson<CommitMemoryNoteResponse>("POST", "/v1/memory/commits", request),
+
+    getMemoryOverview: (scope?: string | null) =>
+      requestJson<MemoryOverviewResponse>(
+        "GET",
+        `/v1/memory/overview${buildQuery([["scope", scope]])}`,
+      ),
+
+    correctMemoryNote: (request: CorrectNoteRequest) =>
+      requestJson<NoteMutationResponse>(
+        "POST",
+        `/v1/memory/notes/${request.note_id}/correct`,
+        request,
+      ),
+
+    getMemoryNoteHistory: (noteId: string) =>
+      requestJson<NoteHistoryResponse>("GET", `/v1/memory/notes/${noteId}/history`),
+
+    listMemoryClaims: (scope?: string | null, topicKey?: string | null) =>
+      requestJson<ListClaimsResponse>(
+        "GET",
+        `/v1/memory/claims${buildQuery([
+          ["scope", scope],
+          ["topic_key", topicKey],
+        ])}`,
+      ),
+
+    createMemoryClaim: (request: CreateClaimRequest) =>
+      requestJson<MemoryClaim>("POST", "/v1/memory/claims", request),
+
+    supersedeMemoryClaim: (request: SupersedeClaimRequest) =>
+      requestJson<MemoryClaim>(
+        "POST",
+        `/v1/memory/claims/${request.claim_id}/supersede`,
+        request,
+      ),
+
+    listMemoryConflicts: (scope?: string | null) =>
+      requestJson<ListConflictsResponse>(
+        "GET",
+        `/v1/memory/conflicts${buildQuery([["scope", scope]])}`,
+      ),
+
+    resolveMemoryConflict: (request: ResolveConflictRequest) =>
+      requestJson<MemoryConflict>(
+        "POST",
+        `/v1/memory/conflicts/${request.conflict_id}/resolve`,
+        request,
+      ),
+
+    listMemoryDocuments: (scope?: string | null) =>
+      requestJson<ListDocumentsResponse>(
+        "GET",
+        `/v1/memory/documents${buildQuery([["scope", scope]])}`,
+      ),
+
+    createMemoryDocument: (request: CreateDocumentRequest) =>
+      requestJson<MemoryDocument>("POST", "/v1/memory/documents", request),
+
+    getMemoryDocument: (documentId: string) =>
+      requestJson<MemoryDocument>("GET", `/v1/memory/documents/${documentId}`),
+
+    updateMemoryDocument: (request: UpdateDocumentRequest) =>
+      requestJson<MemoryDocument>(
+        "PUT",
+        `/v1/memory/documents/${request.document_id}`,
+        request,
+      ),
+
+    getMemoryDocumentVersions: (documentId: string) =>
+      requestJson<GetDocumentVersionsResponse>(
+        "GET",
+        `/v1/memory/documents/${documentId}/versions`,
+      ),
+
+    forgetMemoryItem: (request: ForgetRequest) =>
+      requestJson<ForgetResponse>("POST", "/v1/memory/forget", request),
+
+    listMemoryTombstones: (scope?: string | null) =>
+      requestJson<ListTombstonesResponse>(
+        "GET",
+        `/v1/memory/forget/tombstones${buildQuery([["scope", scope]])}`,
+      ),
+
+    exportMemoryPackage: (request: ExportRequest) =>
+      requestJson<ExportResponse>("POST", "/v1/memory/export", request),
+
+    importMemoryPackage: (request: ImportRequest) =>
+      requestJson<ImportResponse>("POST", "/v1/memory/import", request),
+
+    triggerMemoryIndexRebuild: (request: TriggerIndexRebuildRequest) =>
+      requestJson<TriggerIndexRebuildResponse>("POST", "/v1/memory/index/rebuild", request),
+
+    listMemoryConsolidationJobs: (scope?: string | null) =>
+      requestJson<ListConsolidationJobsResponse>(
+        "GET",
+        `/v1/memory/consolidation/jobs${buildQuery([["scope", scope]])}`,
+      ),
+
+    createMemoryConsolidationJob: (request: CreateConsolidationJobRequest) =>
+      requestJson<ConsolidationJob>("POST", "/v1/memory/consolidation/jobs", request),
+
+    pauseMemoryConsolidationJob: (jobId: string) =>
+      requestJson<ConsolidationJob>("POST", `/v1/memory/consolidation/jobs/${jobId}/pause`),
+
+    resumeMemoryConsolidationJob: (jobId: string) =>
+      requestJson<ConsolidationJob>("POST", `/v1/memory/consolidation/jobs/${jobId}/resume`),
   };
 }

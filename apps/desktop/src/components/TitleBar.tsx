@@ -24,6 +24,12 @@ function resolveStatusLabel(
   if (isSimulated) {
     return { text: "SIMULATED", tone: "warn" };
   }
+  if (authProfile === "local-endpoint") {
+    return {
+      text: tier && tier.trim().length > 0 ? `Локальный · ${tier.trim()}` : "Локальный сервер",
+      tone: "ok",
+    };
+  }
   if (authProfile === "gemini-api-key") {
     return { text: "Antigravity ACP · Gemini API key", tone: "ok" };
   }
@@ -97,7 +103,9 @@ export function TitleBar() {
       ? "Фильтр по Входящим и Радару…"
       : state.activeView === "tasks"
         ? "Фильтр по поручениям…"
-        : "Поиск по чатам и проектам…";
+        : state.activeView === "memory"
+          ? "Поиск по памяти и заметкам…"
+          : "Поиск по чатам и проектам…";
 
   return (
     <header
@@ -133,6 +141,14 @@ export function TitleBar() {
                 /
               </span>
               <strong>Поручения и расписания</strong>
+            </>
+          ) : state.activeView === "memory" ? (
+            <>
+              <span className="breadcrumb-prefix">Dennett</span>
+              <span className="breadcrumb-sep" aria-hidden="true">
+                /
+              </span>
+              <strong>Память</strong>
             </>
           ) : meta.isStandaloneActiveSession && meta.activeSession ? (
             <>

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type {
+  ActivateConnectionRequest,
   AgentRecord,
   ArtifactLifecycleRequest,
   ArtifactLifecycleResponse,
@@ -9,57 +10,106 @@ import type {
   CancelRunResponse,
   CancelTaskResponse,
   CapabilityGrantRecord,
+  CapabilityKind,
+  CapabilityProjectBinding,
+  CapabilityRecord,
+  CapabilityScopeKind,
+  CommitMemoryNoteRequest,
+  CommitMemoryNoteResponse,
+  ConsolidationJob,
+  CorrectNoteRequest,
   CreateAgentRequest,
   CreateArtifactRequest,
+  CreateCapabilityRequest,
+  CreateClaimRequest,
+  CreateConsolidationJobRequest,
+  CreateDocumentRequest,
   CreateProjectRequest,
   CreateSessionRequest,
   CreateTaskRequest,
+  DeleteCapabilityResponse,
+  DeleteProviderConnectionResponse,
   DesktopHealthSnapshot,
   DiagnosticsResponse,
+  DiscoverCapabilitiesRequest,
+  DiscoverCapabilitiesResponse,
   DispatchEffectRequest,
   DispatchEffectResponse,
   EventStreamResponse,
+  ExportRequest,
+  ExportResponse,
   FlushOutboxResponse,
+  ForgetRequest,
+  ForgetResponse,
+  GetDocumentVersionsResponse,
   HeadMemorySearchRequest,
   HeadMemorySearchResponse,
+  ImportRequest,
+  ImportResponse,
   ListAgentMessagesResponse,
   ListAgentsResponse,
   ListArtifactsResponse,
+  ListCapabilitiesResponse,
   ListCapabilityGrantsResponse,
+  ListClaimsResponse,
+  ListConflictsResponse,
+  ListConsolidationJobsResponse,
+  ListDocumentsResponse,
   ListEffectsResponse,
   ListInboxResponse,
   ListPermissionRequestsResponse,
   ListProjectFilesResponse,
   ListProjectsResponse,
+  ListProviderConnectionsResponse,
+  ListSecretsResponse,
   ListSessionsResponse,
   ListTasksResponse,
+  ListTombstonesResponse,
+  MemoryClaim,
+  MemoryConflict,
+  MemoryDocument,
+  MemoryOverviewResponse,
+  NoteHistoryResponse,
+  NoteMutationResponse,
+  ProbeConnectionResponse,
   ProjectLifecycleResponse,
   ProjectRecord,
+  ProviderConnectionRecord,
   RebindProjectRequest,
   ReconcileEffectRequest,
   ReconcileEffectResponse,
   ReplyTaskRequest,
+  ResolveConflictRequest,
   ResolveInboxCardRequest,
   ResolveInboxCardResponse,
   ResolvePermissionRequest,
   ResolvePermissionResponse,
   RevokeGrantRequest,
   RuntimeCatalogResponse,
+  SecretMetadataRecord,
   SendAgentMessageRequest,
   SendAgentMessageResponse,
   SendMessageRequest,
   SendMessageResponse,
   SessionDetailResponse,
   SessionRecord,
+  SetProjectCapabilityBindingRequest,
+  SetSecretRequest,
   StateSnapshotResponse,
+  SupersedeClaimRequest,
   TaskDetailResponse,
   TaskRecord,
   TaskSignalRequest,
   TaskSignalResponse,
+  TriggerIndexRebuildRequest,
+  TriggerIndexRebuildResponse,
   UpdateAgentConfigRequest,
+  UpdateCapabilityRequest,
+  UpdateDocumentRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateTaskRequest,
+  UpsertProviderConnectionRequest,
 } from "./contracts";
 
 export interface DesktopBridge {
@@ -159,6 +209,67 @@ export interface DesktopBridge {
   listDiagnostics(limit?: number): Promise<DiagnosticsResponse>;
   flushMemoryOutbox(): Promise<FlushOutboxResponse>;
   searchMemory(request: HeadMemorySearchRequest): Promise<HeadMemorySearchResponse>;
+  // Phase D3: SecretBroker, Provider Connections, Capabilities, Memory Fabric
+  listSecrets(): Promise<ListSecretsResponse>;
+  setSecret(slotKey: string, request: SetSecretRequest): Promise<SecretMetadataRecord>;
+  deleteSecret(slotKey: string): Promise<SecretMetadataRecord>;
+  listProviderConnections(): Promise<ListProviderConnectionsResponse>;
+  createProviderConnection(
+    request: UpsertProviderConnectionRequest,
+  ): Promise<ProviderConnectionRecord>;
+  updateProviderConnection(
+    connectionId: string,
+    request: UpsertProviderConnectionRequest,
+  ): Promise<ProviderConnectionRecord>;
+  deleteProviderConnection(connectionId: string): Promise<DeleteProviderConnectionResponse>;
+  probeProviderConnection(connectionId: string): Promise<ProbeConnectionResponse>;
+  activateProviderConnection(
+    connectionId: string,
+    request?: ActivateConnectionRequest,
+  ): Promise<ProviderConnectionRecord>;
+  listCapabilities(
+    projectId?: string | null,
+    scopeKind?: CapabilityScopeKind | null,
+    kind?: CapabilityKind | null,
+  ): Promise<ListCapabilitiesResponse>;
+  createCapability(request: CreateCapabilityRequest): Promise<CapabilityRecord>;
+  discoverCapabilities(request: DiscoverCapabilitiesRequest): Promise<DiscoverCapabilitiesResponse>;
+  updateCapability(
+    capabilityId: string,
+    request: UpdateCapabilityRequest,
+  ): Promise<CapabilityRecord>;
+  deleteCapability(capabilityId: string): Promise<DeleteCapabilityResponse>;
+  rollbackCapability(capabilityId: string): Promise<CapabilityRecord>;
+  setProjectCapabilityBinding(
+    projectId: string,
+    capabilityId: string,
+    request: SetProjectCapabilityBindingRequest,
+  ): Promise<CapabilityProjectBinding>;
+  commitMemoryNote(request: CommitMemoryNoteRequest): Promise<CommitMemoryNoteResponse>;
+  getMemoryOverview(scope?: string | null): Promise<MemoryOverviewResponse>;
+  correctMemoryNote(request: CorrectNoteRequest): Promise<NoteMutationResponse>;
+  getMemoryNoteHistory(noteId: string): Promise<NoteHistoryResponse>;
+  listMemoryClaims(scope?: string | null, topicKey?: string | null): Promise<ListClaimsResponse>;
+  createMemoryClaim(request: CreateClaimRequest): Promise<MemoryClaim>;
+  supersedeMemoryClaim(request: SupersedeClaimRequest): Promise<MemoryClaim>;
+  listMemoryConflicts(scope?: string | null): Promise<ListConflictsResponse>;
+  resolveMemoryConflict(request: ResolveConflictRequest): Promise<MemoryConflict>;
+  listMemoryDocuments(scope?: string | null): Promise<ListDocumentsResponse>;
+  createMemoryDocument(request: CreateDocumentRequest): Promise<MemoryDocument>;
+  getMemoryDocument(documentId: string): Promise<MemoryDocument>;
+  updateMemoryDocument(request: UpdateDocumentRequest): Promise<MemoryDocument>;
+  getMemoryDocumentVersions(documentId: string): Promise<GetDocumentVersionsResponse>;
+  forgetMemoryItem(request: ForgetRequest): Promise<ForgetResponse>;
+  listMemoryTombstones(scope?: string | null): Promise<ListTombstonesResponse>;
+  exportMemoryPackage(request: ExportRequest): Promise<ExportResponse>;
+  importMemoryPackage(request: ImportRequest): Promise<ImportResponse>;
+  triggerMemoryIndexRebuild(
+    request: TriggerIndexRebuildRequest,
+  ): Promise<TriggerIndexRebuildResponse>;
+  listMemoryConsolidationJobs(scope?: string | null): Promise<ListConsolidationJobsResponse>;
+  createMemoryConsolidationJob(request: CreateConsolidationJobRequest): Promise<ConsolidationJob>;
+  pauseMemoryConsolidationJob(jobId: string): Promise<ConsolidationJob>;
+  resumeMemoryConsolidationJob(jobId: string): Promise<ConsolidationJob>;
 }
 
 export interface WindowControls {
@@ -320,6 +431,109 @@ export function createTauriBridge(): DesktopBridge {
     flushMemoryOutbox: () => invoke<FlushOutboxResponse>("flush_memory_outbox"),
     searchMemory: (request: HeadMemorySearchRequest) =>
       invoke<HeadMemorySearchResponse>("search_memory", { request }),
+    listSecrets: () => invoke<ListSecretsResponse>("list_secrets"),
+    setSecret: (slotKey: string, request: SetSecretRequest) =>
+      invoke<SecretMetadataRecord>("set_secret", { slotKey, request }),
+    deleteSecret: (slotKey: string) =>
+      invoke<SecretMetadataRecord>("delete_secret", { slotKey }),
+    listProviderConnections: () =>
+      invoke<ListProviderConnectionsResponse>("list_provider_connections"),
+    createProviderConnection: (request: UpsertProviderConnectionRequest) =>
+      invoke<ProviderConnectionRecord>("create_provider_connection", { request }),
+    updateProviderConnection: (
+      connectionId: string,
+      request: UpsertProviderConnectionRequest,
+    ) => invoke<ProviderConnectionRecord>("update_provider_connection", { connectionId, request }),
+    deleteProviderConnection: (connectionId: string) =>
+      invoke<DeleteProviderConnectionResponse>("delete_provider_connection", { connectionId }),
+    probeProviderConnection: (connectionId: string) =>
+      invoke<ProbeConnectionResponse>("probe_provider_connection", { connectionId }),
+    activateProviderConnection: (connectionId: string, request?: ActivateConnectionRequest) =>
+      invoke<ProviderConnectionRecord>("activate_provider_connection", {
+        connectionId,
+        request: request ?? null,
+      }),
+    listCapabilities: (
+      projectId?: string | null,
+      scopeKind?: CapabilityScopeKind | null,
+      kind?: CapabilityKind | null,
+    ) =>
+      invoke<ListCapabilitiesResponse>("list_capabilities", {
+        projectId: projectId ?? null,
+        scopeKind: scopeKind ?? null,
+        kind: kind ?? null,
+      }),
+    createCapability: (request: CreateCapabilityRequest) =>
+      invoke<CapabilityRecord>("create_capability", { request }),
+    discoverCapabilities: (request: DiscoverCapabilitiesRequest) =>
+      invoke<DiscoverCapabilitiesResponse>("discover_capabilities", { request }),
+    updateCapability: (capabilityId: string, request: UpdateCapabilityRequest) =>
+      invoke<CapabilityRecord>("update_capability", { capabilityId, request }),
+    deleteCapability: (capabilityId: string) =>
+      invoke<DeleteCapabilityResponse>("delete_capability", { capabilityId }),
+    rollbackCapability: (capabilityId: string) =>
+      invoke<CapabilityRecord>("rollback_capability", { capabilityId }),
+    setProjectCapabilityBinding: (
+      projectId: string,
+      capabilityId: string,
+      request: SetProjectCapabilityBindingRequest,
+    ) =>
+      invoke<CapabilityProjectBinding>("set_project_capability_binding", {
+        projectId,
+        capabilityId,
+        request,
+      }),
+    commitMemoryNote: (request: CommitMemoryNoteRequest) =>
+      invoke<CommitMemoryNoteResponse>("commit_memory_note", { request }),
+    getMemoryOverview: (scope?: string | null) =>
+      invoke<MemoryOverviewResponse>("get_memory_overview", { scope: scope ?? null }),
+    correctMemoryNote: (request: CorrectNoteRequest) =>
+      invoke<NoteMutationResponse>("correct_memory_note", { request }),
+    getMemoryNoteHistory: (noteId: string) =>
+      invoke<NoteHistoryResponse>("get_memory_note_history", { noteId }),
+    listMemoryClaims: (scope?: string | null, topicKey?: string | null) =>
+      invoke<ListClaimsResponse>("list_memory_claims", {
+        scope: scope ?? null,
+        topicKey: topicKey ?? null,
+      }),
+    createMemoryClaim: (request: CreateClaimRequest) =>
+      invoke<MemoryClaim>("create_memory_claim", { request }),
+    supersedeMemoryClaim: (request: SupersedeClaimRequest) =>
+      invoke<MemoryClaim>("supersede_memory_claim", { request }),
+    listMemoryConflicts: (scope?: string | null) =>
+      invoke<ListConflictsResponse>("list_memory_conflicts", { scope: scope ?? null }),
+    resolveMemoryConflict: (request: ResolveConflictRequest) =>
+      invoke<MemoryConflict>("resolve_memory_conflict", { request }),
+    listMemoryDocuments: (scope?: string | null) =>
+      invoke<ListDocumentsResponse>("list_memory_documents", { scope: scope ?? null }),
+    createMemoryDocument: (request: CreateDocumentRequest) =>
+      invoke<MemoryDocument>("create_memory_document", { request }),
+    getMemoryDocument: (documentId: string) =>
+      invoke<MemoryDocument>("get_memory_document", { documentId }),
+    updateMemoryDocument: (request: UpdateDocumentRequest) =>
+      invoke<MemoryDocument>("update_memory_document", { request }),
+    getMemoryDocumentVersions: (documentId: string) =>
+      invoke<GetDocumentVersionsResponse>("get_memory_document_versions", { documentId }),
+    forgetMemoryItem: (request: ForgetRequest) =>
+      invoke<ForgetResponse>("forget_memory_item", { request }),
+    listMemoryTombstones: (scope?: string | null) =>
+      invoke<ListTombstonesResponse>("list_memory_tombstones", { scope: scope ?? null }),
+    exportMemoryPackage: (request: ExportRequest) =>
+      invoke<ExportResponse>("export_memory_package", { request }),
+    importMemoryPackage: (request: ImportRequest) =>
+      invoke<ImportResponse>("import_memory_package", { request }),
+    triggerMemoryIndexRebuild: (request: TriggerIndexRebuildRequest) =>
+      invoke<TriggerIndexRebuildResponse>("trigger_memory_index_rebuild", { request }),
+    listMemoryConsolidationJobs: (scope?: string | null) =>
+      invoke<ListConsolidationJobsResponse>("list_memory_consolidation_jobs", {
+        scope: scope ?? null,
+      }),
+    createMemoryConsolidationJob: (request: CreateConsolidationJobRequest) =>
+      invoke<ConsolidationJob>("create_memory_consolidation_job", { request }),
+    pauseMemoryConsolidationJob: (jobId: string) =>
+      invoke<ConsolidationJob>("pause_memory_consolidation_job", { jobId }),
+    resumeMemoryConsolidationJob: (jobId: string) =>
+      invoke<ConsolidationJob>("resume_memory_consolidation_job", { jobId }),
   };
 }
 

@@ -1,4 +1,4 @@
-import { BracketsCurly, ChatsCircle, ListChecks, Tray } from "@phosphor-icons/react";
+import { BracketsCurly, Brain, ChatsCircle, ListChecks, Tray } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
 import { QuotaRings } from "./QuotaRings";
@@ -23,6 +23,8 @@ export function ActivityRail() {
   const isChatView = state.activeView === "chat";
   const isInboxView = state.activeView === "inbox";
   const isTasksView = state.activeView === "tasks";
+  const isMemoryView = state.activeView === "memory";
+  const openConflictsCount = meta.openMemoryConflictsCount;
 
   const handleChatNav = () => {
     if (isChatView) {
@@ -85,6 +87,25 @@ export function ActivityRail() {
           {meta.activeTaskCount > 0 && (
             <span className="rail-badge rail-badge--subtle" data-testid="rail-tasks-badge">
               {meta.activeTaskCount > 99 ? "99+" : meta.activeTaskCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className={`icon-button rail-nav-btn ${isMemoryView ? "is-active" : ""}`}
+          onClick={() => actions.setActiveView("memory")}
+          aria-label={
+            openConflictsCount > 0 ? `Память (${openConflictsCount} конфликтов)` : "Память"
+          }
+          aria-pressed={isMemoryView}
+          data-testid="rail-nav-memory"
+          title="Память и досье (Alt+4)"
+        >
+          <Brain size={19} weight={isMemoryView ? "fill" : "regular"} />
+          {openConflictsCount > 0 && (
+            <span className="rail-badge rail-badge--warn" data-testid="rail-memory-badge">
+              {openConflictsCount > 99 ? "99+" : openConflictsCount}
             </span>
           )}
         </button>

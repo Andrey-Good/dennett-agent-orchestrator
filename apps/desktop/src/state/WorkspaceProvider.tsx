@@ -22,37 +22,59 @@ import {
   type ArtifactRecord,
   type BridgeErrorPayload,
   type CancelTaskResponse,
+  type CapabilityActivation,
   type CapabilityGrantRecord,
+  type CapabilityRecord,
+  type CapabilityScopeKind,
+  type ConnectionActivationRole,
+  type ConsolidationJob,
+  type ConsolidationJobType,
+  type CreateCapabilityRequest,
   type CreateTaskRequest,
   type DesktopHealthSnapshot,
   type DiagnosticsResponse,
+  type DiscoverCapabilitiesResponse,
   type EffectClaimRecord,
   type InboxCardRecord,
   type InboxResolutionAction,
   type ListProjectFilesResponse,
   type ManualEffectResolution,
+  type MemoryOverviewResponse,
   type MessageRecord,
   type PermissionRequestRecord,
   type PermissionResolutionDecision,
+  type PlannedProviderInfo,
+  type ProbeConnectionResponse,
   type ProjectRecord,
+  type ProviderConnectionRecord,
   type QueuedOfflineMessage,
   type RuntimeCatalogResponse,
+  type SecretMetadataRecord,
   type SessionDetailResponse,
   type SessionRecord,
   type StreamCursor,
   type TaskRecord,
   type TaskSignalResponse,
   type ThinkingLevel,
+  type TriggerIndexRebuildResponse,
+  type UpdateCapabilityRequest,
+  type UpsertProviderConnectionRequest,
   type WorkspaceWritePolicy,
 } from "../api/contracts";
 import { formatDecisionReasonRu } from "../utils/formatters";
 
-export type WorkspaceView = "chat" | "inbox" | "tasks";
+export type WorkspaceView = "chat" | "inbox" | "tasks" | "memory";
 
 export type FolderPickerIntent =
   | { mode: "create-project" }
   | { mode: "attach-project"; projectId: string }
-  | { mode: "rebind-project"; projectId: string };
+  | { mode: "rebind-project"; projectId: string }
+  | {
+      mode: "add-capability";
+      kind: "skill" | "plugin";
+      scopeKind: CapabilityScopeKind;
+      projectId: string | null;
+    };
 
 export interface ReconcileNotice {
   tone: "ok" | "warn" | "neutral";
@@ -216,6 +238,16 @@ export interface WorkspaceState {
   isFlushingOutbox: boolean;
   lastFlushSummary: string | null;
   isUpdatingModel: boolean;
+  // Phase D3 state
+  memoryOverview: MemoryOverviewResponse | null;
+  isLoadingMemoryOverview: boolean;
+  providerConnections: ProviderConnectionRecord[];
+  plannedProviders: PlannedProviderInfo[];
+  secrets: SecretMetadataRecord[];
+  capabilities: CapabilityRecord[];
+  isLoadingD3Settings: boolean;
+  isRebuildingIndex: boolean;
+  isConsolidatingMemory: boolean;
 }
 
 export interface CreateArtifactInput {
@@ -301,6 +333,54 @@ export interface WorkspaceActions {
     reason?: string,
   ): Promise<void>;
   flushMemoryOutbox(): Promise<void>;
+  // Phase D3 actions
+  refreshMemoryOverview(scope?: string | null): Promise<MemoryOverviewResponse | null>;
+  refreshD3SettingsData(): Promise<void>;
+  setSecret(
+    slotKey: string,
+    value: string,
+    description?: string,
+  ): Promise<SecretMetadataRecord | null>;
+  deleteSecret(slotKey: string): Promise<SecretMetadataRecord | null>;
+  createProviderConnection(
+    request: UpsertProviderConnectionRequest,
+  ): Promise<ProviderConnectionRecord | null>;
+  updateProviderConnection(
+    connectionId: string,
+    request: UpsertProviderConnectionRequest,
+  ): Promise<ProviderConnectionRecord | null>;
+  deleteProviderConnection(connectionId: string): Promise<boolean>;
+  probeProviderConnection(connectionId: string): Promise<ProbeConnectionResponse | null>;
+  activateProviderConnection(
+    connectionId: string,
+    role?: ConnectionActivationRole,
+  ): Promise<ProviderConnectionRecord | null>;
+  updateActiveAgentConnection(
+    connectionId: string | null,
+    modelPreference: string | null,
+    thinkingLevel: ThinkingLevel | null,
+  ): Promise<void>;
+  discoverCapabilities(
+    projectId?: string | null,
+    scanPersonalGeminiReadonly?: boolean,
+  ): Promise<DiscoverCapabilitiesResponse | null>;
+  createCapability(request: CreateCapabilityRequest): Promise<CapabilityRecord | null>;
+  updateCapability(
+    capabilityId: string,
+    request: UpdateCapabilityRequest,
+  ): Promise<CapabilityRecord | null>;
+  rollbackCapability(capabilityId: string): Promise<CapabilityRecord | null>;
+  deleteCapability(capabilityId: string): Promise<boolean>;
+  setProjectCapabilityBinding(
+    projectId: string,
+    capabilityId: string,
+    activationState: CapabilityActivation,
+  ): Promise<void>;
+  triggerMemoryIndexRebuild(scope: string): Promise<TriggerIndexRebuildResponse | null>;
+  createMemoryConsolidationJob(
+    scope: string,
+    jobType?: ConsolidationJobType,
+  ): Promise<ConsolidationJob | null>;
   toggleRightPanel(): void;
   setRightPanelOpen(open: boolean): void;
   toggleSidebar(): void;
@@ -335,6 +415,7 @@ export interface WorkspaceMeta {
   isActiveProjectArchived: boolean;
   activeClarificationCard: InboxCardRecord | null;
   activeTaskCount: number;
+  openMemoryConflictsCount: number;
 }
 
 export interface WorkspaceContextValue {
@@ -451,6 +532,15 @@ export function WorkspaceProvider({
   const [isFlushingOutbox, setIsFlushingOutbox] = useState(false);
   const [lastFlushSummary, setLastFlushSummary] = useState<string | null>(null);
   const [isUpdatingModel, setIsUpdatingModel] = useState(false);
+  const [memoryOverview, setMemoryOverview] = useState<MemoryOverviewResponse | null>(null);
+  const [isLoadingMemoryOverview, setIsLoadingMemoryOverview] = useState(false);
+  const [providerConnections, setProviderConnections] = useState<ProviderConnectionRecord[]>([]);
+  const [plannedProviders, setPlannedProviders] = useState<PlannedProviderInfo[]>([]);
+  const [secrets, setSecrets] = useState<SecretMetadataRecord[]>([]);
+  const [capabilities, setCapabilities] = useState<CapabilityRecord[]>([]);
+  const [isLoadingD3Settings, setIsLoadingD3Settings] = useState(false);
+  const [isRebuildingIndex, setIsRebuildingIndex] = useState(false);
+  const [isConsolidatingMemory, setIsConsolidatingMemory] = useState(false);
   const [isDocumentHidden, setIsDocumentHidden] = useState(
     () => typeof document !== "undefined" && document.visibilityState === "hidden",
   );
@@ -910,6 +1000,19 @@ export function WorkspaceProvider({
           setRuntimeCatalog(catResp);
         })
         .catch(() => {});
+      void bridge
+        .getMemoryOverview(null)
+        .then((ov) => {
+          setMemoryOverview(ov);
+        })
+        .catch(() => {});
+      void bridge
+        .listProviderConnections()
+        .then((resp) => {
+          setProviderConnections(resp.connections);
+          setPlannedProviders(resp.planned_providers);
+        })
+        .catch(() => {});
     },
     [applySnapshotCollections, bridge],
   );
@@ -1173,18 +1276,92 @@ export function WorkspaceProvider({
     await loadFilesForProject(activeProject.project_id);
   }, [activeProject, loadFilesForProject]);
 
+  const refreshMemoryOverview = useCallback(
+    async (scope?: string | null): Promise<MemoryOverviewResponse | null> => {
+      if (!healthSnapshot?.connected) {
+        return null;
+      }
+      setIsLoadingMemoryOverview(true);
+      try {
+        const overview = await bridge.getMemoryOverview(scope ?? null);
+        setMemoryOverview(overview);
+        if (overview.memory_status === "healthy" && overview.stats) {
+          if (activeProject && (!scope || scope === activeProject.memory_scope)) {
+            const scopedNotes = overview.notes.filter(
+              (n) => n.scope === activeProject.memory_scope,
+            );
+            setActiveScopeNoteCount(scopedNotes.length);
+          }
+        }
+        return overview;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      } finally {
+        setIsLoadingMemoryOverview(false);
+      }
+    },
+    [activeProject, bridge, healthSnapshot?.connected],
+  );
+
+  const refreshD3SettingsData = useCallback(async () => {
+    if (!healthSnapshot?.connected) {
+      return;
+    }
+    setIsLoadingD3Settings(true);
+    try {
+      const [secResp, connResp, capResp] = await Promise.all([
+        bridge.listSecrets().catch(() => null),
+        bridge.listProviderConnections().catch(() => null),
+        bridge.listCapabilities(null, null, null).catch(() => null),
+      ]);
+      if (secResp) {
+        setSecrets(secResp.secrets);
+      }
+      if (connResp) {
+        setProviderConnections(connResp.connections);
+        setPlannedProviders(connResp.planned_providers);
+      }
+      if (capResp) {
+        setCapabilities(capResp.capabilities);
+      }
+    } finally {
+      setIsLoadingD3Settings(false);
+    }
+  }, [bridge, healthSnapshot?.connected]);
+
+  useEffect(() => {
+    if (isSettingsOpen && healthSnapshot?.connected) {
+      void refreshD3SettingsData();
+    }
+  }, [healthSnapshot?.connected, isSettingsOpen, refreshD3SettingsData]);
+
+  useEffect(() => {
+    if (activeView === "memory" && healthSnapshot?.connected) {
+      void refreshMemoryOverview(null);
+    }
+  }, [activeView, healthSnapshot?.connected, refreshMemoryOverview]);
+
   const refreshMemoryStats = useCallback(async () => {
-    if (!healthSnapshot?.connected || !activeProject) {
+    if (!healthSnapshot?.connected) {
       setActiveScopeNoteCount(null);
       return;
     }
     try {
-      const resp = await bridge.searchMemory({
-        scope: activeProject.memory_scope,
-        limit: 100,
-      });
-      if (resp.memory_status === "healthy") {
-        setActiveScopeNoteCount(resp.notes.length);
+      const targetScope = activeProject?.memory_scope ?? null;
+      const [searchResp, overviewResp] = await Promise.all([
+        targetScope
+          ? bridge.searchMemory({ scope: targetScope, limit: 100 }).catch(() => null)
+          : Promise.resolve(null),
+        bridge.getMemoryOverview(targetScope).catch(() => null),
+      ]);
+      if (overviewResp) {
+        setMemoryOverview(overviewResp);
+      }
+      if (searchResp && searchResp.memory_status === "healthy") {
+        setActiveScopeNoteCount(searchResp.notes.length);
+      } else if (overviewResp && overviewResp.memory_status === "healthy" && overviewResp.stats) {
+        setActiveScopeNoteCount(overviewResp.stats.active_notes_count);
       } else {
         setActiveScopeNoteCount(null);
       }
@@ -1859,6 +2036,68 @@ export function WorkspaceProvider({
     [bridge],
   );
 
+  const addCapabilityFromFolder = useCallback(
+    async (
+      folderPath: string,
+      kind: "skill" | "plugin",
+      scopeKind: CapabilityScopeKind,
+      projectId: string | null,
+    ): Promise<CapabilityRecord | null> => {
+      const trimmed = folderPath.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const displayName = extractFolderBasename(trimmed);
+      const slug =
+        displayName
+          .toLowerCase()
+          .replace(/[^a-z0-9._:-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 80) || `${kind}-${Date.now().toString(16)}`;
+      setErrorBanner(null);
+      try {
+        const created = await bridge.createCapability({
+          slug,
+          display_name: displayName,
+          description:
+            kind === "plugin"
+              ? `Локальный плагин из папки ${displayName}`
+              : `Локальный навык из папки ${displayName}`,
+          version: "1.0.0",
+          origin_kind: "user_manual",
+          ownership: scopeKind === "project" ? "project" : "user",
+          scope_kind: scopeKind,
+          project_id: scopeKind === "project" ? projectId : null,
+          trust_state: "unreviewed",
+          activation_state: "disabled",
+          source_path: trimmed,
+          spec:
+            kind === "plugin"
+              ? {
+                  kind: "plugin",
+                  manifest_version: "1.0",
+                  skills: [slug],
+                  mcp_servers: [],
+                  has_hooks: false,
+                  enabled_components: [slug],
+                }
+              : {
+                  kind: "skill",
+                  skill_markdown: `# ${displayName}\n\nЛокальный навык из папки.`,
+                  has_scripts: false,
+                  entry_files: ["SKILL.md"],
+                },
+        });
+        setCapabilities((prev) => [created, ...prev.filter((c) => c.capability_id !== created.capability_id)]);
+        return created;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
   const requestFolderPicker = useCallback(
     async (intent: FolderPickerIntent) => {
       if (bridge.supportsNativeFolderPicker) {
@@ -1871,6 +2110,8 @@ export function WorkspaceProvider({
             await createProjectFromFolder(picked);
           } else if (intent.mode === "rebind-project") {
             await rebindProjectFolder(intent.projectId, picked);
+          } else if (intent.mode === "add-capability") {
+            await addCapabilityFromFolder(picked, intent.kind, intent.scopeKind, intent.projectId);
           } else {
             await attachProjectFolder(intent.projectId, picked);
           }
@@ -1881,7 +2122,13 @@ export function WorkspaceProvider({
       }
       setFolderPickerIntent(intent);
     },
-    [attachProjectFolder, bridge, createProjectFromFolder, rebindProjectFolder],
+    [
+      addCapabilityFromFolder,
+      attachProjectFolder,
+      bridge,
+      createProjectFromFolder,
+      rebindProjectFolder,
+    ],
   );
 
   const closeFolderPicker = useCallback(() => {
@@ -1899,11 +2146,24 @@ export function WorkspaceProvider({
         await createProjectFromFolder(folderPath);
       } else if (intent.mode === "rebind-project") {
         await rebindProjectFolder(intent.projectId, folderPath);
+      } else if (intent.mode === "add-capability") {
+        await addCapabilityFromFolder(
+          folderPath,
+          intent.kind,
+          intent.scopeKind,
+          intent.projectId,
+        );
       } else {
         await attachProjectFolder(intent.projectId, folderPath);
       }
     },
-    [attachProjectFolder, createProjectFromFolder, folderPickerIntent, rebindProjectFolder],
+    [
+      addCapabilityFromFolder,
+      attachProjectFolder,
+      createProjectFromFolder,
+      folderPickerIntent,
+      rebindProjectFolder,
+    ],
   );
 
   const updateDraft = useCallback((sessionId: string, value: string) => {
@@ -2577,6 +2837,369 @@ export function WorkspaceProvider({
     }
   }, [bridge, refreshMemoryStats]);
 
+  // ============================================================================
+  // Phase D3 Actions: Secrets, Providers, Capabilities, Memory Maintenance
+  // ============================================================================
+
+  const setSecret = useCallback(
+    async (
+      slotKey: string,
+      value: string,
+      description?: string,
+    ): Promise<SecretMetadataRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const updated = await bridge.setSecret(slotKey, {
+          value,
+          scope: "global",
+          description: description ?? "",
+        });
+        setSecrets((prev) => {
+          const exists = prev.some((s) => s.slot_key === updated.slot_key);
+          return exists
+            ? prev.map((s) => (s.slot_key === updated.slot_key ? updated : s))
+            : [...prev, updated];
+        });
+        const connResp = await bridge.listProviderConnections().catch(() => null);
+        if (connResp) {
+          setProviderConnections(connResp.connections);
+          setPlannedProviders(connResp.planned_providers);
+        }
+        return updated;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const deleteSecret = useCallback(
+    async (slotKey: string): Promise<SecretMetadataRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const cleared = await bridge.deleteSecret(slotKey);
+        setSecrets((prev) =>
+          prev.map((s) => (s.slot_key === cleared.slot_key ? cleared : s)),
+        );
+        const connResp = await bridge.listProviderConnections().catch(() => null);
+        if (connResp) {
+          setProviderConnections(connResp.connections);
+          setPlannedProviders(connResp.planned_providers);
+        }
+        return cleared;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const createProviderConnection = useCallback(
+    async (
+      request: UpsertProviderConnectionRequest,
+    ): Promise<ProviderConnectionRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const created = await bridge.createProviderConnection(request);
+        setProviderConnections((prev) => [...prev, created]);
+        return created;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const updateProviderConnection = useCallback(
+    async (
+      connectionId: string,
+      request: UpsertProviderConnectionRequest,
+    ): Promise<ProviderConnectionRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const updated = await bridge.updateProviderConnection(connectionId, request);
+        setProviderConnections((prev) =>
+          prev.map((c) => (c.connection_id === connectionId ? updated : c)),
+        );
+        return updated;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const deleteProviderConnection = useCallback(
+    async (connectionId: string): Promise<boolean> => {
+      setErrorBanner(null);
+      try {
+        await bridge.deleteProviderConnection(connectionId);
+        setProviderConnections((prev) => prev.filter((c) => c.connection_id !== connectionId));
+        return true;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return false;
+      }
+    },
+    [bridge],
+  );
+
+  const probeProviderConnection = useCallback(
+    async (connectionId: string): Promise<ProbeConnectionResponse | null> => {
+      setErrorBanner(null);
+      try {
+        const resp = await bridge.probeProviderConnection(connectionId);
+        setProviderConnections((prev) =>
+          prev.map((c) => (c.connection_id === connectionId ? resp.connection : c)),
+        );
+        if (resp.catalog && resp.connection.is_default_interactive) {
+          catalogRef.current = resp.catalog;
+          setRuntimeCatalog(resp.catalog);
+        }
+        return resp;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const activateProviderConnection = useCallback(
+    async (
+      connectionId: string,
+      role: ConnectionActivationRole = "interactive",
+    ): Promise<ProviderConnectionRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const activated = await bridge.activateProviderConnection(connectionId, { role });
+        const listResp = await bridge.listProviderConnections().catch(() => null);
+        if (listResp) {
+          setProviderConnections(listResp.connections);
+          setPlannedProviders(listResp.planned_providers);
+        } else {
+          setProviderConnections((prev) =>
+            prev.map((c) =>
+              c.connection_id === connectionId
+                ? activated
+                : {
+                    ...c,
+                    is_default_interactive:
+                      role === "interactive" || role === "both" ? false : c.is_default_interactive,
+                    is_default_background:
+                      role === "background" || role === "both" ? false : c.is_default_background,
+                  },
+            ),
+          );
+        }
+        await refreshRuntimeCatalog(true);
+        return activated;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge, refreshRuntimeCatalog],
+  );
+
+  const updateActiveAgentConnection = useCallback(
+    async (
+      connectionId: string | null,
+      modelPreference: string | null,
+      thinkingLevel: ThinkingLevel | null,
+    ) => {
+      if (!activeAgent) {
+        return;
+      }
+      setIsUpdatingModel(true);
+      setErrorBanner(null);
+      try {
+        const updated = await bridge.updateAgentConfig(activeAgent.agent_id, {
+          system_prompt: activeAgent.current_config.system_prompt,
+          model_preference: modelPreference,
+          thinking_level: thinkingLevel,
+          allowed_memory_scopes: activeAgent.current_config.allowed_memory_scopes,
+          workspace_write_policy: activeAgent.current_config.workspace_write_policy,
+          default_budget: activeAgent.current_config.default_budget ?? null,
+          attached_skills: activeAgent.current_config.attached_skills ?? [],
+          preferred_connection_id: connectionId,
+        });
+        agentsRef.current = agentsRef.current.map((a) =>
+          a.agent_id === updated.agent_id ? updated : a,
+        );
+        setAgents((prev) => prev.map((a) => (a.agent_id === updated.agent_id ? updated : a)));
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+      } finally {
+        setIsUpdatingModel(false);
+      }
+    },
+    [activeAgent, bridge],
+  );
+
+  const discoverCapabilities = useCallback(
+    async (
+      projectId?: string | null,
+      scanPersonalGeminiReadonly = false,
+    ): Promise<DiscoverCapabilitiesResponse | null> => {
+      setErrorBanner(null);
+      try {
+        const resp = await bridge.discoverCapabilities({
+          project_id: projectId ?? null,
+          scan_personal_gemini_readonly: scanPersonalGeminiReadonly,
+        });
+        const listResp = await bridge.listCapabilities(null, null, null).catch(() => null);
+        if (listResp) {
+          setCapabilities(listResp.capabilities);
+        }
+        return resp;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const createCapability = useCallback(
+    async (request: CreateCapabilityRequest): Promise<CapabilityRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const created = await bridge.createCapability(request);
+        setCapabilities((prev) => [
+          created,
+          ...prev.filter((c) => c.capability_id !== created.capability_id),
+        ]);
+        return created;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const updateCapability = useCallback(
+    async (
+      capabilityId: string,
+      request: UpdateCapabilityRequest,
+    ): Promise<CapabilityRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const updated = await bridge.updateCapability(capabilityId, request);
+        setCapabilities((prev) =>
+          prev.map((c) => (c.capability_id === capabilityId ? updated : c)),
+        );
+        return updated;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const rollbackCapability = useCallback(
+    async (capabilityId: string): Promise<CapabilityRecord | null> => {
+      setErrorBanner(null);
+      try {
+        const restored = await bridge.rollbackCapability(capabilityId);
+        setCapabilities((prev) =>
+          prev.map((c) => (c.capability_id === capabilityId ? restored : c)),
+        );
+        return restored;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge],
+  );
+
+  const deleteCapability = useCallback(
+    async (capabilityId: string): Promise<boolean> => {
+      setErrorBanner(null);
+      try {
+        await bridge.deleteCapability(capabilityId);
+        setCapabilities((prev) => prev.filter((c) => c.capability_id !== capabilityId));
+        return true;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return false;
+      }
+    },
+    [bridge],
+  );
+
+  const setProjectCapabilityBinding = useCallback(
+    async (
+      projectId: string,
+      capabilityId: string,
+      activationState: CapabilityActivation,
+    ) => {
+      setErrorBanner(null);
+      try {
+        await bridge.setProjectCapabilityBinding(projectId, capabilityId, {
+          activation_state: activationState,
+        });
+        const listResp = await bridge.listCapabilities(null, null, null).catch(() => null);
+        if (listResp) {
+          setCapabilities(listResp.capabilities);
+        }
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+      }
+    },
+    [bridge],
+  );
+
+  const triggerMemoryIndexRebuild = useCallback(
+    async (scope: string): Promise<TriggerIndexRebuildResponse | null> => {
+      setIsRebuildingIndex(true);
+      setErrorBanner(null);
+      try {
+        const resp = await bridge.triggerMemoryIndexRebuild({ scope });
+        await refreshMemoryOverview(null);
+        return resp;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      } finally {
+        setIsRebuildingIndex(false);
+      }
+    },
+    [bridge, refreshMemoryOverview],
+  );
+
+  const createMemoryConsolidationJob = useCallback(
+    async (
+      scope: string,
+      jobType: ConsolidationJobType = "dossier_update",
+    ): Promise<ConsolidationJob | null> => {
+      setIsConsolidatingMemory(true);
+      setErrorBanner(null);
+      try {
+        const job = await bridge.createMemoryConsolidationJob({
+          scope,
+          job_type: jobType,
+          idempotency_key: `ui-cons-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        });
+        await refreshMemoryOverview(null);
+        return job;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      } finally {
+        setIsConsolidatingMemory(false);
+      }
+    },
+    [bridge, refreshMemoryOverview],
+  );
+
   // Global keyboard shortcuts (Alt+1/2/3, Ctrl+N, Ctrl+B, Ctrl+\, Ctrl+K, Escape for Stop)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2595,6 +3218,11 @@ export function WorkspaceProvider({
         if (event.key === "3") {
           event.preventDefault();
           setActiveView("tasks");
+          return;
+        }
+        if (event.key === "4") {
+          event.preventDefault();
+          setActiveView("memory");
           return;
         }
       }
@@ -2756,6 +3384,15 @@ export function WorkspaceProvider({
     [inboxCards, selectedSessionId],
   );
 
+  const openMemoryConflictsCount = useMemo(() => {
+    if (!memoryOverview || memoryOverview.memory_status !== "healthy") {
+      return 0;
+    }
+    const fromStats = memoryOverview.stats?.open_conflicts_count ?? 0;
+    const fromList = memoryOverview.conflicts.filter((c) => c.status === "open").length;
+    return Math.max(fromStats, fromList);
+  }, [memoryOverview]);
+
   const value = useMemo<WorkspaceContextValue>(
     () => ({
       state: {
@@ -2806,6 +3443,15 @@ export function WorkspaceProvider({
         isFlushingOutbox,
         lastFlushSummary,
         isUpdatingModel,
+        memoryOverview,
+        isLoadingMemoryOverview,
+        providerConnections,
+        plannedProviders,
+        secrets,
+        capabilities,
+        isLoadingD3Settings,
+        isRebuildingIndex,
+        isConsolidatingMemory,
       },
       actions: {
         setActiveView,
@@ -2859,6 +3505,24 @@ export function WorkspaceProvider({
         revokeCapabilityGrant,
         reconcileEffect,
         flushMemoryOutbox,
+        refreshMemoryOverview,
+        refreshD3SettingsData,
+        setSecret,
+        deleteSecret,
+        createProviderConnection,
+        updateProviderConnection,
+        deleteProviderConnection,
+        probeProviderConnection,
+        activateProviderConnection,
+        updateActiveAgentConnection,
+        discoverCapabilities,
+        createCapability,
+        updateCapability,
+        rollbackCapability,
+        deleteCapability,
+        setProjectCapabilityBinding,
+        triggerMemoryIndexRebuild,
+        createMemoryConsolidationJob,
         toggleRightPanel,
         setRightPanelOpen,
         toggleSidebar,
@@ -2892,9 +3556,11 @@ export function WorkspaceProvider({
         isActiveProjectArchived,
         activeClarificationCard,
         activeTaskCount,
+        openMemoryConflictsCount,
       },
     }),
     [
+      activateProviderConnection,
       activeAgent,
       activeClarificationCard,
       activeDetail,
@@ -2915,19 +3581,27 @@ export function WorkspaceProvider({
       cancelTask,
       cancelledNotice,
       cancellingSessionIds,
+      capabilities,
       closeFolderPicker,
       commandInitialQuery,
       createArtifact,
       createBlankChat,
       createBlankChatWithDraft,
+      createCapability,
       createFolderlessProject,
+      createMemoryConsolidationJob,
       createProjectFromFolder,
+      createProviderConnection,
       createStandaloneChat,
       createTask,
       currentDraft,
+      deleteCapability,
       deleteProject,
+      deleteProviderConnection,
+      deleteSecret,
       detachProjectWorkspace,
       diagnostics,
+      discoverCapabilities,
       draftsBySession,
       effects,
       errorBanner,
@@ -2941,10 +3615,14 @@ export function WorkspaceProvider({
       isAwaitingApprovalActiveSession,
       isCancellingActiveSession,
       isCommandOpen,
+      isConsolidatingMemory,
       isFlushingOutbox,
       isFlushingQueue,
       isLoading,
+      isLoadingD3Settings,
       isLoadingFiles,
+      isLoadingMemoryOverview,
+      isRebuildingIndex,
       isRefreshingCatalog,
       isRightPanelOpen,
       isRunningActiveSession,
@@ -2956,13 +3634,18 @@ export function WorkspaceProvider({
       isSyncedAfterConnect,
       isUpdatingModel,
       lastFlushSummary,
+      memoryOverview,
+      openMemoryConflictsCount,
       openSessionInChat,
       optimisticMessagesBySession,
       optimisticMessagesForActiveSession,
       pendingPermissions,
+      plannedProviders,
       pollEventsNow,
+      probeProviderConnection,
       projectFiles,
       projects,
+      providerConnections,
       queueOfflineMessage,
       queuedMessages,
       queuedMessagesForActiveSession,
@@ -2971,6 +3654,8 @@ export function WorkspaceProvider({
       reconcileNotice,
       reconnectWithUrl,
       refreshAll,
+      refreshD3SettingsData,
+      refreshMemoryOverview,
       refreshMemoryStats,
       refreshProjectFiles,
       refreshRuntimeCatalog,
@@ -2982,9 +3667,11 @@ export function WorkspaceProvider({
       resolveInboxCard,
       resolvePermissionRequest,
       revokeCapabilityGrant,
+      rollbackCapability,
       runningSessionIds,
       runtimeCatalog,
       searchQuery,
+      secrets,
       selectArtifact,
       selectProject,
       selectSession,
@@ -2997,7 +3684,9 @@ export function WorkspaceProvider({
       sessions,
       setActiveView,
       setCommandOpen,
+      setProjectCapabilityBinding,
       setRightPanelOpen,
+      setSecret,
       setSidebarOpen,
       standaloneSessions,
       stopActiveRun,
@@ -3009,11 +3698,15 @@ export function WorkspaceProvider({
       toggleRightPanel,
       toggleSessionPin,
       toggleSidebar,
+      triggerMemoryIndexRebuild,
       unarchiveProject,
       unresolvedInboxCount,
+      updateActiveAgentConnection,
       updateActiveAgentModel,
       updateActiveAgentWritePolicy,
+      updateCapability,
       updateDraft,
+      updateProviderConnection,
       updateTaskGoal,
       windowControls,
     ],

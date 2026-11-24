@@ -2,6 +2,7 @@ import type { DesktopBridge } from "./bridge";
 import {
   sortProjectsByPin,
   sortSessionsByPin,
+  type ActivateConnectionRequest,
   type AgentMessageRecord,
   type AgentRecord,
   type ArtifactLifecycleRequest,
@@ -10,45 +11,91 @@ import {
   type CancelRunResponse,
   type CancelTaskResponse,
   type CapabilityGrantRecord,
+  type CapabilityKind,
+  type CapabilityProjectBinding,
+  type CapabilityRecord,
+  type CapabilityScopeKind,
+  type CommitMemoryNoteRequest,
+  type CommitMemoryNoteResponse,
+  type ConsolidationJob,
   type ControlEventRecord,
+  type CorrectNoteRequest,
   type CreateAgentRequest,
   type CreateArtifactRequest,
+  type CreateCapabilityRequest,
+  type CreateClaimRequest,
+  type CreateConsolidationJobRequest,
+  type CreateDocumentRequest,
   type CreateProjectRequest,
   type CreateSessionRequest,
   type CreateTaskRequest,
+  type DeleteCapabilityResponse,
+  type DeleteProviderConnectionResponse,
   type DesktopHealthSnapshot,
   type DiagnosticsResponse,
+  type DiscoverCapabilitiesRequest,
+  type DiscoverCapabilitiesResponse,
   type DispatchEffectRequest,
   type DispatchEffectResponse,
+  type DocumentVersion,
   type EffectClaimRecord,
   type EventStreamResponse,
+  type ExportRequest,
+  type ExportResponse,
   type FlushOutboxResponse,
+  type ForgetRequest,
+  type ForgetResponse,
+  type ForgetTombstone,
+  type GetDocumentVersionsResponse,
   type HeadHealth,
   type HeadMemorySearchRequest,
   type HeadMemorySearchResponse,
+  type ImportRequest,
+  type ImportResponse,
   type InboxCardRecord,
+  type IndexStatus,
   type ListAgentMessagesResponse,
   type ListAgentsResponse,
   type ListArtifactsResponse,
+  type ListCapabilitiesResponse,
   type ListCapabilityGrantsResponse,
+  type ListClaimsResponse,
+  type ListConflictsResponse,
+  type ListConsolidationJobsResponse,
+  type ListDocumentsResponse,
   type ListEffectsResponse,
   type ListInboxResponse,
   type ListPermissionRequestsResponse,
   type ListProjectFilesResponse,
   type ListProjectsResponse,
+  type ListProviderConnectionsResponse,
+  type ListSecretsResponse,
   type ListSessionsResponse,
   type ListTasksResponse,
+  type ListTombstonesResponse,
+  type MemoryClaim,
+  type MemoryConflict,
+  type MemoryDocument,
   type MemoryNote,
+  type MemoryOverviewResponse,
   type MemoryStatus,
   type MessageRecord,
+  type NoteHistoryResponse,
+  type NoteMutationResponse,
+  type NoteRevision,
   type PermissionDecisionRecord,
   type PermissionRequestRecord,
+  type PlannedProviderInfo,
+  type ProbeConnectionResponse,
   type ProjectLifecycleResponse,
   type ProjectRecord,
+  type ProviderConnectionRecord,
+  type ProviderQuotaError,
   type RebindProjectRequest,
   type ReconcileEffectRequest,
   type ReconcileEffectResponse,
   type ReplyTaskRequest,
+  type ResolveConflictRequest,
   type ResolveInboxCardRequest,
   type ResolveInboxCardResponse,
   type ResolvePermissionRequest,
@@ -60,13 +107,17 @@ import {
   type RuntimeCatalogResponse,
   type RuntimeModelOption,
   type RuntimeQuotaWindow,
+  type SecretMetadataRecord,
   type SendAgentMessageRequest,
   type SendAgentMessageResponse,
   type SendMessageRequest,
   type SendMessageResponse,
   type SessionDetailResponse,
   type SessionRecord,
+  type SetProjectCapabilityBindingRequest,
+  type SetSecretRequest,
   type StateSnapshotResponse,
+  type SupersedeClaimRequest,
   type TaskDetailResponse,
   type TaskRecord,
   type TaskSignalRecord,
@@ -74,10 +125,15 @@ import {
   type TaskSignalResponse,
   type TaskTimerRecord,
   type ThinkingLevel,
+  type TriggerIndexRebuildRequest,
+  type TriggerIndexRebuildResponse,
   type UpdateAgentConfigRequest,
+  type UpdateCapabilityRequest,
+  type UpdateDocumentRequest,
   type UpdateProjectRequest,
   type UpdateSessionRequest,
   type UpdateTaskRequest,
+  type UpsertProviderConnectionRequest,
   type WorkspaceFileEntry,
 } from "./contracts";
 
@@ -115,6 +171,23 @@ export interface MockBridgeSeed {
   sendDelayMs?: number;
   failNextSendWith?: { code: string; message: string } | null;
   runningSessionIds?: string[];
+  // Phase D3 seeds
+  secrets?: SecretMetadataRecord[];
+  providerConnections?: ProviderConnectionRecord[];
+  plannedProviders?: PlannedProviderInfo[];
+  capabilities?: CapabilityRecord[];
+  memoryClaims?: MemoryClaim[];
+  memoryConflicts?: MemoryConflict[];
+  memoryDocuments?: MemoryDocument[];
+  documentVersionsById?: Record<string, DocumentVersion[]>;
+  noteRevisionsById?: Record<string, NoteRevision[]>;
+  consolidationJobs?: ConsolidationJob[];
+  tombstones?: ForgetTombstone[];
+  indexStatus?: IndexStatus;
+  staleWarning?: string | null;
+  quotaError?: ProviderQuotaError | null;
+  localProbeModels?: RuntimeModelOption[];
+  memorySourcesCount?: number;
 }
 
 const DEFAULT_ANTIGRAVITY_MODELS: RuntimeModelOption[] = [
@@ -152,6 +225,55 @@ const DEFAULT_SIMULATED_MODELS: RuntimeModelOption[] = [
     default_thinking_level: "medium",
   },
 ];
+
+const DEFAULT_LOCAL_HTTP_MODELS: RuntimeModelOption[] = [
+  {
+    model_id: "qwen2.5-coder:14b",
+    label: "Qwen 2.5 Coder 14B (Local)",
+    supported_thinking_levels: [],
+    default_thinking_level: null,
+  },
+  {
+    model_id: "llama3.2:latest",
+    label: "Llama 3.2 (Local)",
+    supported_thinking_levels: [],
+    default_thinking_level: null,
+  },
+];
+
+const DEFAULT_PLANNED_PROVIDERS: PlannedProviderInfo[] = [
+  {
+    id: "r-claude",
+    label: "Claude Code (R-CLAUDE)",
+    status: "planned",
+    note: "Запланировано за пределами D0–D9",
+  },
+  {
+    id: "r-codex",
+    label: "Codex (R-CODEX)",
+    status: "planned",
+    note: "Запланировано за пределами D0–D9",
+  },
+];
+
+function deterministicHex(input: string, len: number): string {
+  let h1 = 0xdeadbeef ^ input.length;
+  let h2 = 0x41c6ce57 ^ input.length;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  let out = "";
+  let seed = (h1 >>> 0).toString(16).padStart(8, "0") + (h2 >>> 0).toString(16).padStart(8, "0");
+  while (out.length < len) {
+    h1 = Math.imul(h1 ^ 0x9e3779b1, 2246822519);
+    h2 = Math.imul(h2 ^ 0x85ebca77, 3266489917);
+    out += seed;
+    seed = (h1 >>> 0).toString(16).padStart(8, "0") + (h2 >>> 0).toString(16).padStart(8, "0");
+  }
+  return out.slice(0, len);
+}
 
 function deriveAutoTitle(content: string): string | null {
   const firstLine = content
@@ -218,6 +340,26 @@ export class MockDesktopBridge implements DesktopBridge {
   public sendDelayMs: number;
   public failNextSendWith: { code: string; message: string } | null;
   public seededRunningSessionIds: Set<string>;
+
+  // Phase D3 in-memory state
+  public secrets: SecretMetadataRecord[];
+  public providerConnections: ProviderConnectionRecord[];
+  public plannedProviders: PlannedProviderInfo[];
+  public capabilities: CapabilityRecord[];
+  public memoryClaims: MemoryClaim[];
+  public memoryConflicts: MemoryConflict[];
+  public memoryDocuments: MemoryDocument[];
+  public documentVersionsById: Record<string, DocumentVersion[]>;
+  public noteRevisionsById: Record<string, NoteRevision[]>;
+  public consolidationJobs: ConsolidationJob[];
+  public tombstones: ForgetTombstone[];
+  public indexStatus: IndexStatus;
+  public staleWarning: string | null;
+  public quotaError: ProviderQuotaError | null;
+  public localProbeModels: RuntimeModelOption[];
+  public memorySourcesCount: number;
+  private previousCapabilitySnapshots = new Map<string, CapabilityRecord>();
+  private lastRebuildAt: number | null = null;
 
   public authorityEpoch = 1;
   public retainedFromSeq = 1;
@@ -287,6 +429,127 @@ export class MockDesktopBridge implements DesktopBridge {
     this.sendDelayMs = seed.sendDelayMs ?? 0;
     this.failNextSendWith = seed.failNextSendWith ?? null;
     this.seededRunningSessionIds = new Set(seed.runningSessionIds ?? []);
+
+    const initNow = Date.now();
+    this.secrets = seed.secrets
+      ? seed.secrets.map((s) => ({ ...s }))
+      : [
+          {
+            slot_key: "gemini_api_key",
+            scope: "global",
+            description: "Gemini API key для фоновых профилей Antigravity",
+            configured: false,
+            version: 0,
+            fingerprint_short: null,
+            source: "unset",
+            updated_at: null,
+          },
+          {
+            slot_key: "local_runtime_token",
+            scope: "global",
+            description: "Опциональный Bearer-токен локального сервера",
+            configured: false,
+            version: 0,
+            fingerprint_short: null,
+            source: "unset",
+            updated_at: null,
+          },
+        ];
+    this.providerConnections = seed.providerConnections
+      ? seed.providerConnections.map((c) => ({ ...c }))
+      : [
+          {
+            connection_id: "91000000-0000-4000-8000-000000000001",
+            provider_kind: "antigravity_acp",
+            display_name: "Google Antigravity · Google AI Ultra",
+            adapter_id: "antigravity-acp",
+            auth_profile: "oauth-personal",
+            endpoint_url: null,
+            secret_slot_key: null,
+            is_default_interactive: this.authProfile === "oauth-personal",
+            is_default_background: false,
+            enabled: true,
+            last_health_status: "healthy",
+            last_health_detail: null,
+            last_probed_at: initNow,
+            created_at: initNow - 60_000,
+            updated_at: initNow,
+          },
+          {
+            connection_id: "91000000-0000-4000-8000-000000000002",
+            provider_kind: "antigravity_acp",
+            display_name: "Google Antigravity · Gemini API key",
+            adapter_id: "antigravity-acp",
+            auth_profile: "gemini-api-key",
+            endpoint_url: null,
+            secret_slot_key: "gemini_api_key",
+            is_default_interactive: this.authProfile === "gemini-api-key",
+            is_default_background: true,
+            enabled: true,
+            last_health_status: this.authProfile === "gemini-api-key" ? "healthy" : "auth_required",
+            last_health_detail: null,
+            last_probed_at: initNow,
+            created_at: initNow - 60_000,
+            updated_at: initNow,
+          },
+        ];
+    this.plannedProviders = seed.plannedProviders
+      ? seed.plannedProviders.map((p) => ({ ...p }))
+      : DEFAULT_PLANNED_PROVIDERS.map((p) => ({ ...p }));
+    this.capabilities = seed.capabilities ? seed.capabilities.map((c) => ({ ...c })) : [];
+    this.memoryClaims = seed.memoryClaims ? seed.memoryClaims.map((c) => ({ ...c })) : [];
+    this.memoryConflicts = seed.memoryConflicts ? seed.memoryConflicts.map((c) => ({ ...c })) : [];
+    this.memoryDocuments = seed.memoryDocuments ? seed.memoryDocuments.map((d) => ({ ...d })) : [];
+    this.documentVersionsById = { ...(seed.documentVersionsById ?? {}) };
+    for (const doc of this.memoryDocuments) {
+      if (!this.documentVersionsById[doc.document_id]) {
+        this.documentVersionsById[doc.document_id] = [
+          {
+            version_id: this.nextUuid("96000000"),
+            document_id: doc.document_id,
+            version: doc.current_version,
+            body: doc.current_body,
+            provenance_claim_ids: [...(doc.provenance_claim_ids ?? [])],
+            diff_summary: "Начальная версия",
+            event_id: doc.source_event_id ?? this.nextUuid("97000000"),
+            created_at: doc.created_at,
+          },
+        ];
+      }
+    }
+    this.noteRevisionsById = { ...(seed.noteRevisionsById ?? {}) };
+    for (const notes of Object.values(this.notesByScope)) {
+      for (const note of notes) {
+        if (!this.noteRevisionsById[note.note_id]) {
+          this.noteRevisionsById[note.note_id] = [
+            {
+              revision_id: note.current_revision_id ?? this.nextUuid("95000000"),
+              note_id: note.note_id,
+              revision: note.current_revision ?? note.revision ?? 1,
+              title: note.title,
+              body: note.body,
+              tags: [...note.tags],
+              rationale: note.rationale ?? null,
+              event_id: note.last_event_id ?? this.nextUuid("97000000"),
+              recorded_by: note.recorded_by ?? "owner",
+              author_label: note.author_label ?? null,
+              created_at: note.updated_at,
+            },
+          ];
+        }
+      }
+    }
+    this.consolidationJobs = seed.consolidationJobs
+      ? seed.consolidationJobs.map((j) => ({ ...j }))
+      : [];
+    this.tombstones = seed.tombstones ? seed.tombstones.map((t) => ({ ...t })) : [];
+    this.indexStatus = seed.indexStatus ?? "healthy";
+    this.staleWarning = seed.staleWarning ?? null;
+    this.quotaError = seed.quotaError ?? null;
+    this.localProbeModels = seed.localProbeModels
+      ? [...seed.localProbeModels]
+      : [...DEFAULT_LOCAL_HTTP_MODELS];
+    this.memorySourcesCount = seed.memorySourcesCount ?? 0;
   }
 
   public emitControlEvent(
@@ -445,23 +708,37 @@ export class MockDesktopBridge implements DesktopBridge {
   public async getRuntimeCatalog(refresh?: boolean): Promise<RuntimeCatalogResponse> {
     this.calls.push({ method: "getRuntimeCatalog", args: { refresh: Boolean(refresh) } });
     this.ensureConnected();
+    const activeConn =
+      this.providerConnections.find((c) => c.is_default_interactive) ??
+      this.providerConnections[0] ??
+      null;
     return {
       adapter_id: this.runtimeAdapterId,
       auth_profile: this.authProfile,
       is_simulated: this.runtimeIsSimulated,
-      agy_version: this.runtimeIsSimulated ? null : "1.5.15",
+      agy_version:
+        this.runtimeIsSimulated || this.runtimeAdapterId === "local-http-runtime"
+          ? null
+          : "1.5.15",
       tier: this.tier,
       account_label: this.accountLabel,
       default_model_id: this.models[0]?.model_id ?? null,
-      default_thinking_level: "medium",
+      default_thinking_level:
+        this.models[0]?.default_thinking_level ??
+        (this.runtimeAdapterId === "local-http-runtime" ? null : "medium"),
       models: [...this.models],
-      thinking_options: [
-        { value: "low", label: "Low" },
-        { value: "medium", label: "Medium" },
-        { value: "high", label: "High" },
-        { value: "xhigh", label: "Extra" },
-      ],
-      quotas: [...this.quotas],
+      thinking_options:
+        this.runtimeAdapterId === "local-http-runtime"
+          ? []
+          : [
+              { value: "low", label: "Low" },
+              { value: "medium", label: "Medium" },
+              { value: "high", label: "High" },
+              { value: "xhigh", label: "Extra" },
+            ],
+      quotas: this.runtimeAdapterId === "local-http-runtime" ? [] : [...this.quotas],
+      connection_id: activeConn?.connection_id ?? null,
+      quota_error: this.quotaError,
       probed_at: Date.now(),
     };
   }
@@ -735,6 +1012,7 @@ export class MockDesktopBridge implements DesktopBridge {
         workspace_write_policy: request.workspace_write_policy,
         default_budget: request.default_budget ?? null,
         attached_skills: [...(request.attached_skills ?? [])],
+        preferred_connection_id: request.preferred_connection_id ?? null,
         created_at: now,
       },
       created_at: now,
@@ -771,6 +1049,10 @@ export class MockDesktopBridge implements DesktopBridge {
         workspace_write_policy: request.workspace_write_policy,
         default_budget: request.default_budget ?? existing.current_config.default_budget ?? null,
         attached_skills: request.attached_skills ?? existing.current_config.attached_skills ?? [],
+        preferred_connection_id:
+          request.preferred_connection_id !== undefined
+            ? request.preferred_connection_id
+            : (existing.current_config.preferred_connection_id ?? null),
         created_at: now,
       },
     };
@@ -2114,16 +2396,1369 @@ export class MockDesktopBridge implements DesktopBridge {
         memory_status: "degraded_unreachable",
         degraded_reason: this.memoryDetail ?? "memoryd недоступна",
         notes: [],
+        index_status: "degraded",
+        stale_warning: "Память memoryd недоступна.",
       };
     }
-    const notes = request.scope
+    const baseNotes = request.scope
       ? [...(this.notesByScope[request.scope] ?? [])]
       : Object.values(this.notesByScope).flat();
+    const q = request.query?.trim().toLowerCase() ?? "";
+    const matchedNotes: MemoryNote[] = [];
+    for (const note of baseNotes) {
+      const currentMatches =
+        !q ||
+        note.title.toLowerCase().includes(q) ||
+        note.body.toLowerCase().includes(q) ||
+        note.tags.some((t) => t.toLowerCase().includes(q)) ||
+        (note.topic_key?.toLowerCase().includes(q) ?? false);
+      if (currentMatches) {
+        matchedNotes.push(note);
+        continue;
+      }
+      if (request.include_history) {
+        const revs = this.noteRevisionsById[note.note_id] ?? [];
+        const histMatch = revs.some(
+          (r) =>
+            r.title.toLowerCase().includes(q) ||
+            r.body.toLowerCase().includes(q) ||
+            (r.rationale?.toLowerCase().includes(q) ?? false),
+        );
+        if (histMatch) {
+          matchedNotes.push(note);
+        }
+      }
+    }
+    const limited = request.limit ? matchedNotes.slice(0, request.limit) : matchedNotes;
+    const staleWarning =
+      this.staleWarning ??
+      (this.indexStatus === "degraded"
+        ? "Индекс деградирован — свежий хвост активен, результаты возвращаются из живого потока."
+        : this.indexStatus === "rebuilding"
+          ? "Идёт перестроение поискового индекса — свежие записи доступны через хвост."
+          : this.indexStatus === "lagging"
+            ? "Индекс догоняет канонический журнал — свежий хвост активен."
+            : null);
     return {
       memory_status: "healthy",
       degraded_reason: null,
-      notes,
+      notes: limited,
+      index_status: this.indexStatus,
+      stale_warning: staleWarning,
     };
+  }
+
+  // ============================================================================
+  // Phase D3 Mock Methods: SecretBroker, Providers, Capabilities, Memory Fabric
+  // ============================================================================
+
+  public async listSecrets(): Promise<ListSecretsResponse> {
+    this.calls.push({ method: "listSecrets" });
+    this.ensureConnected();
+    return { secrets: this.secrets.map((s) => ({ ...s })) };
+  }
+
+  public async setSecret(
+    slotKey: string,
+    request: SetSecretRequest,
+  ): Promise<SecretMetadataRecord> {
+    // Never record plaintext secret value in calls log!
+    this.calls.push({
+      method: "setSecret",
+      args: { slotKey, scope: request.scope ?? "global", configured: true },
+    });
+    this.ensureConnected();
+    const trimmed = request.value.trim();
+    if (!trimmed) {
+      throw { code: "INVALID_INPUT", message: "Секрет не может быть пустым." };
+    }
+    const now = this.nextTimestamp();
+    const existing = this.secrets.find((s) => s.slot_key === slotKey);
+    const updated: SecretMetadataRecord = {
+      slot_key: slotKey,
+      scope: request.scope ?? existing?.scope ?? "global",
+      description: request.description ?? existing?.description ?? "",
+      configured: true,
+      version: (existing?.version ?? 0) + 1,
+      fingerprint_short: deterministicHex(`${slotKey}:${trimmed}:${now}`, 16),
+      source: "vault",
+      updated_at: now,
+    };
+    if (existing) {
+      this.secrets = this.secrets.map((s) => (s.slot_key === slotKey ? updated : s));
+    } else {
+      this.secrets = [...this.secrets, updated];
+    }
+    if (slotKey === "gemini_api_key") {
+      this.providerConnections = this.providerConnections.map((c) =>
+        c.auth_profile === "gemini-api-key"
+          ? { ...c, last_health_status: "healthy", updated_at: now }
+          : c,
+      );
+    }
+    return updated;
+  }
+
+  public async deleteSecret(slotKey: string): Promise<SecretMetadataRecord> {
+    this.calls.push({ method: "deleteSecret", args: { slotKey } });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const existing = this.secrets.find((s) => s.slot_key === slotKey);
+    const cleared: SecretMetadataRecord = {
+      slot_key: slotKey,
+      scope: existing?.scope ?? "global",
+      description: existing?.description ?? "",
+      configured: false,
+      version: existing?.version ?? 0,
+      fingerprint_short: null,
+      source: "unset",
+      updated_at: now,
+    };
+    if (existing) {
+      this.secrets = this.secrets.map((s) => (s.slot_key === slotKey ? cleared : s));
+    }
+    if (slotKey === "gemini_api_key") {
+      this.providerConnections = this.providerConnections.map((c) =>
+        c.auth_profile === "gemini-api-key"
+          ? { ...c, last_health_status: "auth_required", updated_at: now }
+          : c,
+      );
+    }
+    return cleared;
+  }
+
+  public async listProviderConnections(): Promise<ListProviderConnectionsResponse> {
+    this.calls.push({ method: "listProviderConnections" });
+    this.ensureConnected();
+    return {
+      connections: this.providerConnections.map((c) => ({ ...c })),
+      planned_providers: this.plannedProviders.map((p) => ({ ...p })),
+    };
+  }
+
+  public async createProviderConnection(
+    request: UpsertProviderConnectionRequest,
+  ): Promise<ProviderConnectionRecord> {
+    this.calls.push({ method: "createProviderConnection", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const conn: ProviderConnectionRecord = {
+      connection_id: this.nextUuid("91000000"),
+      provider_kind: request.provider_kind,
+      display_name: request.display_name.trim(),
+      adapter_id:
+        request.adapter_id ??
+        (request.provider_kind === "local_http" ? "local-http-runtime" : "antigravity-acp"),
+      auth_profile: request.auth_profile,
+      endpoint_url: request.endpoint_url ?? null,
+      secret_slot_key: request.secret_slot_key ?? null,
+      is_default_interactive: Boolean(request.is_default_interactive),
+      is_default_background: Boolean(request.is_default_background),
+      enabled: request.enabled ?? true,
+      last_health_status: "unknown",
+      last_health_detail: null,
+      last_probed_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    this.providerConnections = [...this.providerConnections, conn];
+    return conn;
+  }
+
+  public async updateProviderConnection(
+    connectionId: string,
+    request: UpsertProviderConnectionRequest,
+  ): Promise<ProviderConnectionRecord> {
+    this.calls.push({ method: "updateProviderConnection", args: { connectionId, request } });
+    this.ensureConnected();
+    const existing = this.providerConnections.find((c) => c.connection_id === connectionId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `provider_connection ${connectionId} not found` };
+    }
+    const now = this.nextTimestamp();
+    const updated: ProviderConnectionRecord = {
+      ...existing,
+      provider_kind: request.provider_kind,
+      display_name: request.display_name.trim(),
+      adapter_id: request.adapter_id ?? existing.adapter_id,
+      auth_profile: request.auth_profile,
+      endpoint_url: request.endpoint_url ?? null,
+      secret_slot_key: request.secret_slot_key ?? null,
+      is_default_interactive:
+        request.is_default_interactive ?? existing.is_default_interactive,
+      is_default_background: request.is_default_background ?? existing.is_default_background,
+      enabled: request.enabled ?? existing.enabled,
+      updated_at: now,
+    };
+    this.providerConnections = this.providerConnections.map((c) =>
+      c.connection_id === connectionId ? updated : c,
+    );
+    return updated;
+  }
+
+  public async deleteProviderConnection(
+    connectionId: string,
+  ): Promise<DeleteProviderConnectionResponse> {
+    this.calls.push({ method: "deleteProviderConnection", args: { connectionId } });
+    this.ensureConnected();
+    this.providerConnections = this.providerConnections.filter(
+      (c) => c.connection_id !== connectionId,
+    );
+    return { connection_id: connectionId, deleted: true };
+  }
+
+  public async probeProviderConnection(connectionId: string): Promise<ProbeConnectionResponse> {
+    this.calls.push({ method: "probeProviderConnection", args: { connectionId } });
+    this.ensureConnected();
+    const existing = this.providerConnections.find((c) => c.connection_id === connectionId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `provider_connection ${connectionId} not found` };
+    }
+    const now = this.nextTimestamp();
+    const isLocal = existing.provider_kind === "local_http";
+    const probedModels = isLocal ? [...this.localProbeModels] : [...this.models];
+    const updated: ProviderConnectionRecord = {
+      ...existing,
+      last_health_status: "healthy",
+      last_health_detail: isLocal
+        ? `Локальный сервер отвечает (${existing.endpoint_url ?? "loopback"}), моделей: ${probedModels.length}`
+        : "Живой каталог моделей получен",
+      last_probed_at: now,
+      updated_at: now,
+    };
+    this.providerConnections = this.providerConnections.map((c) =>
+      c.connection_id === connectionId ? updated : c,
+    );
+    const catalog: RuntimeCatalogResponse = {
+      adapter_id: updated.adapter_id,
+      auth_profile: updated.auth_profile,
+      is_simulated: !isLocal && this.runtimeIsSimulated,
+      agy_version: isLocal ? null : "1.5.15",
+      tier: isLocal ? updated.display_name : this.tier,
+      account_label: isLocal ? null : this.accountLabel,
+      default_model_id: probedModels[0]?.model_id ?? null,
+      default_thinking_level: isLocal ? null : "medium",
+      models: probedModels,
+      thinking_options: isLocal
+        ? []
+        : [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "xhigh", label: "Extra" },
+          ],
+      quotas: isLocal ? [] : [...this.quotas],
+      connection_id: updated.connection_id,
+      quota_error: isLocal ? null : this.quotaError,
+      probed_at: now,
+    };
+    return { connection: updated, catalog };
+  }
+
+  public async activateProviderConnection(
+    connectionId: string,
+    request?: ActivateConnectionRequest,
+  ): Promise<ProviderConnectionRecord> {
+    this.calls.push({ method: "activateProviderConnection", args: { connectionId, request } });
+    this.ensureConnected();
+    const existing = this.providerConnections.find((c) => c.connection_id === connectionId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `provider_connection ${connectionId} not found` };
+    }
+    const role = request?.role ?? "interactive";
+    const now = this.nextTimestamp();
+    this.providerConnections = this.providerConnections.map((c) => {
+      const match = c.connection_id === connectionId;
+      return {
+        ...c,
+        is_default_interactive:
+          role === "interactive" || role === "both" ? match : c.is_default_interactive,
+        is_default_background:
+          role === "background" || role === "both" ? match : c.is_default_background,
+        updated_at: match ? now : c.updated_at,
+      };
+    });
+    if (role === "interactive" || role === "both") {
+      this.runtimeAdapterId = existing.adapter_id;
+      this.authProfile = existing.auth_profile;
+      if (existing.provider_kind === "local_http") {
+        this.models = [...this.localProbeModels];
+        this.tier = existing.display_name;
+      } else {
+        this.models = this.runtimeIsSimulated
+          ? [...DEFAULT_SIMULATED_MODELS]
+          : [...DEFAULT_ANTIGRAVITY_MODELS];
+        this.tier = existing.auth_profile === "oauth-personal" ? "Google AI Ultra" : null;
+      }
+    }
+    return this.providerConnections.find((c) => c.connection_id === connectionId)!;
+  }
+
+  public async listCapabilities(
+    projectId?: string | null,
+    scopeKind?: CapabilityScopeKind | null,
+    kind?: CapabilityKind | null,
+  ): Promise<ListCapabilitiesResponse> {
+    this.calls.push({ method: "listCapabilities", args: { projectId, scopeKind, kind } });
+    this.ensureConnected();
+    const filtered = this.capabilities.filter((c) => {
+      if (projectId && c.scope_kind === "project" && c.project_id !== projectId) {
+        return false;
+      }
+      if (scopeKind && c.scope_kind !== scopeKind) {
+        return false;
+      }
+      if (kind && c.kind !== kind) {
+        return false;
+      }
+      return true;
+    });
+    return { capabilities: filtered.map((c) => ({ ...c })) };
+  }
+
+  public async createCapability(request: CreateCapabilityRequest): Promise<CapabilityRecord> {
+    this.calls.push({ method: "createCapability", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const record: CapabilityRecord = {
+      capability_id: this.nextUuid("92000000"),
+      slug: request.slug.trim(),
+      kind: request.spec.kind,
+      display_name: request.display_name.trim(),
+      description: request.description ?? "",
+      version: request.version.trim(),
+      origin_kind: request.origin_kind ?? "user_manual",
+      ownership: request.ownership ?? "user",
+      scope_kind: request.scope_kind,
+      project_id: request.project_id ?? null,
+      possession_state: "installed",
+      trust_state: request.trust_state ?? "unreviewed",
+      activation_state: request.activation_state ?? "disabled",
+      compatibility_status: "compatible",
+      compatibility_detail: null,
+      source_path: request.source_path ?? null,
+      content_sha256: deterministicHex(JSON.stringify(request.spec), 64),
+      spec: request.spec,
+      can_rollback: false,
+      revision: 1,
+      project_bindings: [],
+      created_at: now,
+      updated_at: now,
+    };
+    this.capabilities = [record, ...this.capabilities];
+    return record;
+  }
+
+  public async discoverCapabilities(
+    request: DiscoverCapabilitiesRequest,
+  ): Promise<DiscoverCapabilitiesResponse> {
+    this.calls.push({ method: "discoverCapabilities", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const discovered: CapabilityRecord[] = [];
+    let newlyRegistered = 0;
+
+    if (request.project_id) {
+      const slug = "project-rust-checklist";
+      const existing = this.capabilities.find(
+        (c) => c.slug === slug && c.project_id === request.project_id,
+      );
+      if (!existing) {
+        const cap: CapabilityRecord = {
+          capability_id: this.nextUuid("92000000"),
+          slug,
+          kind: "skill",
+          display_name: "Rust Checklist (проект)",
+          description: "Обнаружен в .agents/skills/project-rust-checklist/SKILL.md",
+          version: "1.0.0",
+          origin_kind: "project_local",
+          ownership: "project",
+          scope_kind: "project",
+          project_id: request.project_id,
+          possession_state: "discovered",
+          trust_state: "unreviewed",
+          activation_state: "disabled",
+          compatibility_status: "compatible",
+          compatibility_detail: null,
+          source_path: ".agents/skills/project-rust-checklist",
+          content_sha256: deterministicHex(slug, 64),
+          spec: {
+            kind: "skill",
+            skill_markdown: "# Rust Checklist\nПроверяй clippy и тесты.",
+            has_scripts: false,
+            entry_files: ["SKILL.md"],
+          },
+          can_rollback: false,
+          revision: 1,
+          project_bindings: [],
+          created_at: now,
+          updated_at: now,
+        };
+        this.capabilities = [cap, ...this.capabilities];
+        discovered.push(cap);
+        newlyRegistered += 1;
+      } else {
+        discovered.push(existing);
+      }
+    }
+
+    if (request.scan_personal_gemini_readonly) {
+      const slug = "personal-gemini-notes";
+      const existing = this.capabilities.find(
+        (c) => c.slug === slug && c.origin_kind === "personal_discovered",
+      );
+      if (!existing) {
+        const cap: CapabilityRecord = {
+          capability_id: this.nextUuid("92000000"),
+          slug,
+          kind: "skill",
+          display_name: "Личный навык (~/.gemini/)",
+          description:
+            "Найден в режиме только чтения в ~/.gemini/ — кандидат, не подключён к проектам.",
+          version: "1.0.0",
+          origin_kind: "personal_discovered",
+          ownership: "user",
+          scope_kind: "candidate_unattached",
+          project_id: null,
+          possession_state: "discovered",
+          trust_state: "unreviewed",
+          activation_state: "disabled",
+          compatibility_status: "compatible",
+          compatibility_detail: "Только чтение · без автоподключения",
+          source_path: "~/.gemini/skills/personal-gemini-notes",
+          content_sha256: deterministicHex(slug, 64),
+          spec: {
+            kind: "skill",
+            skill_markdown: "# Personal skill\nRead-only candidate.",
+            has_scripts: false,
+            entry_files: ["SKILL.md"],
+          },
+          can_rollback: false,
+          revision: 1,
+          project_bindings: [],
+          created_at: now,
+          updated_at: now,
+        };
+        this.capabilities = [cap, ...this.capabilities];
+        discovered.push(cap);
+        newlyRegistered += 1;
+      } else {
+        discovered.push(existing);
+      }
+    }
+
+    return {
+      discovered,
+      newly_registered: newlyRegistered,
+      updated_existing: discovered.length - newlyRegistered,
+      warnings: [],
+    };
+  }
+
+  public async updateCapability(
+    capabilityId: string,
+    request: UpdateCapabilityRequest,
+  ): Promise<CapabilityRecord> {
+    this.calls.push({ method: "updateCapability", args: { capabilityId, request } });
+    this.ensureConnected();
+    const existing = this.capabilities.find((c) => c.capability_id === capabilityId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `capability ${capabilityId} not found` };
+    }
+    const now = this.nextTimestamp();
+    const versionOrSpecChanged =
+      (request.version !== undefined && request.version !== null && request.version !== existing.version) ||
+      (request.spec !== undefined && request.spec !== null);
+    if (versionOrSpecChanged) {
+      this.previousCapabilitySnapshots.set(capabilityId, { ...existing });
+    }
+    const nextSpec = request.spec ?? existing.spec;
+    let nextTrust = request.trust_state ?? existing.trust_state;
+    if (
+      request.spec &&
+      ((request.spec.kind === "skill" &&
+        request.spec.has_scripts &&
+        existing.spec.kind === "skill" &&
+        !existing.spec.has_scripts) ||
+        (request.spec.kind === "plugin" &&
+          request.spec.has_hooks &&
+          existing.spec.kind === "plugin" &&
+          !existing.spec.has_hooks))
+    ) {
+      nextTrust = "restricted";
+    }
+    const updated: CapabilityRecord = {
+      ...existing,
+      display_name: request.display_name?.trim() || existing.display_name,
+      description: request.description ?? existing.description,
+      version: request.version?.trim() || existing.version,
+      scope_kind: request.scope_kind ?? existing.scope_kind,
+      project_id: request.project_id !== undefined ? request.project_id : existing.project_id,
+      trust_state: nextTrust,
+      activation_state: request.activation_state ?? existing.activation_state,
+      possession_state:
+        (request.activation_state ?? existing.activation_state) === "active"
+          ? "connected"
+          : existing.possession_state,
+      spec: nextSpec,
+      can_rollback: versionOrSpecChanged || existing.can_rollback,
+      revision: existing.revision + 1,
+      updated_at: now,
+    };
+    this.capabilities = this.capabilities.map((c) =>
+      c.capability_id === capabilityId ? updated : c,
+    );
+    return updated;
+  }
+
+  public async deleteCapability(capabilityId: string): Promise<DeleteCapabilityResponse> {
+    this.calls.push({ method: "deleteCapability", args: { capabilityId } });
+    this.ensureConnected();
+    this.capabilities = this.capabilities.filter((c) => c.capability_id !== capabilityId);
+    this.previousCapabilitySnapshots.delete(capabilityId);
+    return { capability_id: capabilityId, deleted: true };
+  }
+
+  public async rollbackCapability(capabilityId: string): Promise<CapabilityRecord> {
+    this.calls.push({ method: "rollbackCapability", args: { capabilityId } });
+    this.ensureConnected();
+    const prev = this.previousCapabilitySnapshots.get(capabilityId);
+    const existing = this.capabilities.find((c) => c.capability_id === capabilityId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `capability ${capabilityId} not found` };
+    }
+    const now = this.nextTimestamp();
+    const restored: CapabilityRecord = prev
+      ? {
+          ...prev,
+          can_rollback: false,
+          revision: existing.revision + 1,
+          updated_at: now,
+        }
+      : {
+          ...existing,
+          version: "1.0.0",
+          can_rollback: false,
+          revision: existing.revision + 1,
+          updated_at: now,
+        };
+    this.previousCapabilitySnapshots.delete(capabilityId);
+    this.capabilities = this.capabilities.map((c) =>
+      c.capability_id === capabilityId ? restored : c,
+    );
+    return restored;
+  }
+
+  public async setProjectCapabilityBinding(
+    projectId: string,
+    capabilityId: string,
+    request: SetProjectCapabilityBindingRequest,
+  ): Promise<CapabilityProjectBinding> {
+    this.calls.push({
+      method: "setProjectCapabilityBinding",
+      args: { projectId, capabilityId, request },
+    });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const binding: CapabilityProjectBinding = {
+      capability_id: capabilityId,
+      project_id: projectId,
+      activation_state: request.activation_state,
+      updated_at: now,
+    };
+    this.capabilities = this.capabilities.map((c) => {
+      if (c.capability_id !== capabilityId) {
+        return c;
+      }
+      const prev = c.project_bindings ?? [];
+      const exists = prev.some((b) => b.project_id === projectId);
+      return {
+        ...c,
+        project_bindings: exists
+          ? prev.map((b) => (b.project_id === projectId ? binding : b))
+          : [...prev, binding],
+      };
+    });
+    return binding;
+  }
+
+  public async commitMemoryNote(
+    request: CommitMemoryNoteRequest,
+  ): Promise<CommitMemoryNoteResponse> {
+    this.calls.push({ method: "commitMemoryNote", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const eventId = this.nextUuid("97000000");
+    const noteId = this.nextUuid("94000000");
+    const revId = this.nextUuid("95000000");
+    const outboxId = this.nextUuid("98000000");
+    const delivered = this.memoryStatus === "healthy";
+    if (delivered) {
+      const note: MemoryNote = {
+        note_id: noteId,
+        scope: request.scope,
+        current_revision: 1,
+        revision: 1,
+        current_revision_id: revId,
+        title: request.title.trim(),
+        body: request.body.trim(),
+        tags: [...(request.tags ?? [])],
+        rationale: null,
+        last_event_id: eventId,
+        recorded_by: "owner",
+        author_label: "owner",
+        created_at: now,
+        updated_at: now,
+        admission_status: "admitted",
+        salience: 60,
+        trust_level: "native",
+        instruction_active: false,
+      };
+      this.notesByScope[request.scope] = [note, ...(this.notesByScope[request.scope] ?? [])];
+      this.noteRevisionsById[noteId] = [
+        {
+          revision_id: revId,
+          note_id: noteId,
+          revision: 1,
+          title: note.title,
+          body: note.body,
+          tags: [...note.tags],
+          rationale: null,
+          event_id: eventId,
+          recorded_by: "owner",
+          author_label: "owner",
+          created_at: now,
+        },
+      ];
+    } else {
+      this.pendingOutboxCount += 1;
+    }
+    return {
+      outbox_item: {
+        outbox_id: outboxId,
+        session_id: request.session_id ?? null,
+        run_id: request.run_id ?? null,
+        idempotency_key: request.idempotency_key ?? `note-${now}`,
+        scope: request.scope,
+        operation: "create_note",
+        payload_json: JSON.stringify(request),
+        status: delivered ? "delivered" : "pending",
+        attempts: 1,
+        last_error: delivered ? null : (this.memoryDetail ?? "memoryd недоступна"),
+        delivered_event_id: delivered ? eventId : null,
+        delivered_note_id: delivered ? noteId : null,
+        correlation_id: `corr-note-${now}`,
+        created_at: now,
+        updated_at: now,
+      },
+      delivered_immediately: delivered,
+      memory_status: this.memoryStatus,
+    };
+  }
+
+  public async getMemoryOverview(scope?: string | null): Promise<MemoryOverviewResponse> {
+    this.calls.push({ method: "getMemoryOverview", args: { scope: scope ?? null } });
+    this.ensureConnected();
+    if (this.memoryStatus === "degraded_unreachable") {
+      return {
+        memory_status: "degraded_unreachable",
+        degraded_reason: this.memoryDetail ?? "memoryd недоступна",
+        scope: scope ?? null,
+        stats: null,
+        notes: [],
+        claims: [],
+        conflicts: [],
+        documents: [],
+        consolidation_jobs: [],
+        tombstones: [],
+      };
+    }
+    const notes = scope
+      ? [...(this.notesByScope[scope] ?? [])]
+      : Object.values(this.notesByScope).flat();
+    const claims = scope
+      ? this.memoryClaims.filter((c) => c.scope === scope)
+      : [...this.memoryClaims];
+    const conflicts = scope
+      ? this.memoryConflicts.filter((c) => c.scope === scope)
+      : [...this.memoryConflicts];
+    const documents = scope
+      ? this.memoryDocuments.filter((d) => d.scope === scope)
+      : [...this.memoryDocuments];
+    const jobs = scope
+      ? this.consolidationJobs.filter((j) => j.scope === scope)
+      : [...this.consolidationJobs];
+    const tombstones = scope
+      ? this.tombstones.filter((t) => t.scope === scope)
+      : [...this.tombstones];
+
+    const activeNotesCount = notes.filter((n) => (n.admission_status ?? "admitted") !== "rejected").length;
+    const activeClaimsCount = claims.filter(
+      (c) => c.epistemic_status !== "superseded" && c.epistemic_status !== "retracted",
+    ).length;
+    const openConflictsCount = conflicts.filter((c) => c.status === "open").length;
+    const importedUntrustedCount =
+      notes.filter((n) => n.trust_level === "external_untrusted").length +
+      claims.filter((c) => c.trust_level === "external_untrusted").length +
+      documents.filter((d) => d.trust_level === "external_untrusted").length;
+
+    return {
+      memory_status: "healthy",
+      degraded_reason: null,
+      scope: scope ?? null,
+      stats: {
+        scope: scope ?? null,
+        sources_count: this.memorySourcesCount,
+        active_notes_count: activeNotesCount,
+        active_claims_count: activeClaimsCount,
+        documents_count: documents.length,
+        open_conflicts_count: openConflictsCount,
+        imported_untrusted_count: importedUntrustedCount,
+        index_status: this.indexStatus,
+        watermark_seq: notes.length + claims.length + documents.length,
+        last_rebuild_at: this.lastRebuildAt,
+      },
+      notes,
+      claims,
+      conflicts,
+      documents,
+      consolidation_jobs: jobs,
+      tombstones,
+    };
+  }
+
+  public async correctMemoryNote(request: CorrectNoteRequest): Promise<NoteMutationResponse> {
+    this.calls.push({ method: "correctMemoryNote", args: request });
+    this.ensureConnected();
+    const list = this.notesByScope[request.scope] ?? [];
+    const existing = list.find((n) => n.note_id === request.note_id);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `note ${request.note_id} not found` };
+    }
+    const curRev = existing.current_revision ?? existing.revision ?? 1;
+    if (curRev !== request.expected_revision) {
+      throw {
+        code: "CONFLICT",
+        message: `conflict on memory_note: expected revision ${request.expected_revision}, got ${curRev}`,
+      };
+    }
+    const now = this.nextTimestamp();
+    const nextRev = curRev + 1;
+    const revId = this.nextUuid("95000000");
+    const eventId = this.nextUuid("97000000");
+    const updated: MemoryNote = {
+      ...existing,
+      current_revision: nextRev,
+      revision: nextRev,
+      current_revision_id: revId,
+      title: request.title.trim(),
+      body: request.body.trim(),
+      tags: [...(request.tags ?? existing.tags)],
+      rationale: request.rationale.trim(),
+      last_event_id: eventId,
+      updated_at: now,
+    };
+    this.notesByScope[request.scope] = list.map((n) =>
+      n.note_id === request.note_id ? updated : n,
+    );
+    const prevRevs = this.noteRevisionsById[request.note_id] ?? [];
+    this.noteRevisionsById[request.note_id] = [
+      ...prevRevs,
+      {
+        revision_id: revId,
+        note_id: request.note_id,
+        revision: nextRev,
+        title: updated.title,
+        body: updated.body,
+        tags: [...updated.tags],
+        rationale: updated.rationale ?? null,
+        event_id: eventId,
+        recorded_by: "owner",
+        author_label: request.author_label ?? "owner",
+        created_at: now,
+      },
+    ];
+    return { note: updated, event_id: eventId, idempotent_replay: false };
+  }
+
+  public async getMemoryNoteHistory(noteId: string): Promise<NoteHistoryResponse> {
+    this.calls.push({ method: "getMemoryNoteHistory", args: { noteId } });
+    this.ensureConnected();
+    const note = Object.values(this.notesByScope)
+      .flat()
+      .find((n) => n.note_id === noteId);
+    if (!note) {
+      throw { code: "NOT_FOUND", message: `note ${noteId} not found` };
+    }
+    const revisions = this.noteRevisionsById[noteId] ?? [
+      {
+        revision_id: note.current_revision_id ?? this.nextUuid("95000000"),
+        note_id: note.note_id,
+        revision: note.current_revision ?? note.revision ?? 1,
+        title: note.title,
+        body: note.body,
+        tags: [...note.tags],
+        rationale: note.rationale ?? null,
+        event_id: note.last_event_id ?? this.nextUuid("97000000"),
+        recorded_by: note.recorded_by ?? "owner",
+        author_label: note.author_label ?? null,
+        created_at: note.updated_at,
+      },
+    ];
+    return {
+      note_id: noteId,
+      scope: note.scope,
+      current_revision: note.current_revision ?? note.revision ?? 1,
+      revisions,
+    };
+  }
+
+  public async listMemoryClaims(
+    scope?: string | null,
+    topicKey?: string | null,
+  ): Promise<ListClaimsResponse> {
+    this.calls.push({ method: "listMemoryClaims", args: { scope, topicKey } });
+    this.ensureConnected();
+    const claims = this.memoryClaims.filter(
+      (c) => (!scope || c.scope === scope) && (!topicKey || c.topic_key === topicKey),
+    );
+    return { claims };
+  }
+
+  public async createMemoryClaim(request: CreateClaimRequest): Promise<MemoryClaim> {
+    this.calls.push({ method: "createMemoryClaim", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const claim: MemoryClaim = {
+      claim_id: this.nextUuid("93000000"),
+      scope: request.scope,
+      topic_key: request.topic_key.trim(),
+      claim_key: request.claim_key ?? null,
+      natural_language: request.natural_language.trim(),
+      epistemic_status: request.epistemic_status ?? "asserted",
+      supersedes_claim_id: request.supersedes_claim_id ?? null,
+      valid_from: request.valid_from ?? now,
+      valid_to: request.valid_to ?? null,
+      source_event_id: this.nextUuid("97000000"),
+      source_note_id: request.source_note_id ?? null,
+      caveats: [...(request.caveats ?? [])],
+      provenance: { ...(request.provenance ?? {}) },
+      trust_level: "native",
+      instruction_active: false,
+      created_at: now,
+    };
+    this.memoryClaims = [claim, ...this.memoryClaims];
+    return claim;
+  }
+
+  public async supersedeMemoryClaim(request: SupersedeClaimRequest): Promise<MemoryClaim> {
+    this.calls.push({ method: "supersedeMemoryClaim", args: request });
+    this.ensureConnected();
+    const oldClaim = this.memoryClaims.find((c) => c.claim_id === request.claim_id);
+    if (!oldClaim) {
+      throw { code: "NOT_FOUND", message: `claim ${request.claim_id} not found` };
+    }
+    this.memoryClaims = this.memoryClaims.map((c) =>
+      c.claim_id === request.claim_id ? { ...c, epistemic_status: "superseded" } : c,
+    );
+    return this.createMemoryClaim({
+      ...request.new_claim,
+      supersedes_claim_id: request.claim_id,
+    });
+  }
+
+  public async listMemoryConflicts(scope?: string | null): Promise<ListConflictsResponse> {
+    this.calls.push({ method: "listMemoryConflicts", args: { scope } });
+    this.ensureConnected();
+    return {
+      conflicts: scope
+        ? this.memoryConflicts.filter((c) => c.scope === scope)
+        : [...this.memoryConflicts],
+    };
+  }
+
+  public async resolveMemoryConflict(request: ResolveConflictRequest): Promise<MemoryConflict> {
+    this.calls.push({ method: "resolveMemoryConflict", args: request });
+    this.ensureConnected();
+    const existing = this.memoryConflicts.find((c) => c.conflict_id === request.conflict_id);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `conflict ${request.conflict_id} not found` };
+    }
+    const now = this.nextTimestamp();
+    const resolutionEventId = this.nextUuid("97000000");
+    const resolved: MemoryConflict = {
+      ...existing,
+      status: request.target_status ?? "resolved",
+      resolution_event_id: resolutionEventId,
+      resolution_note: request.resolution_note.trim(),
+      resolved_at: now,
+    };
+    this.memoryConflicts = this.memoryConflicts.map((c) =>
+      c.conflict_id === request.conflict_id ? resolved : c,
+    );
+    if (request.winning_claim_id) {
+      this.memoryClaims = this.memoryClaims.map((cl) => {
+        if (!existing.candidate_claim_ids.includes(cl.claim_id)) {
+          return cl;
+        }
+        return cl.claim_id === request.winning_claim_id
+          ? { ...cl, epistemic_status: "asserted" }
+          : { ...cl, epistemic_status: "superseded" };
+      });
+    }
+    return resolved;
+  }
+
+  public async listMemoryDocuments(scope?: string | null): Promise<ListDocumentsResponse> {
+    this.calls.push({ method: "listMemoryDocuments", args: { scope } });
+    this.ensureConnected();
+    return {
+      documents: scope
+        ? this.memoryDocuments.filter((d) => d.scope === scope)
+        : [...this.memoryDocuments],
+    };
+  }
+
+  public async createMemoryDocument(request: CreateDocumentRequest): Promise<MemoryDocument> {
+    this.calls.push({ method: "createMemoryDocument", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const docId = this.nextUuid("96000000");
+    const eventId = this.nextUuid("97000000");
+    const doc: MemoryDocument = {
+      document_id: docId,
+      scope: request.scope,
+      document_key: request.document_key.trim(),
+      title: request.title.trim(),
+      current_version: 1,
+      current_body: request.body,
+      provenance_claim_ids: [...(request.provenance_claim_ids ?? [])],
+      provenance_note_ids: [...(request.provenance_note_ids ?? [])],
+      source_event_id: eventId,
+      principal_id: "owner",
+      trust_level: "native",
+      instruction_active: false,
+      created_at: now,
+      updated_at: now,
+    };
+    this.memoryDocuments = [doc, ...this.memoryDocuments];
+    this.documentVersionsById[docId] = [
+      {
+        version_id: this.nextUuid("96100000"),
+        document_id: docId,
+        version: 1,
+        body: doc.current_body,
+        provenance_claim_ids: [...(doc.provenance_claim_ids ?? [])],
+        diff_summary: "Создание досье",
+        event_id: eventId,
+        created_at: now,
+      },
+    ];
+    return doc;
+  }
+
+  public async getMemoryDocument(documentId: string): Promise<MemoryDocument> {
+    this.calls.push({ method: "getMemoryDocument", args: { documentId } });
+    this.ensureConnected();
+    const doc = this.memoryDocuments.find((d) => d.document_id === documentId);
+    if (!doc) {
+      throw { code: "NOT_FOUND", message: `document ${documentId} not found` };
+    }
+    return doc;
+  }
+
+  public async updateMemoryDocument(request: UpdateDocumentRequest): Promise<MemoryDocument> {
+    this.calls.push({ method: "updateMemoryDocument", args: request });
+    this.ensureConnected();
+    const existing = this.memoryDocuments.find((d) => d.document_id === request.document_id);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `document ${request.document_id} not found` };
+    }
+    if (existing.current_version !== request.expected_version) {
+      throw {
+        code: "CONFLICT",
+        message: `conflict on memory_document: expected version ${request.expected_version}, got ${existing.current_version}`,
+      };
+    }
+    const now = this.nextTimestamp();
+    const nextVersion = existing.current_version + 1;
+    const eventId = this.nextUuid("97000000");
+    const updated: MemoryDocument = {
+      ...existing,
+      title: request.title.trim(),
+      current_version: nextVersion,
+      current_body: request.body,
+      provenance_claim_ids: [...(request.provenance_claim_ids ?? existing.provenance_claim_ids ?? [])],
+      provenance_note_ids: [...(request.provenance_note_ids ?? existing.provenance_note_ids ?? [])],
+      source_event_id: eventId,
+      updated_at: now,
+    };
+    this.memoryDocuments = this.memoryDocuments.map((d) =>
+      d.document_id === request.document_id ? updated : d,
+    );
+    const prevVersions = this.documentVersionsById[request.document_id] ?? [];
+    this.documentVersionsById[request.document_id] = [
+      ...prevVersions,
+      {
+        version_id: this.nextUuid("96100000"),
+        document_id: request.document_id,
+        version: nextVersion,
+        body: updated.current_body,
+        provenance_claim_ids: [...(updated.provenance_claim_ids ?? [])],
+        diff_summary: request.diff_summary ?? `Обновление v${nextVersion}`,
+        event_id: eventId,
+        created_at: now,
+      },
+    ];
+    return updated;
+  }
+
+  public async getMemoryDocumentVersions(
+    documentId: string,
+  ): Promise<GetDocumentVersionsResponse> {
+    this.calls.push({ method: "getMemoryDocumentVersions", args: { documentId } });
+    this.ensureConnected();
+    const doc = this.memoryDocuments.find((d) => d.document_id === documentId);
+    if (!doc) {
+      throw { code: "NOT_FOUND", message: `document ${documentId} not found` };
+    }
+    return {
+      document_id: documentId,
+      scope: doc.scope,
+      current_version: doc.current_version,
+      versions: [...(this.documentVersionsById[documentId] ?? [])],
+    };
+  }
+
+  public async forgetMemoryItem(request: ForgetRequest): Promise<ForgetResponse> {
+    this.calls.push({ method: "forgetMemoryItem", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const tombstoneId = this.nextUuid("98100000");
+    const forgetEventId = this.nextUuid("97000000");
+    if (request.target_type === "note") {
+      this.notesByScope[request.scope] = (this.notesByScope[request.scope] ?? []).filter(
+        (n) => n.note_id !== request.target_id,
+      );
+    } else if (request.target_type === "claim") {
+      this.memoryClaims = this.memoryClaims.filter((c) => c.claim_id !== request.target_id);
+    } else if (request.target_type === "document") {
+      this.memoryDocuments = this.memoryDocuments.filter(
+        (d) => d.document_id !== request.target_id,
+      );
+    }
+    const notice =
+      "Запись удалена из активных проекций и поискового индекса; содержимое может сохраняться в офлайн-резервных копиях до их плановой ротации.";
+    const tombstone: ForgetTombstone = {
+      tombstone_id: tombstoneId,
+      scope: request.scope,
+      target_type: request.target_type,
+      target_id: request.target_id,
+      forget_event_id: forgetEventId,
+      principal_id: "owner",
+      reason: request.reason.trim(),
+      residual_backup_notice: notice,
+      propagation_status: "completed",
+      created_at: now,
+    };
+    this.tombstones = [tombstone, ...this.tombstones];
+    return {
+      tombstone_id: tombstoneId,
+      forget_event_id: forgetEventId,
+      residual_backup_notice: notice,
+      propagation_status: "completed",
+      idempotent_replay: false,
+    };
+  }
+
+  public async listMemoryTombstones(scope?: string | null): Promise<ListTombstonesResponse> {
+    this.calls.push({ method: "listMemoryTombstones", args: { scope } });
+    this.ensureConnected();
+    return {
+      tombstones: scope
+        ? this.tombstones.filter((t) => t.scope === scope)
+        : [...this.tombstones],
+    };
+  }
+
+  public async exportMemoryPackage(request: ExportRequest): Promise<ExportResponse> {
+    this.calls.push({ method: "exportMemoryPackage", args: request });
+    this.ensureConnected();
+    const notes = [...(this.notesByScope[request.scope] ?? [])];
+    const claims = this.memoryClaims.filter((c) => c.scope === request.scope);
+    const documents = this.memoryDocuments.filter((d) => d.scope === request.scope);
+    const pkg = {
+      format_version: request.format_version ?? "1.0",
+      scope: request.scope,
+      secrets_stripped: true,
+      notes,
+      claims,
+      documents,
+    };
+    const packageJson = JSON.stringify(pkg, null, 2);
+    return {
+      package_id: this.nextUuid("98200000"),
+      scope: request.scope,
+      format_version: pkg.format_version,
+      manifest_sha256: deterministicHex(packageJson, 64),
+      item_count: notes.length + claims.length + documents.length,
+      byte_size: packageJson.length,
+      secrets_stripped: true,
+      package_json: packageJson,
+    };
+  }
+
+  public async importMemoryPackage(request: ImportRequest): Promise<ImportResponse> {
+    this.calls.push({ method: "importMemoryPackage", args: { scope: request.scope } });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const sha = deterministicHex(request.package_json, 64);
+    let parsed: {
+      notes?: Array<{ title?: string; body?: string; tags?: string[] }>;
+      claims?: Array<{ topic_key?: string; natural_language?: string; caveats?: string[] }>;
+      documents?: Array<{ document_key?: string; title?: string; body?: string; current_body?: string }>;
+    };
+    try {
+      parsed = JSON.parse(request.package_json) as typeof parsed;
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("Ожидается JSON-объект пакета памяти");
+      }
+    } catch (err) {
+      return {
+        import_id: this.nextUuid("98300000"),
+        scope: request.scope,
+        source_package_sha256: sha,
+        trust_level: "external_untrusted",
+        instruction_active: false,
+        items_imported: 0,
+        items_rejected: 1,
+        validation_errors: [err instanceof Error ? err.message : "Невалидный JSON"],
+      };
+    }
+
+    let imported = 0;
+    let rejected = 0;
+    const errors: string[] = [];
+
+    for (const rawNote of parsed.notes ?? []) {
+      if (!rawNote.title?.trim() || !rawNote.body?.trim()) {
+        rejected += 1;
+        errors.push("Пропущена заметка с пустым заголовком или текстом");
+        continue;
+      }
+      const noteId = this.nextUuid("94000000");
+      const revId = this.nextUuid("95000000");
+      const evId = this.nextUuid("97000000");
+      const note: MemoryNote = {
+        note_id: noteId,
+        scope: request.scope,
+        current_revision: 1,
+        revision: 1,
+        current_revision_id: revId,
+        title: rawNote.title.trim(),
+        body: rawNote.body.trim(),
+        tags: [...(rawNote.tags ?? []), "imported"],
+        last_event_id: evId,
+        recorded_by: "import",
+        created_at: now,
+        updated_at: now,
+        admission_status: "admitted",
+        salience: 40,
+        trust_level: "external_untrusted",
+        instruction_active: false,
+      };
+      this.notesByScope[request.scope] = [note, ...(this.notesByScope[request.scope] ?? [])];
+      this.noteRevisionsById[noteId] = [
+        {
+          revision_id: revId,
+          note_id: noteId,
+          revision: 1,
+          title: note.title,
+          body: note.body,
+          tags: [...note.tags],
+          rationale: "Внешний недоверенный импорт",
+          event_id: evId,
+          recorded_by: "import",
+          created_at: now,
+        },
+      ];
+      imported += 1;
+    }
+
+    for (const rawClaim of parsed.claims ?? []) {
+      if (!rawClaim.topic_key?.trim() || !rawClaim.natural_language?.trim()) {
+        rejected += 1;
+        errors.push("Пропущено утверждение без topic_key или текста");
+        continue;
+      }
+      const claim: MemoryClaim = {
+        claim_id: this.nextUuid("93000000"),
+        scope: request.scope,
+        topic_key: rawClaim.topic_key.trim(),
+        natural_language: rawClaim.natural_language.trim(),
+        epistemic_status: "inferred",
+        source_event_id: this.nextUuid("97000000"),
+        caveats: [...(rawClaim.caveats ?? [])],
+        trust_level: "external_untrusted",
+        instruction_active: false,
+        created_at: now,
+      };
+      this.memoryClaims = [claim, ...this.memoryClaims];
+      imported += 1;
+    }
+
+    for (const rawDoc of parsed.documents ?? []) {
+      const body = rawDoc.body ?? rawDoc.current_body ?? "";
+      if (!rawDoc.title?.trim() || !body.trim()) {
+        rejected += 1;
+        errors.push("Пропущено досье без заголовка или содержимого");
+        continue;
+      }
+      const docId = this.nextUuid("96000000");
+      const evId = this.nextUuid("97000000");
+      const doc: MemoryDocument = {
+        document_id: docId,
+        scope: request.scope,
+        document_key: rawDoc.document_key?.trim() || `dossier:imported-${docId.slice(-6)}`,
+        title: rawDoc.title.trim(),
+        current_version: 1,
+        current_body: body,
+        provenance_claim_ids: [],
+        provenance_note_ids: [],
+        source_event_id: evId,
+        principal_id: "import",
+        trust_level: "external_untrusted",
+        instruction_active: false,
+        created_at: now,
+        updated_at: now,
+      };
+      this.memoryDocuments = [doc, ...this.memoryDocuments];
+      this.documentVersionsById[docId] = [
+        {
+          version_id: this.nextUuid("96100000"),
+          document_id: docId,
+          version: 1,
+          body,
+          provenance_claim_ids: [],
+          diff_summary: "Внешний недоверенный импорт",
+          event_id: evId,
+          created_at: now,
+        },
+      ];
+      imported += 1;
+    }
+
+    return {
+      import_id: this.nextUuid("98300000"),
+      scope: request.scope,
+      source_package_sha256: sha,
+      trust_level: "external_untrusted",
+      instruction_active: false,
+      items_imported: imported,
+      items_rejected: rejected,
+      validation_errors: errors,
+    };
+  }
+
+  public async triggerMemoryIndexRebuild(
+    request: TriggerIndexRebuildRequest,
+  ): Promise<TriggerIndexRebuildResponse> {
+    this.calls.push({ method: "triggerMemoryIndexRebuild", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    this.indexStatus = "healthy";
+    this.staleWarning = null;
+    this.lastRebuildAt = now;
+    const notesCount = (this.notesByScope[request.scope] ?? []).length;
+    const claimsCount = this.memoryClaims.filter((c) => c.scope === request.scope).length;
+    const docsCount = this.memoryDocuments.filter((d) => d.scope === request.scope).length;
+    const rebuilt = notesCount + claimsCount + docsCount;
+    return {
+      index_state: {
+        scope: request.scope,
+        watermark_event_id: this.nextUuid("97000000"),
+        watermark_seq: rebuilt,
+        model_version: "fts-v1",
+        status: "healthy",
+        last_rebuild_at: now,
+        updated_at: now,
+      },
+      entries_rebuilt: rebuilt,
+    };
+  }
+
+  public async listMemoryConsolidationJobs(
+    scope?: string | null,
+  ): Promise<ListConsolidationJobsResponse> {
+    this.calls.push({ method: "listMemoryConsolidationJobs", args: { scope } });
+    this.ensureConnected();
+    return {
+      jobs: scope
+        ? this.consolidationJobs.filter((j) => j.scope === scope)
+        : [...this.consolidationJobs],
+    };
+  }
+
+  public async createMemoryConsolidationJob(
+    request: CreateConsolidationJobRequest,
+  ): Promise<ConsolidationJob> {
+    this.calls.push({ method: "createMemoryConsolidationJob", args: request });
+    this.ensureConnected();
+    const now = this.nextTimestamp();
+    const job: ConsolidationJob = {
+      job_id: this.nextUuid("98400000"),
+      scope: request.scope,
+      job_type: request.job_type,
+      status: "completed",
+      checkpoint_json: JSON.stringify({ processed: true }),
+      watermark_event_id: this.nextUuid("97000000"),
+      caveats_preserved: true,
+      error_detail: null,
+      created_at: now,
+      updated_at: now,
+      started_at: now,
+      completed_at: now,
+    };
+    this.consolidationJobs = [job, ...this.consolidationJobs];
+    return job;
+  }
+
+  public async pauseMemoryConsolidationJob(jobId: string): Promise<ConsolidationJob> {
+    this.calls.push({ method: "pauseMemoryConsolidationJob", args: { jobId } });
+    this.ensureConnected();
+    const existing = this.consolidationJobs.find((j) => j.job_id === jobId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `consolidation_job ${jobId} not found` };
+    }
+    const updated: ConsolidationJob = {
+      ...existing,
+      status: "paused",
+      updated_at: this.nextTimestamp(),
+    };
+    this.consolidationJobs = this.consolidationJobs.map((j) =>
+      j.job_id === jobId ? updated : j,
+    );
+    return updated;
+  }
+
+  public async resumeMemoryConsolidationJob(jobId: string): Promise<ConsolidationJob> {
+    this.calls.push({ method: "resumeMemoryConsolidationJob", args: { jobId } });
+    this.ensureConnected();
+    const existing = this.consolidationJobs.find((j) => j.job_id === jobId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `consolidation_job ${jobId} not found` };
+    }
+    const now = this.nextTimestamp();
+    const updated: ConsolidationJob = {
+      ...existing,
+      status: "completed",
+      updated_at: now,
+      completed_at: now,
+    };
+    this.consolidationJobs = this.consolidationJobs.map((j) =>
+      j.job_id === jobId ? updated : j,
+    );
+    return updated;
   }
 }
 
