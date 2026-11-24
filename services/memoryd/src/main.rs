@@ -17,7 +17,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
-use axum::http::header::{AUTHORIZATION, HOST};
+use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -47,6 +47,7 @@ const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
 static HEADER_SHUTDOWN: HeaderName = HeaderName::from_static("x-dennett-shutdown");
+static HEADER_SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -55,6 +56,7 @@ enum Command {
     },
     Serve {
         addr: SocketAddr,
+        allow_non_loopback: bool,
         pg_url: Option<String>,
         auth_config_file: Option<PathBuf>,
     },
@@ -80,6 +82,7 @@ struct AppState {
     service: Option<MemoryService>,
     auth: StandaloneAuthVerifier,
     profile_mode: ProfileMode,
+    allow_non_loopback: bool,
     shutdown_tx: watch::Sender<bool>,
     request_limit: Arc<Semaphore>,
 }
@@ -111,9 +114,19 @@ async fn main() -> ExitCode {
         Command::HealthOnce { pg_url } => run_health_once(pg_url, profile_mode).await,
         Command::Serve {
             addr,
+            allow_non_loopback,
             pg_url,
             auth_config_file,
-        } => run_serve(addr, pg_url, auth_config_file, profile_mode).await,
+        } => {
+            run_serve(
+                addr,
+                allow_non_loopback,
+                pg_url,
+                auth_config_file,
+                profile_mode,
+            )
+            .await
+        }
     }
 }
 
@@ -188,6 +201,7 @@ where
             }
             Ok(Command::Serve {
                 addr,
+                allow_non_loopback,
                 pg_url,
                 auth_config_file,
             })
@@ -305,6 +319,7 @@ async fn run_health_once(cli_pg_url: Option<String>, profile_mode: ProfileMode) 
 
 async fn run_serve(
     addr: SocketAddr,
+    allow_non_loopback: bool,
     cli_pg_url: Option<String>,
     auth_config_file: Option<PathBuf>,
     profile_mode: ProfileMode,
@@ -382,6 +397,7 @@ async fn run_serve(
         service,
         auth,
         profile_mode,
+        allow_non_loopback,
         shutdown_tx,
         request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
     };
@@ -460,6 +476,14 @@ async fn enforce_limits_and_timeout(
 ) -> Response {
     let correlation_id = extract_correlation_id_lossy(request.headers());
 
+    // D2-SEC-03: Independent loopback Host / Origin / Sec-Fetch-Site DNS-rebinding & CSRF guard
+    // enforced directly inside standalone `dennett-memoryd` (zero dependency on `dennett-head`).
+    if !state.allow_non_loopback
+        && let Err(err) = validate_loopback_request_headers(request.headers())
+    {
+        return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
+    }
+
     let Ok(_permit) = Arc::clone(&state.request_limit).try_acquire_owned() else {
         let err = DennettError::Internal {
             detail: String::from("concurrent request limit reached"),
@@ -475,6 +499,67 @@ async fn enforce_limits_and_timeout(
         };
         json_api_error(StatusCode::GATEWAY_TIMEOUT, err, &correlation_id)
     }
+}
+
+fn validate_loopback_request_headers(headers: &HeaderMap) -> Result<(), DennettError> {
+    let host_ok = headers
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(is_loopback_host);
+    if !host_ok {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("http.host"),
+            reason: String::from(
+                "missing or non-loopback Host header rejected by memoryd loopback DNS-rebinding guard",
+            ),
+        });
+    }
+
+    if let Some(fetch_site) = headers.get(&HEADER_SEC_FETCH_SITE) {
+        let is_cross_site = fetch_site
+            .to_str()
+            .map_or(true, |v| v.trim().eq_ignore_ascii_case("cross-site"));
+        if is_cross_site {
+            return Err(DennettError::AccessDenied {
+                scope: String::from("http.sec_fetch_site"),
+                reason: String::from("cross-site browser request rejected by memoryd"),
+            });
+        }
+    }
+
+    if let Some(origin) = headers.get(ORIGIN) {
+        let origin_ok = origin.to_str().is_ok_and(is_allowed_loopback_origin);
+        if !origin_ok {
+            return Err(DennettError::AccessDenied {
+                scope: String::from("http.origin"),
+                reason: String::from(
+                    "non-loopback Origin header rejected by memoryd loopback CSRF guard",
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn is_allowed_loopback_origin(origin: &str) -> bool {
+    let trimmed = origin.trim();
+    if trimmed.eq_ignore_ascii_case("tauri://localhost")
+        || trimmed.eq_ignore_ascii_case("https://tauri.localhost")
+        || trimmed.eq_ignore_ascii_case("http://tauri.localhost")
+    {
+        return true;
+    }
+    let Some(rest) = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    if rest.contains('/') || rest.contains('?') || rest.contains('#') || rest.contains('@') {
+        return false;
+    }
+    is_loopback_host(rest)
 }
 
 async fn handle_healthz(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1003,5 +1088,43 @@ mod tests {
         assert!(is_loopback_host("localhost:8080"));
         assert!(!is_loopback_host("evil.example:8080"));
         assert!(!is_loopback_host(""));
+    }
+
+    #[test]
+    fn d2_sec_03_loopback_middleware_rejects_evil_host_origin_and_cross_site_headers() {
+        let mut ok_headers = HeaderMap::new();
+        ok_headers.insert(HOST, HeaderValue::from_static("127.0.0.1:18080"));
+        ok_headers.insert(ORIGIN, HeaderValue::from_static("http://127.0.0.1:5173"));
+        ok_headers.insert(
+            &HEADER_SEC_FETCH_SITE,
+            HeaderValue::from_static("same-site"),
+        );
+        assert!(validate_loopback_request_headers(&ok_headers).is_ok());
+
+        let mut evil_host = HeaderMap::new();
+        evil_host.insert(HOST, HeaderValue::from_static("evil.example:18080"));
+        assert!(matches!(
+            validate_loopback_request_headers(&evil_host),
+            Err(DennettError::AccessDenied { ref scope, .. }) if scope == "http.host"
+        ));
+
+        let mut evil_origin = HeaderMap::new();
+        evil_origin.insert(HOST, HeaderValue::from_static("127.0.0.1:18080"));
+        evil_origin.insert(ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert!(matches!(
+            validate_loopback_request_headers(&evil_origin),
+            Err(DennettError::AccessDenied { ref scope, .. }) if scope == "http.origin"
+        ));
+
+        let mut cross_site = HeaderMap::new();
+        cross_site.insert(HOST, HeaderValue::from_static("localhost:18080"));
+        cross_site.insert(
+            &HEADER_SEC_FETCH_SITE,
+            HeaderValue::from_static("cross-site"),
+        );
+        assert!(matches!(
+            validate_loopback_request_headers(&cross_site),
+            Err(DennettError::AccessDenied { ref scope, .. }) if scope == "http.sec_fetch_site"
+        ));
     }
 }

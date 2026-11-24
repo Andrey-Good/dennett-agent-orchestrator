@@ -17,8 +17,8 @@ use dennett_contracts::{
     CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
     DennettError, HeadHealth, HeadMemorySearchRequest, IdempotencyKey, MemoryCapability,
     MemoryOutboxStatus, MemoryScope, MemoryStatus, PolicyEffect, PrincipalId, ProjectRecord,
-    RunStatus, SearchNotesRequest, SendMessageRequest, SessionDetailResponse, SessionRecord,
-    ThinkingLevel, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
+    RunStatus, SearchNotesRequest, SendMessageRequest, SessionDetailResponse, SessionKind,
+    SessionRecord, ThinkingLevel, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
     UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_head_client::HeadClient;
@@ -493,6 +493,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
                 agent_id: agent.agent_id,
                 project_id: project.project_id,
                 title: String::from("Outage Test Session"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )
@@ -806,6 +807,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
                 agent_id: agent.agent_id,
                 project_id: project.project_id,
                 title: String::from("Policy Verification"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )
@@ -1129,6 +1131,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 agent_id: agent_v1.agent_id,
                 project_id: project.project_id,
                 title: String::from("Session Alpha"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )
@@ -1140,6 +1143,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 agent_id: agent_v1.agent_id,
                 project_id: project.project_id,
                 title: String::from("Session Beta"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )
@@ -1283,13 +1287,13 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     let head1 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c1 = HeadClient::new(&head1.base_url).expect("client1");
     let h1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(h1.schema_version, Some(5));
+    assert_eq!(h1.schema_version, Some(6));
     head1.shutdown().await;
 
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c2 = HeadClient::new(&head2.base_url).expect("client2");
     let h2 = c2.healthz(None).await.expect("health2");
-    assert_eq!(h2.schema_version, Some(5));
+    assert_eq!(h2.schema_version, Some(6));
 
     // Seed one project inside this isolated schema so `audit_events` has a real row to guard.
     let _proj = c2
@@ -1504,6 +1508,7 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
                 agent_id: agent.agent_id,
                 project_id: project.project_id,
                 title: String::from("Новый чат"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )
@@ -1764,6 +1769,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
                 agent_id: xhigh_agent.agent_id,
                 project_id: project.project_id,
                 title: String::from("Concurrency Session"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )

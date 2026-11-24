@@ -4,9 +4,10 @@
 //! HTTP/JSON transport crates — NEVER on `dennett-head`, `dennett-memory-core`, or PostgreSQL
 //! drivers, so `dennettctl` and future `apps/desktop` UI reuse one canonical typed client.
 
+use core::fmt;
 use std::time::Duration;
 
-use dennett_contracts::redact::redact_secrets;
+use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets};
 use dennett_contracts::{
     AgentConfigHistoryResponse, AgentId, AgentRecord, ApiErrorResponse, ArtifactId,
     ArtifactLifecycleRequest, ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse,
@@ -41,12 +42,26 @@ pub const DEFAULT_HEAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MAX_RESPONSE_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
+static HEADER_CONTROL_TOKEN: HeaderName = HeaderName::from_static("x-dennett-control-token");
 
 /// Typed asynchronous HTTP client communicating with a `dennett-head` daemon.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HeadClient {
     base_url: String,
     http: Client,
+    control_token: Option<String>,
+}
+
+impl fmt::Debug for HeadClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeadClient")
+            .field("base_url", &self.base_url)
+            .field(
+                "control_token",
+                &self.control_token.as_ref().map(|_| REDACTED_PLACEHOLDER),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl HeadClient {
@@ -95,7 +110,17 @@ impl HeadClient {
         Ok(Self {
             base_url: trimmed.to_owned(),
             http,
+            control_token: None,
         })
+    }
+
+    /// Attaches a project-scoped `dct1.` control MCP bearer token (`X-Dennett-Control-Token`)
+    /// to every outgoing HTTP request made by this client.
+    #[must_use]
+    pub fn with_control_token(mut self, token: impl Into<String>) -> Self {
+        let trimmed = token.into().trim().to_owned();
+        self.control_token = (!trimmed.is_empty()).then_some(trimmed);
+        self
     }
 
     /// Returns the normalized base URL without trailing slash.
@@ -1152,7 +1177,7 @@ impl HeadClient {
         correlation_id: Option<&CorrelationId>,
     ) -> Result<Resp, DennettError> {
         let url = format!("{}{path}", self.base_url);
-        let headers = build_headers(correlation_id)?;
+        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
         let resp = self
             .http
             .request(method, &url)
@@ -1171,7 +1196,7 @@ impl HeadClient {
         correlation_id: Option<&CorrelationId>,
     ) -> Result<Resp, DennettError> {
         let url = format!("{}{path}", self.base_url);
-        let headers = build_headers(correlation_id)?;
+        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
         let resp = self
             .http
             .request(method, &url)
@@ -1218,7 +1243,10 @@ fn encode_query_component(input: &str) -> String {
     out
 }
 
-fn build_headers(correlation_id: Option<&CorrelationId>) -> Result<HeaderMap, DennettError> {
+fn build_headers(
+    correlation_id: Option<&CorrelationId>,
+    control_token: Option<&str>,
+) -> Result<HeaderMap, DennettError> {
     let mut headers = HeaderMap::new();
     let cid = correlation_id
         .cloned()
@@ -1228,6 +1256,13 @@ fn build_headers(correlation_id: Option<&CorrelationId>) -> Result<HeaderMap, De
         reason: String::from("invalid HTTP header value"),
     })?;
     headers.insert(HEADER_CORRELATION_ID.clone(), val);
+    if let Some(token) = control_token {
+        let tok_val = HeaderValue::from_str(token).map_err(|_| DennettError::InvalidInput {
+            field: String::from("control_token"),
+            reason: String::from("invalid control token HTTP header value"),
+        })?;
+        headers.insert(HEADER_CONTROL_TOKEN.clone(), tok_val);
+    }
     Ok(headers)
 }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant as StdInstant};
+use std::time::Duration;
 
 use dennett_contracts::redact::redact_secrets_owned;
 use dennett_contracts::{
@@ -41,13 +41,11 @@ const ACP_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const CANCEL_GRACE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Graceful wait before forcefully killing `agy acp` during shutdown.
 const SHUTDOWN_GRACE_TIMEOUT: Duration = Duration::from_secs(3);
-/// Maximum synchronous wait in `Drop` after `start_kill` so Windows file handles close.
-const DROP_REAP_BUDGET: Duration = Duration::from_millis(200);
-/// Poll interval during `Drop` reaping.
-const DROP_REAP_POLL: Duration = Duration::from_millis(10);
+/// Asynchronous reap budget after `start_kill` when an `AcpProcess` is dropped.
+const DROP_REAP_BUDGET: Duration = Duration::from_millis(500);
 
 /// Sensitive host environment variables scrubbed from spawned `agy acp` processes by default.
-const DEFAULT_SCRUBBED_ENV_VARS: [&str; 9] = [
+const DEFAULT_SCRUBBED_ENV_VARS: [&str; 12] = [
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "DENNETT_MEMORY_PG_URL",
@@ -56,7 +54,10 @@ const DEFAULT_SCRUBBED_ENV_VARS: [&str; 9] = [
     "DENNETT_TEST_CONTROL_PG_URL",
     "PGPASSWORD",
     "DENNETT_MEMORY_TOKEN",
+    "DENNETT_MEMORY_HMAC_SECRET",
+    "DENNETT_MEMORY_AUTH_CONFIG",
     "DENNETT_HEAD_TOKEN",
+    "DENNETT_CONTROL_TOKEN",
 ];
 
 /// Spawn configuration for a single isolated `agy acp` child process.
@@ -148,7 +149,7 @@ pub struct AcpPermissionRequest {
 
 /// Active stdio JSON-RPC 2.0 connection to one isolated `agy acp` subprocess.
 pub struct AcpProcess {
-    child: Child,
+    child: Option<Child>,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     stderr_buf: Arc<Mutex<String>>,
@@ -244,7 +245,7 @@ impl AcpProcess {
         }
 
         Ok(Self {
-            child,
+            child: Some(child),
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             stderr_buf,
@@ -265,7 +266,10 @@ impl AcpProcess {
 
     /// Returns `true` if the child process has already exited.
     pub fn has_exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)))
+        match self.child.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+            None => true,
+        }
     }
 
     /// Returns a redacted snapshot of captured stderr output.
@@ -498,11 +502,13 @@ impl AcpProcess {
     /// Gracefully closes stdin and waits briefly before forcefully killing `agy acp`.
     pub async fn shutdown(mut self) {
         drop(self.stdin.take());
-        if time::timeout(SHUTDOWN_GRACE_TIMEOUT, self.child.wait())
-            .await
-            .is_err()
+        if let Some(mut child) = self.child.take()
+            && time::timeout(SHUTDOWN_GRACE_TIMEOUT, child.wait())
+                .await
+                .is_err()
         {
-            let _ = self.child.kill().await;
+            let _ = child.kill().await;
+            let _ = child.wait().await;
         }
     }
 
@@ -546,14 +552,19 @@ impl AcpProcess {
 impl Drop for AcpProcess {
     fn drop(&mut self) {
         drop(self.stdin.take());
-        let _ = self.child.start_kill();
-
-        let deadline = StdInstant::now() + DROP_REAP_BUDGET;
-        while StdInstant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(Some(_)) | Err(_) => break,
-                Ok(None) => std::thread::sleep(DROP_REAP_POLL),
-            }
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let _ = child.start_kill();
+        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            return;
+        }
+        // D2-BUG-05: Never block a Tokio worker thread with `std::thread::sleep` inside `Drop`.
+        // Hand the killed child to an async reaper task when a Tokio runtime handle is active.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = time::timeout(DROP_REAP_BUDGET, child.wait()).await;
+            });
         }
     }
 }
@@ -582,6 +593,7 @@ struct TurnAccumulator {
     events: Vec<RuntimeEvent>,
     cancelled: bool,
     cancel_sent: bool,
+    human_wait_ms: u64,
 }
 
 impl TurnAccumulator {
@@ -591,6 +603,7 @@ impl TurnAccumulator {
             events: Vec::new(),
             cancelled: false,
             cancel_sent: false,
+            human_wait_ms: 0,
         }
     }
 
@@ -636,6 +649,7 @@ where
                 assistant_text: String::new(),
                 events: acc.events,
                 usage: None,
+                human_wait_ms: acc.human_wait_ms,
             },
             false,
         ));
@@ -677,6 +691,7 @@ where
                         assistant_text: acc.assistant_text,
                         events: acc.events,
                         usage: None,
+                        human_wait_ms: acc.human_wait_ms,
                     },
                     true,
                 ));
@@ -736,6 +751,7 @@ where
                         assistant_text: acc.assistant_text,
                         events: acc.events,
                         usage: None,
+                        human_wait_ms: acc.human_wait_ms,
                     },
                     true,
                 ));
@@ -775,6 +791,7 @@ where
                                 assistant_text: acc.assistant_text,
                                 events: acc.events,
                                 usage: None,
+                                human_wait_ms: acc.human_wait_ms,
                             },
                             false,
                         ));
@@ -818,6 +835,7 @@ where
                         assistant_text: acc.assistant_text,
                         events: acc.events,
                         usage,
+                        human_wait_ms: acc.human_wait_ms,
                     },
                     false,
                 ));
@@ -845,6 +863,7 @@ where
                     assistant_text: acc.assistant_text,
                     events: acc.events,
                     usage,
+                    human_wait_ms: acc.human_wait_ms,
                 },
                 false,
             ));
@@ -962,10 +981,10 @@ async fn handle_turn_server_message<W: AsyncWrite + Unpin>(
                     locations: parsed.locations.clone(),
                     raw_input: parsed.raw_input.clone(),
                 };
-                let remaining = deadline.saturating_duration_since(time::Instant::now());
+                // D2-BUG-03: Pause the turn RPC deadline while waiting on interactive human
+                // approval inside `policy.evaluate(...)` (whose own approval_timeout bounds wait).
+                let approval_wait_started = time::Instant::now();
                 let mut eval_fut = policy.evaluate(&eval_req);
-                let timeout_sleep = time::sleep(remaining);
-                tokio::pin!(timeout_sleep);
                 let mut cancel_channel_open = true;
 
                 let maybe_outcome = loop {
@@ -982,38 +1001,13 @@ async fn handle_turn_server_message<W: AsyncWrite + Unpin>(
                                 cancel_channel_open = false;
                             }
                         }
-                        () = &mut timeout_sleep => {
-                            if !acc.cancel_sent {
-                                let _ = write_json_to(
-                                    writer,
-                                    &json!({
-                                        "jsonrpc": "2.0",
-                                        "method": "session/cancel",
-                                        "params": { "sessionId": args.provider_session_id }
-                                    }),
-                                )
-                                .await;
-                                acc.cancel_sent = true;
-                            }
-                            write_json_to(
-                                writer,
-                                &json!({
-                                    "jsonrpc": "2.0",
-                                    "id": server_req_id,
-                                    "result": {
-                                        "outcome": {
-                                            "outcome": "cancelled"
-                                        }
-                                    }
-                                }),
-                            )
-                            .await?;
-                            return Err(DennettError::Timeout {
-                                operation: String::from("session/request_permission"),
-                            });
-                        }
                     }
                 };
+                let approval_waited = approval_wait_started.elapsed();
+                *deadline += approval_waited;
+                acc.human_wait_ms = acc
+                    .human_wait_ms
+                    .saturating_add(u64::try_from(approval_waited.as_millis()).unwrap_or(u64::MAX));
 
                 let Some(outcome) = maybe_outcome else {
                     if !acc.cancel_sent {
@@ -2651,5 +2645,80 @@ mod tests {
         srv2.await.expect("srv2");
         canceller.await.expect("canceller");
         assert_eq!(outcome2.status, RunStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn d2_bug_03_human_approval_wait_pauses_turn_rpc_deadline_and_records_human_wait_ms() {
+        struct SlowApprovePolicy;
+        impl PolicyEvaluator for SlowApprovePolicy {
+            fn evaluate<'a>(
+                &'a self,
+                _req: &'a PolicyEvaluationRequest,
+            ) -> crate::port::BoxFuture<'a, PolicyEvaluationOutcome> {
+                Box::pin(async move {
+                    // Sleep LONGER than the turn's 150ms RPC timeout!
+                    time::sleep(Duration::from_millis(280)).await;
+                    PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        matched_rule_id: None,
+                        reason: String::from("approved after human review"),
+                        scope: String::from("session:test"),
+                    }
+                })
+            }
+        }
+
+        let (mut c2s_w, s_from_c_r) = tokio::io::duplex(8192);
+        let (mut s2c_w, c_from_s_r) = tokio::io::duplex(8192);
+
+        let srv = tokio::spawn(async move {
+            let mut srv_in = BufReader::new(s_from_c_r);
+            let mut line = String::new();
+            srv_in.read_line(&mut line).await.expect("read prompt");
+            s2c_w
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"session/request_permission\",\"params\":{\"toolCall\":{\"toolCallId\":\"w-slow\",\"name\":\"write_file\",\"kind\":\"edit\",\"title\":\"docs/out.txt\"},\"options\":[{\"optionId\":\"once-opt\",\"kind\":\"allow_once\",\"name\":\"Once\"}]}}\n")
+                .await
+                .expect("write perm");
+            line.clear();
+            srv_in.read_line(&mut line).await.expect("read perm resp");
+            let v: Value = serde_json::from_str(line.trim()).expect("parse resp");
+            assert_eq!(v["result"]["outcome"]["optionId"], "once-opt");
+            s2c_w
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"stopReason\":\"end_turn\"}}\n",
+                )
+                .await
+                .expect("write end_turn");
+        });
+
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let mut reader = BufReader::new(c_from_s_r);
+        let (outcome, _) = exchange_prompt_turn_io(
+            &mut reader,
+            &mut c2s_w,
+            PromptTurnIoArgs {
+                req_id: 1,
+                dennett_session_id: SessionId::new(),
+                provider_session_id: "prov-pause-deadline",
+                run_id: RunId::new(),
+                prompt_text: "write file",
+                timeout: Duration::from_millis(150),
+                secrets: &[],
+            },
+            cancel_rx,
+            Arc::new(SlowApprovePolicy),
+            None,
+            String::new,
+        )
+        .await
+        .expect("turn must NOT time out while paused on human approval");
+
+        srv.await.expect("srv");
+        assert_eq!(outcome.status, RunStatus::Succeeded);
+        assert!(
+            outcome.human_wait_ms >= 220,
+            "expected human_wait_ms >= 220, got {}",
+            outcome.human_wait_ms
+        );
     }
 }

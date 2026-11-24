@@ -16,8 +16,8 @@ use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -32,22 +32,24 @@ use dennett_contracts::{
     HeadMemorySearchResponse, IdempotencyKey, ListAgentsResponse, ListArtifactsResponse,
     ListOutboxResponse, ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
     ListSessionsResponse, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
-    MemoryStatus, MessageId, MessageRecord, MessageRole, OutboxItemId, PermissionDecisionRecord,
-    PermissionRequestId, PolicyRule, PolicyRuleId, PrincipalId, ProfileMode, ProjectId,
-    ProjectLifecycleState, ProjectRecord, RunId, RunRecord, RunStatus, RuntimeAuthProfile,
-    RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
-    SendMessageRequest, SendMessageResponse, ServiceKind, SessionDetailResponse, SessionId,
-    SessionRecord, SessionStatus, Sha256Hex, SimEffectBehavior, TaskId, TimestampMs,
-    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
+    MemoryStatus, MessageId, MessageRecord, MessageRole, OrderedOutboxItem, OrderedOutboxStatus,
+    OutboxItemId, PermissionDecisionRecord, PermissionRequestId, PolicyRule, PolicyRuleId,
+    PrincipalId, ProfileMode, ProjectId, ProjectLifecycleState, ProjectRecord, RunId, RunRecord,
+    RunStatus, RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse,
+    SearchNotesRequest, SendMessageRequest, SendMessageResponse, ServiceKind,
+    SessionDetailResponse, SessionId, SessionKind, SessionRecord, SessionStatus, Sha256Hex,
+    SimEffectBehavior, TaskId, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
+    UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
-    AgentRuntimePort, RuntimeEvent, RuntimeMcpEnvEntry, RuntimeMcpServerSpec, SessionStartRequest,
-    TurnRequest,
+    AgentRuntimePort, PolicyEvaluationRequest, RuntimeEvent, RuntimeMcpEnvEntry,
+    RuntimeMcpServerSpec, SessionStartRequest, TurnRequest,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, Notify, oneshot, watch};
+use tokio::sync::{Mutex, oneshot, watch};
 use tokio::time;
 use tokio_postgres::NoTls;
 
@@ -60,20 +62,23 @@ use crate::effects::{
 };
 use crate::events::{
     ControlEventAppend, PendingControlEvent, append_control_event_in_tx,
-    append_control_events_batch_in_tx,
+    append_control_events_batch_in_tx, enqueue_ordered_outbox_in_tx,
 };
-use crate::memory_auth::MemoryTokenSigner;
+use crate::memory_auth::{ControlTokenSigner, MemoryTokenSigner};
 use crate::migrations::{query_control_schema_version, run_control_migrations, sha256_hex};
 use crate::pg_target::ValidatedControlPgTarget;
-use crate::policy::{PolicyContext, resolve_within_workspace};
+use crate::policy::{
+    PolicyContext, PolicyEngine, PolicyEvaluationDecision, resolve_within_workspace,
+};
 use crate::store::{
-    AGENT_JOIN_SELECT, AGENT_MESSAGE_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS, PROJECT_SELECT_COLS,
-    RUN_SELECT_COLS, append_audit_event, decode_agent_join_row, decode_agent_message_row,
-    decode_audit_event_row, decode_config_version_row, decode_effect_claim_row, decode_message_row,
-    decode_outbox_row, decode_permission_decision_row, decode_policy_rule_row, decode_project_row,
-    decode_run_row, decode_runtime_binding_row, decode_session_row, fetch_agent,
-    fetch_all_runtime_bindings, fetch_policy_rules, fetch_project, fetch_runtime_binding,
-    fetch_session, fetch_session_artifacts, fetch_session_messages,
+    AGENT_JOIN_SELECT, AGENT_MESSAGE_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS,
+    ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, RUN_SELECT_COLS, SESSION_SELECT_COLS,
+    append_audit_event, decode_agent_join_row, decode_agent_message_row, decode_audit_event_row,
+    decode_config_version_row, decode_effect_claim_row, decode_message_row,
+    decode_ordered_outbox_row, decode_permission_decision_row, decode_policy_rule_row,
+    decode_project_row, decode_run_row, decode_runtime_binding_row, decode_session_row,
+    fetch_agent, fetch_all_runtime_bindings, fetch_policy_rules, fetch_project,
+    fetch_runtime_binding, fetch_session, fetch_session_artifacts, fetch_session_messages,
     fetch_session_permission_decisions, fetch_session_runs, is_pg_unique_violation, map_pg_err,
     next_stream_seq, truncate_utf8,
 };
@@ -95,11 +100,21 @@ pub const DEFAULT_TURN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Cache TTL for dynamic `GET /v1/runtime/catalog` responses.
 pub const RUNTIME_CATALOG_CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// Destination key used in `ordered_outbox` for unified durable memory note delivery (`D2-OVER-01`).
+pub const MEMORY_OUTBOX_DESTINATION: &str = "memoryd";
+/// Generous transient retry cap for durable memory outbox delivery while `memoryd` is unreachable.
+const MEMORY_OUTBOX_MAX_TRANSIENT_ATTEMPTS: i32 = 1_000_000;
+
 /// Optional extra configuration for [`HeadService::new_with_extras`].
 #[derive(Clone, Default)]
 pub struct HeadServiceExtras {
     /// Optional HMAC-SHA256 signer for dynamically issuing scoped `dnt1.` memory tokens per project.
     pub memory_hmac_signer: Option<MemoryTokenSigner>,
+    /// Optional path to the `dennett-control-mcp` stdio MCP adapter binary.
+    pub control_mcp_bin: Option<PathBuf>,
+    /// Optional HMAC-SHA256 signer for issuing project-scoped `dct1.` control tokens to `dennett-control-mcp`.
+    /// Defaults to a fresh process-local CSPRNG signer when omitted.
+    pub control_hmac_signer: Option<ControlTokenSigner>,
     /// Root directory under which isolated scratch `cwd` folders for folderless projects are created.
     pub detached_projects_root: Option<PathBuf>,
     /// Optional dedicated runtime configured for background tasks (`gemini-api-key`, never silently
@@ -115,6 +130,8 @@ impl fmt::Debug for HeadServiceExtras {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HeadServiceExtras")
             .field("memory_hmac_signer", &self.memory_hmac_signer.is_some())
+            .field("control_mcp_bin", &self.control_mcp_bin)
+            .field("control_hmac_signer", &self.control_hmac_signer.is_some())
             .field("detached_projects_root", &self.detached_projects_root)
             .field("background_runtime", &self.background_runtime.is_some())
             .field("effect_port", &self.effect_port.is_some())
@@ -183,9 +200,121 @@ pub fn d2_head_capabilities() -> Vec<String> {
     caps
 }
 
+/// Compact multi-profile runtime router (`D2-OVER-02`) ensuring cancellation and session
+/// teardown always fan out across EVERY configured auth profile without silent fallback (`A09`).
+#[derive(Clone)]
+pub(crate) struct RuntimeRouter {
+    interactive: Arc<dyn AgentRuntimePort>,
+    background: Option<Arc<dyn AgentRuntimePort>>,
+}
+
+impl RuntimeRouter {
+    pub(crate) fn for_profile(
+        &self,
+        override_profile: Option<RuntimeAuthProfile>,
+    ) -> Result<Arc<dyn AgentRuntimePort>, DennettError> {
+        let Some(requested) = override_profile else {
+            return Ok(Arc::clone(&self.interactive));
+        };
+        if self.interactive.auth_profile() == requested {
+            return Ok(Arc::clone(&self.interactive));
+        }
+        if let Some(ref bg) = self.background
+            && bg.auth_profile() == requested
+        {
+            return Ok(Arc::clone(bg));
+        }
+        Err(DennettError::AuthRequired {
+            profile: requested,
+            detail: format!(
+                "runtime auth profile `{}` is not configured on dennett-head; refusing silent fallback to `{}`",
+                requested.as_method_id(),
+                self.interactive.auth_profile().as_method_id(),
+            ),
+        })
+    }
+
+    pub(crate) async fn cancel_turn_all(&self, session_id: SessionId) -> bool {
+        let mut cancelled = self
+            .interactive
+            .cancel_turn(session_id)
+            .await
+            .unwrap_or(false);
+        if let Some(ref bg) = self.background {
+            cancelled |= bg.cancel_turn(session_id).await.unwrap_or(false);
+        }
+        cancelled
+    }
+
+    pub(crate) async fn close_session_all(&self, session_id: SessionId) {
+        let _ = self.interactive.close_session(session_id).await;
+        if let Some(ref bg) = self.background {
+            let _ = bg.close_session(session_id).await;
+        }
+    }
+}
+
+/// Typed trigger source for unified [`HeadService::execute_session_turn_core`] (`D2-OVER-02`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TurnTrigger {
+    UserMessage,
+    TaskGeneration { task_id: TaskId },
+}
+
+pub(crate) struct CoreTurnInput {
+    pub(crate) trigger: TurnTrigger,
+    pub(crate) session_id: SessionId,
+    pub(crate) session_kind: SessionKind,
+    pub(crate) run_id: RunId,
+    pub(crate) agent: AgentRecord,
+    pub(crate) project: ProjectRecord,
+    pub(crate) existing_binding: Option<RuntimeBinding>,
+    pub(crate) prior_history: Vec<MessageRecord>,
+    pub(crate) policy_rules: Vec<PolicyRule>,
+    pub(crate) prompt_text: String,
+    pub(crate) runtime: Arc<dyn AgentRuntimePort>,
+    pub(crate) turn_timeout: Duration,
+    pub(crate) approval_timeout: Duration,
+    pub(crate) cancel_rx: watch::Receiver<bool>,
+    pub(crate) correlation_id: CorrelationId,
+}
+
+pub(crate) struct CoreTurnOutput {
+    pub(crate) start_outcome: dennett_runtime_antigravity::SessionStartOutcome,
+    pub(crate) runtime_binding: RuntimeBinding,
+    pub(crate) turn_outcome: dennett_runtime_antigravity::TurnOutcome,
+    pub(crate) effective_elapsed_ms: u64,
+    pub(crate) captured_decisions: Vec<CapturedPermissionDecision>,
+    pub(crate) hit_unknown_external: bool,
+}
+
+pub(crate) struct CoreTurnFailure {
+    pub(crate) error: DennettError,
+    pub(crate) effective_elapsed_ms: u64,
+    pub(crate) captured_decisions: Vec<CapturedPermissionDecision>,
+}
+
+/// Durable JSONB envelope stored in `ordered_outbox` (`destination = 'memoryd'`, `D2-OVER-01`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MemoryOutboxEnvelope {
+    scope: MemoryScope,
+    idempotency_key: IdempotencyKey,
+    operation: String,
+    session_id: Option<SessionId>,
+    run_id: Option<RunId>,
+    note_request: CreateNoteRequest,
+    #[serde(default)]
+    delivered_event_id: Option<dennett_contracts::MemoryEventId>,
+    #[serde(default)]
+    delivered_note_id: Option<dennett_contracts::MemoryNoteId>,
+}
+
 pub(crate) struct ActiveRunHandle {
     pub(crate) run_id: RunId,
+    pub(crate) client_message_id: Option<String>,
     pub(crate) cancel_tx: watch::Sender<bool>,
+    pub(crate) completion_rx:
+        Option<watch::Receiver<Option<Result<SendMessageResponse, DennettError>>>>,
 }
 
 pub(crate) struct ActiveRunGuard {
@@ -299,28 +428,30 @@ impl Drop for ActiveTaskGuard {
     }
 }
 
-type InFlightClientMessageMap = Arc<Mutex<HashMap<(SessionId, String), Arc<Notify>>>>;
+struct InFlightClientMessageEntry {
+    content: String,
+    completion_rx: watch::Receiver<Option<Result<SendMessageResponse, DennettError>>>,
+}
+
+type InFlightClientMessageMap =
+    Arc<Mutex<HashMap<(SessionId, String), InFlightClientMessageEntry>>>;
 
 struct InFlightClientMessageGuard {
     map: InFlightClientMessageMap,
     key: (SessionId, String),
-    notify: Arc<Notify>,
 }
 
 impl Drop for InFlightClientMessageGuard {
     fn drop(&mut self) {
         let map = Arc::clone(&self.map);
         let key = self.key.clone();
-        let notify = Arc::clone(&self.notify);
         if let Ok(mut guard) = map.try_lock() {
             guard.remove(&key);
-            notify.notify_waiters();
             return;
         }
         tokio::spawn(async move {
             let mut guard = map.lock().await;
             guard.remove(&key);
-            notify.notify_waiters();
         });
     }
 }
@@ -339,6 +470,9 @@ struct HeadServiceInner {
     memory_client: Option<MemoryClient>,
     memory_mcp: Option<MemoryMcpWiring>,
     memory_hmac_signer: Option<MemoryTokenSigner>,
+    control_mcp_bin: Option<PathBuf>,
+    control_token_signer: ControlTokenSigner,
+    self_http_url: StdRwLock<Option<String>>,
     detached_projects_root: PathBuf,
     runtime_catalog_cache: Mutex<Option<(time::Instant, RuntimeCatalogResponse)>>,
     last_memory_status: AtomicU8,
@@ -443,6 +577,10 @@ impl HeadService {
             Arc::new(SimulatedExternalConnector::in_memory())
         };
 
+        let control_token_signer = extras
+            .control_hmac_signer
+            .unwrap_or_else(ControlTokenSigner::ephemeral);
+
         Ok(Self {
             inner: Arc::new(HeadServiceInner {
                 pg_target,
@@ -455,6 +593,9 @@ impl HeadService {
                 memory_client,
                 memory_mcp,
                 memory_hmac_signer: extras.memory_hmac_signer,
+                control_mcp_bin: extras.control_mcp_bin,
+                control_token_signer,
+                self_http_url: StdRwLock::new(None),
                 detached_projects_root,
                 runtime_catalog_cache: Mutex::new(None),
                 last_memory_status: AtomicU8::new(initial_memory_status),
@@ -468,6 +609,40 @@ impl HeadService {
                 secrets_to_redact: secrets,
             }),
         })
+    }
+
+    /// Registers the bound loopback HTTP base URL of this `dennett-head` instance so
+    /// `dennett-control-mcp` child adapters can call back into `Head` via `HeadClient`.
+    pub fn set_self_http_url(&self, url: impl Into<String>) {
+        let trimmed = url.into().trim().trim_end_matches('/').to_owned();
+        if let Ok(mut guard) = self.inner.self_http_url.write() {
+            *guard = (!trimmed.is_empty()).then_some(trimmed);
+        }
+    }
+
+    /// Returns the registered loopback HTTP base URL of this `dennett-head` instance, if bound.
+    #[must_use]
+    pub fn self_http_url(&self) -> Option<String> {
+        self.inner.self_http_url.read().ok().and_then(|g| g.clone())
+    }
+
+    /// Returns the HMAC-SHA256 signer verifying `X-Dennett-Control-Token` (`dct1.`) headers.
+    #[must_use]
+    pub fn control_token_signer(&self) -> &ControlTokenSigner {
+        &self.inner.control_token_signer
+    }
+
+    /// Returns a [`RuntimeRouter`] spanning both interactive and optional background runtimes.
+    pub(crate) fn runtime_router(&self) -> RuntimeRouter {
+        RuntimeRouter {
+            interactive: Arc::clone(&self.inner.runtime),
+            background: self.inner.background_runtime.clone(),
+        }
+    }
+
+    /// Returns the isolated fallback workspace directory path for a folderless/detached project.
+    pub(crate) fn fallback_workspace_root(&self, project_id: ProjectId) -> PathBuf {
+        self.detached_project_scratch_dir(project_id)
     }
 
     /// Probes the active runtime dynamically (`agy acp` or `SimulatedRuntime`) and returns the
@@ -619,16 +794,26 @@ impl HeadService {
             )
             .await?;
 
-            let pending_outbox_count: i64 = if schema_version.is_some() {
-                conn.query_one(
-                    "SELECT COUNT(*)::bigint FROM memory_commit_outbox WHERE status = 'pending'",
-                    &[],
-                )
-                .await
-                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
-                .get(0)
-            } else {
-                0
+            let pending_outbox_count: i64 = match schema_version {
+                Some(v) if v >= 6 => conn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint
+                         FROM ordered_outbox
+                         WHERE destination = 'memoryd' AND status IN ('pending', 'leased')",
+                        &[],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                    .get(0),
+                Some(_) => conn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM memory_commit_outbox WHERE status = 'pending'",
+                        &[],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                    .get(0),
+                None => 0,
             };
 
             Ok::<_, DennettError>((role, database, schema_version, pending_outbox_count))
@@ -1121,6 +1306,10 @@ impl HeadService {
     ///
     /// Returns [`DennettError::InvalidInput`], [`DennettError::AccessDenied`],
     /// [`DennettError::NotFound`], or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "project update atomically validates workspace rebind, transitions Detached->Active, emits journal events, and resets runtime sessions"
+    )]
     pub async fn update_project(
         &self,
         project_id: ProjectId,
@@ -1151,12 +1340,18 @@ impl HeadService {
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         let existing = fetch_project(&tx, project_id, &self.inner.pg_target).await?;
-        if existing.lifecycle_state == ProjectLifecycleState::DeletedRecord {
+        if matches!(
+            existing.lifecycle_state,
+            ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+        ) {
             return Err(DennettError::Conflict {
                 resource: String::from("project"),
                 expected_revision: None,
                 actual_revision: None,
-                reason: String::from("cannot update a deleted project record"),
+                reason: format!(
+                    "cannot update project `{project_id}` in lifecycle state `{}`",
+                    existing.lifecycle_state
+                ),
             });
         }
         let next_name = req
@@ -1164,12 +1359,22 @@ impl HeadService {
             .as_deref()
             .map_or(existing.name.as_str(), str::trim)
             .to_owned();
-        let next_workspace = validated_workspace.or(existing.workspace_path);
+        let workspace_changed = validated_workspace.is_some()
+            && validated_workspace.as_deref() != existing.workspace_path.as_deref();
+        let next_workspace = validated_workspace.or(existing.workspace_path.clone());
+        let next_lifecycle = if next_workspace.is_some()
+            && existing.lifecycle_state == ProjectLifecycleState::Detached
+        {
+            ProjectLifecycleState::Active
+        } else {
+            existing.lifecycle_state
+        };
 
         let update_sql = format!(
             "UPDATE projects
              SET name = $2,
                  workspace_path = $3,
+                 lifecycle_state = $4,
                  updated_at = now()
              WHERE project_id = $1
              RETURNING {PROJECT_SELECT_COLS}"
@@ -1177,10 +1382,29 @@ impl HeadService {
         let row = tx
             .query_one(
                 &update_sql,
-                &[&project_id.as_uuid(), &next_name, &next_workspace],
+                &[
+                    &project_id.as_uuid(),
+                    &next_name,
+                    &next_workspace,
+                    &next_lifecycle.as_str(),
+                ],
             )
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let sessions_to_close: Vec<SessionId> = if workspace_changed {
+            tx.query(
+                "SELECT session_id FROM sessions WHERE project_id = $1",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+            .iter()
+            .map(|r| SessionId::from_uuid(r.get(0)))
+            .collect()
+        } else {
+            Vec::new()
+        };
 
         let _ = append_audit_event(
             &tx,
@@ -1191,7 +1415,8 @@ impl HeadService {
             "head",
             "project_updated",
             &format!(
-                "updated project `{next_name}` ({project_id}) bound={}",
+                "updated project `{next_name}` ({project_id}) state={} bound={}",
+                next_lifecycle,
                 next_workspace.is_some()
             ),
         )
@@ -1221,6 +1446,13 @@ impl HeadService {
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        if !sessions_to_close.is_empty() {
+            let router = self.runtime_router();
+            for sid in sessions_to_close {
+                router.close_session_all(sid).await;
+            }
+        }
         Ok(record)
     }
 
@@ -1348,18 +1580,20 @@ impl HeadService {
         }
 
         let session_id = SessionId::new();
+        let insert_sql = format!(
+            "INSERT INTO sessions (session_id, agent_id, project_id, title, status, session_kind)
+             VALUES ($1, $2, $3, $4, 'active', $5)
+             RETURNING {SESSION_SELECT_COLS}"
+        );
         let row = tx
             .query_one(
-                "INSERT INTO sessions (session_id, agent_id, project_id, title, status)
-                 VALUES ($1, $2, $3, $4, 'active')
-                 RETURNING session_id, agent_id, project_id, title, status,
-                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                           TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint",
+                &insert_sql,
                 &[
                     &session_id.as_uuid(),
                     &req.agent_id.as_uuid(),
                     &req.project_id.as_uuid(),
                     &req.title.trim(),
+                    &req.session_kind.as_str(),
                 ],
             )
             .await
@@ -1373,7 +1607,11 @@ impl HeadService {
             None,
             "head",
             "session_created",
-            &format!("created session `{}` ({session_id})", req.title.trim()),
+            &format!(
+                "created session `{}` ({session_id}) kind={}",
+                req.title.trim(),
+                req.session_kind
+            ),
         )
         .await?;
 
@@ -1393,6 +1631,7 @@ impl HeadService {
                     "project_id": req.project_id,
                     "agent_id": req.agent_id,
                     "title": record.title,
+                    "session_kind": record.session_kind,
                 }),
             },
         )
@@ -1425,17 +1664,15 @@ impl HeadService {
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         let trimmed_title = req.title.trim();
+        let update_sql = format!(
+            "UPDATE sessions
+             SET title = $2,
+                 updated_at = now()
+             WHERE session_id = $1
+             RETURNING {SESSION_SELECT_COLS}"
+        );
         let row = tx
-            .query_opt(
-                "UPDATE sessions
-                 SET title = $2,
-                     updated_at = now()
-                 WHERE session_id = $1
-                 RETURNING session_id, agent_id, project_id, title, status,
-                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                           TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint",
-                &[&session_id.as_uuid(), &trimmed_title],
-            )
+            .query_opt(&update_sql, &[&session_id.as_uuid(), &trimmed_title])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
@@ -1460,6 +1697,25 @@ impl HeadService {
 
         let binding = fetch_runtime_binding(&tx, session_id, &self.inner.pg_target).await?;
         let record = decode_session_row(&row, binding)?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{session_id}"),
+                event_type: "session.updated",
+                project_id: Some(record.project_id),
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": session_id,
+                    "project_id": record.project_id,
+                    "title": record.title,
+                    "session_kind": record.session_kind,
+                }),
+            },
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -1475,15 +1731,9 @@ impl HeadService {
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let mut bindings = fetch_all_runtime_bindings(&conn, &self.inner.pg_target).await?;
+        let sql = format!("SELECT {SESSION_SELECT_COLS} FROM sessions ORDER BY updated_at DESC");
         let rows = conn
-            .query(
-                "SELECT session_id, agent_id, project_id, title, status,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
-                 FROM sessions
-                 ORDER BY updated_at DESC",
-                &[],
-            )
+            .query(&sql, &[])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
@@ -1817,14 +2067,308 @@ impl HeadService {
         Ok(ListArtifactsResponse { artifacts })
     }
 
-    /// Persists a user message BEFORE invoking the runtime, starts or resumes the runtime session
-    /// with scoped `dennett-memory-mcp`, executes one turn with external [`crate::policy::PolicyEngine`] callbacks
-    /// (including live interactive `AskBeforeWrite` approvals) and live cancellation support, and
-    /// persists all decisions, audit traces, and outcomes.
+    /// Formats incoming plain-text inter-agent coordination messages consistently for both
+    /// user chats and durable task generations (`D2-OVER-02`).
+    pub(crate) fn format_inter_agent_messages_block(
+        &self,
+        messages: &[dennett_contracts::AgentMessageRecord],
+    ) -> String {
+        let mut block = String::from("[Messages from other agents]\n");
+        for msg in messages {
+            let sender_label = msg
+                .sender_agent_id
+                .map_or_else(|| String::from("user"), |id| format!("agent:{id}"));
+            let _ = writeln!(
+                block,
+                "- from {sender_label}: {}",
+                self.redact(&msg.body_text)
+            );
+        }
+        block
+    }
+
+    /// Unified session turn execution core shared between `send_message` and `execute_task_generation`
+    /// (`D2-OVER-02`): builds MCP specs (`dennett-memory` + `dennett-control`), starts/resumes the
+    /// runtime session, enforces live external `PolicyEngine` + `InteractivePolicyEvaluator`, tracks
+    /// `human_wait_ms` exclusion (`D2-BUG-03`), and dispatches emitted partial artifacts and external effects.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "shared turn core coordinates workspace policy, MCP specs, runtime turn I/O, live policy evaluation, and post-turn artifact/effect processing"
+    )]
+    pub(crate) async fn execute_session_turn_core(
+        &self,
+        input: CoreTurnInput,
+    ) -> Result<CoreTurnOutput, CoreTurnFailure> {
+        let task_id = match input.trigger {
+            TurnTrigger::UserMessage => None,
+            TurnTrigger::TaskGeneration { task_id } => Some(task_id),
+        };
+        let started_instant = Instant::now();
+
+        // Resolve effective workspace directory & write policy: folderless projects get an
+        // isolated scratch directory and mandatory `DenyAll` write policy until a real folder is bound.
+        let (effective_workspace_cwd, effective_write_policy) = match input.project.workspace_path {
+            Some(ref ws_path) => (
+                PathBuf::from(ws_path),
+                input.agent.current_config.workspace_write_policy.clone(),
+            ),
+            None => match self.ensure_detached_project_dir(input.project.project_id) {
+                Ok(dir) => (dir, WorkspaceWritePolicy::DenyAll),
+                Err(error) => {
+                    return Err(CoreTurnFailure {
+                        error,
+                        effective_elapsed_ms: 0,
+                        captured_decisions: Vec::new(),
+                    });
+                }
+            },
+        };
+
+        // Build dynamically scoped MCP server specs (`dennett-memory` + `dennett-control`).
+        let mut mcp_servers = match self.build_memory_mcp_specs(&input.agent) {
+            Ok(specs) => specs,
+            Err(error) => {
+                return Err(CoreTurnFailure {
+                    error,
+                    effective_elapsed_ms: 0,
+                    captured_decisions: Vec::new(),
+                });
+            }
+        };
+        match self.build_control_mcp_spec(
+            input.project.project_id,
+            input.agent.agent_id,
+            input.session_id,
+            input.session_kind,
+        ) {
+            Ok(Some(ctrl_spec)) => mcp_servers.push(ctrl_spec),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(CoreTurnFailure {
+                    error,
+                    effective_elapsed_ms: 0,
+                    captured_decisions: Vec::new(),
+                });
+            }
+        }
+        let turn_secrets = self.collect_turn_secrets(&mcp_servers);
+
+        let start_outcome = match input
+            .runtime
+            .start_or_resume_session(SessionStartRequest {
+                dennett_session_id: input.session_id,
+                workspace_cwd: effective_workspace_cwd.clone(),
+                system_prompt: input.agent.current_config.system_prompt.clone(),
+                model_preference: input.agent.current_config.model_preference.clone(),
+                thinking_level: input.agent.current_config.thinking_level,
+                workspace_write_policy: effective_write_policy.clone(),
+                mcp_servers,
+                existing_binding: input.existing_binding,
+                history_for_rehydrate: input.prior_history,
+                allow_rehydrate: true,
+            })
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let elapsed = u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(0);
+                return Err(CoreTurnFailure {
+                    error,
+                    effective_elapsed_ms: elapsed,
+                    captured_decisions: Vec::new(),
+                });
+            }
+        };
+
+        let runtime_binding = match self
+            .upsert_runtime_binding(
+                input.session_id,
+                &start_outcome,
+                &input.correlation_id,
+                Some(input.run_id),
+            )
+            .await
+        {
+            Ok(binding) => binding,
+            Err(error) => {
+                let elapsed = u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(0);
+                return Err(CoreTurnFailure {
+                    error,
+                    effective_elapsed_ms: elapsed,
+                    captured_decisions: Vec::new(),
+                });
+            }
+        };
+
+        // Load live lifecycle state + delegated parent ceiling right before turn starts.
+        let (live_rules, live_lifecycle, live_ws_bound, live_parent_ceiling) = match self
+            .load_live_policy_inputs(input.project.project_id, task_id)
+            .await
+        {
+            Ok(live) => (
+                live.rules,
+                live.project_lifecycle_state,
+                live.workspace_bound,
+                live.parent_write_ceiling,
+            ),
+            Err(_) => (
+                input.policy_rules,
+                input.project.lifecycle_state,
+                input.project.workspace_path.is_some(),
+                None,
+            ),
+        };
+
+        let policy_ctx = PolicyContext {
+            project_id: input.project.project_id,
+            agent_id: input.agent.agent_id,
+            session_id: input.session_id,
+            task_id,
+            project_lifecycle_state: live_lifecycle,
+            workspace_bound: live_ws_bound,
+            workspace_root: effective_workspace_cwd,
+            workspace_write_policy: effective_write_policy,
+            parent_write_ceiling: live_parent_ceiling,
+            allowed_memory_scopes: input.agent.current_config.allowed_memory_scopes.clone(),
+            rules: live_rules,
+        };
+        let (interactive_policy, decisions_buf) = InteractivePolicyEvaluator::new(
+            self.clone(),
+            policy_ctx,
+            task_id,
+            input.correlation_id.clone(),
+            turn_secrets,
+            input.cancel_rx.clone(),
+            input.approval_timeout,
+        );
+
+        let turn_result = input
+            .runtime
+            .send_prompt_turn(
+                TurnRequest {
+                    dennett_session_id: input.session_id,
+                    provider_session_id: start_outcome.provider_session_id.clone(),
+                    run_id: input.run_id,
+                    prompt_text: input.prompt_text,
+                    timeout: input.turn_timeout,
+                    cancel_rx: input.cancel_rx.clone(),
+                },
+                Arc::new(interactive_policy),
+                None,
+            )
+            .await;
+
+        let raw_elapsed_ms =
+            u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let captured_decisions: Vec<CapturedPermissionDecision> =
+            decisions_buf.lock().map_or_default(|g| g.clone());
+
+        let turn_outcome = match turn_result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Err(CoreTurnFailure {
+                    error,
+                    effective_elapsed_ms: raw_elapsed_ms,
+                    captured_decisions,
+                });
+            }
+        };
+
+        // D2-BUG-03: Exclude human approval wait time from run/task machine wall-time accounting!
+        let effective_elapsed_ms = raw_elapsed_ms.saturating_sub(turn_outcome.human_wait_ms);
+
+        // Process emitted partial artifacts and external effects (strictly checking cancellation first!).
+        let mut hit_unknown_external = false;
+        for ev in &turn_outcome.events {
+            match ev {
+                RuntimeEvent::PartialArtifactEmitted { name, content } => {
+                    let mime_type = infer_artifact_mime_type(name).to_owned();
+                    let _ = self
+                        .create_artifact(
+                            input.session_id,
+                            CreateArtifactRequest {
+                                name: name.clone(),
+                                mime_type,
+                                content: Some(content.clone()),
+                                relative_path: None,
+                                run_id: Some(input.run_id),
+                                completeness_status: ArtifactCompleteness::Partial,
+                            },
+                            &input.correlation_id,
+                        )
+                        .await;
+                }
+                RuntimeEvent::ExternalEffectRequested {
+                    recipient,
+                    operation,
+                    behavior,
+                    idempotency_key,
+                } => {
+                    let cancelled = *input.cancel_rx.borrow()
+                        || match task_id {
+                            Some(tid) => self.is_task_cancel_signalled(tid).await,
+                            None => false,
+                        };
+                    if cancelled {
+                        break;
+                    }
+                    if let Ok(idem) = IdempotencyKey::try_new(idempotency_key.clone()) {
+                        let sim_behavior = SimEffectBehavior::from_str(behavior)
+                            .unwrap_or(SimEffectBehavior::Success);
+                        if let Ok(eff_resp) = self
+                            .dispatch_external_effect(
+                                DispatchEffectRequest {
+                                    project_id: input.project.project_id,
+                                    session_id: input.session_id,
+                                    task_id,
+                                    run_id: Some(input.run_id),
+                                    agent_id: input.agent.agent_id,
+                                    connector_id: Some(String::from(
+                                        SIMULATED_EXTERNAL_CONNECTOR_ID,
+                                    )),
+                                    operation: operation.clone(),
+                                    target_recipient: recipient.clone(),
+                                    parameters_json: json!({
+                                        "session_id": input.session_id,
+                                        "run_id": input.run_id,
+                                        "task_id": task_id,
+                                    })
+                                    .to_string(),
+                                    effect_idempotency_key: idem,
+                                    simulated_behavior: Some(sim_behavior),
+                                },
+                                &input.correlation_id,
+                            )
+                            .await
+                            && eff_resp.external_outcome_unknown
+                        {
+                            hit_unknown_external = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(CoreTurnOutput {
+            start_outcome,
+            runtime_binding,
+            turn_outcome,
+            effective_elapsed_ms,
+            captured_decisions,
+            hit_unknown_external,
+        })
+    }
+
+    /// Persists a user message BEFORE invoking the runtime, spawns the turn in a **detached**
+    /// background worker owned by `HeadService` (`D2-ARCH-01` / `V03`: HTTP disconnects or window
+    /// reloads NEVER abort the running agent turn!), and awaits completion for the caller.
     ///
     /// Supports optional `client_message_id` idempotency (`UNIQUE (session_id, client_message_id)`):
-    /// - Replaying the same `client_message_id` with identical content returns the persisted
-    ///   [`SendMessageResponse`] with `deduplicated = true` without invoking the runtime again.
+    /// - Replaying the same `client_message_id` with identical content while the run is STILL
+    ///   in-flight joins the active run's completion channel and returns its result with
+    ///   `deduplicated = true` (zero double execution, no spurious `409 Conflict`!).
+    /// - Replaying after completion returns the persisted [`SendMessageResponse`] (`deduplicated = true`).
     /// - Reusing `client_message_id` with different content fails closed with `409 IdempotencyMismatch`.
     ///
     /// # Errors
@@ -1833,7 +2377,7 @@ impl HeadService {
     /// active run conflict, auth failure, runtime error, or database unavailability.
     #[expect(
         clippy::too_many_lines,
-        reason = "send_message orchestrates client idempotency deduplication, pre-run persistence, interactive policy evaluation, runtime turn execution, and post-run atomic recording without holding SQL locks across runtime I/O"
+        reason = "send_message orchestrates detached run execution, client_message_id join/replay, pre-run persistence, and clean awaiting"
     )]
     pub async fn send_message(
         &self,
@@ -1853,31 +2397,68 @@ impl HeadService {
         let turn_timeout = req
             .timeout_ms
             .map_or(DEFAULT_TURN_TIMEOUT, Duration::from_millis);
+        // When an explicit short `timeout_ms` is requested (e.g. automated tests), align approval
+        // expiry inside it; for normal interactive chats (`timeout_ms = None`), allow the full
+        // `DEFAULT_APPROVAL_WAIT_TIMEOUT` while pausing the RPC deadline (`D2-BUG-03`).
+        let approval_timeout = match req.timeout_ms {
+            Some(explicit_ms) => Duration::from_millis(explicit_ms)
+                .saturating_sub(Duration::from_millis(200))
+                .max(Duration::from_millis(250))
+                .min(DEFAULT_APPROVAL_WAIT_TIMEOUT),
+            None => DEFAULT_APPROVAL_WAIT_TIMEOUT,
+        };
 
-        // 0. Client-side retry idempotency (`client_message_id`): deduplicate both completed
-        //    and concurrently in-flight retries before touching active_runs or runtime!
-        let mut _in_flight_cmid_guard: Option<InFlightClientMessageGuard> = None;
+        let (completion_tx, mut completion_rx) =
+            watch::channel::<Option<Result<SendMessageResponse, DennettError>>>(None);
+
+        // 0. Client-side retry idempotency (`client_message_id`): join active in-flight run OR
+        //    replay persisted completed run without ever returning spurious 409 (`D2-ARCH-01`).
+        let mut in_flight_cmid_guard: Option<InFlightClientMessageGuard> = None;
         if let Some(ref cmid) = client_message_id {
             loop {
-                let existing_notify = {
+                let existing_rx = {
                     let mut map = self.inner.in_flight_client_messages.lock().await;
                     let key = (session_id, cmid.clone());
-                    if let Some(notify) = map.get(&key) {
-                        Some(Arc::clone(notify))
+                    if let Some(entry) = map.get(&key) {
+                        if entry.content != req.content {
+                            return Err(DennettError::IdempotencyMismatch {
+                                idempotency_key: cmid.clone(),
+                                reason: String::from(
+                                    "reused client_message_id on this session with different message content",
+                                ),
+                            });
+                        }
+                        Some(entry.completion_rx.clone())
                     } else {
-                        let notify = Arc::new(Notify::new());
-                        map.insert(key.clone(), Arc::clone(&notify));
-                        _in_flight_cmid_guard = Some(InFlightClientMessageGuard {
+                        map.insert(
+                            key.clone(),
+                            InFlightClientMessageEntry {
+                                content: req.content.clone(),
+                                completion_rx: completion_rx.clone(),
+                            },
+                        );
+                        in_flight_cmid_guard = Some(InFlightClientMessageGuard {
                             map: Arc::clone(&self.inner.in_flight_client_messages),
                             key,
-                            notify,
                         });
                         None
                     }
                 };
 
-                if let Some(notify) = existing_notify {
-                    let _ = time::timeout(turn_timeout, notify.notified()).await;
+                if let Some(mut rx) = existing_rx {
+                    if let Ok(guard) = rx.wait_for(Option::is_some).await
+                        && let Some(res) = guard.as_ref()
+                    {
+                        return match res {
+                            Ok(resp) => {
+                                let mut dedup = resp.clone();
+                                dedup.deduplicated = true;
+                                Ok(dedup)
+                            }
+                            Err(err) => Err(err.clone()),
+                        };
+                    }
+                    // Leading attempt exited before broadcasting; check PG replay or retry.
                     if let Some(replayed) = self
                         .try_replay_client_message(session_id, cmid, &req.content, &correlation_id)
                         .await?
@@ -1934,17 +2515,42 @@ impl HeadService {
             (session, agent, project, binding, history, rules)
         };
 
-        // 2. Acquire unified per-session execution lock + active run slot (H2-05: serializes
-        //    `send_message` and `execute_task_generation` so neither can clobber `active_runs`).
+        // 2. Acquire unified per-session execution lock + active run slot (`H2-05`).
         let session_lock = self.session_exec_lock(session_id).await;
-        let _session_guard = session_lock
-            .try_lock_owned()
-            .map_err(|_| DennettError::Conflict {
+        let Ok(session_guard) = session_lock.try_lock_owned() else {
+            // Belt-and-suspenders: if an active run with the SAME client_message_id holds the
+            // slot, join it instead of returning 409 Conflict (`D2-ARCH-01`).
+            if let Some(ref cmid) = client_message_id {
+                let existing_rx = {
+                    let active = self.inner.active_runs.lock().await;
+                    active
+                        .get(&session_id)
+                        .filter(|h| h.client_message_id.as_deref() == Some(cmid.as_str()))
+                        .and_then(|h| h.completion_rx.clone())
+                };
+                if let Some(mut rx) = existing_rx {
+                    drop(in_flight_cmid_guard);
+                    if let Ok(guard) = rx.wait_for(Option::is_some).await
+                        && let Some(res) = guard.as_ref()
+                    {
+                        return match res {
+                            Ok(resp) => {
+                                let mut dedup = resp.clone();
+                                dedup.deduplicated = true;
+                                Ok(dedup)
+                            }
+                            Err(err) => Err(err.clone()),
+                        };
+                    }
+                }
+            }
+            return Err(DennettError::Conflict {
                 resource: String::from("session_run"),
                 expected_revision: None,
                 actual_revision: None,
                 reason: String::from("another run is already active in this session"),
-            })?;
+            });
+        };
 
         let run_id = RunId::new();
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -1952,7 +2558,9 @@ impl HeadService {
             session_id,
             ActiveRunHandle {
                 run_id,
+                client_message_id: client_message_id.clone(),
                 cancel_tx: cancel_tx.clone(),
+                completion_rx: Some(completion_rx.clone()),
             },
         )
         .await?;
@@ -1974,8 +2582,8 @@ impl HeadService {
         };
         let effective_session_title = auto_title.clone().unwrap_or_else(|| session.title.clone());
 
-        // 3. Persist user message + running RunRecord + claim undelivered inter-agent messages
-        //    BEFORE touching runtime (Architecture 80 §11).
+        // 3. Persist user message + running RunRecord + claim undelivered general inter-agent
+        //    messages (`related_task_id IS NULL`, `D2-BUG-04`) BEFORE spawning runtime work.
         let pre_run_res: Result<
             (MessageRecord, Vec<dennett_contracts::AgentMessageRecord>),
             Result<SendMessageResponse, DennettError>,
@@ -2042,6 +2650,7 @@ impl HeadService {
                          FROM agent_messages
                          WHERE recipient_agent_id = $1
                            AND project_id = $2
+                           AND related_task_id IS NULL
                            AND delivered_in_run_id IS NULL
                          ORDER BY created_at ASC
                          FOR UPDATE"
@@ -2089,6 +2698,27 @@ impl HeadService {
                     )
                     .await?;
 
+                    // D2-BUG-04: Emit `session.run_started` so UI/event subscribers observe active runs live.
+                    let _ = append_control_event_in_tx(
+                        &tx,
+                        &self.inner.pg_target,
+                        ControlEventAppend {
+                            entity_key: &format!("session:{session_id}"),
+                            event_type: "session.run_started",
+                            project_id: Some(project.project_id),
+                            session_id: Some(session_id),
+                            task_id: None,
+                            correlation_id: &correlation_id,
+                            payload: json!({
+                                "session_id": session_id,
+                                "run_id": run_id,
+                                "agent_id": agent.agent_id,
+                                "title": effective_session_title,
+                            }),
+                        },
+                    )
+                    .await?;
+
                     tx.commit()
                         .await
                         .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -2126,7 +2756,11 @@ impl HeadService {
                         });
                     Err(replay)
                 }
-                Err(pg_err) => return Err(map_pg_err(&self.inner.pg_target, &pg_err)),
+                Err(pg_err) => {
+                    active_guard.mark_completed();
+                    self.unregister_active_session_run(session_id, run_id).await;
+                    return Err(map_pg_err(&self.inner.pg_target, &pg_err));
+                }
             }
         };
 
@@ -2139,238 +2773,146 @@ impl HeadService {
             }
         };
 
-        // 4. Probe memoryd status (never blocks or aborts the control turn when memoryd is down!).
-        let (memory_status, _mem_detail) = self.probe_memory_status(&correlation_id).await;
-
-        // Resolve effective workspace directory & write policy: folderless projects get an
-        // isolated scratch directory and mandatory `DenyAll` write policy until a real folder is bound.
-        let (effective_workspace_cwd, effective_write_policy) = match project.workspace_path {
-            Some(ref ws_path) => (
-                PathBuf::from(ws_path),
-                agent.current_config.workspace_write_policy.clone(),
-            ),
-            None => (
-                self.ensure_detached_project_dir(project.project_id)?,
-                WorkspaceWritePolicy::DenyAll,
-            ),
-        };
-
-        // 5. Start or explicitly resume runtime session (with dynamically scoped `dennett-memory-mcp`).
-        let mcp_servers = self.build_memory_mcp_specs(&agent);
-        let turn_secrets = self.collect_turn_secrets(&mcp_servers);
-        let started_instant = Instant::now();
-        let start_outcome = match self
-            .inner
-            .runtime
-            .start_or_resume_session(SessionStartRequest {
-                dennett_session_id: session_id,
-                workspace_cwd: effective_workspace_cwd.clone(),
-                system_prompt: agent.current_config.system_prompt.clone(),
-                model_preference: agent.current_config.model_preference.clone(),
-                thinking_level: agent.current_config.thinking_level,
-                workspace_write_policy: effective_write_policy.clone(),
-                mcp_servers,
-                existing_binding,
-                history_for_rehydrate: prior_history,
-                allow_rehydrate: true,
-            })
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                self.record_failed_run(session_id, run_id, &correlation_id, &err, &[])
-                    .await;
-                active_guard.mark_completed();
-                self.unregister_active_session_run(session_id, run_id).await;
-                return Err(err);
-            }
-        };
-
-        let runtime_binding = self
-            .upsert_runtime_binding(session_id, &start_outcome, &correlation_id, Some(run_id))
-            .await?;
-
-        // 6. Execute turn with external InteractivePolicyEvaluator + live cancellation handle.
-        let policy_ctx = PolicyContext {
-            project_id: project.project_id,
-            agent_id: agent.agent_id,
-            session_id: session.session_id,
-            task_id: None,
-            workspace_root: effective_workspace_cwd,
-            workspace_write_policy: effective_write_policy,
-            allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
-            rules: policy_rules,
-        };
-        // Align interactive approval wait with turn_timeout so `await_interactive_approval`
-        // cleanly expires before `transport.rs`'s turn deadline fires (H2-01).
-        let approval_timeout = turn_timeout
-            .saturating_sub(Duration::from_secs(2))
-            .max(Duration::from_millis(250))
-            .min(DEFAULT_APPROVAL_WAIT_TIMEOUT);
-        let (interactive_policy, decisions_buf) = InteractivePolicyEvaluator::new(
-            self.clone(),
-            policy_ctx,
-            None,
-            correlation_id.clone(),
-            turn_secrets,
-            cancel_rx.clone(),
-            approval_timeout,
-        );
-
         let effective_prompt = if inbox_agent_messages.is_empty() {
             req.content.clone()
         } else {
-            let mut combined = String::from("[Messages from other agents]\n");
-            for msg in &inbox_agent_messages {
-                let sender_label = msg
-                    .sender_agent_id
-                    .map_or_else(|| String::from("user"), |id| id.to_string());
-                let _ = writeln!(
-                    combined,
-                    "- from {sender_label}: {}",
-                    self.redact(&msg.body_text)
-                );
-            }
+            let mut combined = self.format_inter_agent_messages_block(&inbox_agent_messages);
             combined.push('\n');
             combined.push_str(&req.content);
             combined
         };
 
-        let turn_result = self
-            .inner
-            .runtime
-            .send_prompt_turn(
-                TurnRequest {
-                    dennett_session_id: session_id,
-                    provider_session_id: start_outcome.provider_session_id.clone(),
-                    run_id,
-                    prompt_text: effective_prompt,
-                    timeout: turn_timeout,
-                    cancel_rx: cancel_rx.clone(),
-                },
-                Arc::new(interactive_policy),
-                None,
-            )
-            .await;
+        // 4. Spawn the turn in a DETACHED task owned by `HeadService` (`D2-ARCH-01` / `V03`).
+        //    HTTP disconnects drop ONLY the awaiter below — the detached worker completes cleanly!
+        let svc = self.clone();
+        let runtime = Arc::clone(&self.inner.runtime);
+        let session_kind = session.session_kind;
+        tokio::spawn(async move {
+            let session_guard = session_guard;
+            let mut active_guard = active_guard;
+            let in_flight_cmid_guard = in_flight_cmid_guard;
 
-        let elapsed_ms = u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let captured_decisions: Vec<CapturedPermissionDecision> =
-            decisions_buf.lock().map_or_default(|g| g.clone());
+            let (memory_status, _mem_detail) = svc.probe_memory_status(&correlation_id).await;
 
-        let turn_outcome = match turn_result {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                self.record_failed_run(
+            let core_res = svc
+                .execute_session_turn_core(CoreTurnInput {
+                    trigger: TurnTrigger::UserMessage,
                     session_id,
+                    session_kind,
                     run_id,
-                    &correlation_id,
-                    &err,
-                    &captured_decisions,
-                )
+                    agent: agent.clone(),
+                    project: project.clone(),
+                    existing_binding,
+                    prior_history,
+                    policy_rules,
+                    prompt_text: effective_prompt,
+                    runtime,
+                    turn_timeout,
+                    approval_timeout,
+                    cancel_rx,
+                    correlation_id: correlation_id.clone(),
+                })
                 .await;
-                active_guard.mark_completed();
-                self.unregister_active_session_run(session_id, run_id).await;
-                return Err(err);
-            }
-        };
 
-        // Process any partial artifacts or external effects requested during the turn.
-        for ev in &turn_outcome.events {
-            match ev {
-                RuntimeEvent::PartialArtifactEmitted { name, content } => {
-                    let _ = self
-                        .create_artifact(
+            let final_result: Result<SendMessageResponse, DennettError> = match core_res {
+                Err(failure) => {
+                    svc.record_failed_run(
+                        session_id,
+                        run_id,
+                        &correlation_id,
+                        &failure.error,
+                        &failure.captured_decisions,
+                    )
+                    .await;
+                    active_guard.mark_completed();
+                    svc.unregister_active_session_run(session_id, run_id).await;
+                    Err(failure.error)
+                }
+                Ok(core) => {
+                    match svc
+                        .finalize_turn(
                             session_id,
-                            CreateArtifactRequest {
-                                name: name.clone(),
-                                mime_type: String::from("text/plain"),
-                                content: Some(content.clone()),
-                                relative_path: None,
-                                run_id: Some(run_id),
-                                completeness_status: ArtifactCompleteness::Partial,
-                            },
+                            project.project_id,
+                            run_id,
+                            &agent,
+                            user_message.message_id,
+                            core.start_outcome.rehydrated,
+                            &core.turn_outcome,
+                            core.effective_elapsed_ms,
+                            &core.captured_decisions,
+                            core.hit_unknown_external,
                             &correlation_id,
                         )
-                        .await;
-                }
-                RuntimeEvent::ExternalEffectRequested {
-                    recipient,
-                    operation,
-                    behavior,
-                    idempotency_key,
-                } => {
-                    if *cancel_rx.borrow() {
-                        break;
-                    }
-                    if let Ok(idem) = IdempotencyKey::try_new(idempotency_key.clone()) {
-                        let sim_behavior = SimEffectBehavior::from_str(behavior)
-                            .unwrap_or(SimEffectBehavior::Success);
-                        let _ = self
-                            .dispatch_external_effect(
-                                DispatchEffectRequest {
-                                    project_id: project.project_id,
-                                    session_id,
-                                    task_id: None,
-                                    run_id: Some(run_id),
-                                    agent_id: agent.agent_id,
-                                    connector_id: Some(String::from(
-                                        SIMULATED_EXTERNAL_CONNECTOR_ID,
-                                    )),
-                                    operation: operation.clone(),
-                                    target_recipient: recipient.clone(),
-                                    parameters_json: json!({
-                                        "session_id": session_id,
-                                        "run_id": run_id,
-                                    })
-                                    .to_string(),
-                                    effect_idempotency_key: idem,
-                                    simulated_behavior: Some(sim_behavior),
-                                },
+                        .await
+                    {
+                        Ok((assistant_message, run_record)) => {
+                            active_guard.mark_completed();
+                            svc.unregister_active_session_run(session_id, run_id).await;
+                            let artifacts = match svc.get_conn(DEFAULT_PG_OP_TIMEOUT).await {
+                                Ok(conn) => {
+                                    fetch_session_artifacts(&conn, session_id, &svc.inner.pg_target)
+                                        .await
+                                        .unwrap_or_default()
+                                }
+                                Err(_) => Vec::new(),
+                            };
+                            Ok(SendMessageResponse {
+                                user_message,
+                                assistant_message,
+                                run: run_record,
+                                runtime_binding: core.runtime_binding,
+                                artifacts,
+                                permission_decisions: core
+                                    .captured_decisions
+                                    .into_iter()
+                                    .map(|c| c.record)
+                                    .collect(),
+                                memory_status,
+                                session_title: effective_session_title,
+                                deduplicated: false,
+                            })
+                        }
+                        Err(err) => {
+                            svc.record_failed_run(
+                                session_id,
+                                run_id,
                                 &correlation_id,
+                                &err,
+                                &core.captured_decisions,
                             )
                             .await;
+                            active_guard.mark_completed();
+                            svc.unregister_active_session_run(session_id, run_id).await;
+                            Err(err)
+                        }
                     }
                 }
-                _ => {}
-            }
+            };
+
+            let _ = completion_tx.send(Some(final_result));
+            drop(in_flight_cmid_guard);
+            drop(session_guard);
+            svc.prune_session_lock(session_id).await;
+        });
+
+        // 5. Caller awaits the detached worker's completion channel cleanly.
+        match completion_rx.wait_for(Option::is_some).await {
+            Ok(guard) => match guard.as_ref() {
+                Some(res) => res.clone(),
+                None => Err(DennettError::Internal {
+                    detail: String::from("detached session turn completed without result"),
+                }),
+            },
+            Err(_) => Err(DennettError::Internal {
+                detail: String::from("detached session turn terminated unexpectedly"),
+            }),
         }
-
-        // 7. Atomically persist decisions, tool audit trace, assistant reply, and terminal RunRecord.
-        let (assistant_message, run_record) = self
-            .finalize_turn(
-                session_id,
-                project.project_id,
-                run_id,
-                &agent,
-                user_message.message_id,
-                start_outcome.rehydrated,
-                &turn_outcome,
-                elapsed_ms,
-                &captured_decisions,
-                &correlation_id,
-            )
-            .await?;
-        active_guard.mark_completed();
-        self.unregister_active_session_run(session_id, run_id).await;
-
-        let artifacts = {
-            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-            fetch_session_artifacts(&conn, session_id, &self.inner.pg_target).await?
-        };
-
-        Ok(SendMessageResponse {
-            user_message,
-            assistant_message,
-            run: run_record,
-            runtime_binding,
-            artifacts,
-            permission_decisions: captured_decisions.into_iter().map(|c| c.record).collect(),
-            memory_status,
-            session_title: effective_session_title,
-            deduplicated: false,
-        })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "idempotent client_message_id replay reconstructs complete SendMessageResponse from PG rows"
+    )]
     async fn try_replay_client_message(
         &self,
         session_id: SessionId,
@@ -2419,6 +2961,27 @@ impl HeadService {
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
         let run = decode_run_row(&run_row)?;
         if run.status == RunStatus::Running {
+            drop(conn);
+            let active_rx = {
+                let active = self.inner.active_runs.lock().await;
+                active
+                    .get(&session_id)
+                    .filter(|h| h.run_id == run_id)
+                    .and_then(|h| h.completion_rx.clone())
+            };
+            if let Some(mut rx) = active_rx
+                && let Ok(guard) = rx.wait_for(Option::is_some).await
+                && let Some(res) = guard.as_ref()
+            {
+                return match res {
+                    Ok(resp) => {
+                        let mut dedup = resp.clone();
+                        dedup.deduplicated = true;
+                        Ok(Some(dedup))
+                    }
+                    Err(err) => Err(err.clone()),
+                };
+            }
             return Err(DennettError::Conflict {
                 resource: String::from("session_run"),
                 expected_revision: None,
@@ -2489,7 +3052,7 @@ impl HeadService {
     /// [`DennettError::DatabaseUnavailable`] if control PG fails.
     #[expect(
         clippy::too_many_lines,
-        reason = "signals live cancellation, withdraws pending approvals, transitions dispatching effects to unknown, and reports honest external outcome uncertainty without calling memoryd"
+        reason = "signals live cancellation across all runtime profiles, withdraws pending approvals, transitions dispatching effects to unknown, and reports honest external outcome uncertainty without calling memoryd"
     )]
     pub async fn cancel_session_run(
         &self,
@@ -2498,7 +3061,7 @@ impl HeadService {
     ) -> Result<CancelRunResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
 
-        // Signal cancellation immediately BEFORE touching PostgreSQL or anything else!
+        // Signal cancellation immediately across ALL runtime profiles BEFORE touching PostgreSQL!
         let active_run_id = {
             let active = self.inner.active_runs.lock().await;
             active.get(&session_id).map(|h| {
@@ -2506,12 +3069,7 @@ impl HeadService {
                 h.run_id
             })
         };
-        let runtime_cancelled = self
-            .inner
-            .runtime
-            .cancel_turn(session_id)
-            .await
-            .unwrap_or(false);
+        let runtime_cancelled = self.runtime_router().cancel_turn_all(session_id).await;
 
         let withdrawn_perms = self
             .cancel_pending_permissions_for_scope(
@@ -2576,6 +3134,16 @@ impl HeadService {
         }
         let external_outcome_unknown = !unknown_effects.is_empty();
 
+        // D2-ARCH-03: Preserve `unknown_external` status on the run when external outcome is uncertain.
+        if external_outcome_unknown && let Some(rid) = active_run_id {
+            tx.execute(
+                "UPDATE runs SET status = 'unknown_external' WHERE run_id = $1",
+                &[&rid.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        }
+
         let _ = append_audit_event(
             &tx,
             &self.inner.pg_target,
@@ -2591,7 +3159,9 @@ impl HeadService {
         )
         .await?;
 
-        let status = if cancelled {
+        let status = if external_outcome_unknown {
+            Some(RunStatus::UnknownExternal)
+        } else if cancelled {
             Some(RunStatus::Cancelled)
         } else {
             fetch_session_runs(&tx, session_id, &self.inner.pg_target)
@@ -2639,19 +3209,19 @@ impl HeadService {
         })
     }
 
-    /// Durable memory commit path (V02): records intent into `memory_commit_outbox` inside
-    /// `dennett_control` FIRST, then attempts immediate delivery to `dennett-memoryd`.
-    ///
-    /// If `dennett-memoryd` is unreachable, the item stays durably `pending` in `dennett_control`
-    /// with its deterministic `idempotency_key` until [`Self::flush_memory_outbox`] succeeds!
-    /// Reusing `(scope, idempotency_key)` with a conflicting payload fails closed with
-    /// [`DennettError::IdempotencyMismatch`] (`409 Conflict`).
+    /// Durable memory commit path (`V02` / `D2-OVER-01` / `D2-SEC-01`):
+    /// - When `req.session_id` is supplied, validates active project lifecycle, agent
+    ///   `allowed_memory_scopes`, and external `PolicyEngine` rules BEFORE writing outbox.
+    /// - Enqueues into unified `ordered_outbox` (`destination = 'memoryd'`, `ordering_key = scope`),
+    ///   strictly preserving FIFO ordering per scope and deterministic `(scope, idempotency_key)` dedup.
+    /// - Attempts immediate delivery to standalone `dennett-memoryd`; if unreachable, stays durably
+    ///   `pending` for automatic background drain in `HeadScheduler` or manual `/v1/memory/outbox/flush`.
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`], [`DennettError::IdempotencyMismatch`],
-    /// [`DennettError::DatabaseUnavailable`] (control PG), or permanent non-transient memoryd
-    /// rejections (`ForbiddenScope`, `Unauthorized`, etc.).
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::AccessDenied`],
+    /// [`DennettError::ForbiddenScope`], [`DennettError::IdempotencyMismatch`],
+    /// [`DennettError::DatabaseUnavailable`] (control PG), or permanent non-transient memoryd rejections.
     pub async fn commit_memory_note(
         &self,
         req: CommitMemoryNoteRequest,
@@ -2659,6 +3229,17 @@ impl HeadService {
     ) -> Result<CommitMemoryNoteResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
         let idempotency_key = req.idempotency_key.unwrap_or_else(IdempotencyKey::generate);
+
+        // D2-SEC-01: When bound to a session, route through external `PolicyEngine` + agent scopes!
+        if let Some(session_id) = req.session_id {
+            self.authorize_session_memory_operation(
+                session_id,
+                "memory_write_note",
+                &req.scope,
+                correlation_id,
+            )
+            .await?;
+        }
 
         let create_note_req = CreateNoteRequest {
             scope: req.scope.clone(),
@@ -2671,24 +3252,20 @@ impl HeadService {
             idempotency_key: idempotency_key.clone(),
         };
         create_note_req.validate()?;
-        let payload_json =
-            serde_json::to_string(&create_note_req).map_err(|err| DennettError::Internal {
-                detail: format!("failed serializing memory outbox payload: {err}"),
-            })?;
 
-        // 1. Race-safe durable insert into `memory_commit_outbox` on `(scope, idempotency_key)`.
-        //    If a row already exists, verify payload equality or return `IdempotencyMismatch` (409)!
-        let outbox_item = self
+        // 1. Race-safe durable insert into unified `ordered_outbox` (`destination = 'memoryd'`,
+        //    `ordering_key = scope`). Verifies payload equality on duplicate key -> 409 on conflict.
+        let ordered_item = self
             .insert_or_verify_outbox_note(
                 req.session_id,
                 req.run_id,
                 &create_note_req,
-                &payload_json,
                 correlation_id,
             )
             .await?;
 
-        if outbox_item.status == MemoryOutboxStatus::Delivered {
+        if ordered_item.status == OrderedOutboxStatus::Delivered {
+            let outbox_item = ordered_item_to_memory_outbox_item(&ordered_item)?;
             return Ok(CommitMemoryNoteResponse {
                 outbox_item,
                 delivered_immediately: true,
@@ -2696,16 +3273,79 @@ impl HeadService {
             });
         }
 
-        // 2. Attempt immediate delivery to standalone `dennett-memoryd`.
-        let (updated, memory_status) = self
-            .deliver_single_outbox_item(outbox_item, correlation_id)
-            .await?;
+        // 2. Attempt immediate ordered delivery for `memoryd` (preserving FIFO per scope).
+        let _ = self.flush_memory_outbox(correlation_id).await?;
+        let refreshed = self.fetch_memory_outbox_item(ordered_item.item_id).await?;
+        let delivered_immediately = refreshed.status == MemoryOutboxStatus::Delivered;
 
         Ok(CommitMemoryNoteResponse {
-            delivered_immediately: updated.status == MemoryOutboxStatus::Delivered,
-            outbox_item: updated,
-            memory_status,
+            delivered_immediately,
+            outbox_item: refreshed,
+            memory_status: self.cached_memory_status(),
         })
+    }
+
+    async fn authorize_session_memory_operation(
+        &self,
+        session_id: SessionId,
+        tool_name: &str,
+        scope: &MemoryScope,
+        _correlation_id: &CorrelationId,
+    ) -> Result<(), DennettError> {
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+        let agent = fetch_agent(&conn, session.agent_id, &self.inner.pg_target).await?;
+        let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
+        drop(conn);
+
+        let live = self
+            .load_live_policy_inputs(project.project_id, None)
+            .await?;
+        let workspace_root = project.workspace_path.as_deref().map_or_else(
+            || self.fallback_workspace_root(project.project_id),
+            PathBuf::from,
+        );
+        let ctx = PolicyContext {
+            project_id: project.project_id,
+            agent_id: agent.agent_id,
+            session_id,
+            task_id: None,
+            project_lifecycle_state: live.project_lifecycle_state,
+            workspace_bound: live.workspace_bound,
+            workspace_root,
+            workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
+            parent_write_ceiling: None,
+            allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
+            rules: live.rules,
+        };
+        let engine = PolicyEngine::new(ctx);
+        let eval_req = PolicyEvaluationRequest {
+            session_id,
+            run_id: RunId::new(),
+            tool_call_id: format!("head-memory-{}", OutboxItemId::new()),
+            tool_name: tool_name.to_owned(),
+            tool_kind: String::from("mcp"),
+            title: format!("{tool_name} ({scope})"),
+            target: Some(scope.as_str().to_owned()),
+            locations: Vec::new(),
+            raw_input: json!({ "scope": scope.as_str() }),
+        };
+        let decision = engine.evaluate_with_grants(&eval_req, &live.grants, TimestampMs::now());
+        match decision {
+            PolicyEvaluationDecision::Immediate(out)
+                if out.effect == dennett_contracts::PolicyEffect::Allow =>
+            {
+                Ok(())
+            }
+            PolicyEvaluationDecision::AllowedByGrant { .. } => Ok(()),
+            PolicyEvaluationDecision::Immediate(out) => Err(DennettError::AccessDenied {
+                scope: out.scope,
+                reason: out.reason,
+            }),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { scope, reason, .. } => {
+                Err(DennettError::AccessDenied { scope, reason })
+            }
+        }
     }
 
     async fn insert_or_verify_outbox_note(
@@ -2713,66 +3353,39 @@ impl HeadService {
         session_id: Option<SessionId>,
         run_id: Option<RunId>,
         create_note_req: &CreateNoteRequest,
-        payload_json: &str,
         correlation_id: &CorrelationId,
-    ) -> Result<MemoryOutboxItem, DennettError> {
+    ) -> Result<OrderedOutboxItem, DennettError> {
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let tx = conn
             .transaction()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
-        let outbox_id = OutboxItemId::new();
-        let inserted = tx
+        let existing_sql = format!(
+            "SELECT {ORDERED_OUTBOX_SELECT_COLS}
+             FROM ordered_outbox
+             WHERE destination = $1 AND ordering_key = $2 AND idempotency_key = $3"
+        );
+        if let Some(existing_row) = tx
             .query_opt(
-                "INSERT INTO memory_commit_outbox (
-                    outbox_id, session_id, run_id, scope, idempotency_key,
-                    operation, payload_json, status, correlation_id
-                 ) VALUES ($1, $2, $3, $4, $5, 'create_note', $6, 'pending', $7)
-                 ON CONFLICT (scope, idempotency_key) DO NOTHING
-                 RETURNING outbox_id, session_id, run_id, scope, idempotency_key, operation,
-                           payload_json, status, attempts, last_error,
-                           delivered_event_id, delivered_note_id, correlation_id,
-                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                           TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint",
+                &existing_sql,
                 &[
-                    &outbox_id.as_uuid(),
-                    &session_id.map(SessionId::as_uuid),
-                    &run_id.map(RunId::as_uuid),
+                    &MEMORY_OUTBOX_DESTINATION,
                     &create_note_req.scope.as_str(),
                     &create_note_req.idempotency_key.as_str(),
-                    &payload_json,
-                    &correlation_id.as_str(),
                 ],
             )
             .await
-            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-
-        let item = if let Some(row) = inserted {
-            decode_outbox_row(&row)?
-        } else {
-            let existing_row = tx
-                .query_one(
-                    "SELECT outbox_id, session_id, run_id, scope, idempotency_key, operation,
-                            payload_json, status, attempts, last_error,
-                            delivered_event_id, delivered_note_id, correlation_id,
-                            TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                            TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
-                     FROM memory_commit_outbox
-                     WHERE scope = $1 AND idempotency_key = $2",
-                    &[
-                        &create_note_req.scope.as_str(),
-                        &create_note_req.idempotency_key.as_str(),
-                    ],
-                )
-                .await
-                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-            let existing = decode_outbox_row(&existing_row)?;
-            let existing_payload: CreateNoteRequest = serde_json::from_str(&existing.payload_json)
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+        {
+            let existing = decode_ordered_outbox_row(&existing_row)?;
+            let existing_env: MemoryOutboxEnvelope = serde_json::from_str(&existing.payload_json)
                 .map_err(|err| DennettError::Internal {
-                    detail: format!("corrupt existing outbox payload JSON: {err}"),
-                })?;
-            if existing.operation != "create_note" || existing_payload != *create_note_req {
+                detail: format!("corrupt ordered_outbox memory envelope JSON: {err}"),
+            })?;
+            if existing_env.operation != "create_note"
+                || existing_env.note_request != *create_note_req
+            {
                 return Err(DennettError::IdempotencyMismatch {
                     idempotency_key: create_note_req.idempotency_key.to_string(),
                     reason: format!(
@@ -2781,8 +3394,49 @@ impl HeadService {
                     ),
                 });
             }
-            existing
+            tx.commit()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            return Ok(existing);
+        }
+
+        let envelope = MemoryOutboxEnvelope {
+            scope: create_note_req.scope.clone(),
+            idempotency_key: create_note_req.idempotency_key.clone(),
+            operation: String::from("create_note"),
+            session_id,
+            run_id,
+            note_request: create_note_req.clone(),
+            delivered_event_id: None,
+            delivered_note_id: None,
         };
+        let payload_val =
+            serde_json::to_value(&envelope).map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing memory outbox envelope: {err}"),
+            })?;
+
+        let cursor_seq: i64 = tx
+            .query_opt(
+                "SELECT GREATEST(1, committed_seq)::bigint
+                 FROM control_stream_counters
+                 WHERE stream_id = 'control:journal'",
+                &[],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+            .map_or(1, |row| row.get(0));
+
+        let item = enqueue_ordered_outbox_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            MEMORY_OUTBOX_DESTINATION,
+            create_note_req.scope.as_str(),
+            cursor_seq,
+            &create_note_req.idempotency_key,
+            &payload_val,
+            correlation_id,
+        )
+        .await?;
 
         tx.commit()
             .await
@@ -2790,10 +3444,47 @@ impl HeadService {
         Ok(item)
     }
 
-    /// Flushes all pending `memory_commit_outbox` rows to standalone `dennett-memoryd` idempotently.
+    async fn fetch_memory_outbox_item(
+        &self,
+        item_id: dennett_contracts::OrderedOutboxItemId,
+    ) -> Result<MemoryOutboxItem, DennettError> {
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let sql =
+            format!("SELECT {ORDERED_OUTBOX_SELECT_COLS} FROM ordered_outbox WHERE item_id = $1");
+        let row = conn
+            .query_one(&sql, &[&item_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let ordered = decode_ordered_outbox_row(&row)?;
+        ordered_item_to_memory_outbox_item(&ordered)
+    }
+
+    /// Lightweight check used by `HeadScheduler` before invoking automatic background memory outbox
+    /// draining (`D2-OVER-01`).
+    pub(crate) async fn has_pending_memory_outbox(&self) -> bool {
+        let Ok(conn) = self.get_conn(DEFAULT_PROBE_TIMEOUT).await else {
+            return false;
+        };
+        conn.query_opt(
+            "SELECT 1
+             FROM ordered_outbox
+             WHERE destination = 'memoryd'
+               AND status IN ('pending', 'leased')
+               AND available_at <= now()
+             LIMIT 1",
+            &[],
+        )
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    }
+
+    /// Flushes all pending `ordered_outbox (destination = 'memoryd')` items to standalone
+    /// `dennett-memoryd` in strict per-scope FIFO order (`D2-OVER-01`).
     ///
-    /// Safe to invoke repeatedly: `memoryd` deduplicates on `(scope, idempotency_key)` with zero
-    /// duplicate notes.
+    /// Safe to invoke repeatedly or concurrently: `ordered_outbox` leases each scope's head with
+    /// `FOR UPDATE SKIP LOCKED` and `memoryd` deduplicates on `(scope, idempotency_key)`.
     ///
     /// # Errors
     ///
@@ -2803,45 +3494,68 @@ impl HeadService {
         correlation_id: &CorrelationId,
     ) -> Result<FlushOutboxResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
-        let pending_rows = {
-            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-            let rows = conn
-                .query(
-                    "SELECT outbox_id, session_id, run_id, scope, idempotency_key, operation,
-                            payload_json, status, attempts, last_error,
-                            delivered_event_id, delivered_note_id, correlation_id,
-                            TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                            TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
-                     FROM memory_commit_outbox
-                     WHERE status = 'pending'
-                     ORDER BY created_at ASC",
-                    &[],
-                )
-                .await
-                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-            rows.iter()
-                .map(decode_outbox_row)
-                .collect::<Result<Vec<_>, _>>()?
-        };
 
-        let attempted = pending_rows.len();
-        let mut delivered = 0;
-        let mut pending = 0;
-        let mut failed = 0;
+        let worker_id = format!("head-mem-flush-{}", std::process::id());
+        let mut attempted = 0_usize;
+        let mut delivered = 0_usize;
+        let mut pending = 0_usize;
+        let mut failed = 0_usize;
         let mut last_mem_status = self.probe_memory_status(correlation_id).await.0;
-        let mut touched = Vec::with_capacity(attempted);
+        let mut touched: Vec<MemoryOutboxItem> = Vec::new();
+        let mut visited: HashSet<dennett_contracts::OrderedOutboxItemId> = HashSet::new();
 
-        for item in pending_rows {
-            let (updated, mem_status) = self
-                .deliver_single_outbox_item(item, correlation_id)
+        loop {
+            let batch = self
+                .claim_ordered_outbox_batch(
+                    MEMORY_OUTBOX_DESTINATION,
+                    &worker_id,
+                    32,
+                    30_000,
+                    TimestampMs::now(),
+                )
                 .await?;
-            last_mem_status = mem_status;
-            match updated.status {
-                MemoryOutboxStatus::Delivered => delivered += 1,
-                MemoryOutboxStatus::Pending => pending += 1,
-                MemoryOutboxStatus::Failed => failed += 1,
+            if batch.is_empty() {
+                break;
             }
-            touched.push(updated);
+
+            let mut progressed_any = false;
+            for leased in batch {
+                if !visited.insert(leased.item_id) {
+                    // Already attempted and nacked back to `pending` during this flush call
+                    // (e.g. `memoryd` is still unreachable) — release lease without looping.
+                    let _ = self
+                        .nack_ordered_outbox_item(
+                            leased.item_id,
+                            leased.lease_generation,
+                            leased
+                                .last_error
+                                .as_deref()
+                                .unwrap_or("memoryd unreachable"),
+                            MEMORY_OUTBOX_MAX_TRANSIENT_ATTEMPTS,
+                            0,
+                            TimestampMs::now(),
+                        )
+                        .await;
+                    continue;
+                }
+
+                progressed_any = true;
+                attempted += 1;
+                let (updated, mem_status) = self
+                    .deliver_leased_memory_outbox_item(leased, correlation_id)
+                    .await?;
+                last_mem_status = mem_status;
+                match updated.status {
+                    MemoryOutboxStatus::Delivered => delivered += 1,
+                    MemoryOutboxStatus::Pending => pending += 1,
+                    MemoryOutboxStatus::Failed => failed += 1,
+                }
+                touched.push(updated);
+            }
+
+            if !progressed_any {
+                break;
+            }
         }
 
         Ok(FlushOutboxResponse {
@@ -2854,7 +3568,8 @@ impl HeadService {
         })
     }
 
-    /// Lists all durable memory outbox items ordered newest first.
+    /// Lists all durable memory outbox items (`ordered_outbox WHERE destination = 'memoryd'`)
+    /// ordered newest first.
     ///
     /// # Errors
     ///
@@ -2865,23 +3580,21 @@ impl HeadService {
     ) -> Result<ListOutboxResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let sql = format!(
+            "SELECT {ORDERED_OUTBOX_SELECT_COLS}
+             FROM ordered_outbox
+             WHERE destination = $1
+             ORDER BY created_at DESC"
+        );
         let rows = conn
-            .query(
-                "SELECT outbox_id, session_id, run_id, scope, idempotency_key, operation,
-                        payload_json, status, attempts, last_error,
-                        delivered_event_id, delivered_note_id, correlation_id,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
-                 FROM memory_commit_outbox
-                 ORDER BY created_at DESC",
-                &[],
-            )
+            .query(&sql, &[&MEMORY_OUTBOX_DESTINATION])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-        let items = rows
-            .iter()
-            .map(decode_outbox_row)
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut items = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let ordered = decode_ordered_outbox_row(row)?;
+            items.push(ordered_item_to_memory_outbox_item(&ordered)?);
+        }
         let (memory_status, _) = self.probe_memory_status(correlation_id).await;
         Ok(ListOutboxResponse {
             memory_status,
@@ -2991,20 +3704,23 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
+        let outbox_sql = format!(
+            "SELECT {ORDERED_OUTBOX_SELECT_COLS}
+             FROM ordered_outbox
+             WHERE destination = $1
+             ORDER BY created_at DESC
+             LIMIT $2"
+        );
         let outbox_rows = conn
-            .query(
-                "SELECT outbox_id, session_id, run_id, scope, idempotency_key, operation,
-                        payload_json, status, attempts, last_error,
-                        delivered_event_id, delivered_note_id, correlation_id,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
-                 FROM memory_commit_outbox
-                 ORDER BY created_at DESC
-                 LIMIT $1",
-                &[&capped],
-            )
+            .query(&outbox_sql, &[&MEMORY_OUTBOX_DESTINATION, &capped])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let mut outbox_items = Vec::with_capacity(outbox_rows.len());
+        for row in &outbox_rows {
+            let ordered = decode_ordered_outbox_row(row)?;
+            outbox_items.push(ordered_item_to_memory_outbox_item(&ordered)?);
+        }
 
         Ok(DiagnosticsResponse {
             events: event_rows
@@ -3015,60 +3731,85 @@ impl HeadService {
                 .iter()
                 .map(decode_permission_decision_row)
                 .collect::<Result<Vec<_>, _>>()?,
-            outbox_items: outbox_rows
-                .iter()
-                .map(decode_outbox_row)
-                .collect::<Result<Vec<_>, _>>()?,
+            outbox_items,
         })
     }
 
-    async fn deliver_single_outbox_item(
+    #[expect(
+        clippy::too_many_lines,
+        reason = "delivers one leased ordered_outbox memory item with short-lived token minting, ack, or retry backoff"
+    )]
+    async fn deliver_leased_memory_outbox_item(
         &self,
-        item: MemoryOutboxItem,
+        leased: OrderedOutboxItem,
         correlation_id: &CorrelationId,
     ) -> Result<(MemoryOutboxItem, MemoryStatus), DennettError> {
+        let mut envelope: MemoryOutboxEnvelope = serde_json::from_str(&leased.payload_json)
+            .map_err(|err| DennettError::Internal {
+                detail: format!("corrupt ordered_outbox memory envelope JSON: {err}"),
+            })?;
+
         let mut scopes = BTreeSet::new();
-        scopes.insert(item.scope.clone());
+        scopes.insert(envelope.scope.clone());
         let client_opt = self.memory_client_for_scopes(scopes, true)?;
         let Some(client) = client_opt else {
             self.record_memory_status(MemoryStatus::DegradedUnreachable);
             let safe_err = String::from("memoryd client is not configured on dennett-head");
-            let updated = self
-                .update_outbox_attempt(
-                    item.outbox_id,
-                    MemoryOutboxStatus::Pending,
-                    Some(&safe_err),
-                    None,
-                    None,
-                    correlation_id,
-                    item.session_id,
-                    item.run_id,
+            let updated_ordered = self
+                .nack_ordered_outbox_item(
+                    leased.item_id,
+                    leased.lease_generation,
+                    &safe_err,
+                    MEMORY_OUTBOX_MAX_TRANSIENT_ATTEMPTS,
+                    0,
+                    TimestampMs::now(),
                 )
                 .await?;
-            return Ok((updated, MemoryStatus::DegradedUnreachable));
+            self.record_memory_outbox_audit(
+                leased.item_id,
+                MemoryOutboxStatus::Pending,
+                envelope.session_id,
+                envelope.run_id,
+                correlation_id,
+            )
+            .await;
+            return Ok((
+                ordered_item_to_memory_outbox_item(&updated_ordered)?,
+                MemoryStatus::DegradedUnreachable,
+            ));
         };
 
-        let create_req: CreateNoteRequest =
-            serde_json::from_str(&item.payload_json).map_err(|err| DennettError::Internal {
-                detail: format!("corrupt outbox payload JSON: {err}"),
-            })?;
-
-        match client.create_note(&create_req, Some(correlation_id)).await {
+        match client
+            .create_note(&envelope.note_request, Some(correlation_id))
+            .await
+        {
             Ok(resp) => {
                 self.record_memory_status(MemoryStatus::Healthy);
-                let updated = self
-                    .update_outbox_attempt(
-                        item.outbox_id,
-                        MemoryOutboxStatus::Delivered,
-                        None,
-                        Some(resp.event_id),
-                        Some(resp.note.note_id),
-                        correlation_id,
-                        item.session_id,
-                        item.run_id,
+                envelope.delivered_event_id = Some(resp.event_id);
+                envelope.delivered_note_id = Some(resp.note.note_id);
+                let updated_payload =
+                    serde_json::to_value(&envelope).map_err(|err| DennettError::Internal {
+                        detail: format!("failed serializing delivered outbox envelope: {err}"),
+                    })?;
+                let updated_ordered = self
+                    .ack_ordered_outbox_item_with_payload(
+                        leased.item_id,
+                        leased.lease_generation,
+                        Some(&updated_payload),
                     )
                     .await?;
-                Ok((updated, MemoryStatus::Healthy))
+                self.record_memory_outbox_audit(
+                    leased.item_id,
+                    MemoryOutboxStatus::Delivered,
+                    envelope.session_id,
+                    envelope.run_id,
+                    correlation_id,
+                )
+                .await;
+                Ok((
+                    ordered_item_to_memory_outbox_item(&updated_ordered)?,
+                    MemoryStatus::Healthy,
+                ))
             }
             Err(
                 DennettError::DatabaseUnavailable { detail }
@@ -3076,88 +3817,72 @@ impl HeadService {
             ) => {
                 self.record_memory_status(MemoryStatus::DegradedUnreachable);
                 let safe_err = self.redact(&detail);
-                let updated = self
-                    .update_outbox_attempt(
-                        item.outbox_id,
-                        MemoryOutboxStatus::Pending,
-                        Some(&safe_err),
-                        None,
-                        None,
-                        correlation_id,
-                        item.session_id,
-                        item.run_id,
+                let updated_ordered = self
+                    .nack_ordered_outbox_item(
+                        leased.item_id,
+                        leased.lease_generation,
+                        &safe_err,
+                        MEMORY_OUTBOX_MAX_TRANSIENT_ATTEMPTS,
+                        0,
+                        TimestampMs::now(),
                     )
                     .await?;
-                Ok((updated, MemoryStatus::DegradedUnreachable))
+                self.record_memory_outbox_audit(
+                    leased.item_id,
+                    MemoryOutboxStatus::Pending,
+                    envelope.session_id,
+                    envelope.run_id,
+                    correlation_id,
+                )
+                .await;
+                Ok((
+                    ordered_item_to_memory_outbox_item(&updated_ordered)?,
+                    MemoryStatus::DegradedUnreachable,
+                ))
             }
             Err(permanent_err) => {
                 self.record_memory_status(MemoryStatus::Healthy);
                 let safe_err = self.redact(&permanent_err.to_string());
-                let updated = self
-                    .update_outbox_attempt(
-                        item.outbox_id,
-                        MemoryOutboxStatus::Failed,
-                        Some(&safe_err),
-                        None,
-                        None,
-                        correlation_id,
-                        item.session_id,
-                        item.run_id,
+                let updated_ordered = self
+                    .nack_ordered_outbox_item(
+                        leased.item_id,
+                        leased.lease_generation,
+                        &safe_err,
+                        1,
+                        0,
+                        TimestampMs::now(),
                     )
                     .await?;
-                Ok((updated, MemoryStatus::Healthy))
+                self.record_memory_outbox_audit(
+                    leased.item_id,
+                    MemoryOutboxStatus::Failed,
+                    envelope.session_id,
+                    envelope.run_id,
+                    correlation_id,
+                )
+                .await;
+                Ok((
+                    ordered_item_to_memory_outbox_item(&updated_ordered)?,
+                    MemoryStatus::Healthy,
+                ))
             }
         }
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "internal helper persists all outbox delivery columns atomically in one UPDATE"
-    )]
-    async fn update_outbox_attempt(
+    async fn record_memory_outbox_audit(
         &self,
-        outbox_id: OutboxItemId,
+        item_id: dennett_contracts::OrderedOutboxItemId,
         status: MemoryOutboxStatus,
-        last_error: Option<&str>,
-        delivered_event_id: Option<dennett_contracts::MemoryEventId>,
-        delivered_note_id: Option<dennett_contracts::MemoryNoteId>,
-        correlation_id: &CorrelationId,
         session_id: Option<SessionId>,
         run_id: Option<RunId>,
-    ) -> Result<MemoryOutboxItem, DennettError> {
-        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-        let tx = conn
-            .transaction()
-            .await
-            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-
-        let truncated_err = last_error.map(|e| truncate_utf8(e, 2000).to_owned());
-        let row = tx
-            .query_one(
-                "UPDATE memory_commit_outbox
-                 SET status = $2,
-                     attempts = attempts + 1,
-                     last_error = $3,
-                     delivered_event_id = COALESCE($4, delivered_event_id),
-                     delivered_note_id = COALESCE($5, delivered_note_id),
-                     updated_at = now()
-                 WHERE outbox_id = $1
-                 RETURNING outbox_id, session_id, run_id, scope, idempotency_key, operation,
-                           payload_json, status, attempts, last_error,
-                           delivered_event_id, delivered_note_id, correlation_id,
-                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                           TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint",
-                &[
-                    &outbox_id.as_uuid(),
-                    &status.as_str(),
-                    &truncated_err,
-                    &delivered_event_id.map(dennett_contracts::MemoryEventId::as_uuid),
-                    &delivered_note_id.map(dennett_contracts::MemoryNoteId::as_uuid),
-                ],
-            )
-            .await
-            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-
+        correlation_id: &CorrelationId,
+    ) {
+        let Ok(mut conn) = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await else {
+            return;
+        };
+        let Ok(tx) = conn.transaction().await else {
+            return;
+        };
         let event_kind = match status {
             MemoryOutboxStatus::Delivered => "memory_outbox_delivered",
             MemoryOutboxStatus::Pending => "memory_outbox_queued",
@@ -3171,15 +3896,10 @@ impl HeadService {
             run_id,
             "head",
             event_kind,
-            &format!("outbox item {outbox_id} transitioned to `{status}`"),
+            &format!("outbox item {item_id} transitioned to `{status}`"),
         )
-        .await?;
-
-        let item = decode_outbox_row(&row)?;
-        tx.commit()
-            .await
-            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-        Ok(item)
+        .await;
+        let _ = tx.commit().await;
     }
 
     pub(crate) async fn upsert_runtime_binding(
@@ -3266,7 +3986,7 @@ impl HeadService {
     #[expect(
         clippy::too_many_arguments,
         clippy::too_many_lines,
-        reason = "atomic turn finalization persists decisions, tool observations, assistant message, terminal run status, and ordered journal event together"
+        reason = "atomic turn finalization persists decisions, tool observations, assistant message, honest run status, and ordered journal event together"
     )]
     async fn finalize_turn(
         &self,
@@ -3279,6 +3999,7 @@ impl HeadService {
         outcome: &dennett_runtime_antigravity::TurnOutcome,
         elapsed_ms: u64,
         decisions: &[CapturedPermissionDecision],
+        hit_unknown_external: bool,
         correlation_id: &CorrelationId,
     ) -> Result<(Option<MessageRecord>, RunRecord), DennettError> {
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
@@ -3370,6 +4091,38 @@ impl HeadService {
             }
         }
 
+        // D2-ARCH-03: Never overwrite `unknown_external` or hide unknown/dispatching external effects!
+        let has_unknown_effect: bool = hit_unknown_external
+            || tx
+                .query_one(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM effect_claims
+                        WHERE run_id = $1 AND status IN ('unknown', 'dispatching')
+                    )",
+                    &[&run_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                .get(0);
+        let requested_status = if has_unknown_effect {
+            RunStatus::UnknownExternal
+        } else {
+            outcome.status
+        };
+
+        // D2-BUG-04: If run was cancelled before producing an assistant response, release any
+        // stamped inter-agent messages so they are not silently lost!
+        if requested_status == RunStatus::Cancelled && assistant_message.is_none() {
+            tx.execute(
+                "UPDATE agent_messages
+                 SET delivered_in_run_id = NULL, delivered_at = NULL
+                 WHERE delivered_in_run_id = $1",
+                &[&run_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        }
+
         let stop_reason = truncate_utf8(&outcome.stop_reason, 128).to_owned();
         let tokens_used = outcome.total_tokens();
         let tokens_i64 = tokens_used.and_then(|v| i64::try_from(v).ok());
@@ -3378,19 +4131,20 @@ impl HeadService {
             .query_one(
                 "UPDATE runs
                  SET assistant_message_id = $2,
-                     status = $3,
+                     status = CASE WHEN status = 'unknown_external' THEN 'unknown_external' ELSE $3 END,
                      stop_reason = $4,
                      rehydrated = $5,
                      tokens_used = $6,
                      wall_ms = $7,
                      finished_at = now()
                  WHERE run_id = $1
-                 RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+                 RETURNING status,
+                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
                            TRUNC(EXTRACT(EPOCH FROM finished_at) * 1000)::bigint",
                 &[
                     &run_id.as_uuid(),
                     &assistant_message.as_ref().map(|m| m.message_id.as_uuid()),
-                    &outcome.status.as_str(),
+                    &requested_status.as_str(),
                     &Some(stop_reason.as_str()),
                     &rehydrated,
                     &tokens_i64,
@@ -3399,6 +4153,7 @@ impl HeadService {
             )
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let persisted_status = RunStatus::from_str(run_row.get(0))?;
 
         tx.execute(
             "UPDATE sessions SET updated_at = now() WHERE session_id = $1",
@@ -3412,7 +4167,7 @@ impl HeadService {
             .expire_pending_approvals_for_run_in_tx(
                 &tx,
                 run_id,
-                if outcome.status == RunStatus::Cancelled {
+                if persisted_status == RunStatus::Cancelled {
                     "withdrawn"
                 } else {
                     "expired"
@@ -3429,14 +4184,16 @@ impl HeadService {
             Some(session_id),
             Some(run_id),
             "head",
-            if outcome.status == RunStatus::Cancelled {
+            if persisted_status == RunStatus::Cancelled {
                 "run_cancelled"
+            } else if persisted_status == RunStatus::UnknownExternal {
+                "run_unknown_external"
             } else {
                 "run_succeeded"
             },
             &format!(
                 "run {run_id} finished status={} stop_reason={} decisions={}",
-                outcome.status,
+                persisted_status,
                 stop_reason,
                 decisions.len()
             ),
@@ -3452,7 +4209,7 @@ impl HeadService {
             payload: json!({
                 "session_id": session_id,
                 "run_id": run_id,
-                "status": outcome.status,
+                "status": persisted_status,
                 "tokens_used": tokens_used,
                 "wall_ms": elapsed_ms,
             }),
@@ -3481,7 +4238,7 @@ impl HeadService {
             agent_config_version_id: agent.current_config_version_id,
             user_message_id,
             assistant_message_id: assistant_message.as_ref().map(|m| m.message_id),
-            status: outcome.status,
+            status: persisted_status,
             stop_reason: Some(stop_reason),
             error_code: None,
             error_summary: None,
@@ -3491,8 +4248,8 @@ impl HeadService {
             tokens_used,
             wall_ms: Some(elapsed_ms),
             correlation_id: correlation_id.clone(),
-            created_at: TimestampMs::from_millis(run_row.get(0)),
-            finished_at: Some(TimestampMs::from_millis(run_row.get(1))),
+            created_at: TimestampMs::from_millis(run_row.get(1)),
+            finished_at: Some(TimestampMs::from_millis(run_row.get(2))),
         };
 
         Ok((assistant_message, run_record))
@@ -3517,12 +4274,21 @@ impl HeadService {
                 let _ = insert_permission_decision(&tx, &self.inner.pg_target, &cap.record).await;
             }
         }
+        // D2-BUG-04: Return undelivered inter-agent messages back to queue on failed turn!
+        let _ = tx
+            .execute(
+                "UPDATE agent_messages
+                 SET delivered_in_run_id = NULL, delivered_at = NULL
+                 WHERE delivered_in_run_id = $1",
+                &[&run_id.as_uuid()],
+            )
+            .await;
         let safe_summary = self.redact(&err.to_string());
         let truncated = truncate_utf8(&safe_summary, 2000).to_owned();
         let _ = tx
             .execute(
                 "UPDATE runs
-                 SET status = 'failed',
+                 SET status = CASE WHEN status = 'unknown_external' THEN 'unknown_external' ELSE 'failed' END,
                      error_code = $2,
                      error_summary = $3,
                      finished_at = now()
@@ -3566,26 +4332,35 @@ impl HeadService {
         }
     }
 
-    /// Finalizes a run whose enclosing future was dropped (e.g. HTTP timeout or client disconnect),
-    /// ensuring PostgreSQL `runs.status = 'running'` and pending approvals are NEVER stranded (H2-01).
+    /// Finalizes a run whose detached worker panicked or was aborted on daemon shutdown,
+    /// ensuring PostgreSQL `runs.status = 'running'`, pending approvals, and stamped
+    /// `agent_messages` are NEVER stranded.
     pub(crate) async fn finalize_abandoned_run(
         &self,
         session_id: SessionId,
         run_id: RunId,
         correlation_id: &CorrelationId,
     ) {
-        let _ = self.inner.runtime.cancel_turn(session_id).await;
+        let _ = self.runtime_router().cancel_turn_all(session_id).await;
         let Ok(mut conn) = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await else {
             return;
         };
         let Ok(tx) = conn.transaction().await else {
             return;
         };
+        let _ = tx
+            .execute(
+                "UPDATE agent_messages
+                 SET delivered_in_run_id = NULL, delivered_at = NULL
+                 WHERE delivered_in_run_id = $1",
+                &[&run_id.as_uuid()],
+            )
+            .await;
         let updated = tx
             .execute(
                 "UPDATE runs
                  SET status = 'cancelled',
-                     stop_reason = 'client_disconnected_or_timeout',
+                     stop_reason = 'worker_aborted_or_shutdown',
                      finished_at = now()
                  WHERE run_id = $1 AND status = 'running'",
                 &[&run_id.as_uuid()],
@@ -3598,7 +4373,7 @@ impl HeadService {
                 &tx,
                 run_id,
                 "withdrawn",
-                "Запрос был прерван или истёк тайм-аут ожидания ответа",
+                "Выполнение было прервано при остановке воркера",
                 &mut pending_events,
             )
             .await
@@ -3612,7 +4387,7 @@ impl HeadService {
                 Some(run_id),
                 "head",
                 "run_abandoned",
-                &format!("run {run_id} abandoned (HTTP disconnect or timeout)"),
+                &format!("run {run_id} abandoned (worker panic or daemon shutdown)"),
             )
             .await;
         }
@@ -3628,7 +4403,7 @@ impl HeadService {
             self.wake_expired_approval_waiters(
                 &expired_perms,
                 session_id,
-                "abandoned due to HTTP disconnect or timeout",
+                "abandoned due to worker abort or shutdown",
             )
             .await;
         }
@@ -3702,25 +4477,7 @@ impl HeadService {
         &self,
         override_profile: Option<RuntimeAuthProfile>,
     ) -> Result<Arc<dyn AgentRuntimePort>, DennettError> {
-        let Some(requested) = override_profile else {
-            return Ok(Arc::clone(&self.inner.runtime));
-        };
-        if self.inner.runtime.auth_profile() == requested {
-            return Ok(Arc::clone(&self.inner.runtime));
-        }
-        if let Some(ref bg) = self.inner.background_runtime
-            && bg.auth_profile() == requested
-        {
-            return Ok(Arc::clone(bg));
-        }
-        Err(DennettError::AuthRequired {
-            profile: requested,
-            detail: format!(
-                "runtime auth profile `{}` is not configured on dennett-head; refusing silent fallback to `{}`",
-                requested.as_method_id(),
-                self.inner.runtime.auth_profile().as_method_id(),
-            ),
-        })
+        self.runtime_router().for_profile(override_profile)
     }
 
     pub(crate) fn effect_port(&self) -> &Arc<dyn ExternalEffectPort> {
@@ -3745,38 +4502,51 @@ impl HeadService {
         Ok(dir)
     }
 
-    pub(crate) fn build_memory_mcp_specs(&self, agent: &AgentRecord) -> Vec<RuntimeMcpServerSpec> {
+    /// Builds least-privilege `dennett-memory` MCP server spec (`D2-SEC-01`).
+    ///
+    /// Security invariants:
+    /// - Empty `agent.current_config.allowed_memory_scopes` ALWAYS returns `Ok(Vec::new())` (never
+    ///   mounts memory MCP and never falls back to a static token!).
+    /// - When `memory_hmac_signer` is configured, token mint failure fails CLOSED (`Err(...)`)
+    ///   rather than silently substituting Head's static token!
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError`] if scoped token minting fails or no token is available.
+    pub(crate) fn build_memory_mcp_specs(
+        &self,
+        agent: &AgentRecord,
+    ) -> Result<Vec<RuntimeMcpServerSpec>, DennettError> {
         let Some(ref mcp) = self.inner.memory_mcp else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
+        if agent.current_config.allowed_memory_scopes.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        // When dynamic HMAC signing is configured, mint a least-privilege `dnt1.` token bound
-        // strictly to THIS agent's `allowed_memory_scopes` (preserving cross-project isolation
-        // while eliminating static-token `403 ForbiddenScope` on user-created projects).
-        let effective_token = if let Some(ref signer) = self.inner.memory_hmac_signer
-            && !agent.current_config.allowed_memory_scopes.is_empty()
-        {
+        let effective_token = if let Some(ref signer) = self.inner.memory_hmac_signer {
             let mut caps = BTreeSet::new();
             caps.insert(MemoryCapability::Read);
             caps.insert(MemoryCapability::Write);
-            let principal_res = PrincipalId::try_new(format!("agent:{}", agent.agent_id));
-            match principal_res.and_then(|principal| {
-                signer.mint_scoped_token(
-                    principal,
-                    agent.current_config.allowed_memory_scopes.clone(),
-                    caps,
-                )
-            }) {
-                Ok(tok) => tok,
-                Err(_) => mcp.memory_token.clone(),
-            }
-        } else {
+            let principal = PrincipalId::try_new(format!("agent:{}", agent.agent_id))?;
+            signer.mint_scoped_token(
+                principal,
+                agent.current_config.allowed_memory_scopes.clone(),
+                caps,
+            )?
+        } else if !mcp.memory_token.trim().is_empty() {
             mcp.memory_token.clone()
+        } else {
+            return Err(DennettError::Internal {
+                detail: String::from(
+                    "memory MCP configured without HMAC signer or static memory token",
+                ),
+            });
         };
 
         // CRITICAL SECURITY BOUNDARY: pass ONLY `DENNETT_MEMORY_URL` and scoped
         // `DENNETT_MEMORY_TOKEN` — NEVER PostgreSQL credentials or Head DB URLs!
-        vec![RuntimeMcpServerSpec {
+        Ok(vec![RuntimeMcpServerSpec {
             name: String::from("dennett-memory"),
             command: mcp.binary_path.to_string_lossy().into_owned(),
             args: Vec::new(),
@@ -3790,14 +4560,72 @@ impl HeadService {
                     value: effective_token,
                 },
             ],
-        }]
+        }])
+    }
+
+    /// Builds project-scoped `dennett-control` MCP server spec (`dennett-control-mcp`) when both
+    /// the binary path and `dennett-head`'s bound loopback HTTP URL are configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError`] if `dct1.` token minting fails.
+    pub(crate) fn build_control_mcp_spec(
+        &self,
+        project_id: ProjectId,
+        agent_id: AgentId,
+        session_id: SessionId,
+        session_kind: SessionKind,
+    ) -> Result<Option<RuntimeMcpServerSpec>, DennettError> {
+        let Some(ref bin) = self.inner.control_mcp_bin else {
+            return Ok(None);
+        };
+        let Some(head_url) = self.self_http_url() else {
+            return Ok(None);
+        };
+        let token = self.inner.control_token_signer.mint_control_token(
+            project_id,
+            agent_id,
+            session_id,
+            session_kind,
+        )?;
+        Ok(Some(RuntimeMcpServerSpec {
+            name: String::from("dennett-control"),
+            command: bin.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            env: vec![
+                RuntimeMcpEnvEntry {
+                    name: String::from("DENNETT_HEAD_URL"),
+                    value: head_url,
+                },
+                RuntimeMcpEnvEntry {
+                    name: String::from("DENNETT_CONTROL_PROJECT_ID"),
+                    value: project_id.to_string(),
+                },
+                RuntimeMcpEnvEntry {
+                    name: String::from("DENNETT_CONTROL_AGENT_ID"),
+                    value: agent_id.to_string(),
+                },
+                RuntimeMcpEnvEntry {
+                    name: String::from("DENNETT_CONTROL_SESSION_ID"),
+                    value: session_id.to_string(),
+                },
+                RuntimeMcpEnvEntry {
+                    name: String::from("DENNETT_CONTROL_TOKEN"),
+                    value: token,
+                },
+            ],
+        }))
     }
 
     pub(crate) fn collect_turn_secrets(&self, mcp_servers: &[RuntimeMcpServerSpec]) -> Vec<String> {
         let mut turn_secrets = self.inner.secrets_to_redact.clone();
         for server in mcp_servers {
             for entry in &server.env {
-                if entry.name == "DENNETT_MEMORY_TOKEN" && !entry.value.trim().is_empty() {
+                if matches!(
+                    entry.name.as_str(),
+                    "DENNETT_MEMORY_TOKEN" | "DENNETT_CONTROL_TOKEN"
+                ) && !entry.value.trim().is_empty()
+                {
                     turn_secrets.push(entry.value.clone());
                 }
             }
@@ -3906,10 +4734,6 @@ impl HeadService {
         (run_ids, task_ids)
     }
 
-    pub(crate) fn background_runtime(&self) -> Option<&Arc<dyn AgentRuntimePort>> {
-        self.inner.background_runtime.as_ref()
-    }
-
     pub(crate) async fn is_task_cancel_signalled(&self, task_id: TaskId) -> bool {
         if self.inner.stopped_tasks.lock().await.contains(&task_id) {
             return true;
@@ -3934,6 +4758,10 @@ impl HeadService {
         })
     }
 
+    pub(crate) async fn clear_stopped_task(&self, task_id: TaskId) {
+        self.inner.stopped_tasks.lock().await.remove(&task_id);
+    }
+
     pub(crate) async fn signal_old_task_generation_preempt(
         &self,
         task_id: TaskId,
@@ -3953,7 +4781,7 @@ impl HeadService {
             let _ = self
                 .signal_session_run_if_matching(session_id, run_id)
                 .await;
-            let _ = self.inner.runtime.cancel_turn(session_id).await;
+            let _ = self.runtime_router().cancel_turn_all(session_id).await;
         }
     }
 
@@ -3979,6 +4807,18 @@ impl HeadService {
                 .entry(session_id)
                 .or_insert_with(|| Arc::new(Mutex::new(()))),
         )
+    }
+
+    /// Prunes an idle per-session execution lock entry when no other caller holds a handle
+    /// (`D2-BUG-05` memory hygiene).
+    pub(crate) async fn prune_session_lock(&self, session_id: SessionId) {
+        let mut locks = self.inner.session_locks.lock().await;
+        if locks
+            .get(&session_id)
+            .is_some_and(|lock| Arc::strong_count(lock) == 1)
+        {
+            locks.remove(&session_id);
+        }
     }
 
     pub(crate) fn cached_memory_status(&self) -> MemoryStatus {
@@ -4089,6 +4929,55 @@ const _: () = {
     assert_send_sync::<HeadServiceExtras>();
     assert_send_sync::<MemoryMcpWiring>();
 };
+
+fn ordered_item_to_memory_outbox_item(
+    ordered: &OrderedOutboxItem,
+) -> Result<MemoryOutboxItem, DennettError> {
+    let env: MemoryOutboxEnvelope =
+        serde_json::from_str(&ordered.payload_json).map_err(|err| DennettError::Internal {
+            detail: format!("corrupt ordered_outbox memory envelope JSON: {err}"),
+        })?;
+    let payload_json =
+        serde_json::to_string(&env.note_request).map_err(|err| DennettError::Internal {
+            detail: format!("failed serializing memory outbox note_request: {err}"),
+        })?;
+    let status = match ordered.status {
+        OrderedOutboxStatus::Delivered => MemoryOutboxStatus::Delivered,
+        OrderedOutboxStatus::Parked => MemoryOutboxStatus::Failed,
+        _ => MemoryOutboxStatus::Pending,
+    };
+    Ok(MemoryOutboxItem {
+        outbox_id: OutboxItemId::from_uuid(ordered.item_id.as_uuid()),
+        session_id: env.session_id,
+        run_id: env.run_id,
+        scope: env.scope,
+        idempotency_key: env.idempotency_key,
+        operation: env.operation,
+        payload_json,
+        status,
+        attempts: ordered.attempts,
+        last_error: ordered.last_error.clone(),
+        delivered_event_id: env.delivered_event_id,
+        delivered_note_id: env.delivered_note_id,
+        correlation_id: ordered.correlation_id.clone(),
+        created_at: ordered.created_at,
+        updated_at: ordered.updated_at,
+    })
+}
+
+fn infer_artifact_mime_type(name: &str) -> &'static str {
+    let ext = Path::new(name.trim())
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("json") => "application/json",
+        Some("txt" | "log") => "text/plain",
+        Some("csv") => "text/csv",
+        Some("html" | "htm") => "text/html",
+        _ => "text/markdown",
+    }
+}
 
 fn detect_os_account_label() -> Option<String> {
     std::env::var("USERNAME")

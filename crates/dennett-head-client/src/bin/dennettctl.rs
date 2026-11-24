@@ -20,9 +20,9 @@ use dennett_contracts::{
     PermissionResolutionDecision, PolicyEffect, ProjectId, RebindProjectRequest,
     ReconcileEffectRequest, ReplyTaskRequest, ResolveInboxCardRequest, ResolvePermissionRequest,
     RevokeGrantRequest, RuntimeAuthProfile, ScheduleKind, SendAgentMessageRequest,
-    SendMessageRequest, SessionId, SimEffectBehavior, TaskBudget, TaskId, TaskSchedule,
-    TaskSignalRequest, ThinkingLevel, TimestampMs, UpdateAgentConfigRequest, UpdateProjectRequest,
-    UpdateSessionRequest, UpdateTaskRequest, WorkspaceWritePolicy,
+    SendMessageRequest, SessionId, SessionKind, SimEffectBehavior, TaskBudget, TaskId,
+    TaskSchedule, TaskSignalRequest, ThinkingLevel, TimestampMs, UpdateAgentConfigRequest,
+    UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest, WorkspaceWritePolicy,
 };
 use dennett_head_client::HeadClient;
 use serde::Serialize;
@@ -1260,6 +1260,7 @@ fn parse_session_subcommand(
             let mut agent_id = None;
             let mut project_id = None;
             let mut title = None;
+            let mut session_kind = SessionKind::UserChat;
             while let Some(flag) = iter.next() {
                 match flag.as_str() {
                     "--agent" => agent_id = Some(AgentId::from_str(&next_val(iter, "--agent")?)?),
@@ -1267,6 +1268,9 @@ fn parse_session_subcommand(
                         project_id = Some(ProjectId::from_str(&next_val(iter, "--project")?)?);
                     }
                     "--title" => title = Some(next_val(iter, "--title")?),
+                    "--kind" => {
+                        session_kind = SessionKind::from_str(&next_val(iter, "--kind")?)?;
+                    }
                     other => return Err(unknown_flag(other)),
                 }
             }
@@ -1274,6 +1278,7 @@ fn parse_session_subcommand(
                 agent_id: req_opt(agent_id, "--agent")?,
                 project_id: req_opt(project_id, "--project")?,
                 title: req_opt(title, "--title")?,
+                session_kind,
             };
             req.validate()?;
             Ok(Action::SessionCreate { g, req })
@@ -1486,6 +1491,7 @@ fn parse_task_subcommand(
             let mut fire_at_ms: Option<i64> = None;
             let mut interval_secs: Option<u64> = None;
             let mut daily_time: Option<(u8, u8)> = None;
+            let mut weekly_spec: Option<(u8, u8, u8)> = None;
             let mut timezone = String::from("UTC");
             let mut misfire = MissedRunPolicy::ExecuteOnce;
             let mut wait_for_signal: Option<String> = None;
@@ -1524,6 +1530,9 @@ fn parse_task_subcommand(
                     "--daily" => {
                         daily_time = Some(parse_hhmm(&next_val(iter, "--daily")?)?);
                     }
+                    "--weekly" => {
+                        weekly_spec = Some(parse_weekly_spec(&next_val(iter, "--weekly")?)?);
+                    }
                     "--tz" => timezone = next_val(iter, "--tz")?,
                     "--misfire" => {
                         misfire = MissedRunPolicy::from_str(&next_val(iter, "--misfire")?)?;
@@ -1559,8 +1568,14 @@ fn parse_task_subcommand(
                 }
             }
 
-            let schedule =
-                build_optional_schedule(fire_at_ms, interval_secs, daily_time, timezone, misfire)?;
+            let schedule = build_optional_schedule(
+                fire_at_ms,
+                interval_secs,
+                daily_time,
+                weekly_spec,
+                timezone,
+                misfire,
+            )?;
             let budget = if max_turns.is_some()
                 || max_tokens.is_some()
                 || max_wall_secs.is_some()
@@ -1623,8 +1638,13 @@ fn parse_task_subcommand(
             let mut fire_at_ms = None;
             let mut interval_secs = None;
             let mut daily_time = None;
+            let mut weekly_spec = None;
             let mut timezone = String::from("UTC");
             let mut misfire = MissedRunPolicy::ExecuteOnce;
+            let mut max_turns: Option<u32> = None;
+            let mut max_tokens: Option<u64> = None;
+            let mut max_wall_secs: Option<u64> = None;
+            let mut exceed_policy: Option<BudgetExceedPolicy> = None;
             let mut execute_immediately = None;
             while let Some(flag) = iter.next() {
                 match flag.as_str() {
@@ -1643,22 +1663,63 @@ fn parse_task_subcommand(
                         )?);
                     }
                     "--daily" => daily_time = Some(parse_hhmm(&next_val(iter, "--daily")?)?),
+                    "--weekly" => {
+                        weekly_spec = Some(parse_weekly_spec(&next_val(iter, "--weekly")?)?);
+                    }
                     "--tz" => timezone = next_val(iter, "--tz")?,
                     "--misfire" => {
                         misfire = MissedRunPolicy::from_str(&next_val(iter, "--misfire")?)?;
+                    }
+                    "--max-turns" => {
+                        max_turns =
+                            Some(parse_u32(&next_val(iter, "--max-turns")?, "--max-turns")?);
+                    }
+                    "--max-tokens" => {
+                        max_tokens =
+                            Some(parse_u64(&next_val(iter, "--max-tokens")?, "--max-tokens")?);
+                    }
+                    "--max-wall-secs" => {
+                        max_wall_secs = Some(parse_u64(
+                            &next_val(iter, "--max-wall-secs")?,
+                            "--max-wall-secs",
+                        )?);
+                    }
+                    "--budget-policy" | "--exceed-policy" => {
+                        exceed_policy =
+                            Some(parse_budget_exceed_policy(&next_val(iter, flag.as_str())?)?);
                     }
                     "--no-auto-run" => execute_immediately = Some(false),
                     other => return Err(unknown_flag(other)),
                 }
             }
-            let schedule =
-                build_optional_schedule(fire_at_ms, interval_secs, daily_time, timezone, misfire)?;
+            let schedule = build_optional_schedule(
+                fire_at_ms,
+                interval_secs,
+                daily_time,
+                weekly_spec,
+                timezone,
+                misfire,
+            )?;
+            let budget = if max_turns.is_some()
+                || max_tokens.is_some()
+                || max_wall_secs.is_some()
+                || exceed_policy.is_some()
+            {
+                Some(TaskBudget {
+                    max_turns,
+                    max_tokens,
+                    max_wall_secs,
+                    exceed_policy: exceed_policy.unwrap_or(BudgetExceedPolicy::AskApproval),
+                })
+            } else {
+                None
+            };
             let req = UpdateTaskRequest {
                 title,
                 goal,
                 schedule,
                 clear_schedule,
-                budget: None,
+                budget,
                 execute_immediately,
             };
             req.validate()?;
@@ -2424,21 +2485,59 @@ fn parse_manual_effect_resolution(raw: &str) -> Result<ManualEffectResolution, D
     }
 }
 
+fn parse_weekly_spec(raw: &str) -> Result<(u8, u8, u8), DennettError> {
+    let Some((days_raw, time_raw)) = raw.trim().split_once('@') else {
+        return Err(DennettError::InvalidInput {
+            field: String::from("--weekly"),
+            reason: String::from("expected <mon,wed,fri>@HH:MM (e.g. mon,wed,fri@09:30)"),
+        });
+    };
+    let mut mask: u8 = 0;
+    for tok in days_raw.split(',') {
+        let bit = match tok.trim().to_ascii_lowercase().as_str() {
+            "mon" | "monday" => 1 << 0,
+            "tue" | "tuesday" => 1 << 1,
+            "wed" | "wednesday" => 1 << 2,
+            "thu" | "thursday" => 1 << 3,
+            "fri" | "friday" => 1 << 4,
+            "sat" | "saturday" => 1 << 5,
+            "sun" | "sunday" => 1 << 6,
+            other => {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("--weekly"),
+                    reason: format!("unrecognized weekday `{other}` (expected mon..sun)"),
+                });
+            }
+        };
+        mask |= bit;
+    }
+    if mask == 0 {
+        return Err(DennettError::InvalidInput {
+            field: String::from("--weekly"),
+            reason: String::from("at least one weekday (mon..sun) is required"),
+        });
+    }
+    let (hour, minute) = parse_hhmm(time_raw)?;
+    Ok((mask, hour, minute))
+}
+
 fn build_optional_schedule(
     fire_at_ms: Option<i64>,
     interval_secs: Option<u64>,
     daily_time: Option<(u8, u8)>,
+    weekly_spec: Option<(u8, u8, u8)>,
     timezone: String,
     missed_run_policy: MissedRunPolicy,
 ) -> Result<Option<TaskSchedule>, DennettError> {
     let count = usize::from(fire_at_ms.is_some())
         + usize::from(interval_secs.is_some())
-        + usize::from(daily_time.is_some());
+        + usize::from(daily_time.is_some())
+        + usize::from(weekly_spec.is_some());
     if count > 1 {
         return Err(DennettError::InvalidInput {
             field: String::from("schedule"),
             reason: String::from(
-                "specify at most one of --fire-at-ms, --interval-secs, or --daily",
+                "specify at most one of --fire-at-ms, --interval-secs, --daily, or --weekly",
             ),
         });
     }
@@ -2452,6 +2551,12 @@ fn build_optional_schedule(
         }
     } else if let Some((hour, minute)) = daily_time {
         ScheduleKind::DailyWallTime { hour, minute }
+    } else if let Some((weekdays_mask, hour, minute)) = weekly_spec {
+        ScheduleKind::WeeklyWallTime {
+            weekdays_mask,
+            hour,
+            minute,
+        }
     } else {
         return Ok(None);
     };
@@ -2564,7 +2669,7 @@ fn print_usage() {
            project detach --id <uuid>\n\
            project archive|unarchive|remove --id <uuid>\n\
            project delete --id <uuid> --confirm\n\
-           session create --agent <uuid> --project <uuid> --title <t>\n\
+           session create --agent <uuid> --project <uuid> --title <t> [--kind user_chat|task_run]\n\
            session list\n\
            session show --id <uuid>\n\
            session update --id <uuid> --title <t>\n\
@@ -2574,22 +2679,22 @@ fn print_usage() {
            artifact list --session <uuid>\n\
            artifact revisions --session <uuid> (--id <uuid> | --name <n>)\n\
            artifact finalize|archive|unarchive|remove|delete --session <uuid> --id <uuid> [--confirm]\n\
-           task create --project <uuid> --agent <uuid> --title <t> --goal <g> [--fire-at-ms <ms> | --interval-secs <s> | --daily HH:MM] [--tz <iana>] [--misfire execute_once|skip|ask] [--wait-for-signal] [--max-turns <n>] [--max-tokens <n>] [--max-wall-secs <n>] [--budget-policy ask_approval|fail] [--parent-task <uuid>] [--skill <s>] [--auth-profile <p>] [--no-auto-run]\n\
+           task create --project <uuid> --agent <uuid> --title <t> --goal <g> [--fire-at-ms <ms> | --interval-secs <s> | --daily HH:MM | --weekly mon,wed@HH:MM] [--tz <iana>] [--misfire execute_once|skip|ask] [--wait-for-signal <name>] [--max-turns <n>] [--max-tokens <n>] [--max-wall-secs <n>] [--budget-policy ask_approval|fail] [--parent-task <uuid>] [--skill <s>] [--auth-profile <p>] [--no-auto-run]\n\
            task list [--project <uuid>] [--status <s>]\n\
            task show --id <uuid>\n\
-           task update --id <uuid> [--title <t>] [--goal <g>] [--clear-schedule]\n\
+           task update --id <uuid> [--title <t>] [--goal <g>] [--clear-schedule | --fire-at-ms <ms> | --interval-secs <s> | --daily HH:MM | --weekly mon,wed@HH:MM] [--tz <iana>] [--misfire execute_once|skip|ask] [--max-turns <n>] [--max-tokens <n>] [--max-wall-secs <n>] [--budget-policy ask_approval|fail] [--no-auto-run]\n\
            task signal --id <uuid> --name <n> --payload <text> --idempotency-key <k>\n\
            task reply --id <uuid> --answer <text>\n\
            task cancel --id <uuid>\n\
            inbox list [--status open|resolved|all] [--project <uuid>]\n\
-           inbox resolve --id <uuid> --revision <n> --action <permission|reply|increase_budget|run_now|skip_missed|reconcile_effect|cancel_task|dismiss> [...]\n\
+           inbox resolve --id <uuid> --revision <n> --action <permission|reply|increase_budget|run_now|skip_missed|reconcile_effect|stop_task> [...]\n\
            permission list [--status pending|all] [--session <uuid>]\n\
-           permission resolve --id <uuid> --decision <approve_once|approve_project|approve_task|deny> [--ttl-secs <s>] [--max-uses <n>] [--revision <n>]\n\
+           permission resolve --id <uuid> --decision <approve_once|allow_scope|deny> [--ttl-secs <s>] [--max-uses <n>] [--revision <n>]\n\
            grant list [--project <uuid>] [--include-revoked]\n\
            grant revoke --id <uuid> [--reason <r>]\n\
            effect dispatch --project <uuid> --session <uuid> --agent <uuid> --operation <op> --recipient <r> --idempotency-key <k> [--task <uuid>] [--behavior success|denied|failed_before_accept|lost_ack]\n\
            effect list [--task <uuid>] [--session <uuid>] [--status <s>]\n\
-           effect reconcile --id <uuid> [--manual mark_confirmed|mark_failed|mark_abandoned] [--note <text>]\n\
+           effect reconcile --id <uuid> [--manual mark_confirmed|mark_not_executed] [--note <text>]\n\
            events snapshot [--project <uuid>] [--include-archived]\n\
            events tail [--after <seq>] [--epoch <n>] [--project <uuid>] [--limit <n>]\n\
            policy add --scope <scope> --tool <tool> [--target <pat>] --effect <allow|deny> --reason <r>\n\
@@ -2807,6 +2912,44 @@ mod tests {
             )
             .expect("parse project delete"),
             Action::ProjectDelete { confirm: true, .. }
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "task",
+                    "update",
+                    "--id",
+                    &task_id.to_string(),
+                    "--weekly",
+                    "mon,wed,fri@09:30",
+                    "--tz",
+                    "UTC",
+                    "--max-turns",
+                    "8",
+                    "--max-tokens",
+                    "12000",
+                    "--max-wall-secs",
+                    "180",
+                    "--budget-policy",
+                    "fail",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse task update with budget and weekly schedule"),
+            Action::TaskUpdate { ref req, .. }
+                if req.budget.as_ref().is_some_and(|b| b.max_turns == Some(8)
+                    && b.max_tokens == Some(12000)
+                    && b.max_wall_secs == Some(180)
+                    && b.exceed_policy == BudgetExceedPolicy::Fail)
+                    && matches!(
+                        req.schedule.as_ref().map(|s| &s.kind),
+                        Some(ScheduleKind::WeeklyWallTime {
+                            weekdays_mask: 0b001_0101,
+                            hour: 9,
+                            minute: 30,
+                        })
+                    )
         ));
         assert!(matches!(
             parse_cli(

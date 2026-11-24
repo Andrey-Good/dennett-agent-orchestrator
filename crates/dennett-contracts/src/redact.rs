@@ -11,7 +11,7 @@ pub const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 /// URI and key-value rules without corrupting unrelated English words).
 const MIN_AUTO_GLOBAL_SECRET_LEN: usize = 3;
 
-const SECRET_KEY_NAMES: [&str; 12] = [
+const SECRET_KEY_NAMES: [&str; 15] = [
     "password",
     "gemini_api_key",
     "google_api_key",
@@ -22,6 +22,9 @@ const SECRET_KEY_NAMES: [&str; 12] = [
     "memory_token",
     "dennett_head_token",
     "head_token",
+    "dennett_control_token",
+    "control_token",
+    "x-dennett-control-token",
     "auth_secret",
     "hmac_secret",
 ];
@@ -552,28 +555,34 @@ fn redact_prefixed_token(
 }
 
 fn redact_dennett_signed_tokens(input: &str) -> String {
+    let after_dnt = redact_dennett_signed_token_prefix(input, "dnt1");
+    redact_dennett_signed_token_prefix(&after_dnt, "dct1")
+}
+
+fn redact_dennett_signed_token_prefix(input: &str, prefix: &str) -> String {
+    let needle = format!("{prefix}.");
     let mut result = String::with_capacity(input.len());
     let mut idx = 0;
 
-    while let Some(rel) = input[idx..].find("dnt1.") {
+    while let Some(rel) = input[idx..].find(&needle) {
         let start = idx + rel;
         let bytes = &input.as_bytes()[start..];
         let raw_len = bytes.iter().take_while(|&&b| is_jwt_char(b)).count();
         let trimmed = input[start..start + raw_len].trim_end_matches('.');
         let mut parts = trimmed.split('.');
-        let is_dnt1 = matches!(
+        let is_signed = matches!(
             (parts.next(), parts.next(), parts.next(), parts.next()),
-            (Some("dnt1"), Some(payload), Some(sig), None)
-                if payload.len() >= 8 && sig.len() >= 8
+            (Some(p), Some(payload), Some(sig), None)
+                if p == prefix && payload.len() >= 8 && sig.len() >= 8
         );
 
-        if is_dnt1 {
+        if is_signed {
             result.push_str(&input[idx..start]);
             result.push_str(REDACTED_PLACEHOLDER);
             idx = start + trimmed.len();
         } else {
-            result.push_str(&input[idx..start + 5]);
-            idx = start + 5;
+            result.push_str(&input[idx..start + needle.len()]);
+            idx = start + needle.len();
         }
     }
 
@@ -788,6 +797,20 @@ mod tests {
         assert_eq!(redact_secrets("dnt1.short.x", &[]), "dnt1.short.x");
     }
 
+    #[test]
+    fn redact_secrets_scrubs_dennett_dct1_control_tokens_idempotently() {
+        let token = "dct1.eyJwcm9qZWN0X2lkIjoiYWJjZDEyMzQiLCJzZXNzaW9uX2tpbmQiOiJ1c2VyX2NoYXQifQ.XyZ9876543210_-abcdef0123456789";
+        let raw = format!(
+            "head rejected X-Dennett-Control-Token: {token} env DENNETT_CONTROL_TOKEN={token} raw={token}."
+        );
+        let once = redact_secrets(&raw, &[]);
+        assert!(!once.contains("dct1."));
+        assert!(!once.contains("eyJwcm9qZWN0X2lk"));
+        assert!(!once.contains("XyZ9876543210"));
+        assert_eq!(redact_secrets(&once, &[]), once);
+        assert_eq!(redact_secrets("dct1.short.x", &[]), "dct1.short.x");
+    }
+
     fn targeted_redaction_strategy() -> impl Strategy<Value = String> {
         prop::collection::vec(
             prop_oneof![
@@ -800,6 +823,9 @@ mod tests {
                 Just(String::from("Bearer\t")),
                 Just(String::from("[REDACTED]")),
                 Just(String::from("dnt1.eyJ0ZXN0IjoxfQ.0123456789abcdef")),
+                Just(String::from("dct1.eyJ0ZXN0IjoxfQ.0123456789abcdef")),
+                Just(String::from("DENNETT_CONTROL_TOKEN=")),
+                Just(String::from("X-Dennett-Control-Token: ")),
                 Just(String::from("GEMINI_API_KEY=")),
                 Just(String::from("?password=")),
                 Just(String::from("&sslmode=disable")),

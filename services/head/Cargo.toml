@@ -26,6 +26,7 @@ tokio-postgres.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+dennett-head-client.workspace = true
 proptest.workspace = true
 
 [lints]

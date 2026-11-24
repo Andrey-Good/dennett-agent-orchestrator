@@ -13,7 +13,7 @@ use axum::body::Bytes;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::header::{HOST, ORIGIN};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -27,13 +27,14 @@ use dennett_contracts::{
     InboxCardId, MemoryStatus, PermissionRequestId, ProfileMode, ProjectId, RebindProjectRequest,
     ReconcileEffectRequest, ReplyTaskRequest, ResolveInboxCardRequest, ResolvePermissionRequest,
     RevokeGrantRequest, SchedulerTickRequest, SendAgentMessageRequest, SendMessageRequest,
-    ServiceKind, SessionId, TaskId, TaskSignalRequest, TimestampMs, UpdateAgentConfigRequest,
-    UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    ServiceKind, SessionId, SessionKind, TaskId, TaskSignalRequest, TimestampMs,
+    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, watch};
 use tokio::time;
 
+use crate::memory_auth::ControlTokenClaims;
 use crate::service::{HEAD_STAGE_LABEL, HeadService, d2_head_capabilities};
 
 /// Maximum incoming HTTP request body size (1 MiB).
@@ -46,6 +47,7 @@ pub const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
 static HEADER_SHUTDOWN: HeaderName = HeaderName::from_static("x-dennett-shutdown");
 static HEADER_SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
+static HEADER_CONTROL_TOKEN: HeaderName = HeaderName::from_static("x-dennett-control-token");
 
 /// Shared `axum` application state for `dennett-head`.
 #[derive(Clone)]
@@ -335,12 +337,38 @@ async fn enforce_limits_and_timeout(
         return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
     }
 
+    // Fail-closed route scope check when a `dct1.` control token is presented: restrict it
+    // exclusively to the narrow event/task MCP route surface!
+    if request.headers().contains_key(&HEADER_CONTROL_TOKEN)
+        && !is_control_token_allowed_route(request.method(), request.uri().path())
+    {
+        let err = DennettError::AccessDenied {
+            scope: String::from("http.control_token"),
+            reason: format!(
+                "control MCP token is not permitted to invoke {} {}",
+                request.method(),
+                request.uri().path()
+            ),
+        };
+        return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
+    }
+
     let Ok(_permit) = Arc::clone(&state.request_limit).try_acquire_owned() else {
         let err = DennettError::Internal {
             detail: String::from("concurrent request limit reached"),
         };
         return json_api_error(StatusCode::SERVICE_UNAVAILABLE, err, &correlation_id);
     };
+
+    // D2-ARCH-01 / D2-BUG-03: Exempt `POST /v1/sessions/{id}/messages` from the fixed 180s
+    // HTTP layer timeout so interactive human approvals (paused RPC deadline) and detached turns
+    // are never spuriously aborted by a 504 at the HTTP middleware boundary!
+    let is_session_message_turn = request.method() == Method::POST
+        && request.uri().path().starts_with("/v1/sessions/")
+        && request.uri().path().ends_with("/messages");
+    if is_session_message_turn {
+        return next.run(request).await;
+    }
 
     if let Ok(resp) = time::timeout(HTTP_REQUEST_TIMEOUT, next.run(request)).await {
         resp
@@ -350,6 +378,48 @@ async fn enforce_limits_and_timeout(
         };
         json_api_error(StatusCode::GATEWAY_TIMEOUT, err, &correlation_id)
     }
+}
+
+fn is_control_token_allowed_route(method: &Method, path: &str) -> bool {
+    if method == Method::GET && path == "/healthz" {
+        return true;
+    }
+    if method == Method::POST && path == "/v1/sessions" {
+        return true;
+    }
+    if path == "/v1/tasks" && matches!(*method, Method::GET | Method::POST) {
+        return true;
+    }
+    if let Some(rest) = path.strip_prefix("/v1/tasks/") {
+        if !rest.contains('/') && matches!(*method, Method::GET | Method::PATCH) {
+            return true;
+        }
+        if let Some(task_seg) = rest.strip_suffix("/cancel")
+            && !task_seg.is_empty()
+            && !task_seg.contains('/')
+            && method == Method::POST
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn verify_optional_control_token(
+    svc: &HeadService,
+    headers: &HeaderMap,
+) -> Result<Option<ControlTokenClaims>, DennettError> {
+    let Some(raw_header) = headers.get(&HEADER_CONTROL_TOKEN) else {
+        return Ok(None);
+    };
+    let raw = raw_header
+        .to_str()
+        .map_err(|_| DennettError::Unauthorized {
+            reason: String::from("X-Dennett-Control-Token header must be valid ASCII"),
+        })?;
+    svc.control_token_signer()
+        .verify_control_token(raw, TimestampMs::now())
+        .map(Some)
 }
 
 fn validate_loopback_request_headers(headers: &HeaderMap) -> Result<(), DennettError> {
@@ -713,10 +783,38 @@ async fn handle_create_session(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let Json(req) = match payload {
         Ok(j) => j,
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
+    if let Some(claims) = control_claims {
+        if req.project_id != claims.project_id {
+            return domain_error_response(
+                DennettError::AccessDenied {
+                    scope: format!("project:{}", claims.project_id),
+                    reason: String::from(
+                        "control MCP token cannot create sessions in another project",
+                    ),
+                },
+                &cid,
+            );
+        }
+        if req.session_kind != SessionKind::TaskRun {
+            return domain_error_response(
+                DennettError::AccessDenied {
+                    scope: format!("project:{}", claims.project_id),
+                    reason: String::from(
+                        "control MCP token may only create dedicated `task_run` sessions",
+                    ),
+                },
+                &cid,
+            );
+        }
+    }
     match svc.create_session(req, &cid).await {
         Ok(session) => json_with_correlation(StatusCode::CREATED, &session, &cid),
         Err(err) => domain_error_response(err, &cid),
@@ -1016,10 +1114,38 @@ async fn handle_create_task(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let Json(req) = match payload {
         Ok(j) => j,
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
+    if let Some(claims) = control_claims {
+        if req.project_id != claims.project_id {
+            return domain_error_response(
+                DennettError::AccessDenied {
+                    scope: format!("project:{}", claims.project_id),
+                    reason: String::from(
+                        "control MCP token cannot create tasks/events in another project",
+                    ),
+                },
+                &cid,
+            );
+        }
+        if claims.session_kind == SessionKind::TaskRun {
+            return domain_error_response(
+                DennettError::AccessDenied {
+                    scope: format!("session:{}", claims.session_id),
+                    reason: String::from(
+                        "background task_run session cannot create new scheduled events via control MCP",
+                    ),
+                },
+                &cid,
+            );
+        }
+    }
     match svc.create_task(req, &cid).await {
         Ok(task) => json_with_correlation(StatusCode::CREATED, &task, &cid),
         Err(err) => domain_error_response(err, &cid),
@@ -1035,10 +1161,30 @@ async fn handle_list_tasks(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
-    let project_id = match parse_optional_id::<ProjectId>(query.project_id.as_deref()) {
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let mut project_id = match parse_optional_id::<ProjectId>(query.project_id.as_deref()) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
+    if let Some(claims) = control_claims {
+        if let Some(requested_pid) = project_id
+            && requested_pid != claims.project_id
+        {
+            return domain_error_response(
+                DennettError::AccessDenied {
+                    scope: format!("project:{}", claims.project_id),
+                    reason: String::from(
+                        "control MCP token cannot list tasks belonging to another project",
+                    ),
+                },
+                &cid,
+            );
+        }
+        project_id = Some(claims.project_id);
+    }
     match svc.list_tasks(project_id, query.status.as_deref()).await {
         Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
         Err(err) => domain_error_response(err, &cid),
@@ -1054,12 +1200,31 @@ async fn handle_get_task_detail(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let task_id = match TaskId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
     match svc.get_task_detail(task_id).await {
-        Ok(detail) => json_with_correlation(StatusCode::OK, &detail, &cid),
+        Ok(detail) => {
+            if let Some(claims) = control_claims
+                && detail.task.project_id != claims.project_id
+            {
+                return domain_error_response(
+                    DennettError::AccessDenied {
+                        scope: format!("project:{}", claims.project_id),
+                        reason: String::from(
+                            "control MCP token cannot inspect a task in another project",
+                        ),
+                    },
+                    &cid,
+                );
+            }
+            json_with_correlation(StatusCode::OK, &detail, &cid)
+        }
         Err(err) => domain_error_response(err, &cid),
     }
 }
@@ -1074,6 +1239,10 @@ async fn handle_update_task(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let task_id = match TaskId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
@@ -1082,6 +1251,23 @@ async fn handle_update_task(
         Ok(j) => j,
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
+    if let Some(claims) = control_claims {
+        match svc.get_task_detail(task_id).await {
+            Ok(detail) if detail.task.project_id == claims.project_id => {}
+            Ok(_) => {
+                return domain_error_response(
+                    DennettError::AccessDenied {
+                        scope: format!("project:{}", claims.project_id),
+                        reason: String::from(
+                            "control MCP token cannot modify a task in another project",
+                        ),
+                    },
+                    &cid,
+                );
+            }
+            Err(err) => return domain_error_response(err, &cid),
+        }
+    }
     match svc.update_task(task_id, req, &cid).await {
         Ok(task) => json_with_correlation(StatusCode::OK, &task, &cid),
         Err(err) => domain_error_response(err, &cid),
@@ -1152,10 +1338,31 @@ async fn handle_cancel_task(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let task_id = match TaskId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
+    if let Some(claims) = control_claims {
+        match svc.get_task_detail(task_id).await {
+            Ok(detail) if detail.task.project_id == claims.project_id => {}
+            Ok(_) => {
+                return domain_error_response(
+                    DennettError::AccessDenied {
+                        scope: format!("project:{}", claims.project_id),
+                        reason: String::from(
+                            "control MCP token cannot cancel a task in another project",
+                        ),
+                    },
+                    &cid,
+                );
+            }
+            Err(err) => return domain_error_response(err, &cid),
+        }
+    }
     match svc.cancel_task(task_id, &cid).await {
         Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
         Err(err) => domain_error_response(err, &cid),

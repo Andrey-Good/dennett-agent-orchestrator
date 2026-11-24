@@ -16,8 +16,8 @@ use dennett_contracts::{
     CreateTaskRequest, DennettError, EffectClaimId, IdempotencyKey, InboxCardId, InboxCardKind,
     MemoryScope, MessageId, MissedRunPolicy, PermissionRequestId, PermissionRequestStatus,
     PermissionResolutionDecision, ProfileMode, ProjectId, ResolvePermissionRequest, RunId,
-    RunStatus, RuntimeAuthProfile, ScheduleKind, SendMessageRequest, TaskBudget, TaskSchedule,
-    TaskSignalOutcome, TaskSignalRequest, TaskStatus, TimestampMs, UpdateTaskRequest,
+    RunStatus, RuntimeAuthProfile, ScheduleKind, SendMessageRequest, SessionKind, TaskBudget,
+    TaskSchedule, TaskSignalOutcome, TaskSignalRequest, TaskStatus, TimestampMs, UpdateTaskRequest,
     WorkspaceWritePolicy,
 };
 use dennett_head::{
@@ -724,6 +724,7 @@ async fn v07_direct_late_complete_task_run_fenced_and_auth_profile_override_fail
                 agent_id: agent.agent_id,
                 project_id: proj.project_id,
                 title: String::from("V07 Direct Session"),
+                session_kind: SessionKind::UserChat,
             },
             &cid,
         )
@@ -805,6 +806,7 @@ async fn v07_direct_late_complete_task_run_fenced_and_auth_profile_override_fail
         status: RunStatus::Succeeded,
         events: Vec::new(),
         usage: None,
+        human_wait_ms: 0,
     };
     let persisted_status = svc
         .complete_task_run(
@@ -876,7 +878,7 @@ async fn v07_direct_late_complete_task_run_fenced_and_auth_profile_override_fail
         .await
         .expect("create api-key task");
 
-    svc.execute_task_generation(api_task.task_id, 1, None, cid.clone())
+    svc.execute_task_generation(api_task.task_id, 1, cid.clone())
         .await
         .expect("execute_task_generation records fail-closed auth error");
 
@@ -943,6 +945,7 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
                 agent_id: agent.agent_id,
                 project_id: proj.project_id,
                 title: String::from("H2-01 Session"),
+                session_kind: SessionKind::UserChat,
             },
             &cid,
         )
@@ -1153,26 +1156,30 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
         .expect("inbox after stale deny");
     assert_eq!(inbox_after_b.unresolved_count, 0);
 
-    // Part C: Dropping an in-flight `send_message` future (simulating HTTP disconnect)
-    // triggers `ActiveRunGuard::drop` -> cancels run in PG and releases the session!
-    let svc_abort = svc.clone();
-    let cid_abort = cid.clone();
+    // Part C (D2-ARCH-01 / V03): Dropping an in-flight `send_message` caller future (simulating
+    // HTTP client disconnect or Desktop UI close) MUST NOT cancel the detached server run!
+    // Replaying the SAME `client_message_id` joins the active run cleanly (deduplicated=true),
+    // while explicit `cancel_session_run` and server `turn_timeout` cleanly release the session!
+    let detached_cmid = format!("detached-v03-{}", Uuid::new_v4().simple());
+    let svc_detach = svc.clone();
+    let cid_detach = cid.clone();
     let sid = session.session_id;
+    let cmid_first = detached_cmid.clone();
     let in_flight = tokio::spawn(async move {
-        let _ = svc_abort
+        let _ = svc_detach
             .send_message(
                 sid,
                 SendMessageRequest {
-                    content: String::from("[SIM:SLOW:10000]"),
-                    timeout_ms: Some(15_000),
-                    client_message_id: None,
+                    content: String::from("[SIM:SLOW:700]"),
+                    timeout_ms: Some(10_000),
+                    client_message_id: Some(cmid_first),
                 },
-                cid_abort,
+                cid_detach,
             )
             .await;
     });
 
-    // Wait until the run row appears in PG as 'running', then abort the future!
+    // Wait until the run row appears in PG as 'running', then drop/abort the caller's handle!
     let mut saw_running = false;
     for _ in 0..40 {
         let det = svc.get_session_detail(sid).await.expect("poll detail");
@@ -1186,18 +1193,99 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
     in_flight.abort();
     let _ = in_flight.await;
 
-    let mut cleaned_up = false;
+    // Duplicate retry with the SAME `client_message_id` joins the STILL-RUNNING detached turn
+    // instead of returning 409 Conflict, and observes the succeeded run (`V03`)!
+    let joined = svc
+        .send_message(
+            sid,
+            SendMessageRequest {
+                content: String::from("[SIM:SLOW:700]"),
+                timeout_ms: Some(10_000),
+                client_message_id: Some(detached_cmid),
+            },
+            cid.clone(),
+        )
+        .await
+        .expect("D2-ARCH-01: duplicate client_message_id must join active detached run cleanly");
+    assert!(
+        joined.deduplicated,
+        "joined duplicate client_message_id must return deduplicated=true"
+    );
+    assert_eq!(
+        joined.run.status,
+        RunStatus::Succeeded,
+        "V03: detached server run must survive client disconnect and finish Succeeded"
+    );
+
+    // Explicit `/cancel` stops a long detached turn and immediately frees the session slot!
+    let svc_cancel_test = svc.clone();
+    let cid_cancel_test = cid.clone();
+    let cancel_turn_handle = tokio::spawn(async move {
+        svc_cancel_test
+            .send_message(
+                sid,
+                SendMessageRequest {
+                    content: String::from("[SIM:SLOW:10000]"),
+                    timeout_ms: Some(15_000),
+                    client_message_id: None,
+                },
+                cid_cancel_test,
+            )
+            .await
+    });
+    let mut saw_cancel_running = false;
     for _ in 0..40 {
-        let det = svc.get_session_detail(sid).await.expect("poll after abort");
-        if det.runs.iter().all(|r| r.status != RunStatus::Running) {
-            cleaned_up = true;
+        let det = svc
+            .get_session_detail(sid)
+            .await
+            .expect("poll cancel detail");
+        if det.runs.iter().any(|r| r.status == RunStatus::Running) {
+            saw_cancel_running = true;
             break;
         }
         time::sleep(Duration::from_millis(50)).await;
     }
     assert!(
-        cleaned_up,
-        "H2-01: ActiveRunGuard::drop must finalize abandoned run out of Running"
+        saw_cancel_running,
+        "long detached turn should enter Running"
+    );
+    let cancel_resp = svc
+        .cancel_session_run(sid, &cid)
+        .await
+        .expect("explicit cancel_session_run");
+    assert!(cancel_resp.cancelled);
+    let cancelled_turn = cancel_turn_handle
+        .await
+        .expect("join cancelled turn")
+        .expect("cancelled turn returns Cancelled outcome");
+    assert_eq!(cancelled_turn.run.status, RunStatus::Cancelled);
+
+    // Server `turn_timeout` cleanly fails and frees the session slot without stranded `Running` rows!
+    let timed_out = svc
+        .send_message(
+            sid,
+            SendMessageRequest {
+                content: String::from("[SIM:SLOW:5000]"),
+                timeout_ms: Some(300),
+                client_message_id: None,
+            },
+            cid.clone(),
+        )
+        .await;
+    assert!(
+        matches!(timed_out, Err(DennettError::Timeout { .. })),
+        "server turn_timeout must return Timeout, got: {timed_out:?}"
+    );
+    let det_after_timeout = svc
+        .get_session_detail(sid)
+        .await
+        .expect("detail after server timeout");
+    assert!(
+        det_after_timeout
+            .runs
+            .iter()
+            .all(|r| r.status != RunStatus::Running),
+        "server turn_timeout must leave zero runs stuck in Running"
     );
 
     // Subsequent message on the same session must succeed immediately!
@@ -1205,14 +1293,14 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
         .send_message(
             sid,
             SendMessageRequest {
-                content: String::from("Followup after disconnect"),
+                content: String::from("Followup after cancel and timeout"),
                 timeout_ms: Some(5_000),
                 client_message_id: None,
             },
             cid.clone(),
         )
         .await
-        .expect("followup after abandoned run must succeed");
+        .expect("followup after cancel and timeout must succeed");
     assert_eq!(followup.run.status, RunStatus::Succeeded);
 
     drop(pg);
@@ -1655,6 +1743,7 @@ async fn h2_03_h2_07_project_remove_delete_cleanup_deleted_filtering_and_artifac
                 agent_id: agent.agent_id,
                 project_id: proj_a.project_id,
                 title: String::from("Session A"),
+                session_kind: SessionKind::UserChat,
             },
             &cid,
         )
@@ -2151,6 +2240,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
                 agent_id: agent.agent_id,
                 project_id: proj.project_id,
                 title: String::from("Shared Serialized Session"),
+                session_kind: SessionKind::UserChat,
             },
             &cid,
         )
@@ -2221,7 +2311,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
     let tid_shared = shared_task.task_id;
     let h_task = tokio::spawn(async move {
         queued_task_svc
-            .execute_task_generation(tid_shared, 1, None, queued_task_cid)
+            .execute_task_generation(tid_shared, 1, queued_task_cid)
             .await
     });
 
@@ -2266,7 +2356,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
     let tid_slow = slow_task.task_id;
     let h_slow_task = tokio::spawn(async move {
         slow_bg_svc
-            .execute_task_generation(tid_slow, 1, None, slow_bg_cid)
+            .execute_task_generation(tid_slow, 1, slow_bg_cid)
             .await
     });
     time::sleep(Duration::from_millis(180)).await;
@@ -2331,7 +2421,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
         .await
         .expect("create bg api task");
     dual_svc
-        .execute_task_generation(bg_api_task.task_id, 1, None, cid.clone())
+        .execute_task_generation(bg_api_task.task_id, 1, cid.clone())
         .await
         .expect("execute on background gemini-api-key runtime");
 
@@ -2360,6 +2450,7 @@ async fn h2_04_h2_05_h2_06_signal_matching_session_serialization_and_background_
                 agent_id: agent.agent_id,
                 project_id: proj.project_id,
                 title: String::from("Interactive OAuth Session"),
+                session_kind: SessionKind::UserChat,
             },
             &cid,
         )

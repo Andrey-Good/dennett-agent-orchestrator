@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex};
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
     AgentId, CapabilityGrantId, CapabilityGrantRecord, CorrelationId, MemoryScope,
-    PermissionDecisionId, PermissionDecisionRecord, PolicyEffect, PolicyRule, ProjectId, SessionId,
-    TaskId, TimestampMs, WorkspaceWritePolicy,
+    PermissionDecisionId, PermissionDecisionRecord, PolicyEffect, PolicyRule, ProjectId,
+    ProjectLifecycleState, SessionId, TaskId, TimestampMs, WorkspaceWritePolicy,
 };
 use dennett_runtime_antigravity::{
     BoxFuture, PolicyEvaluationOutcome, PolicyEvaluationRequest, PolicyEvaluator,
@@ -30,6 +30,10 @@ use dennett_runtime_antigravity::{
 pub struct PolicyContext {
     /// Owning project identifier.
     pub project_id: ProjectId,
+    /// Current lifecycle state of the owning project (`Active` required for live tool execution; D2-BUG-02).
+    pub project_lifecycle_state: ProjectLifecycleState,
+    /// Whether the project currently has a bound workspace directory on disk (D2-BUG-02).
+    pub workspace_bound: bool,
     /// Owning agent identifier.
     pub agent_id: AgentId,
     /// Owning session identifier.
@@ -40,6 +44,9 @@ pub struct PolicyContext {
     pub workspace_root: PathBuf,
     /// Agent's configured workspace write policy.
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Optional parent task agent's write policy ceiling enforced BEFORE child Allow rules or
+    /// project capability grants on delegated sub-tasks (D2-SEC-02).
+    pub parent_write_ceiling: Option<WorkspaceWritePolicy>,
     /// Agent's allowed memory scopes.
     pub allowed_memory_scopes: BTreeSet<MemoryScope>,
     /// Active persisted policy rules loaded from `dennett_control`.
@@ -138,6 +145,22 @@ impl PolicyEngine {
             .filter(|rule| active_scopes.iter().any(|s| s == &rule.scope))
             .collect();
 
+        // 0. Live project lifecycle guard (closes mid-turn TOCTOU after archive/delete/detach; D2-BUG-02).
+        if matches!(
+            self.ctx.project_lifecycle_state,
+            ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+        ) {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Deny,
+                matched_rule_id: None,
+                reason: format!(
+                    "denied tool `{}`: project `{}` is in `{}` lifecycle state",
+                    req.tool_name, self.ctx.project_id, self.ctx.project_lifecycle_state
+                ),
+                scope: format!("project:{}", self.ctx.project_id),
+            });
+        }
+
         let is_execute = is_execute_tool(&tool_lower, &req.tool_kind, &req.raw_input);
         let is_file_write = !is_execute && is_write_tool(&tool_lower, &req.tool_kind);
         let is_file_read =
@@ -147,6 +170,27 @@ impl PolicyEngine {
         } else {
             canonical_memory_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
         };
+        let control_mcp_op =
+            if is_execute || is_file_write || is_file_read || memory_mcp_op.is_some() {
+                None
+            } else {
+                canonical_control_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
+            };
+
+        if (is_file_write || is_file_read)
+            && (self.ctx.project_lifecycle_state == ProjectLifecycleState::Detached
+                || !self.ctx.workspace_bound)
+        {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Deny,
+                matched_rule_id: None,
+                reason: format!(
+                    "denied workspace file tool `{}`: project `{}` has no bound active workspace (state={})",
+                    req.tool_name, self.ctx.project_id, self.ctx.project_lifecycle_state
+                ),
+                scope: format!("project:{}", self.ctx.project_id),
+            });
+        }
 
         // 1. Hard workspace boundary check for BOTH file-mutating AND file-reading tools
         //    (CANNOT be bypassed by Allow rules OR capability grants; fails CLOSED on missing target or any escaping location!).
@@ -188,24 +232,32 @@ impl PolicyEngine {
             }
         }
 
-        // Build full target match list (normalized workspace-relative paths FIRST, plus raw target)
-        // so explicit `Deny` rules like `secrets/*` match absolute paths (`C:/ws/secrets/key.pem`)
-        // AND secondary `locations[*]` entries!
-        let mut rule_match_targets: Vec<&str> =
+        // Build target match lists separately for Deny (any match denies) vs Allow (ALL targets must match; D2-SEC-02).
+        let mut deny_match_targets: Vec<&str> =
             normalized_rel_targets.iter().map(String::as_str).collect();
         if let Some(raw) = req
             .target
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            && !rule_match_targets.contains(&raw)
+            && !deny_match_targets.contains(&raw)
         {
-            rule_match_targets.push(raw);
+            deny_match_targets.push(raw);
         }
+        let allow_match_targets: Vec<&str> = if is_file_write || is_file_read {
+            normalized_rel_targets.iter().map(String::as_str).collect()
+        } else {
+            req.target
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .into_iter()
+                .collect()
+        };
 
         // 2. Explicit `Deny` rules ALWAYS take precedence over `Allow` rules and `CapabilityGrants`.
         if let Some(deny_rule) = applicable_rules.iter().find(|r| {
-            r.effect == PolicyEffect::Deny && rule_matches_any(r, &tool_lower, &rule_match_targets)
+            r.effect == PolicyEffect::Deny && rule_matches_any(r, &tool_lower, &deny_match_targets)
         }) {
             return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Deny,
@@ -215,8 +267,50 @@ impl PolicyEngine {
             });
         }
 
-        // 3. Enforce agent `WorkspaceWritePolicy` on file-mutating tools.
+        // 3. Enforce delegated parent write ceiling FIRST (D2-SEC-02), then agent `WorkspaceWritePolicy`.
         if is_file_write {
+            if let Some(ref ceiling) = self.ctx.parent_write_ceiling {
+                match ceiling {
+                    WorkspaceWritePolicy::DenyAll => {
+                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                            effect: PolicyEffect::Deny,
+                            matched_rule_id: None,
+                            reason: String::from(
+                                "denied by delegated parent task write ceiling (deny_all)",
+                            ),
+                            scope: format!("agent:{}", self.ctx.agent_id),
+                        });
+                    }
+                    WorkspaceWritePolicy::AllowPaths { allowed_prefixes } => {
+                        if let Some(disallowed) = normalized_rel_targets
+                            .iter()
+                            .find(|rel| !matches_any_prefix(rel, allowed_prefixes))
+                        {
+                            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                                effect: PolicyEffect::Deny,
+                                matched_rule_id: None,
+                                reason: format!(
+                                    "denied by delegated parent task write ceiling (allow_paths): `{disallowed}` is outside parent permitted prefixes"
+                                ),
+                                scope: format!("agent:{}", self.ctx.agent_id),
+                            });
+                        }
+                    }
+                    WorkspaceWritePolicy::AskBeforeWrite | WorkspaceWritePolicy::AllowWorkspace => {
+                    }
+                    _ => {
+                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                            effect: PolicyEffect::Deny,
+                            matched_rule_id: None,
+                            reason: String::from(
+                                "denied: unrecognized parent task workspace_write_policy ceiling",
+                            ),
+                            scope: format!("agent:{}", self.ctx.agent_id),
+                        });
+                    }
+                }
+            }
+
             match &self.ctx.workspace_write_policy {
                 WorkspaceWritePolicy::DenyAll => {
                     return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
@@ -262,10 +356,10 @@ impl PolicyEngine {
                     });
                 }
                 WorkspaceWritePolicy::AskBeforeWrite => {
-                    // Explicit Allow policy rule still applies when configured.
+                    // Explicit Allow policy rule applies ONLY when EVERY normalized target matches (D2-SEC-02).
                     if let Some(allow_rule) = applicable_rules.iter().find(|r| {
                         r.effect == PolicyEffect::Allow
-                            && rule_matches_any(r, &tool_lower, &rule_match_targets)
+                            && rule_matches_all_for_allow(r, &tool_lower, &allow_match_targets)
                     }) {
                         return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                             effect: PolicyEffect::Allow,
@@ -394,9 +488,67 @@ impl PolicyEngine {
             });
         }
 
-        // 5. Explicit `Allow` rules matching active scopes.
+        // 4b. Scoped `dennett-control-mcp` tools (Agent-Native Events):
+        //     Step 2 explicit `Deny` rules already ran above; reject foreign `project_id`, and
+        //     block recursive `dennett_event_create` inside background `task_run` turns unless
+        //     explicitly allowed by policy rule.
+        if let Some(ctrl_op) = control_mcp_op {
+            if let Some(requested_pid) = req
+                .raw_input
+                .get("project_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                && requested_pid != self.ctx.project_id.to_string()
+            {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "denied control MCP tool `{}`: cross-project target `{requested_pid}` does not match owning project `{}`",
+                        req.tool_name, self.ctx.project_id
+                    ),
+                    scope: format!("project:{}", self.ctx.project_id),
+                });
+            }
+
+            if ctrl_op == "dennett_event_create" && self.ctx.task_id.is_some() {
+                if let Some(allow_rule) = applicable_rules.iter().find(|r| {
+                    r.effect == PolicyEffect::Allow
+                        && rule_matches_all_for_allow(r, &tool_lower, &allow_match_targets)
+                }) {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        matched_rule_id: Some(allow_rule.rule_id),
+                        reason: format!("allowed by explicit policy rule: {}", allow_rule.reason),
+                        scope: allow_rule.scope.clone(),
+                    });
+                }
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: String::from(
+                        "denied control MCP tool `dennett_event_create` inside background task_run (anti-self-recursion guard)",
+                    ),
+                    scope: format!("session:{}", self.ctx.session_id),
+                });
+            }
+
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                matched_rule_id: None,
+                reason: format!(
+                    "allowed scoped Dennett control MCP tool `{}`",
+                    req.tool_name
+                ),
+                scope: format!("project:{}", self.ctx.project_id),
+            });
+        }
+
+        // 5. Explicit `Allow` rules (ALL targets must match; D2-SEC-02) and active non-file `CapabilityGrants`.
         if let Some(allow_rule) = applicable_rules.iter().find(|r| {
-            r.effect == PolicyEffect::Allow && rule_matches_any(r, &tool_lower, &rule_match_targets)
+            r.effect == PolicyEffect::Allow
+                && rule_matches_all_for_allow(r, &tool_lower, &allow_match_targets)
         }) {
             return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Allow,
@@ -404,6 +556,28 @@ impl PolicyEngine {
                 reason: format!("allowed by explicit policy rule: {}", allow_rule.reason),
                 scope: allow_rule.scope.clone(),
             });
+        }
+        if !is_file_read {
+            let grant_targets: Vec<String> = allow_match_targets
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+            if let Some(grant) =
+                self.find_matching_grant(active_grants, now, &tool_lower, false, &grant_targets)
+            {
+                return PolicyEvaluationDecision::AllowedByGrant {
+                    grant_id: grant.grant_id,
+                    outcome: PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        matched_rule_id: None,
+                        reason: format!(
+                            "allowed by active capability grant {} ({})",
+                            grant.grant_id, grant.reason
+                        ),
+                        scope: grant.scope.clone(),
+                    },
+                };
+            }
         }
 
         // 6. Read-only file inspection strictly inside the project workspace root
@@ -579,6 +753,12 @@ const MEMORY_MCP_OPS: [&str; 5] = [
     "memory_write_note",
     "memory_correct_note",
 ];
+const CONTROL_MCP_OPS: [&str; 4] = [
+    "dennett_event_create",
+    "dennett_event_list",
+    "dennett_event_update",
+    "dennett_event_cancel",
+];
 
 fn has_any_json_key(raw_input: &serde_json::Value, keys: &[&str]) -> bool {
     let Some(obj) = raw_input.as_object() else {
@@ -690,6 +870,48 @@ fn canonical_memory_mcp_op(
     None
 }
 
+fn canonical_control_mcp_op(
+    tool_lower: &str,
+    tool_kind: &str,
+    raw_input: &serde_json::Value,
+) -> Option<&'static str> {
+    if is_execute_tool(tool_lower, tool_kind, raw_input)
+        || is_write_tool(tool_lower, tool_kind)
+        || is_read_tool(tool_lower, tool_kind)
+        || has_any_json_key(raw_input, FILE_TARGET_INPUT_KEYS)
+    {
+        return None;
+    }
+
+    for op in CONTROL_MCP_OPS {
+        if tool_lower == op {
+            return Some(op);
+        }
+        if let Some(prefix) = tool_lower.strip_suffix(op)
+            && matches!(
+                prefix,
+                "mcp:"
+                    | "mcp__"
+                    | "mcp_dennett-control_"
+                    | "mcp__dennett-control__"
+                    | "mcp_dennett_control_"
+                    | "mcp__dennett_control__"
+                    | "dennett-control:"
+                    | "dennett-control/"
+                    | "dennett-control."
+                    | "dennett-control__"
+                    | "dennett_control:"
+                    | "dennett_control/"
+                    | "dennett_control."
+                    | "dennett_control__"
+            )
+        {
+            return Some(op);
+        }
+    }
+    None
+}
+
 fn collect_file_targets(req: &PolicyEvaluationRequest) -> Vec<String> {
     let mut targets = Vec::new();
     let mut push_unique = |candidate: &str| {
@@ -720,6 +942,24 @@ fn rule_matches_any(rule: &PolicyRule, tool_lower: &str, targets: &[&str]) -> bo
     targets
         .iter()
         .any(|target| rule_matches(rule, tool_lower, Some(target)))
+}
+
+/// D2-SEC-02: `Allow` rules with a non-wildcard `target_pattern` MUST require a non-empty target
+/// set AND match EVERY target in the request (never permitting compound requests where a secondary
+/// target escapes the allowed prefix).
+fn rule_matches_all_for_allow(rule: &PolicyRule, tool_lower: &str, targets: &[&str]) -> bool {
+    let has_specific_target = rule
+        .target_pattern
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|p| !p.is_empty() && p != "*");
+    if !has_specific_target {
+        return rule_matches(rule, tool_lower, None);
+    }
+    !targets.is_empty()
+        && targets
+            .iter()
+            .all(|target| rule_matches(rule, tool_lower, Some(target)))
 }
 
 fn rule_matches(rule: &PolicyRule, tool_lower: &str, target: Option<&str>) -> bool {
@@ -856,12 +1096,15 @@ pub fn resolve_within_workspace(workspace_root: &Path, raw_target: &str) -> Resu
 }
 
 fn normalize_candidate_path(canonical_root: &Path, raw_target: &str) -> Result<PathBuf, String> {
-    // Handle `file://` URIs cleanly and reject non-file URI schemes / remote file hosts.
+    // Handle `file://` URIs cleanly, strictly percent-decoding BEFORE `Path::components()` so
+    // `%2e%2e`, `%2f`, `%5c`, or `%00` traversal tricks fail closed (D2-SEC-02).
     let trimmed_raw = raw_target.trim();
     let without_scheme = if let Some(rest) = trimmed_raw.strip_prefix("file://localhost/") {
-        format!("/{rest}")
+        let decoded = strict_percent_decode_uri_path(rest, raw_target)?;
+        format!("/{decoded}")
     } else if let Some(rest) = trimmed_raw.strip_prefix("file:///") {
-        format!("/{rest}")
+        let decoded = strict_percent_decode_uri_path(rest, raw_target)?;
+        format!("/{decoded}")
     } else if trimmed_raw.contains("://") {
         return Err(format!(
             "denied path `{raw_target}`: unsupported or remote URI scheme is forbidden"
@@ -920,6 +1163,54 @@ fn normalize_candidate_path(canonical_root: &Path, raw_target: &str) -> Result<P
         }
     }
     Ok(joined)
+}
+
+fn strict_percent_decode_uri_path(uri_rest: &str, raw_target: &str) -> Result<String, String> {
+    let bytes = uri_rest.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(format!(
+                    "denied path `{raw_target}`: malformed percent-encoding in file URI"
+                ));
+            }
+            let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) else {
+                return Err(format!(
+                    "denied path `{raw_target}`: invalid hex digits in file URI percent-encoding"
+                ));
+            };
+            let decoded_byte = (hi << 4) | lo;
+            if decoded_byte == 0 {
+                return Err(format!(
+                    "denied path `{raw_target}`: percent-encoded NUL byte in file URI is forbidden"
+                ));
+            }
+            out.push(decoded_byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let decoded = String::from_utf8(out)
+        .map_err(|_| format!("denied path `{raw_target}`: file URI decoded to invalid UTF-8"))?;
+    if decoded.contains('\\') {
+        return Err(format!(
+            "denied path `{raw_target}`: backslash separator inside file URI is forbidden"
+        ));
+    }
+    Ok(decoded)
+}
+
+const fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn strip_leading_slash_before_drive(raw: &str) -> &str {
@@ -994,6 +1285,8 @@ mod tests {
 
         let engine = PolicyEngine::new(PolicyContext {
             project_id: ProjectId::new(),
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
             task_id: None,
@@ -1001,6 +1294,7 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::AllowPaths {
                 allowed_prefixes: vec![String::from("docs/")],
             },
+            parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
             rules: vec![allow_all_rule, deny_shell_rule],
         });
@@ -1055,11 +1349,14 @@ mod tests {
         let ws = temp_workspace("default-deny");
         let engine = PolicyEngine::new(PolicyContext {
             project_id: ProjectId::new(),
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             rules: vec![],
         });
@@ -1092,11 +1389,14 @@ mod tests {
         let scope_alpha = MemoryScope::try_new("project-alpha").expect("scope");
         let engine = PolicyEngine::new(PolicyContext {
             project_id: ProjectId::new(),
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
             rules: vec![],
         });
@@ -1190,11 +1490,14 @@ mod tests {
         };
         let engine = PolicyEngine::new(PolicyContext {
             project_id: ProjectId::new(),
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             rules: vec![deny_secrets],
         });
@@ -1263,11 +1566,14 @@ mod tests {
 
         let engine = PolicyEngine::new(PolicyContext {
             project_id,
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
             agent_id,
             session_id,
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             rules: vec![],
         });
@@ -1342,6 +1648,218 @@ mod tests {
 
         let _ = fs::remove_dir_all(&ws);
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn d2_sec_02_allow_all_targets_percent_encoded_file_uri_and_parent_write_ceiling() {
+        let ws = temp_workspace("d2-sec-02");
+        fs::create_dir_all(ws.join("docs")).expect("docs");
+        fs::create_dir_all(ws.join("secrets")).expect("secrets");
+
+        let project_id = ProjectId::new();
+        let allow_docs = PolicyRule {
+            rule_id: PolicyRuleId::new(),
+            scope: format!("project:{project_id}"),
+            tool_name: String::from("write_file"),
+            target_pattern: Some(String::from("docs/*")),
+            effect: PolicyEffect::Allow,
+            reason: String::from("allow writes inside docs only"),
+            created_at: TimestampMs::now(),
+        };
+
+        let engine = PolicyEngine::new(PolicyContext {
+            project_id,
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            parent_write_ceiling: Some(WorkspaceWritePolicy::AllowPaths {
+                allowed_prefixes: vec![String::from("docs/safe")],
+            }),
+            allowed_memory_scopes: BTreeSet::new(),
+            rules: vec![allow_docs],
+        });
+
+        // 1. Compound request with `docs/safe/a.txt` AND `secrets/key.pem`:
+        //    MUST be denied by parent_write_ceiling AND must NEVER be allowed by `docs/*` rule!
+        let mut compound = make_req("write_file", "edit", Some("docs/safe/a.txt"));
+        compound.locations = vec![
+            String::from("docs/safe/a.txt"),
+            String::from("secrets/key.pem"),
+        ];
+        assert_eq!(
+            engine.evaluate_request(&compound).effect,
+            PolicyEffect::Deny
+        );
+
+        // 1b. Without any `parent_write_ceiling`, an explicit `Allow` rule for `docs/*` MUST
+        //     require ALL targets to match (`rule_matches_all_for_allow`) — mixing one allowed
+        //     target (`docs/a.txt`) with an unpermitted target (`src/escape.txt`) MUST be denied!
+        let allow_only_engine = PolicyEngine::new(PolicyContext {
+            project_id,
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::new(),
+            rules: vec![PolicyRule {
+                rule_id: PolicyRuleId::new(),
+                scope: format!("project:{project_id}"),
+                tool_name: String::from("write_file"),
+                target_pattern: Some(String::from("docs/*")),
+                effect: PolicyEffect::Allow,
+                reason: String::from("allow writes inside docs only"),
+                created_at: TimestampMs::now(),
+            }],
+        });
+        let mut mixed_req = make_req("write_file", "edit", Some("docs/a.txt"));
+        mixed_req.locations = vec![String::from("docs/a.txt"), String::from("src/escape.txt")];
+        assert_eq!(
+            allow_only_engine.evaluate_request(&mixed_req).effect,
+            PolicyEffect::Deny,
+            "D2-SEC-02: Allow rule MUST match ALL targets, never just ANY target!"
+        );
+
+        // 2. Parent write ceiling (`docs/safe`) MUST block `docs/other.txt` BEFORE project Allow rule or project CapabilityGrant!
+        let broad_grant = CapabilityGrantRecord {
+            grant_id: CapabilityGrantId::new(),
+            scope: format!("project:{project_id}"),
+            project_id,
+            agent_id: None,
+            session_id: None,
+            task_id: None,
+            tool_pattern: String::from("workspace_write"),
+            target_prefixes: vec![],
+            max_uses: None,
+            uses_consumed: 0,
+            reason: String::from("project-wide grant"),
+            expires_at: None,
+            revoked_at: None,
+            revoked_reason: None,
+            created_at: TimestampMs::now(),
+        };
+        let outside_ceiling = make_req("write_file", "edit", Some("docs/other.txt"));
+        assert!(matches!(
+            engine.evaluate_with_grants(
+                &outside_ceiling,
+                std::slice::from_ref(&broad_grant),
+                TimestampMs::now()
+            ),
+            PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Deny,
+                ..
+            })
+        ));
+
+        // 3. Inside parent ceiling (`docs/safe/ok.txt`) is allowed by the docs/* rule.
+        let inside_ceiling = make_req("write_file", "edit", Some("docs/safe/ok.txt"));
+        assert_eq!(
+            engine.evaluate_request(&inside_ceiling).effect,
+            PolicyEffect::Allow
+        );
+
+        // 4. Percent-encoded `file://` traversal (`%2e%2e`, `%2f`, `%00`, malformed `%`) MUST fail closed!
+        let ws_uri = ws.to_string_lossy().replace('\\', "/");
+        for bad_uri in [
+            format!("file:///{ws_uri}/%2e%2e/escape.txt"),
+            format!("file://localhost/{ws_uri}/docs/%2e%2e/%2e%2e/escape.txt"),
+            format!("file:///{ws_uri}/docs/bad%00name.txt"),
+            format!("file:///{ws_uri}/docs/bad%ZZ.txt"),
+            format!("file:///{ws_uri}/docs/%5c..%5cescape.txt"),
+        ] {
+            assert!(
+                resolve_within_workspace(&ws, &bad_uri).is_err(),
+                "D2-SEC-02: expected percent-encoded traversal URI to be rejected: {bad_uri}"
+            );
+        }
+
+        // 5. Archived & detached project lifecycle guards (D2-BUG-02).
+        let archived_engine = PolicyEngine::new(PolicyContext {
+            project_id,
+            project_lifecycle_state: ProjectLifecycleState::Archived,
+            workspace_bound: true,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::new(),
+            rules: vec![],
+        });
+        assert_eq!(
+            archived_engine
+                .evaluate_request(&make_req("read_file", "read", Some("docs/a.txt")))
+                .effect,
+            PolicyEffect::Deny
+        );
+
+        // 6. Control MCP Step 4b: chat allows same-project event creation, denies cross-project,
+        //    and background `task_run` denies recursive `dennett_event_create` by default.
+        let chat_ctrl_engine = PolicyEngine::new(PolicyContext {
+            project_id,
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::new(),
+            rules: vec![],
+        });
+        let mut ok_evt = make_req("dennett_event_create", "other", None);
+        ok_evt.raw_input = json!({ "title": "Reminder", "goal": "Check CI" });
+        assert_eq!(
+            chat_ctrl_engine.evaluate_request(&ok_evt).effect,
+            PolicyEffect::Allow
+        );
+
+        let mut foreign_evt = make_req("dennett_event_create", "other", None);
+        foreign_evt.raw_input = json!({ "project_id": ProjectId::new().to_string(), "title": "X" });
+        assert_eq!(
+            chat_ctrl_engine.evaluate_request(&foreign_evt).effect,
+            PolicyEffect::Deny
+        );
+
+        let task_ctrl_engine = PolicyEngine::new(PolicyContext {
+            project_id,
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: Some(TaskId::new()),
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::new(),
+            rules: vec![],
+        });
+        assert_eq!(
+            task_ctrl_engine.evaluate_request(&ok_evt).effect,
+            PolicyEffect::Deny
+        );
+
+        // 7. External effects fail closed by default (D2-ARCH-03).
+        let eff_req = make_req(
+            "external_effect:send_webhook",
+            "external_effect",
+            Some("ops@example.test"),
+        );
+        assert_eq!(
+            chat_ctrl_engine.evaluate_request(&eff_req).effect,
+            PolicyEffect::Deny
+        );
+
+        let _ = fs::remove_dir_all(&ws);
     }
 
     proptest! {

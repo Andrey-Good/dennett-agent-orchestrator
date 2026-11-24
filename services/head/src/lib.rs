@@ -34,7 +34,9 @@ pub use events::{
     enqueue_ordered_outbox_in_tx,
 };
 pub use http::{HeadAppState, MAX_CONCURRENT_REQUESTS, MAX_HTTP_BODY_BYTES, build_head_router};
-pub use memory_auth::MemoryTokenSigner;
+pub use memory_auth::{
+    CONTROL_TOKEN_PREFIX, ControlTokenClaims, ControlTokenSigner, MemoryTokenSigner,
+};
 pub use migrations::{
     CONTROL_MIGRATIONS, ControlMigration, LATEST_CONTROL_SCHEMA_VERSION,
     query_control_schema_version, run_control_migrations, sha256_hex,

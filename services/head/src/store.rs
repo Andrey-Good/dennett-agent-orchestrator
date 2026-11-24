@@ -14,16 +14,15 @@ use dennett_contracts::{
     AuditEventId, CapabilityGrantId, CapabilityGrantRecord, ControlEventId, ControlEventRecord,
     CorrelationId, DennettError, DiagnosticEvent, EffectClaimId, EffectClaimRecord,
     ExternalEffectStatus, IdempotencyKey, InboxCardId, InboxCardKind, InboxCardRecord,
-    InboxCardStatus, InboxCardUrgency, MemoryEventId, MemoryNoteId, MemoryOutboxItem,
-    MemoryOutboxStatus, MemoryScope, MessageId, MessageRecord, MessageRole, MissedRunPolicy,
-    OrderedOutboxItem, OrderedOutboxItemId, OrderedOutboxStatus, OutboxItemId,
+    InboxCardStatus, InboxCardUrgency, MemoryScope, MessageId, MessageRecord, MessageRole,
+    MissedRunPolicy, OrderedOutboxItem, OrderedOutboxItemId, OrderedOutboxStatus,
     PermissionDecisionId, PermissionDecisionRecord, PermissionRequestId, PermissionRequestRecord,
     PermissionRequestStatus, PolicyEffect, PolicyRule, PolicyRuleId, ProjectId,
     ProjectLifecycleState, ProjectRecord, RunId, RunRecord, RunStatus, RuntimeAuthProfile,
-    RuntimeBinding, RuntimeBindingId, SessionId, SessionRecord, SessionStatus, Sha256Hex,
-    TaskBudget, TaskId, TaskRecord, TaskSchedule, TaskSignalId, TaskSignalOutcome,
+    RuntimeBinding, RuntimeBindingId, SessionId, SessionKind, SessionRecord, SessionStatus,
+    Sha256Hex, TaskBudget, TaskId, TaskRecord, TaskSchedule, TaskSignalId, TaskSignalOutcome,
     TaskSignalRecord, TaskStatus, TaskTimerId, TaskTimerRecord, TaskTimerStatus, TaskUsage,
-    ThinkingLevel, TimestampMs, UsageConfidence, WorkspaceWritePolicy,
+    ThinkingLevel, TimerPauseReason, TimestampMs, UsageConfidence, WorkspaceWritePolicy,
 };
 use serde_json::Value as JsonValue;
 use tokio_postgres::Row;
@@ -55,8 +54,28 @@ pub(crate) fn map_pg_err(
     target: &ValidatedControlPgTarget,
     err: &tokio_postgres::Error,
 ) -> DennettError {
+    let safe_detail = target.sanitize_error(&format_pg_error_detail(err));
+    if let Some(db) = err.as_db_error() {
+        let code = db.code().code();
+        // D2-BUG-05: Map PostgreSQL data exceptions (22xxx) and check constraint violations (23514)
+        // to HTTP 400 InvalidInput instead of misleading 503 DatabaseUnavailable.
+        if code.starts_with("22") || code == "23514" {
+            return DennettError::InvalidInput {
+                field: db.constraint().unwrap_or("database").to_owned(),
+                reason: safe_detail,
+            };
+        }
+        if code == "23505" {
+            return DennettError::Conflict {
+                resource: db.constraint().unwrap_or("unique_constraint").to_owned(),
+                expected_revision: None,
+                actual_revision: None,
+                reason: safe_detail,
+            };
+        }
+    }
     DennettError::DatabaseUnavailable {
-        detail: target.sanitize_error(&format_pg_error_detail(err)),
+        detail: safe_detail,
     }
 }
 
@@ -196,6 +215,12 @@ pub(crate) const PROJECT_SELECT_COLS: &str = "
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
 ";
 
+pub(crate) const SESSION_SELECT_COLS: &str = "
+    session_id, agent_id, project_id, title, session_kind, status,
+    TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+";
+
 pub(crate) const ARTIFACT_SELECT_COLS: &str = "
     artifact_id, session_id, project_id, run_id, name, mime_type,
     revision, content, relative_path, sha256,
@@ -232,7 +257,8 @@ pub(crate) const TASK_TIMER_SELECT_COLS: &str = "
     status, lease_owner, lease_generation,
     TRUNC(EXTRACT(EPOCH FROM lease_expires_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-    TRUNC(EXTRACT(EPOCH FROM fired_at) * 1000)::bigint
+    TRUNC(EXTRACT(EPOCH FROM fired_at) * 1000)::bigint,
+    pause_reason
 ";
 
 pub(crate) const TASK_SIGNAL_SELECT_COLS: &str = "
@@ -258,7 +284,8 @@ pub(crate) const PERMISSION_REQUEST_SELECT_COLS: &str = "
     TRUNC(EXTRACT(EPOCH FROM expires_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM resolved_at) * 1000)::bigint,
     correlation_id,
-    TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
+    TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+    preview_snippet
 ";
 
 pub(crate) const EFFECT_CLAIM_SELECT_COLS: &str = "
@@ -347,20 +374,40 @@ pub(crate) async fn fetch_project<C: GenericClient>(
     decode_project_row(&row)
 }
 
+/// Verifies that `project_id` exists and is NOT in `archived` or `deleted_record` lifecycle state
+/// inside an open transaction (`D2-BUG-02` / `D2-ARCH-02`).
+pub(crate) async fn ensure_project_active_in_tx<C: GenericClient>(
+    client: &C,
+    project_id: ProjectId,
+    action: &str,
+    target: &ValidatedControlPgTarget,
+) -> Result<ProjectRecord, DennettError> {
+    let project = fetch_project(client, project_id, target).await?;
+    if matches!(
+        project.lifecycle_state,
+        ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+    ) {
+        return Err(DennettError::Conflict {
+            resource: String::from("project"),
+            expected_revision: None,
+            actual_revision: None,
+            reason: format!(
+                "cannot {action}: project `{}` is in `{}` lifecycle state",
+                project.project_id, project.lifecycle_state
+            ),
+        });
+    }
+    Ok(project)
+}
+
 pub(crate) async fn fetch_session<C: GenericClient>(
     client: &C,
     session_id: SessionId,
     target: &ValidatedControlPgTarget,
 ) -> Result<SessionRecord, DennettError> {
+    let sql = format!("SELECT {SESSION_SELECT_COLS} FROM sessions WHERE session_id = $1");
     let row = client
-        .query_opt(
-            "SELECT session_id, agent_id, project_id, title, status,
-                    TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
-             FROM sessions
-             WHERE session_id = $1",
-            &[&session_id.as_uuid()],
-        )
+        .query_opt(&sql, &[&session_id.as_uuid()])
         .await
         .map_err(|err| map_pg_err(target, &err))?;
 
@@ -685,10 +732,11 @@ pub(crate) fn decode_session_row(
         agent_id: AgentId::from_uuid(row.get(1)),
         project_id: ProjectId::from_uuid(row.get(2)),
         title: row.get(3),
-        status: SessionStatus::from_str(&row.get::<_, String>(4))?,
+        session_kind: SessionKind::from_str(&row.get::<_, String>(4))?,
+        status: SessionStatus::from_str(&row.get::<_, String>(5))?,
         runtime_binding,
-        created_at: TimestampMs::from_millis(row.get(5)),
-        updated_at: TimestampMs::from_millis(row.get(6)),
+        created_at: TimestampMs::from_millis(row.get(6)),
+        updated_at: TimestampMs::from_millis(row.get(7)),
     })
 }
 
@@ -811,26 +859,6 @@ pub(crate) fn decode_permission_decision_row(
     })
 }
 
-pub(crate) fn decode_outbox_row(row: &Row) -> Result<MemoryOutboxItem, DennettError> {
-    Ok(MemoryOutboxItem {
-        outbox_id: OutboxItemId::from_uuid(row.get(0)),
-        session_id: row.get::<_, Option<Uuid>>(1).map(SessionId::from_uuid),
-        run_id: row.get::<_, Option<Uuid>>(2).map(RunId::from_uuid),
-        scope: MemoryScope::try_new(row.get::<_, String>(3))?,
-        idempotency_key: IdempotencyKey::try_new(row.get::<_, String>(4))?,
-        operation: row.get(5),
-        payload_json: row.get(6),
-        status: MemoryOutboxStatus::from_str(&row.get::<_, String>(7))?,
-        attempts: row.get(8),
-        last_error: row.get(9),
-        delivered_event_id: row.get::<_, Option<Uuid>>(10).map(MemoryEventId::from_uuid),
-        delivered_note_id: row.get::<_, Option<Uuid>>(11).map(MemoryNoteId::from_uuid),
-        correlation_id: CorrelationId::try_new(row.get::<_, String>(12))?,
-        created_at: TimestampMs::from_millis(row.get(13)),
-        updated_at: TimestampMs::from_millis(row.get(14)),
-    })
-}
-
 pub(crate) fn decode_audit_event_row(row: &Row) -> Result<DiagnosticEvent, DennettError> {
     Ok(DiagnosticEvent {
         event_id: AuditEventId::from_uuid(row.get(0)),
@@ -905,6 +933,10 @@ pub(crate) fn decode_task_row(row: &Row) -> Result<TaskRecord, DennettError> {
 }
 
 pub(crate) fn decode_task_timer_row(row: &Row) -> Result<TaskTimerRecord, DennettError> {
+    let pause_reason = row
+        .get::<_, Option<String>>(15)
+        .map(|raw| TimerPauseReason::from_str(&raw))
+        .transpose()?;
     Ok(TaskTimerRecord {
         timer_id: TaskTimerId::from_uuid(row.get(0)),
         task_id: TaskId::from_uuid(row.get(1)),
@@ -916,6 +948,7 @@ pub(crate) fn decode_task_timer_row(row: &Row) -> Result<TaskTimerRecord, Dennet
         recurrence_kind: row.get(7),
         missed_run_policy: MissedRunPolicy::from_str(&row.get::<_, String>(8))?,
         status: TaskTimerStatus::from_str(&row.get::<_, String>(9))?,
+        pause_reason,
         lease_owner: row.get(10),
         lease_generation: row.get(11),
         lease_expires_at: row.get::<_, Option<i64>>(12).map(TimestampMs::from_millis),
@@ -987,6 +1020,7 @@ pub(crate) fn decode_permission_request_row(
         target_summary: row.get(9),
         normalized_targets,
         parameters_sha256: Sha256Hex::try_new(row.get::<_, String>(11))?,
+        preview_snippet: row.get(21),
         reason: row.get(12),
         status: PermissionRequestStatus::from_str(&row.get::<_, String>(13))?,
         issued_grant_id: row

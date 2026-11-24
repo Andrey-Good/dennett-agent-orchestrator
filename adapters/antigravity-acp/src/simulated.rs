@@ -6,22 +6,27 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
     DennettError, PolicyEffect, RunStatus, RuntimeAuthProfile, RuntimeModelOption,
     RuntimeThinkingOption, SessionId, ThinkingLevel, WorkspaceWritePolicy,
 };
-use serde_json::json;
+use serde_json::{Map, Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time;
 use uuid::Uuid;
 
 use crate::port::{
     AgentRuntimePort, BoxFuture, PolicyEvaluationRequest, PolicyEvaluator, RuntimeDescriptor,
-    RuntimeEvent, SessionStartOutcome, SessionStartRequest, TurnOutcome, TurnRequest,
+    RuntimeEvent, RuntimeMcpServerSpec, SessionStartOutcome, SessionStartRequest, TurnOutcome,
+    TurnRequest,
 };
 use crate::profile::{normalize_workspace_path, workspace_paths_match};
 
@@ -36,6 +41,7 @@ struct SimSessionState {
     model_preference: Option<String>,
     thinking_level: Option<ThinkingLevel>,
     write_policy: WorkspaceWritePolicy,
+    mcp_servers: Vec<RuntimeMcpServerSpec>,
     turn_history: Vec<String>,
 }
 
@@ -233,6 +239,7 @@ impl AgentRuntimePort for SimulatedRuntime {
                         existing.model_preference = req.model_preference;
                         existing.thinking_level = req.thinking_level;
                         existing.write_policy = req.workspace_write_policy;
+                        existing.mcp_servers = req.mcp_servers;
                         return Ok(SessionStartOutcome {
                             adapter_id: String::from(SIMULATED_ADAPTER_ID),
                             auth_profile: self.auth_profile,
@@ -281,6 +288,7 @@ impl AgentRuntimePort for SimulatedRuntime {
                     model_preference: req.model_preference,
                     thinking_level: req.thinking_level,
                     write_policy: req.workspace_write_policy,
+                    mcp_servers: req.mcp_servers,
                     turn_history,
                 },
             );
@@ -346,6 +354,7 @@ impl AgentRuntimePort for SimulatedRuntime {
                 dennett_session_id,
                 run_id,
                 &prompt_text,
+                req.timeout,
                 &policy,
                 event_tx.as_ref(),
                 &mut cancel_rx,
@@ -431,6 +440,7 @@ fn find_directive<'a>(prompt: &'a str, prefix: &str) -> Option<&'a str> {
 
 #[expect(
     clippy::too_many_lines,
+    clippy::too_many_arguments,
     reason = "simulated directive dispatcher keeps all deterministic CI paths in one clear function"
 )]
 async fn execute_sim_turn(
@@ -438,11 +448,13 @@ async fn execute_sim_turn(
     dennett_session_id: SessionId,
     run_id: dennett_contracts::RunId,
     prompt_text: &str,
+    turn_timeout: Duration,
     policy: &Arc<dyn PolicyEvaluator>,
     event_tx: Option<&mpsc::Sender<RuntimeEvent>>,
     cancel_rx: &mut watch::Receiver<bool>,
 ) -> Result<TurnOutcome, DennettError> {
     let mut events = Vec::new();
+    let mut human_wait_ms: u64 = 0;
     let prompt = prompt_text.trim();
 
     if *cancel_rx.borrow() {
@@ -459,6 +471,7 @@ async fn execute_sim_turn(
             assistant_text: String::new(),
             events,
             usage: None,
+            human_wait_ms,
         });
     }
 
@@ -528,10 +541,16 @@ async fn execute_sim_turn(
                         assistant_text: String::from("starting slow simulated turn..."),
                         events,
                         usage: None,
+                        human_wait_ms,
                     });
                 }
             }
             () = time::sleep(sleep_dur) => {}
+            () = time::sleep(turn_timeout) => {
+                return Err(DennettError::Timeout {
+                    operation: String::from("session/prompt"),
+                });
+            }
         }
     }
 
@@ -597,6 +616,7 @@ async fn execute_sim_turn(
             assistant_text: question_owned,
             events,
             usage: usage_payload,
+            human_wait_ms,
         });
     }
 
@@ -629,6 +649,124 @@ async fn execute_sim_turn(
         );
     }
 
+    if let Some(raw_event_args) = find_directive(prompt, "[SIM:EVENT:CREATE ") {
+        let args_json = parse_sim_event_create_args(raw_event_args);
+        let tool_call_id = format!("sim-evt-{}", &Uuid::new_v4().simple().to_string()[..8]);
+        let title_hint = args_json
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("event");
+        let eval_req = PolicyEvaluationRequest {
+            session_id: dennett_session_id,
+            run_id,
+            tool_call_id: tool_call_id.clone(),
+            tool_name: String::from("dennett_event_create"),
+            tool_kind: String::from("other"),
+            title: format!("dennett_event_create {title_hint}"),
+            target: args_json
+                .get("project_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            locations: Vec::new(),
+            raw_input: args_json.clone(),
+        };
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionRequested {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: String::from("dennett_event_create"),
+                target: eval_req.target.clone(),
+                title: eval_req.title.clone(),
+            },
+            event_tx,
+        );
+        let wait_started = time::Instant::now();
+        let decision = policy.evaluate(&eval_req).await;
+        human_wait_ms = human_wait_ms
+            .saturating_add(u64::try_from(wait_started.elapsed().as_millis()).unwrap_or(u64::MAX));
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionResolved {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: String::from("dennett_event_create"),
+                target: eval_req.target.clone(),
+                effect: decision.effect,
+                matched_rule_id: decision.matched_rule_id,
+                reason: decision.reason.clone(),
+                scope: decision.scope.clone(),
+                chosen_option_id: Some(if decision.effect == PolicyEffect::Allow {
+                    String::from("allow_once")
+                } else {
+                    String::from("reject_once")
+                }),
+            },
+            event_tx,
+        );
+
+        let reply = if decision.effect == PolicyEffect::Allow {
+            let control_spec = session
+                .mcp_servers
+                .iter()
+                .find(|s| s.name == "dennett-control")
+                .ok_or_else(|| DennettError::Internal {
+                    detail: String::from("dennett-control MCP server spec not attached to session"),
+                })?;
+            let mcp_output =
+                invoke_mcp_tool_stdio(control_spec, "dennett_event_create", &args_json).await?;
+            emit(
+                &mut events,
+                RuntimeEvent::ToolObserved {
+                    tool_call_id,
+                    tool_name: String::from("dennett_event_create"),
+                    title: eval_req.title,
+                    status: String::from("completed"),
+                    output_excerpt: mcp_output.clone(),
+                },
+                event_tx,
+            );
+            format!("[simulated] dennett_event_create ALLOWED: {mcp_output}")
+        } else {
+            emit(
+                &mut events,
+                RuntimeEvent::ToolObserved {
+                    tool_call_id,
+                    tool_name: String::from("dennett_event_create"),
+                    title: eval_req.title,
+                    status: String::from("denied"),
+                    output_excerpt: format!("denied: {}", decision.reason),
+                },
+                event_tx,
+            );
+            format!(
+                "[simulated] tool `dennett_event_create` DENIED (policy: {})",
+                decision.reason
+            )
+        };
+
+        emit(
+            &mut events,
+            RuntimeEvent::TextDelta {
+                text: reply.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text: reply,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
+    }
+
     if let Some(body) = find_directive(prompt, "[SIM:TOOL:") {
         let mut parts = body.splitn(3, ':');
         let tool_name = parts.next().unwrap_or("unknown").trim().to_owned();
@@ -658,7 +796,11 @@ async fn execute_sim_turn(
         };
         let raw_input = match tool_kind {
             "execute" => json!({ "CommandLine": target_str }),
-            "edit" | "read" if !target_str.is_empty() => json!({ "Path": target_str }),
+            "edit" if !target_str.is_empty() => match file_content {
+                Some(ref content) => json!({ "Path": target_str, "content": content }),
+                None => json!({ "Path": target_str }),
+            },
+            "read" if !target_str.is_empty() => json!({ "Path": target_str }),
             _ if tool_name.starts_with("memory_") && !target_str.is_empty() => {
                 json!({ "scope": target_str })
             }
@@ -694,6 +836,7 @@ async fn execute_sim_turn(
             event_tx,
         );
 
+        let wait_started = time::Instant::now();
         let maybe_decision = {
             let mut eval_fut = policy.evaluate(&eval_req);
             let mut cancel_open = true;
@@ -713,6 +856,8 @@ async fn execute_sim_turn(
                 }
             }
         };
+        human_wait_ms = human_wait_ms
+            .saturating_add(u64::try_from(wait_started.elapsed().as_millis()).unwrap_or(u64::MAX));
 
         let Some(decision) = maybe_decision else {
             emit(
@@ -744,6 +889,7 @@ async fn execute_sim_turn(
                 assistant_text: String::new(),
                 events,
                 usage: None,
+                human_wait_ms,
             });
         };
 
@@ -775,6 +921,7 @@ async fn execute_sim_turn(
                 assistant_text: String::new(),
                 events,
                 usage: None,
+                human_wait_ms,
             });
         }
 
@@ -871,10 +1018,14 @@ async fn execute_sim_turn(
             assistant_text: reply,
             events,
             usage: usage_payload,
+            human_wait_ms,
         });
     }
 
-    let model_label = session.model_preference.as_deref().unwrap_or("sim-default");
+    let model_label = session
+        .model_preference
+        .as_deref()
+        .unwrap_or("sim-model-alpha");
     let thinking_label = session
         .thinking_level
         .map_or("default", ThinkingLevel::as_str);
@@ -924,7 +1075,248 @@ async fn execute_sim_turn(
         assistant_text: reply,
         events,
         usage: usage_payload,
+        human_wait_ms,
     })
+}
+
+fn parse_sim_event_create_args(raw: &str) -> Value {
+    let mut map = Map::new();
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b'|') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let key_start = i;
+        while i < bytes.len() && bytes[i] != b'=' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let key = raw[key_start..i].trim();
+        if key.is_empty() || i >= bytes.len() || bytes[i] != b'=' {
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            continue;
+        }
+        i += 1; // skip '='
+        let val = if i < bytes.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+            let quote = bytes[i];
+            i += 1;
+            let val_start = i;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            let s = &raw[val_start..i];
+            if i < bytes.len() && bytes[i] == quote {
+                i += 1;
+            }
+            s.to_owned()
+        } else {
+            let val_start = i;
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'|' {
+                i += 1;
+            }
+            raw[val_start..i].to_owned()
+        };
+
+        match key {
+            "interval_secs" | "hour" | "minute" | "max_turns" | "max_tokens" | "max_wall_secs" => {
+                if let Ok(num) = val.parse::<u64>() {
+                    map.insert(key.to_owned(), Value::from(num));
+                }
+            }
+            "weekdays" => {
+                let items: Vec<Value> = val
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Value::from(s.to_owned()))
+                    .collect();
+                map.insert(String::from("weekdays"), Value::Array(items));
+            }
+            _ => {
+                map.insert(key.to_owned(), Value::from(val));
+            }
+        }
+    }
+
+    if !map.contains_key("trigger_kind") {
+        let inferred = if map.contains_key("interval_secs") {
+            "interval"
+        } else if map.contains_key("weekdays") {
+            "weekly_local_time"
+        } else if map.contains_key("hour") {
+            "daily_local_time"
+        } else if map.contains_key("fire_at") {
+            "once_at"
+        } else if map.contains_key("expected_signal_name") {
+            "wait_for_signal"
+        } else {
+            "immediate"
+        };
+        map.insert(String::from("trigger_kind"), Value::from(inferred));
+    }
+
+    Value::Object(map)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "spawns stdio MCP subprocess and executes initialize + tools/call JSON-RPC roundtrip with timeout"
+)]
+async fn invoke_mcp_tool_stdio(
+    spec: &RuntimeMcpServerSpec,
+    tool_name: &str,
+    arguments: &Value,
+) -> Result<String, DennettError> {
+    let mut cmd = Command::new(&spec.command);
+    cmd.args(&spec.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    for entry in &spec.env {
+        cmd.env(&entry.name, &entry.value);
+    }
+
+    let mut child = cmd.spawn().map_err(|err| DennettError::RuntimeProtocol {
+        code: None,
+        detail: redact_secrets(
+            &format!("failed spawning MCP server `{}`: {err}", spec.name),
+            &[],
+        ),
+    })?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| DennettError::RuntimeProtocol {
+            code: None,
+            detail: String::from("MCP child stdin missing"),
+        })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| DennettError::RuntimeProtocol {
+            code: None,
+            detail: String::from("MCP child stdout missing"),
+        })?;
+    let mut reader = BufReader::new(stdout);
+
+    let init_req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "dennett-simulated-runtime", "version": "0.1.0" }
+        }
+    });
+    let call_req = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments,
+        }
+    });
+
+    let rpc_res = time::timeout(Duration::from_secs(15), async {
+        let mut line = serde_json::to_string(&init_req).unwrap_or_default();
+        line.push('\n');
+        stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|err| DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("MCP write initialize failed: {err}"),
+            })?;
+        stdin
+            .flush()
+            .await
+            .map_err(|err| DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("MCP flush initialize failed: {err}"),
+            })?;
+
+        let mut init_resp = String::new();
+        let n = reader.read_line(&mut init_resp).await.map_err(|err| {
+            DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("MCP read initialize response failed: {err}"),
+            }
+        })?;
+        if n == 0 {
+            return Err(DennettError::RuntimeProtocol {
+                code: None,
+                detail: String::from("MCP server closed stdout during initialize"),
+            });
+        }
+
+        let mut call_line = serde_json::to_string(&call_req).unwrap_or_default();
+        call_line.push('\n');
+        stdin.write_all(call_line.as_bytes()).await.map_err(|err| {
+            DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("MCP write tools/call failed: {err}"),
+            }
+        })?;
+        stdin
+            .flush()
+            .await
+            .map_err(|err| DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("MCP flush tools/call failed: {err}"),
+            })?;
+
+        let mut call_resp = String::new();
+        let n2 = reader.read_line(&mut call_resp).await.map_err(|err| {
+            DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("MCP read tools/call response failed: {err}"),
+            }
+        })?;
+        if n2 == 0 {
+            return Err(DennettError::RuntimeProtocol {
+                code: None,
+                detail: String::from("MCP server closed stdout during tools/call"),
+            });
+        }
+        let parsed: Value = serde_json::from_str(call_resp.trim()).map_err(|err| {
+            DennettError::RuntimeProtocol {
+                code: None,
+                detail: format!("MCP server returned malformed JSON: {err}"),
+            }
+        })?;
+        if let Some(err_obj) = parsed.get("error") {
+            return Err(DennettError::RuntimeProtocol {
+                code: err_obj.get("code").and_then(Value::as_i64),
+                detail: redact_secrets(&err_obj.to_string(), &[]),
+            });
+        }
+        let result = parsed.get("result").cloned().unwrap_or(Value::Null);
+        let text = result
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("text"))
+            .and_then(Value::as_str)
+            .map_or_else(|| result.to_string(), ToOwned::to_owned);
+        Ok(redact_secrets(&text, &[]))
+    })
+    .await
+    .map_err(|_| DennettError::Timeout {
+        operation: format!("mcp:{tool_name}"),
+    })?;
+
+    drop(stdin);
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    rpc_res
 }
 
 const _: () = {

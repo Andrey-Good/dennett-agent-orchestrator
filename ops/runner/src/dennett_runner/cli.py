@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -106,6 +108,9 @@ FORBIDDEN_HEAD_CLIENT_DEPS = (
     "dennett-head",
     "dennett-memory-core",
     "dennett-memoryd",
+    "dennett-memory-client",
+    "dennett-memory-mcp",
+    "dennett-runtime-antigravity",
     "dennett-testkit",
     "tokio-postgres",
     "deadpool-postgres",
@@ -140,6 +145,7 @@ FORBIDDEN_DESKTOP_EXACT_DEPS = (
     "dennett-memoryd",
     "dennett-memory-client",
     "dennett-memory-mcp",
+    "dennett-control-mcp",
     "dennett-runtime-antigravity",
     "dennett-testkit",
 )
@@ -611,13 +617,17 @@ def check_deps(repo_root: Path) -> None:
                 f"`dennett-head` violates Memory separation boundary by depending on: {', '.join(sorted(hits))}"
             )
 
-    head_client_trans = {n.lower() for n in transitive_prod_dep_names("dennett-head-client")}
-    for forbidden in FORBIDDEN_HEAD_CLIENT_DEPS:
-        hits = [name for name in head_client_trans if name == forbidden or forbidden in name]
-        if hits:
-            raise CheckError(
-                f"`dennett-head-client` violates thin-client boundary by depending on: {', '.join(sorted(hits))}"
-            )
+    for head_thin_pkg in ("dennett-head-client", "dennett-control-mcp"):
+        trans = {n.lower() for n in transitive_prod_dep_names(head_thin_pkg)}
+        for forbidden in FORBIDDEN_HEAD_CLIENT_DEPS:
+            if forbidden.startswith("dennett-"):
+                hits = [name for name in trans if name == forbidden]
+            else:
+                hits = [name for name in trans if name == forbidden or forbidden in name]
+            if hits:
+                raise CheckError(
+                    f"`{head_thin_pkg}` violates thin-client boundary by depending on: {', '.join(sorted(hits))}"
+                )
 
     runtime_trans = {n.lower() for n in transitive_prod_dep_names("dennett-runtime-antigravity")}
     for forbidden in FORBIDDEN_RUNTIME_ANTIGRAVITY_DEPS:
@@ -994,6 +1004,8 @@ def check_integration(repo_root: Path, *, manage_pg: bool) -> None:
             "--bin",
             "dennett-memory-mcp",
             "--bin",
+            "dennett-control-mcp",
+            "--bin",
             "dennett-head",
             "--bin",
             "dennettctl",
@@ -1120,6 +1132,8 @@ def check_runtime_probe(repo_root: Path) -> None:
             "--bin",
             "dennett-memory-mcp",
             "--bin",
+            "dennett-control-mcp",
+            "--bin",
             "dennett-head",
             "--bin",
             "dennettctl",
@@ -1197,40 +1211,128 @@ def check_runtime_probe(repo_root: Path) -> None:
     )
 
 
+def _spawn_pipe_drainer(
+    stream: Any,
+    ring: deque[str],
+    *,
+    ready_event: threading.Event | None = None,
+    addr_box: list[str] | None = None,
+) -> None:
+    """Continuously drain a child stdout/stderr pipe in a daemon thread so OS pipe buffers never deadlock."""
+    if stream is None:
+        return
+
+    def _drain() -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                stripped = line.strip()
+                if stripped:
+                    ring.append(stripped)
+                    if (
+                        ready_event is not None
+                        and addr_box is not None
+                        and not ready_event.is_set()
+                        and stripped.startswith("LISTENING ")
+                    ):
+                        addr_box.append(stripped.removeprefix("LISTENING ").strip())
+                        ready_event.set()
+        except Exception:
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    thread = threading.Thread(target=_drain, daemon=True)
+    thread.start()
+
+
 def _read_listening_addr(proc: subprocess.Popen[str], label: str, timeout_s: float = 20.0) -> str:
-    """Read the `LISTENING <ip:port>` readiness line from a spawned Dennett daemon."""
+    """Read `LISTENING <ip:port>` using background pipe drainer threads with a real deadline (`D2-OPS-01`)."""
     if proc.stdout is None:
         raise CheckError(f"{label} stdout was not captured.")
+    stdout_ring: deque[str] = deque(maxlen=200)
+    stderr_ring: deque[str] = deque(maxlen=200)
+    ready_event = threading.Event()
+    addr_box: list[str] = []
+
+    _spawn_pipe_drainer(proc.stdout, stdout_ring, ready_event=ready_event, addr_box=addr_box)
+    _spawn_pipe_drainer(proc.stderr, stderr_ring)
+
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
+        if ready_event.wait(timeout=0.1):
+            if addr_box:
+                return addr_box[0]
         if proc.poll() is not None:
-            stderr_tail = proc.stderr.read() if proc.stderr else ""
-            raise CheckError(
-                f"{label} exited early with code {proc.returncode}: {stderr_tail.strip()}"
-            )
-        line = proc.stdout.readline()
-        if line:
-            stripped = line.strip()
-            if stripped.startswith("LISTENING "):
-                return stripped.removeprefix("LISTENING ").strip()
-        else:
+            # Give drainer threads a brief moment to collect final stderr lines.
             time.sleep(0.05)
-    raise CheckError(f"Timed out waiting for LISTENING line from {label}.")
+            stderr_tail = "\n".join(stderr_ring).strip()
+            raise CheckError(
+                f"{label} exited early with code {proc.returncode}: {stderr_tail}"
+            )
+    stderr_tail = "\n".join(stderr_ring).strip()
+    raise CheckError(
+        f"Timed out after {timeout_s:.1f}s waiting for LISTENING line from {label}"
+        + (f" (stderr tail: {stderr_tail})" if stderr_tail else ".")
+    )
 
 
-def _graceful_stop_daemon(proc: subprocess.Popen[str] | None, label: str) -> None:
-    """Terminate a spawned demo daemon cleanly on harness teardown."""
+def _graceful_stop_daemon(
+    proc: subprocess.Popen[str] | None,
+    label: str,
+    *,
+    base_url: str | None = None,
+) -> None:
+    """Stop a spawned demo daemon cleanly: HTTP `/shutdown` -> terminate -> Windows `taskkill /F /T` (`D2-OPS-01`)."""
     if proc is None or proc.poll() is not None:
         return
+
+    if base_url:
+        try:
+            opener = build_opener(ProxyHandler({}))
+            req = Request(
+                f"{base_url.rstrip('/')}/shutdown",
+                data=b"",
+                headers={"X-Dennett-Shutdown": "1"},
+                method="POST",
+            )
+            with opener.open(req, timeout=1.5):
+                pass
+            proc.wait(timeout=4)
+            return
+        except Exception:
+            pass
+
+    if proc.poll() is not None:
+        return
+
     try:
         proc.terminate()
+        proc.wait(timeout=3)
+        return
+    except Exception:
+        pass
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+            proc.wait(timeout=3)
+            return
+        except Exception:
+            pass
+
+    try:
+        proc.kill()
         proc.wait(timeout=5)
     except Exception:
-        try:
-            proc.kill()
-            proc.wait(timeout=5)
-        except Exception:
-            print(f"[dennett-check] warning: could not verify exit of {label}", file=sys.stderr)
+        print(f"[dennett-check] warning: could not verify exit of {label}", file=sys.stderr)
 
 
 def _post_loopback_json(base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1286,8 +1388,11 @@ def _preseed_demo_d1_workspace(
             "description": "Проектный агент Dennett",
             "system_prompt": (
                 f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
-                f"`{memory_scope}` для чтения и записи проектных решений и сохраняй результаты "
-                f"в рабочей папке проекта."
+                f"`{memory_scope}` для чтения и записи проектных решений, MCP-инструменты "
+                f"`dennett-control` (`dennett_event_create`, `dennett_event_list`, "
+                f"`dennett_event_update`, `dennett_event_cancel`) для создания и управления "
+                f"расписаниями и отложенными событиями проекта, и сохраняй результаты в рабочей "
+                f"папке проекта."
             ),
             "thinking_level": "medium",
             "allowed_memory_scopes": [memory_scope],
@@ -1334,6 +1439,7 @@ def run_demo_d1(
     target_debug = repo_root / "target" / "debug"
     memoryd_bin = target_debug / f"dennett-memoryd{exe_suffix}"
     memory_mcp_bin = target_debug / f"dennett-memory-mcp{exe_suffix}"
+    control_mcp_bin = target_debug / f"dennett-control-mcp{exe_suffix}"
     head_bin = target_debug / f"dennett-head{exe_suffix}"
     desktop_bin = target_debug / f"dennett-desktop{exe_suffix}"
 
@@ -1359,6 +1465,7 @@ def run_demo_d1(
             "binaries": {
                 "memoryd": str(memoryd_bin),
                 "memory_mcp": str(memory_mcp_bin),
+                "control_mcp": str(control_mcp_bin),
                 "head": str(head_bin),
                 "desktop": str(desktop_bin),
             },
@@ -1389,6 +1496,8 @@ def run_demo_d1(
             "dennett-memoryd",
             "--bin",
             "dennett-memory-mcp",
+            "--bin",
+            "dennett-control-mcp",
             "--bin",
             "dennett-head",
             "--bin",
@@ -1434,6 +1543,8 @@ def run_demo_d1(
     memoryd_proc: subprocess.Popen[str] | None = None
     head_proc: subprocess.Popen[str] | None = None
     ui_proc: subprocess.Popen[str] | None = None
+    memoryd_http_url: str | None = None
+    head_http_url: str | None = None
 
     try:
         run_cmd([*compose_base, "up", "-d", "--wait"], cwd=repo_root, env=clean_env)
@@ -1495,6 +1606,8 @@ def run_demo_d1(
                 memoryd_http_url,
                 "--memory-mcp-bin",
                 str(memory_mcp_bin),
+                "--control-mcp-bin",
+                str(control_mcp_bin),
             ],
             cwd=repo_root,
             env=head_env,
@@ -1542,8 +1655,8 @@ def run_demo_d1(
         print("\n[dennett-check] Ctrl+C received; tearing down isolated D1 demo...", flush=True)
     finally:
         _graceful_stop_daemon(ui_proc, "dennett-desktop")
-        _graceful_stop_daemon(head_proc, "dennett-head")
-        _graceful_stop_daemon(memoryd_proc, "dennett-memoryd")
+        _graceful_stop_daemon(head_proc, "dennett-head", base_url=head_http_url)
+        _graceful_stop_daemon(memoryd_proc, "dennett-memoryd", base_url=memoryd_http_url)
         run_cmd(
             [*compose_base, "down", "-v"],
             cwd=repo_root,
@@ -1586,8 +1699,11 @@ def _preseed_demo_d2_workspace(
             "description": "Проектный агент Dennett (D2: интерактивные подтверждения, поручения и таймеры)",
             "system_prompt": (
                 f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
-                f"`{memory_scope}` для чтения и записи проектных решений и сохраняй результаты "
-                f"в рабочей папке проекта."
+                f"`{memory_scope}` для чтения и записи проектных решений, MCP-инструменты "
+                f"`dennett-control` (`dennett_event_create`, `dennett_event_list`, "
+                f"`dennett_event_update`, `dennett_event_cancel`) для создания и управления "
+                f"расписаниями и отложенными событиями проекта, и сохраняй результаты в рабочей "
+                f"папке проекта."
             ),
             "thinking_level": "medium",
             "allowed_memory_scopes": [memory_scope],
@@ -1635,6 +1751,7 @@ def run_demo_d2(
     target_debug = repo_root / "target" / "debug"
     memoryd_bin = target_debug / f"dennett-memoryd{exe_suffix}"
     memory_mcp_bin = target_debug / f"dennett-memory-mcp{exe_suffix}"
+    control_mcp_bin = target_debug / f"dennett-control-mcp{exe_suffix}"
     head_bin = target_debug / f"dennett-head{exe_suffix}"
     desktop_bin = target_debug / f"dennett-desktop{exe_suffix}"
 
@@ -1642,7 +1759,7 @@ def run_demo_d2(
         plan = {
             "mode": "demo-d2-dry-run",
             "stage": "D2",
-            "control_schema_version": 5,
+            "control_schema_version": 6,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
             "compose_file": str(compose_file),
@@ -1664,6 +1781,7 @@ def run_demo_d2(
             "binaries": {
                 "memoryd": str(memoryd_bin),
                 "memory_mcp": str(memory_mcp_bin),
+                "control_mcp": str(control_mcp_bin),
                 "head": str(head_bin),
                 "desktop": str(desktop_bin),
             },
@@ -1694,6 +1812,8 @@ def run_demo_d2(
             "dennett-memoryd",
             "--bin",
             "dennett-memory-mcp",
+            "--bin",
+            "dennett-control-mcp",
             "--bin",
             "dennett-head",
             "--bin",
@@ -1739,6 +1859,8 @@ def run_demo_d2(
     memoryd_proc: subprocess.Popen[str] | None = None
     head_proc: subprocess.Popen[str] | None = None
     ui_proc: subprocess.Popen[str] | None = None
+    memoryd_http_url: str | None = None
+    head_http_url: str | None = None
 
     try:
         run_cmd([*compose_base, "up", "-d", "--wait"], cwd=repo_root, env=clean_env)
@@ -1802,6 +1924,8 @@ def run_demo_d2(
                 memoryd_http_url,
                 "--memory-mcp-bin",
                 str(memory_mcp_bin),
+                "--control-mcp-bin",
+                str(control_mcp_bin),
             ],
             cwd=repo_root,
             env=head_env,
@@ -1851,8 +1975,8 @@ def run_demo_d2(
         print("\n[dennett-check] Ctrl+C received; tearing down isolated D2 demo...", flush=True)
     finally:
         _graceful_stop_daemon(ui_proc, "dennett-desktop")
-        _graceful_stop_daemon(head_proc, "dennett-head")
-        _graceful_stop_daemon(memoryd_proc, "dennett-memoryd")
+        _graceful_stop_daemon(head_proc, "dennett-head", base_url=head_http_url)
+        _graceful_stop_daemon(memoryd_proc, "dennett-memoryd", base_url=memoryd_http_url)
         run_cmd(
             [*compose_base, "down", "-v"],
             cwd=repo_root,

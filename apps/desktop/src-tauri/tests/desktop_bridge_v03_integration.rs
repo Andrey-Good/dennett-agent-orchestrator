@@ -13,14 +13,15 @@ use std::time::Duration;
 
 use dennett_contracts::{
     ArtifactCompleteness, ArtifactLifecycleAction, ArtifactLifecycleRequest,
-    ArtifactLifecycleState, CreateAgentRequest, CreateArtifactRequest, CreateProjectRequest,
-    CreateSessionRequest, CreateTaskRequest, DispatchEffectRequest, ExternalEffectStatus,
-    IdempotencyKey, InboxCardKind, MemoryScope, MemoryStatus, PermissionResolutionDecision,
-    ProjectLifecycleState, RebindProjectRequest, ReconcileEffectRequest, ResolvePermissionRequest,
-    RevokeGrantRequest, SendMessageRequest, SimEffectBehavior, TaskStatus, ThinkingLevel,
-    UpdateAgentConfigRequest, UpdateTaskRequest, WorkspaceWritePolicy,
+    ArtifactLifecycleState, CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest,
+    CreateProjectRequest, CreateSessionRequest, CreateTaskRequest, DispatchEffectRequest,
+    ExternalEffectStatus, IdempotencyKey, InboxCardKind, MemoryScope, MemoryStatus,
+    PermissionResolutionDecision, PolicyEffect, ProjectLifecycleState, RebindProjectRequest,
+    ReconcileEffectRequest, ResolvePermissionRequest, RevokeGrantRequest, SendMessageRequest,
+    SessionKind, SimEffectBehavior, TaskStatus, ThinkingLevel, UpdateAgentConfigRequest,
+    UpdateTaskRequest, WorkspaceWritePolicy,
 };
-use dennett_desktop_lib::{HeadBridge, HeadEndpointPolicy};
+use dennett_desktop_lib::{BridgeError, HeadBridge, HeadEndpointPolicy};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -323,6 +324,7 @@ async fn run_v03_session_and_drop_bridge(
             agent_id: agent.agent_id,
             project_id: project.project_id,
             title: String::from("V03 Persistence Chat"),
+            session_kind: SessionKind::UserChat,
         })
         .await
         .expect("create_session");
@@ -503,6 +505,7 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
             agent_id: agent.agent_id,
             project_id: project.project_id,
             title: String::from("V02 Outage Session"),
+            session_kind: SessionKind::UserChat,
         })
         .await
         .expect("create_session");
@@ -635,6 +638,7 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
             agent_id: agent.agent_id,
             project_id: project.project_id,
             title: String::from("D2 Interactive Approval Chat"),
+            session_kind: SessionKind::UserChat,
         })
         .await
         .expect("create_session");
@@ -1018,20 +1022,46 @@ async fn d2_desktop_bridge_lost_ack_unknown_external_visibility_honest_stop_and_
 
     let idem_key = IdempotencyKey::try_new(format!("desktop-lost-ack-{}", &suffix[..8]))
         .expect("valid idempotency key");
+    let dispatch_req = DispatchEffectRequest {
+        project_id: project.project_id,
+        session_id: task.session_id,
+        task_id: Some(task.task_id),
+        run_id: None,
+        agent_id: agent.agent_id,
+        effect_idempotency_key: idem_key,
+        connector_id: Some(String::from("simulated_external")),
+        operation: String::from("send_webhook"),
+        target_recipient: String::from("ops@example.test"),
+        parameters_json: String::from("{\"msg\":\"deploy-ready\"}"),
+        simulated_behavior: Some(SimEffectBehavior::LostAck),
+    };
+    // D2-ARCH-03: External effects fail closed until explicitly authorized by policy.
+    let denied_before_rule = bridge.dispatch_effect(&dispatch_req).await;
+    assert!(
+        matches!(
+            denied_before_rule,
+            Err(BridgeError::HeadApi { ref code, .. }) if code == "ACCESS_DENIED"
+        ),
+        "expected default-deny before Allow policy rule, got: {denied_before_rule:?}"
+    );
+    let head_client =
+        dennett_head_client::HeadClient::new(&head.base_url).expect("head client for policy");
+    head_client
+        .create_policy_rule(
+            &CreatePolicyRuleRequest {
+                scope: format!("project:{}", project.project_id),
+                tool_name: String::from("external_effect:send_webhook"),
+                target_pattern: Some(String::from("ops@example.test")),
+                effect: PolicyEffect::Allow,
+                reason: String::from("Allow webhook dispatch for desktop LostAck test"),
+            },
+            None,
+        )
+        .await
+        .expect("create allow policy rule");
+
     let dispatched = bridge
-        .dispatch_effect(&DispatchEffectRequest {
-            project_id: project.project_id,
-            session_id: task.session_id,
-            task_id: Some(task.task_id),
-            run_id: None,
-            agent_id: agent.agent_id,
-            effect_idempotency_key: idem_key,
-            connector_id: Some(String::from("simulated_external")),
-            operation: String::from("send_webhook"),
-            target_recipient: String::from("ops@example.test"),
-            parameters_json: String::from("{\"msg\":\"deploy-ready\"}"),
-            simulated_behavior: Some(SimEffectBehavior::LostAck),
-        })
+        .dispatch_effect(&dispatch_req)
         .await
         .expect("dispatch_effect LostAck");
     assert_eq!(dispatched.effect.status, ExternalEffectStatus::Unknown);
@@ -1146,6 +1176,7 @@ async fn d2_desktop_bridge_client_message_id_dedup_project_lifecycle_and_artifac
             agent_id: agent.agent_id,
             project_id: project.project_id,
             title: String::from("D2 Dedup Session"),
+            session_kind: SessionKind::UserChat,
         })
         .await
         .expect("create_session");

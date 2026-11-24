@@ -321,6 +321,9 @@ pub struct TurnOutcome {
     pub events: Vec<RuntimeEvent>,
     /// Optional provider usage payload.
     pub usage: Option<Value>,
+    /// Cumulative milliseconds spent waiting on interactive owner approvals during this turn
+    /// (excluded from task execution `wall_ms_used` budget accounting; D2-BUG-03).
+    pub human_wait_ms: u64,
 }
 
 impl TurnOutcome {

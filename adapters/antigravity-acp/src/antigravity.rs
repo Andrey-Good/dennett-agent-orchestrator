@@ -18,13 +18,14 @@ use std::time::Duration;
 
 use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets_owned};
 use dennett_contracts::{
-    DennettError, RuntimeAuthProfile, RuntimeModelOption, SessionId, ThinkingLevel,
+    DennettError, RuntimeAuthProfile, RuntimeModelOption, SessionId, ThinkingLevel, TimestampMs,
 };
+use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::port::{
     AgentRuntimePort, BoxFuture, PolicyEvaluator, RuntimeDescriptor, RuntimeEvent,
-    SessionStartOutcome, SessionStartRequest, TurnOutcome, TurnRequest,
+    RuntimeMcpServerSpec, SessionStartOutcome, SessionStartRequest, TurnOutcome, TurnRequest,
 };
 use crate::profile::{
     Semver, build_effective_system_prompt, detect_agy_version, normalize_workspace_path,
@@ -103,6 +104,9 @@ impl AntigravityRuntimeConfig {
     }
 }
 
+/// Renewal safety margin before MCP signed token expiry (`dnt1.` / `dct1.`) triggering respawn (10 minutes).
+const MCP_TOKEN_EXPIRY_MARGIN_MS: i64 = 10 * 60 * 1_000;
+
 struct ActiveSessionSlot {
     process: Mutex<AcpProcess>,
     provider_session_id: String,
@@ -113,6 +117,8 @@ struct ActiveSessionSlot {
     models: Vec<RuntimeModelOption>,
     applied_write_policy: dennett_contracts::WorkspaceWritePolicy,
     applied_system_prompt: String,
+    applied_mcp_digest: u64,
+    mcp_token_expires_at_ms: Option<i64>,
     applied_model: Mutex<Option<String>>,
     applied_thinking: Mutex<Option<ThinkingLevel>>,
     active_thinking_levels: Mutex<Vec<ThinkingLevel>>,
@@ -126,6 +132,10 @@ enum SlotReuseAction {
     RespawnAndRehydrate { reason: String },
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "slot reuse evaluates cwd, prompt, write policy, process health, MCP scope digest, and token expiry margin together"
+)]
 fn decide_slot_reuse(
     slot_cwd: &str,
     target_cwd: &str,
@@ -133,6 +143,10 @@ fn decide_slot_reuse(
     req_write_policy: &dennett_contracts::WorkspaceWritePolicy,
     slot_system_prompt: &str,
     req_system_prompt: &str,
+    slot_mcp_digest: u64,
+    req_mcp_digest: u64,
+    slot_token_expires_at_ms: Option<i64>,
+    now_ms: i64,
     process_exited: bool,
 ) -> SlotReuseAction {
     if !workspace_paths_match(slot_cwd, target_cwd) {
@@ -147,10 +161,148 @@ fn decide_slot_reuse(
             ),
         };
     }
-    if process_exited || slot_write_policy != req_write_policy {
+    let token_near_expiry = slot_token_expires_at_ms
+        .is_some_and(|exp_ms| exp_ms.saturating_sub(now_ms) < MCP_TOKEN_EXPIRY_MARGIN_MS);
+    if process_exited
+        || slot_write_policy != req_write_policy
+        || slot_mcp_digest != req_mcp_digest
+        || token_near_expiry
+    {
         return SlotReuseAction::RespawnAndResume;
     }
     SlotReuseAction::ReuseLive
+}
+
+/// Computes a deterministic semantic digest of `mcp_servers` plus the earliest `expires_at` (ms)
+/// observed in any `dnt1.` or `dct1.` signed MCP token (D2-SEC-01).
+///
+/// For `dnt1.` and `dct1.` tokens, hashes authorization-bearing claims (`allowed_scopes`,
+/// `capabilities`, `project_id`, `agent_id`, `session_id`, `session_kind`, `principal_id`,
+/// `issuer`, `audience`) rather than per-turn random `token_id`/`issued_at`, so normal
+/// multi-turn reuse stays fast while any scope change, MCP server removal/addition, or
+/// approaching token expiry (`< 10m`) forces a clean `RespawnAndResume`.
+fn compute_mcp_fingerprint(mcp_servers: &[RuntimeMcpServerSpec]) -> (u64, Option<i64>) {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mix_bytes = |h: &mut u64, bytes: &[u8]| {
+        for &b in bytes {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        *h ^= 0xff;
+        *h = h.wrapping_mul(0x0100_0000_01b3);
+    };
+
+    let mut earliest_exp_ms: Option<i64> = None;
+    let mut sorted_servers: Vec<&RuntimeMcpServerSpec> = mcp_servers.iter().collect();
+    sorted_servers.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.command.cmp(&b.command)));
+
+    for srv in sorted_servers {
+        mix_bytes(&mut hash, b"server");
+        mix_bytes(&mut hash, srv.name.as_bytes());
+        mix_bytes(&mut hash, srv.command.as_bytes());
+        for arg in &srv.args {
+            mix_bytes(&mut hash, b"arg");
+            mix_bytes(&mut hash, arg.as_bytes());
+        }
+        let mut sorted_env: Vec<(&str, &str)> = srv
+            .env
+            .iter()
+            .map(|e| (e.name.as_str(), e.value.as_str()))
+            .collect();
+        sorted_env.sort_unstable();
+        for (k, v) in sorted_env {
+            mix_bytes(&mut hash, b"env");
+            mix_bytes(&mut hash, k.as_bytes());
+            if let Some((claims_summary, exp_opt)) = inspect_dennett_signed_token(v) {
+                mix_bytes(&mut hash, claims_summary.as_bytes());
+                if let Some(exp) = exp_opt {
+                    earliest_exp_ms = Some(match earliest_exp_ms {
+                        Some(cur) => cur.min(exp),
+                        None => exp,
+                    });
+                }
+            } else {
+                mix_bytes(&mut hash, v.as_bytes());
+            }
+        }
+    }
+
+    (hash, earliest_exp_ms)
+}
+
+fn inspect_dennett_signed_token(raw: &str) -> Option<(String, Option<i64>)> {
+    let (prefix, rest) = if let Some(r) = raw.strip_prefix("dnt1.") {
+        ("dnt1", r)
+    } else {
+        let r = raw.strip_prefix("dct1.")?;
+        ("dct1", r)
+    };
+    let (payload_b64, _sig) = rest.split_once('.')?;
+    let bytes = decode_base64url_no_pad(payload_b64)?;
+    let parsed: Value = serde_json::from_slice(&bytes).ok()?;
+    let exp = parsed.get("expires_at").and_then(Value::as_i64);
+
+    let mut summary = String::from(prefix);
+    if prefix == "dnt1" {
+        if let Some(p) = parsed.get("principal_id").and_then(Value::as_str) {
+            summary.push('|');
+            summary.push_str(p);
+        }
+        if let Some(iss) = parsed.get("issuer").and_then(Value::as_str) {
+            summary.push('|');
+            summary.push_str(iss);
+        }
+        if let Some(aud) = parsed.get("audience").and_then(Value::as_str) {
+            summary.push('|');
+            summary.push_str(aud);
+        }
+        if let Some(scopes) = parsed.get("allowed_scopes").and_then(Value::as_array) {
+            let mut list: Vec<&str> = scopes.iter().filter_map(Value::as_str).collect();
+            list.sort_unstable();
+            summary.push_str("|scopes=");
+            summary.push_str(&list.join(","));
+        }
+        if let Some(caps) = parsed.get("capabilities").and_then(Value::as_array) {
+            let mut list: Vec<&str> = caps.iter().filter_map(Value::as_str).collect();
+            list.sort_unstable();
+            summary.push_str("|caps=");
+            summary.push_str(&list.join(","));
+        }
+    } else {
+        for field in ["project_id", "agent_id", "session_id", "session_kind"] {
+            if let Some(val) = parsed.get(field).and_then(Value::as_str) {
+                summary.push('|');
+                summary.push_str(field);
+                summary.push('=');
+                summary.push_str(val);
+            }
+        }
+    }
+    Some((summary, exp))
+}
+
+fn decode_base64url_no_pad(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity((input.len() * 3) / 4);
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+    for byte in input.bytes() {
+        let val = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            b'=' => continue,
+            _ => return None,
+        };
+        buf = (buf << 6) | u32::from(val);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xff) as u8);
+        }
+    }
+    Some(out)
 }
 
 /// Production [`AgentRuntimePort`] backed by local `agy acp` subprocesses over stdio JSON-RPC 2.0.
@@ -447,9 +599,12 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
         Box::pin(async move {
             let target_cwd = normalize_workspace_path(&req.workspace_cwd);
             let secrets = self.collect_secrets(&req);
+            let (req_mcp_digest, req_mcp_token_expires_at_ms) =
+                compute_mcp_fingerprint(&req.mcp_servers);
+            let now_ms = TimestampMs::now().as_millis();
 
             // 1. Check if we already hold a live process for this Dennett session in the exact workspace
-            //    with matching `workspace_write_policy` and `system_prompt`.
+            //    with matching `workspace_write_policy`, `system_prompt`, MCP scope digest, and fresh token.
             let existing_slot = {
                 let guard = self.sessions.lock().await;
                 guard.get(&req.dennett_session_id).cloned()
@@ -467,6 +622,10 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                     &req.workspace_write_policy,
                     &slot.applied_system_prompt,
                     &req.system_prompt,
+                    slot.applied_mcp_digest,
+                    req_mcp_digest,
+                    slot.mcp_token_expires_at_ms,
+                    now_ms,
                     proc.has_exited(),
                 );
                 if action == SlotReuseAction::ReuseLive {
@@ -758,6 +917,8 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 models,
                 applied_write_policy: req.workspace_write_policy,
                 applied_system_prompt: req.system_prompt,
+                applied_mcp_digest: req_mcp_digest,
+                mcp_token_expires_at_ms: req_mcp_token_expires_at_ms,
                 applied_model: Mutex::new(applied_model),
                 applied_thinking: Mutex::new(applied_thinking),
                 active_thinking_levels: Mutex::new(active_thinking_levels),
@@ -993,8 +1154,10 @@ mod tests {
     use dennett_contracts::{RuntimeModelOption, ThinkingLevel, WorkspaceWritePolicy};
 
     use super::{
-        SlotReuseAction, clamp_thinking_level, decide_slot_reuse, split_model_and_thinking,
+        MCP_TOKEN_EXPIRY_MARGIN_MS, SlotReuseAction, clamp_thinking_level, compute_mcp_fingerprint,
+        decide_slot_reuse, split_model_and_thinking,
     };
+    use crate::port::{RuntimeMcpEnvEntry, RuntimeMcpServerSpec};
 
     #[test]
     fn split_and_clamp_handles_carbon_xhigh_and_claude_builtin_thinking() {
@@ -1053,10 +1216,18 @@ mod tests {
     }
 
     #[test]
-    fn slot_reuse_restarts_on_write_policy_change_and_rehydrates_on_system_prompt_change() {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustively verifies all decide_slot_reuse dimensions including MCP digest and token expiry margin"
+    )]
+    fn slot_reuse_restarts_on_write_policy_mcp_scope_or_expiring_token_and_rehydrates_on_prompt_change()
+     {
         let allow_docs = WorkspaceWritePolicy::AllowPaths {
             allowed_prefixes: vec![String::from("docs")],
         };
+        let now_ms: i64 = 1_750_000_000_000;
+        let fresh_exp = Some(now_ms + MCP_TOKEN_EXPIRY_MARGIN_MS + 60_000);
+        let expiring_exp = Some(now_ms + MCP_TOKEN_EXPIRY_MARGIN_MS - 1_000);
 
         assert_eq!(
             decide_slot_reuse(
@@ -1066,6 +1237,10 @@ mod tests {
                 &WorkspaceWritePolicy::DenyAll,
                 "prompt v1",
                 "prompt v1",
+                42,
+                42,
+                fresh_exp,
+                now_ms,
                 false
             ),
             SlotReuseAction::ReuseLive
@@ -1080,6 +1255,10 @@ mod tests {
                 &allow_docs,
                 "prompt v1",
                 "prompt v1",
+                42,
+                42,
+                fresh_exp,
+                now_ms,
                 false
             ),
             SlotReuseAction::RespawnAndResume
@@ -1092,6 +1271,46 @@ mod tests {
                 &WorkspaceWritePolicy::DenyAll,
                 "prompt v1",
                 "prompt v1",
+                42,
+                42,
+                fresh_exp,
+                now_ms,
+                false
+            ),
+            SlotReuseAction::RespawnAndResume
+        );
+
+        // D2-SEC-01: MCP scope digest change MUST trigger RespawnAndResume!
+        assert_eq!(
+            decide_slot_reuse(
+                "C:/ws",
+                "C:/ws",
+                &allow_docs,
+                &allow_docs,
+                "prompt v1",
+                "prompt v1",
+                42,
+                99,
+                fresh_exp,
+                now_ms,
+                false
+            ),
+            SlotReuseAction::RespawnAndResume
+        );
+
+        // D2-SEC-01: MCP token within < 10m of expiry MUST trigger RespawnAndResume!
+        assert_eq!(
+            decide_slot_reuse(
+                "C:/ws",
+                "C:/ws",
+                &allow_docs,
+                &allow_docs,
+                "prompt v1",
+                "prompt v1",
+                42,
+                42,
+                expiring_exp,
+                now_ms,
                 false
             ),
             SlotReuseAction::RespawnAndResume
@@ -1106,6 +1325,10 @@ mod tests {
                 &allow_docs,
                 "prompt v1",
                 "prompt v1",
+                42,
+                42,
+                fresh_exp,
+                now_ms,
                 true
             ),
             SlotReuseAction::RespawnAndResume
@@ -1120,6 +1343,10 @@ mod tests {
                 &allow_docs,
                 "prompt v1",
                 "prompt v2 (updated)",
+                42,
+                42,
+                fresh_exp,
+                now_ms,
                 false
             ),
             SlotReuseAction::RespawnAndRehydrate { .. }
@@ -1134,9 +1361,86 @@ mod tests {
                 &allow_docs,
                 "prompt v1",
                 "prompt v1",
+                42,
+                42,
+                fresh_exp,
+                now_ms,
                 false
             ),
             SlotReuseAction::RespawnAndRehydrate { .. }
         ));
+    }
+
+    #[test]
+    fn d2_sec_01_mcp_fingerprint_tracks_scopes_and_earliest_expiry_ignoring_token_nonce() {
+        fn b64url(s: &str) -> String {
+            const TABLE: &[u8; 64] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            let bytes = s.as_bytes();
+            let mut out = String::new();
+            let mut i = 0;
+            while i < bytes.len() {
+                let b0 = bytes[i];
+                let b1 = if i + 1 < bytes.len() { bytes[i + 1] } else { 0 };
+                let b2 = if i + 2 < bytes.len() { bytes[i + 2] } else { 0 };
+                let n = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+                out.push(TABLE[((n >> 18) & 63) as usize] as char);
+                out.push(TABLE[((n >> 12) & 63) as usize] as char);
+                if i + 1 < bytes.len() {
+                    out.push(TABLE[((n >> 6) & 63) as usize] as char);
+                }
+                if i + 2 < bytes.len() {
+                    out.push(TABLE[(n & 63) as usize] as char);
+                }
+                i += 3;
+            }
+            out
+        }
+
+        let mk_spec = |token: String| {
+            vec![RuntimeMcpServerSpec {
+                name: String::from("dennett-memory"),
+                command: String::from("dennett-memory-mcp"),
+                args: vec![],
+                env: vec![RuntimeMcpEnvEntry {
+                    name: String::from("DENNETT_MEMORY_TOKEN"),
+                    value: token,
+                }],
+            }]
+        };
+
+        let tok_a1 = format!(
+            "dnt1.{}.sig1",
+            b64url(
+                r#"{"token_id":"t1","principal_id":"head","allowed_scopes":["project:a"],"capabilities":["read","write"],"expires_at":2000000000000}"#
+            )
+        );
+        let tok_a2 = format!(
+            "dnt1.{}.sig2",
+            b64url(
+                r#"{"token_id":"t2","principal_id":"head","allowed_scopes":["project:a"],"capabilities":["write","read"],"expires_at":2000000099999}"#
+            )
+        );
+        let tok_b = format!(
+            "dnt1.{}.sig3",
+            b64url(
+                r#"{"token_id":"t3","principal_id":"head","allowed_scopes":["project:b"],"capabilities":["read","write"],"expires_at":2000000000000}"#
+            )
+        );
+
+        let (d_a1, exp_a1) = compute_mcp_fingerprint(&mk_spec(tok_a1));
+        let (d_a2, exp_a2) = compute_mcp_fingerprint(&mk_spec(tok_a2));
+        let (d_b, _) = compute_mcp_fingerprint(&mk_spec(tok_b));
+        let (d_empty, exp_empty) = compute_mcp_fingerprint(&[]);
+
+        assert_eq!(
+            d_a1, d_a2,
+            "same scopes with refreshed token_id/exp keep digest stable"
+        );
+        assert_eq!(exp_a1, Some(2_000_000_000_000));
+        assert_eq!(exp_a2, Some(2_000_000_099_999));
+        assert_ne!(d_a1, d_b, "scope change MUST change MCP digest");
+        assert_ne!(d_a1, d_empty, "removing MCP server MUST change digest");
+        assert_eq!(exp_empty, None);
     }
 }

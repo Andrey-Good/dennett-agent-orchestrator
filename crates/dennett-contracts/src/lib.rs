@@ -32,8 +32,8 @@ pub use control::{
     PermissionDecisionId, PermissionDecisionRecord, PolicyEffect, PolicyRule, PolicyRuleId,
     ProjectId, ProjectRecord, RunId, RunRecord, RunStatus, RuntimeBinding, RuntimeBindingId,
     RuntimeCatalogResponse, RuntimeModelOption, RuntimeQuotaWindow, RuntimeThinkingOption,
-    SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
-    SessionStatus, ThinkingLevel, UpdateAgentConfigRequest, UpdateProjectRequest,
+    SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionId, SessionKind,
+    SessionRecord, SessionStatus, ThinkingLevel, UpdateAgentConfigRequest, UpdateProjectRequest,
     UpdateSessionRequest, WorkspaceFileEntry, WorkspaceFileKind, WorkspaceWritePolicy,
 };
 
@@ -61,9 +61,9 @@ pub use d2::{
     StateSnapshotResponse, StreamCursor, TaskBudget, TaskDetailResponse, TaskId, TaskRecord,
     TaskSchedule, TaskSignalId, TaskSignalOutcome, TaskSignalRecord, TaskSignalRequest,
     TaskSignalResponse, TaskStatus, TaskTimerId, TaskTimerRecord, TaskTimerStatus, TaskUsage,
-    UpdateTaskRequest, UsageConfidence, validate_attached_skills, validate_client_message_id,
-    validate_grant_scope, validate_grant_tool_pattern, validate_iana_timezone_syntax,
-    write_policy_is_subset_of,
+    TimerPauseReason, UpdateTaskRequest, UsageConfidence, validate_attached_skills,
+    validate_client_message_id, validate_grant_scope, validate_grant_tool_pattern,
+    validate_iana_timezone_syntax, write_policy_is_subset_of,
 };
 
 pub use memory::{

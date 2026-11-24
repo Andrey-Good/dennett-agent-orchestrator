@@ -24,7 +24,7 @@ use dennett_contracts::{
     PermissionResolutionDecision, PolicyEffect, ProjectId, ProjectLifecycleState,
     ReconcileEffectRequest, ReplyTaskRequest, ResolveInboxCardRequest, ResolveInboxCardResponse,
     ResolvePermissionRequest, ResolvePermissionResponse, RevokeGrantRequest, RunStatus, SessionId,
-    TaskId, TaskStatus, TimestampMs,
+    TaskId, TaskStatus, TimestampMs, WorkspaceWritePolicy,
 };
 use dennett_runtime_antigravity::{
     BoxFuture, PolicyEvaluationOutcome, PolicyEvaluationRequest, PolicyEvaluator,
@@ -46,9 +46,19 @@ use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService, insert_permission_decis
 use crate::store::{
     CAPABILITY_GRANT_SELECT_COLS, INBOX_CARD_SELECT_COLS, PERMISSION_REQUEST_SELECT_COLS,
     TASK_SELECT_COLS, append_audit_event, decode_capability_grant_row, decode_inbox_card_row,
-    decode_permission_request_row, decode_task_row, fetch_active_project_grants, fetch_agent,
-    fetch_policy_rules, fetch_project, fetch_task, map_pg_err, ms_to_pg_epoch_secs, truncate_utf8,
+    decode_permission_request_row, decode_task_row, ensure_project_active_in_tx,
+    fetch_active_project_grants, fetch_agent, fetch_policy_rules, fetch_project, fetch_task,
+    map_pg_err, ms_to_pg_epoch_secs, truncate_utf8,
 };
+
+/// Live PostgreSQL policy inputs refreshed on every tool invocation (`D2-BUG-02`, `D2-SEC-02`).
+pub(crate) struct LivePolicyInputs {
+    pub(crate) rules: Vec<dennett_contracts::PolicyRule>,
+    pub(crate) grants: Vec<CapabilityGrantRecord>,
+    pub(crate) project_lifecycle_state: ProjectLifecycleState,
+    pub(crate) workspace_bound: bool,
+    pub(crate) parent_write_ceiling: Option<WorkspaceWritePolicy>,
+}
 
 /// Default timeout for waiting on interactive owner approval before expiring fail-closed.
 pub const DEFAULT_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -156,14 +166,15 @@ impl PolicyEvaluator for InteractivePolicyEvaluator {
         req: &'a PolicyEvaluationRequest,
     ) -> BoxFuture<'a, PolicyEvaluationOutcome> {
         Box::pin(async move {
-            // 1. Live lookup of policy rules and active capability grants from PostgreSQL so
-            //    newly revoked grants or newly added Deny rules take effect immediately!
-            let (fresh_rules, active_grants) = match self
+            // 1. Live lookup of policy rules, active capability grants, live project lifecycle
+            //    state, and delegated parent write ceiling from PostgreSQL so revoked grants,
+            //    new Deny rules, and mid-turn archive/detach take effect immediately (D2-BUG-02).
+            let live = match self
                 .service
-                .load_live_policy_inputs(self.base_ctx.project_id)
+                .load_live_policy_inputs(self.base_ctx.project_id, self.task_id)
                 .await
             {
-                Ok(pair) => pair,
+                Ok(inputs) => inputs,
                 Err(err) => {
                     let outcome = PolicyEvaluationOutcome {
                         effect: PolicyEffect::Deny,
@@ -177,10 +188,13 @@ impl PolicyEvaluator for InteractivePolicyEvaluator {
             };
 
             let mut ctx = self.base_ctx.clone();
-            ctx.rules = fresh_rules;
+            ctx.rules = live.rules;
+            ctx.project_lifecycle_state = live.project_lifecycle_state;
+            ctx.workspace_bound = live.workspace_bound;
+            ctx.parent_write_ceiling = live.parent_write_ceiling;
             let engine = PolicyEngine::new(ctx);
 
-            let decision = engine.evaluate_with_grants(req, &active_grants, TimestampMs::now());
+            let decision = engine.evaluate_with_grants(req, &live.grants, TimestampMs::now());
             match decision {
                 PolicyEvaluationDecision::Immediate(outcome) => {
                     self.record_decision(req, &outcome, None);
@@ -277,6 +291,8 @@ impl InteractivePolicyEvaluator {
         let params_sha = sha256_hex(params_fingerprint_src.as_bytes());
         let safe_target_summary = redact_secrets_owned(&target_summary, &self.secrets_to_redact);
         let safe_reason = redact_secrets_owned(&reason, &self.secrets_to_redact);
+        let preview_snippet =
+            extract_redacted_preview_snippet(&req.raw_input, &self.secrets_to_redact);
 
         let (tx, rx) = oneshot::channel::<ApprovalResolutionSignal>();
         let request_id = match self
@@ -293,6 +309,7 @@ impl InteractivePolicyEvaluator {
                 &safe_target_summary,
                 &normalized_targets,
                 &params_sha,
+                preview_snippet.as_deref(),
                 &safe_reason,
                 self.approval_timeout,
                 &self.correlation_id,
@@ -374,21 +391,181 @@ impl InteractivePolicyEvaluator {
     }
 }
 
+fn extract_redacted_preview_snippet(
+    raw_input: &serde_json::Value,
+    secrets_to_redact: &[String],
+) -> Option<String> {
+    let obj = raw_input.as_object()?;
+    for key in [
+        "content",
+        "CodeContent",
+        "ReplacementContent",
+        "new_string",
+        "new_content",
+        "text",
+        "patch",
+        "diff",
+    ] {
+        if let Some(val) = obj.get(key).and_then(serde_json::Value::as_str) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let redacted = redact_secrets_owned(trimmed, secrets_to_redact);
+                return Some(truncate_utf8(&redacted, 2000).to_owned());
+            }
+        }
+    }
+    if let Some(chunks) = obj
+        .get("ReplacementChunks")
+        .and_then(serde_json::Value::as_array)
+    {
+        let mut buf = String::new();
+        for chunk in chunks {
+            if let Some(repl) = chunk
+                .get("ReplacementContent")
+                .and_then(serde_json::Value::as_str)
+            {
+                if !buf.is_empty() {
+                    buf.push_str("\n---\n");
+                }
+                buf.push_str(repl);
+            }
+        }
+        if !buf.trim().is_empty() {
+            let redacted = redact_secrets_owned(&buf, secrets_to_redact);
+            return Some(truncate_utf8(&redacted, 2000).to_owned());
+        }
+    }
+    None
+}
+
+fn intersect_write_ceilings(
+    a: WorkspaceWritePolicy,
+    b: WorkspaceWritePolicy,
+) -> WorkspaceWritePolicy {
+    match (a, b) {
+        (WorkspaceWritePolicy::DenyAll, _) | (_, WorkspaceWritePolicy::DenyAll) => {
+            WorkspaceWritePolicy::DenyAll
+        }
+        (WorkspaceWritePolicy::AllowWorkspace, other)
+        | (other, WorkspaceWritePolicy::AllowWorkspace) => other,
+        (
+            WorkspaceWritePolicy::AllowPaths {
+                allowed_prefixes: p1,
+            },
+            WorkspaceWritePolicy::AllowPaths {
+                allowed_prefixes: p2,
+            },
+        ) => {
+            let mut narrowed = Vec::new();
+            for candidate in &p1 {
+                let norm_c = candidate
+                    .trim()
+                    .replace('\\', "/")
+                    .trim_start_matches("./")
+                    .trim_end_matches('/')
+                    .to_ascii_lowercase();
+                if p2.iter().any(|p| {
+                    let norm_p = p
+                        .trim()
+                        .replace('\\', "/")
+                        .trim_start_matches("./")
+                        .trim_end_matches('/')
+                        .to_ascii_lowercase();
+                    norm_c == norm_p || norm_c.starts_with(&format!("{norm_p}/"))
+                }) {
+                    narrowed.push(candidate.clone());
+                }
+            }
+            for candidate in &p2 {
+                let norm_c = candidate
+                    .trim()
+                    .replace('\\', "/")
+                    .trim_start_matches("./")
+                    .trim_end_matches('/')
+                    .to_ascii_lowercase();
+                if p1.iter().any(|p| {
+                    let norm_p = p
+                        .trim()
+                        .replace('\\', "/")
+                        .trim_start_matches("./")
+                        .trim_end_matches('/')
+                        .to_ascii_lowercase();
+                    norm_c == norm_p || norm_c.starts_with(&format!("{norm_p}/"))
+                }) && !narrowed.iter().any(|existing| existing == candidate)
+                {
+                    narrowed.push(candidate.clone());
+                }
+            }
+            if narrowed.is_empty() {
+                WorkspaceWritePolicy::DenyAll
+            } else {
+                WorkspaceWritePolicy::AllowPaths {
+                    allowed_prefixes: narrowed,
+                }
+            }
+        }
+        (WorkspaceWritePolicy::AllowPaths { allowed_prefixes }, _)
+        | (_, WorkspaceWritePolicy::AllowPaths { allowed_prefixes }) => {
+            WorkspaceWritePolicy::AllowPaths { allowed_prefixes }
+        }
+        (WorkspaceWritePolicy::AskBeforeWrite, WorkspaceWritePolicy::AskBeforeWrite) => {
+            WorkspaceWritePolicy::AskBeforeWrite
+        }
+        _ => WorkspaceWritePolicy::DenyAll,
+    }
+}
+
 impl HeadService {
+    pub(crate) async fn compute_parent_write_ceiling_in_tx<C: deadpool_postgres::GenericClient>(
+        &self,
+        client: &C,
+        task_id: Option<TaskId>,
+    ) -> Result<Option<WorkspaceWritePolicy>, DennettError> {
+        let Some(start_tid) = task_id else {
+            return Ok(None);
+        };
+        let mut ceiling: Option<WorkspaceWritePolicy> = None;
+        let mut cursor_parent = fetch_task(client, start_tid, self.pg_target())
+            .await
+            .ok()
+            .and_then(|t| t.parent_task_id);
+        let mut depth = 0_u8;
+        while let Some(parent_tid) = cursor_parent {
+            depth += 1;
+            if depth > 16 {
+                return Ok(Some(WorkspaceWritePolicy::DenyAll));
+            }
+            let parent_task = fetch_task(client, parent_tid, self.pg_target()).await?;
+            let parent_agent = fetch_agent(client, parent_task.agent_id, self.pg_target()).await?;
+            let parent_policy = parent_agent.current_config.workspace_write_policy;
+            ceiling = Some(match ceiling {
+                Some(existing) => intersect_write_ceilings(existing, parent_policy),
+                None => parent_policy,
+            });
+            cursor_parent = parent_task.parent_task_id;
+        }
+        Ok(ceiling)
+    }
+
     pub(crate) async fn load_live_policy_inputs(
         &self,
         project_id: ProjectId,
-    ) -> Result<
-        (
-            Vec<dennett_contracts::PolicyRule>,
-            Vec<CapabilityGrantRecord>,
-        ),
-        DennettError,
-    > {
+        task_id: Option<TaskId>,
+    ) -> Result<LivePolicyInputs, DennettError> {
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let project = fetch_project(&conn, project_id, self.pg_target()).await?;
         let rules = fetch_policy_rules(&conn, self.pg_target()).await?;
         let grants = fetch_active_project_grants(&conn, project_id, self.pg_target()).await?;
-        Ok((rules, grants))
+        let parent_write_ceiling = self
+            .compute_parent_write_ceiling_in_tx(&conn, task_id)
+            .await?;
+        Ok(LivePolicyInputs {
+            rules,
+            grants,
+            project_lifecycle_state: project.lifecycle_state,
+            workspace_bound: project.workspace_path.is_some(),
+            parent_write_ceiling,
+        })
     }
 
     pub(crate) async fn try_consume_capability_grant(
@@ -430,6 +607,7 @@ impl HeadService {
         target_summary: &str,
         normalized_targets: &[String],
         parameters_sha256: &dennett_contracts::Sha256Hex,
+        preview_snippet: Option<&str>,
         reason: &str,
         timeout: Duration,
         correlation_id: &CorrelationId,
@@ -488,11 +666,11 @@ impl HeadService {
                 "INSERT INTO permission_requests (
                     request_id, project_id, session_id, run_id, task_id, agent_id,
                     tool_call_id, tool_name, tool_kind, target_summary, normalized_targets,
-                    parameters_sha256, reason, status, expires_at, correlation_id
+                    parameters_sha256, preview_snippet, reason, status, expires_at, correlation_id
                  ) VALUES (
                     $1, $2, $3, $4, $5, $6,
                     $7, $8, $9, $10, $11,
-                    $12, $13, 'pending', to_timestamp($14), $15
+                    $12, $13, $14, 'pending', to_timestamp($15), $16
                  )",
                 &[
                     &request_id.as_uuid(),
@@ -507,6 +685,7 @@ impl HeadService {
                     &truncate_utf8(target_summary, 1024),
                     &targets_json,
                     &parameters_sha256.as_str(),
+                    &preview_snippet.map(|s| truncate_utf8(s, 2000)),
                     &truncate_utf8(reason, 1024),
                     &expires_at_secs,
                     &correlation_id.as_str(),
@@ -918,14 +1097,25 @@ impl HeadService {
     /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`],
     /// [`DennettError::Conflict`] (already resolved, stale revision, or cancelled run/task),
     /// or [`DennettError::DatabaseUnavailable`].
-    #[expect(
-        clippy::too_many_lines,
-        reason = "permission resolution performs optimistic locking, PolicyEngine re-verification, grant issuance, audit decision persistence, and waiter wakeup in one atomic unit"
-    )]
     pub async fn resolve_permission_request(
         &self,
         request_id: PermissionRequestId,
         req: ResolvePermissionRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<ResolvePermissionResponse, DennettError> {
+        self.resolve_permission_request_with_card_guard(request_id, req, None, correlation_id)
+            .await
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "permission resolution performs optimistic locking, PolicyEngine re-verification, grant issuance, atomic inbox card update, audit decision persistence, and waiter wakeup in one atomic unit"
+    )]
+    async fn resolve_permission_request_with_card_guard(
+        &self,
+        request_id: PermissionRequestId,
+        req: ResolvePermissionRequest,
+        card_revision_guard: Option<(InboxCardId, i64)>,
         correlation_id: &CorrelationId,
     ) -> Result<ResolvePermissionResponse, DennettError> {
         req.validate()?;
@@ -981,6 +1171,15 @@ impl HeadService {
         // For explicit `Deny`, allow idempotent dismissal even if the run already terminated (H2-01)
         // so the user is NEVER trapped by an uncloseable approval card.
         let wants_allow = !matches!(req.decision, PermissionResolutionDecision::Deny);
+        if wants_allow {
+            let _ = ensure_project_active_in_tx(
+                &tx,
+                perm.project_id,
+                "approve permission request",
+                self.pg_target(),
+            )
+            .await?;
+        }
         let run_status_raw: String = tx
             .query_one(
                 "SELECT status FROM runs WHERE run_id = $1",
@@ -1020,6 +1219,9 @@ impl HeadService {
         let project = fetch_project(&tx, perm.project_id, self.pg_target()).await?;
         let agent = fetch_agent(&tx, perm.agent_id, self.pg_target()).await?;
         let rules = fetch_policy_rules(&tx, self.pg_target()).await?;
+        let parent_write_ceiling = self
+            .compute_parent_write_ceiling_in_tx(&tx, perm.task_id)
+            .await?;
 
         // Re-verify through PolicyEngine before allowing execution!
         let (effective_effect, final_status, effective_reason, effective_scope) = if wants_allow {
@@ -1044,11 +1246,14 @@ impl HeadService {
                 if err_msg.is_none() {
                     let reverify_engine = PolicyEngine::new(PolicyContext {
                         project_id: project.project_id,
+                        project_lifecycle_state: project.lifecycle_state,
+                        workspace_bound: true,
                         agent_id: agent.agent_id,
                         session_id: perm.session_id,
                         task_id: perm.task_id,
                         workspace_root: ws_root,
                         workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
+                        parent_write_ceiling,
                         allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
                         rules,
                     });
@@ -1244,18 +1449,50 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated_perm = decode_permission_request_row(&updated_perm_row)?;
 
-        tx.execute(
-            "UPDATE inbox_cards
-             SET status = 'resolved',
-                 resolution_summary = $2,
-                 revision = revision + 1,
-                 resolved_at = now(),
-                 updated_at = now()
-             WHERE permission_request_id = $1 AND status = 'open'",
-            &[&request_id.as_uuid(), &safe_reason],
-        )
-        .await
-        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        if let Some((expected_card_id, expected_card_rev)) = card_revision_guard {
+            let card_rows = tx
+                .execute(
+                    "UPDATE inbox_cards
+                     SET status = 'resolved',
+                         resolution_summary = $3,
+                         revision = revision + 1,
+                         resolved_at = now(),
+                         updated_at = now()
+                     WHERE card_id = $1
+                       AND permission_request_id = $2
+                       AND status = 'open'
+                       AND revision = $4",
+                    &[
+                        &expected_card_id.as_uuid(),
+                        &request_id.as_uuid(),
+                        &safe_reason,
+                        &expected_card_rev,
+                    ],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            if card_rows == 0 {
+                return Err(DennettError::Conflict {
+                    resource: String::from("inbox_card"),
+                    expected_revision: Some(expected_card_rev),
+                    actual_revision: None,
+                    reason: String::from("inbox card revision mismatch (already_resolved)"),
+                });
+            }
+        } else {
+            tx.execute(
+                "UPDATE inbox_cards
+                 SET status = 'resolved',
+                     resolution_summary = $2,
+                     revision = revision + 1,
+                     resolved_at = now(),
+                     updated_at = now()
+                 WHERE permission_request_id = $1 AND status = 'open'",
+                &[&request_id.as_uuid(), &safe_reason],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        }
 
         if let Some(tid) = perm.task_id {
             if run_status == RunStatus::Running {
@@ -1502,10 +1739,13 @@ impl HeadService {
         let sql = format!(
             "SELECT {INBOX_CARD_SELECT_COLS}
              FROM inbox_cards
-             WHERE EXISTS (
-                 SELECT 1 FROM projects p
-                 WHERE p.project_id = inbox_cards.project_id
-                   AND p.lifecycle_state <> 'deleted_record'
+             WHERE (
+                 (kind = 'unknown_effect' AND status = 'open')
+                 OR EXISTS (
+                     SELECT 1 FROM projects p
+                     WHERE p.project_id = inbox_cards.project_id
+                       AND p.lifecycle_state <> 'deleted_record'
+                 )
              )
                AND ($1::text IS NULL OR status = $1)
                AND ($2::uuid IS NULL OR project_id = $2)
@@ -1525,10 +1765,13 @@ impl HeadService {
             .query_one(
                 "SELECT COUNT(*)::bigint FROM inbox_cards
                  WHERE status = 'open'
-                   AND EXISTS (
-                       SELECT 1 FROM projects p
-                       WHERE p.project_id = inbox_cards.project_id
-                         AND p.lifecycle_state <> 'deleted_record'
+                   AND (
+                       kind = 'unknown_effect'
+                       OR EXISTS (
+                           SELECT 1 FROM projects p
+                           WHERE p.project_id = inbox_cards.project_id
+                             AND p.lifecycle_state <> 'deleted_record'
+                       )
                    )
                    AND ($1::uuid IS NULL OR project_id = $1)",
                 &[&project_id.map(ProjectId::as_uuid)],
@@ -1596,6 +1839,18 @@ impl HeadService {
         }
 
         match (card.kind, req.resolution) {
+            // D2-ARCH-03: Unknown external effect cards MUST NEVER be dismissed via StopTask —
+            // the operator must explicitly reconcile them (`reconcile_effect`).
+            (InboxCardKind::UnknownEffect, InboxResolutionAction::StopTask { .. }) => {
+                Err(DennettError::Conflict {
+                    resource: String::from("inbox_card"),
+                    expected_revision: Some(req.expected_revision),
+                    actual_revision: Some(card.revision),
+                    reason: String::from(
+                        "cannot close unknown_effect inbox card via StopTask; use explicit ReconcileEffect instead",
+                    ),
+                })
+            }
             (
                 InboxCardKind::PermissionApproval,
                 InboxResolutionAction::Permission {
@@ -1613,7 +1868,7 @@ impl HeadService {
                         ),
                     })?;
                 let res = self
-                    .resolve_permission_request(
+                    .resolve_permission_request_with_card_guard(
                         perm_id,
                         ResolvePermissionRequest {
                             expected_revision: None,
@@ -1622,6 +1877,7 @@ impl HeadService {
                             max_uses,
                             expires_in_secs,
                         },
+                        Some((card_id, req.expected_revision)),
                         correlation_id,
                     )
                     .await?;
@@ -1646,7 +1902,12 @@ impl HeadService {
                     detail: String::from("clarification inbox card missing task_id"),
                 })?;
                 let task = self
-                    .reply_to_task(task_id, ReplyTaskRequest { answer_text }, correlation_id)
+                    .reply_to_task_with_card_guard(
+                        task_id,
+                        ReplyTaskRequest { answer_text },
+                        Some((card_id, req.expected_revision)),
+                        correlation_id,
+                    )
                     .await?;
                 let updated_card = self.fetch_inbox_card(card_id).await?;
                 Ok(ResolveInboxCardResponse {
@@ -1744,25 +2005,52 @@ impl HeadService {
                     field: String::from("resolution"),
                     reason: String::from("cannot StopTask on an inbox card without a task_id"),
                 })?;
-                let cancel_resp = self.cancel_task(task_id, correlation_id).await?;
                 let safe_reason = truncate_utf8(
                     &self.redact(reason.as_deref().unwrap_or("owner stopped task from inbox")),
                     2000,
                 )
                 .to_owned();
-                let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-                let _ = conn
-                    .execute(
-                        "UPDATE inbox_cards
-                         SET status = 'resolved',
-                             resolution_summary = $2,
-                             revision = revision + 1,
-                             resolved_at = now(),
-                             updated_at = now()
-                         WHERE card_id = $1 AND status = 'open'",
-                        &[&card_id.as_uuid(), &safe_reason],
+                // D2-BUG-04: Atomically claim the inbox card revision FIRST before stopping task
+                // so concurrent resolvers strictly receive 409 Conflict!
+                {
+                    let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+                    let tx = conn
+                        .transaction()
+                        .await
+                        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                    let _ = ensure_project_active_in_tx(
+                        &tx,
+                        card.project_id,
+                        "resolve inbox card",
+                        self.pg_target(),
                     )
-                    .await;
+                    .await?;
+                    let updated = tx
+                        .execute(
+                            "UPDATE inbox_cards
+                             SET status = 'resolved',
+                                 resolution_summary = $2,
+                                 revision = revision + 1,
+                                 resolved_at = now(),
+                                 updated_at = now()
+                             WHERE card_id = $1 AND status = 'open' AND revision = $3",
+                            &[&card_id.as_uuid(), &safe_reason, &req.expected_revision],
+                        )
+                        .await
+                        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                    if updated == 0 {
+                        return Err(DennettError::Conflict {
+                            resource: String::from("inbox_card"),
+                            expected_revision: Some(req.expected_revision),
+                            actual_revision: None,
+                            reason: String::from("inbox card revision mismatch (already_resolved)"),
+                        });
+                    }
+                    tx.commit()
+                        .await
+                        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                }
+                let cancel_resp = self.cancel_task(task_id, correlation_id).await?;
                 let updated_card = self.fetch_inbox_card(card_id).await?;
                 Ok(ResolveInboxCardResponse {
                     card: updated_card,
@@ -1845,6 +2133,13 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let task = decode_task_row(&task_row)?;
+        let _ = ensure_project_active_in_tx(
+            &tx,
+            task.project_id,
+            "increase task budget",
+            self.pg_target(),
+        )
+        .await?;
 
         let mut next_budget = task.budget.clone();
         if let Some(add) = additional_turns {
@@ -1870,6 +2165,17 @@ impl HeadService {
                     .unwrap_or(task.usage.wall_ms_used.div_ceil(1_000))
                     .saturating_add(add),
             );
+        }
+        // D2-BUG-05: Refuse budget adjustments that fail to relieve the actually exceeded dimension
+        // (e.g. adding turns when tokens or wall_ms is still exceeded).
+        if let Some(still_exceeded) = next_budget.check_before_next_turn(&task.usage) {
+            return Err(DennettError::InvalidInput {
+                field: String::from("resolution"),
+                reason: format!(
+                    "budget increase does not relieve exceeded dimension `{}` (used={}, new_limit={})",
+                    still_exceeded.dimension, still_exceeded.used, still_exceeded.limit
+                ),
+            });
         }
         let budget_val =
             serde_json::to_value(&next_budget).map_err(|err| DennettError::Internal {
@@ -1937,12 +2243,7 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        self.spawn_task_execution(
-            task_id,
-            updated_task.generation,
-            None,
-            correlation_id.clone(),
-        );
+        self.spawn_task_execution(task_id, updated_task.generation, correlation_id.clone());
         Ok(updated_task)
     }
 }

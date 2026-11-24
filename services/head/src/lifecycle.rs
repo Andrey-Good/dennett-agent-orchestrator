@@ -19,11 +19,15 @@ use dennett_contracts::{
 };
 use serde_json::json;
 
-use crate::events::{ControlEventAppend, append_control_event_in_tx};
+use crate::events::{
+    ControlEventAppend, PendingControlEvent, append_control_event_in_tx,
+    append_control_events_batch_in_tx,
+};
 use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService};
 use crate::store::{
-    ARTIFACT_SELECT_COLS, PROJECT_SELECT_COLS, append_audit_event, decode_artifact_row,
-    decode_project_row, fetch_project, fetch_session, map_pg_err, truncate_utf8,
+    ARTIFACT_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS, PROJECT_SELECT_COLS, append_audit_event,
+    decode_artifact_row, decode_effect_claim_row, decode_project_row, fetch_project, fetch_session,
+    map_pg_err, truncate_utf8,
 };
 use crate::workspace_files::{clean_display_path, validate_safe_workspace_root};
 
@@ -35,22 +39,46 @@ struct TerminatedProjectWork {
 }
 
 impl HeadService {
-    /// Atomically cancels active/waiting tasks, timers, runs, open inbox cards, pending permission
+    /// Atomically cancels active/waiting tasks, timers, runs, open inbox cards (preserving
+    /// `unknown_external` tasks and `unknown_effect` cards per D2-ARCH-03), pending permission
     /// requests, active capability grants, and active sessions for a removed/deleted project (H2-03).
     #[expect(
         clippy::too_many_lines,
-        reason = "cancels timers, tasks, runs, permission requests, inbox cards, capability grants, and sessions atomically in one transaction"
+        reason = "cancels timers, tasks, runs, permission requests, inbox cards, capability grants, and sessions atomically while preserving unknown_external/unknown_effect"
     )]
     async fn terminate_project_work_in_tx<C: deadpool_postgres::GenericClient>(
         &self,
         tx: &C,
         project_id: ProjectId,
         reason: &str,
+        pending_events: &mut Vec<PendingControlEvent>,
     ) -> Result<TerminatedProjectWork, DennettError> {
+        // D2-ARCH-03: Any in-flight `dispatching` external effects transition to `unknown`
+        // BEFORE we cancel tasks/inbox cards so their `unknown_external` status and
+        // `unknown_effect` inbox cards stay durably visible for explicit reconciliation!
+        let dispatching_sql = format!(
+            "UPDATE effect_claims
+             SET status = 'unknown',
+                 error_summary = COALESCE(error_summary, $2),
+                 updated_at = now()
+             WHERE project_id = $1 AND status = 'dispatching'
+             RETURNING {EFFECT_CLAIM_SELECT_COLS}"
+        );
+        let dispatching_rows = tx
+            .query(&dispatching_sql, &[&project_id.as_uuid(), &reason])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        for row in &dispatching_rows {
+            let claim = decode_effect_claim_row(row)?;
+            self.mark_unknown_effect_side_effects_in_tx(tx, &claim, pending_events)
+                .await?;
+        }
+
         let cancelled_timers = tx
             .execute(
                 "UPDATE task_timers t
-                 SET status = 'cancelled'
+                 SET status = 'cancelled',
+                     pause_reason = NULL
                  FROM tasks tk
                  WHERE t.task_id = tk.task_id
                    AND tk.project_id = $1
@@ -71,7 +99,7 @@ impl HeadService {
                      finished_at = COALESCE(finished_at, now()),
                      updated_at = now()
                  WHERE project_id = $1
-                   AND status NOT IN ('succeeded', 'failed', 'cancelled')
+                   AND status NOT IN ('succeeded', 'failed', 'cancelled', 'unknown_external')
                  RETURNING task_id",
                 &[&project_id.as_uuid()],
             )
@@ -81,6 +109,21 @@ impl HeadService {
             .iter()
             .map(|r| TaskId::from_uuid(r.get(0)))
             .collect();
+
+        // Release any `agent_messages` stamped onto runs we are cancelling (D2-BUG-04).
+        tx.execute(
+            "UPDATE agent_messages m
+             SET delivered_in_run_id = NULL,
+                 delivered_at = NULL
+             FROM runs r
+             JOIN sessions s ON s.session_id = r.session_id
+             WHERE m.delivered_in_run_id = r.run_id
+               AND s.project_id = $1
+               AND r.status = 'running'",
+            &[&project_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         tx.execute(
             "UPDATE runs r
@@ -125,7 +168,9 @@ impl HeadService {
                  revision = revision + 1,
                  resolved_at = now(),
                  updated_at = now()
-             WHERE project_id = $1 AND status = 'open'",
+             WHERE project_id = $1
+               AND status = 'open'
+               AND kind <> 'unknown_effect'",
             &[&project_id.as_uuid(), &reason],
         )
         .await
@@ -175,10 +220,8 @@ impl HeadService {
         }
         for sid in work.session_ids {
             let _ = self.cancel_active_session_run(sid).await;
-            let _ = self.runtime().close_session(sid).await;
-            if let Some(bg) = self.background_runtime() {
-                let _ = bg.close_session(sid).await;
-            }
+            self.runtime_router().cancel_turn_all(sid).await;
+            self.runtime_router().close_session_all(sid).await;
         }
     }
 
@@ -308,9 +351,9 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        // Close live runtime handles for this project's sessions so the next turn rehydrates on the new `cwd`!
+        // Close live runtime handles across ALL runtime profiles so the next turn rehydrates on the new `cwd`!
         for sid in session_ids {
-            let _ = self.runtime().close_session(sid).await;
+            self.runtime_router().close_session_all(sid).await;
         }
 
         Ok(ProjectLifecycleResponse {
@@ -416,7 +459,7 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         for sid in session_ids {
-            let _ = self.runtime().close_session(sid).await;
+            self.runtime_router().close_session_all(sid).await;
         }
 
         Ok(ProjectLifecycleResponse {
@@ -426,12 +469,18 @@ impl HeadService {
         })
     }
 
-    /// Reversibly archives a project and pauses all pending scheduled timers belonging to it
-    /// (`POST /v1/projects/{id}/archive`, Scenario 90 §30, Contract C). Never deletes disk files.
+    /// Reversibly archives a project, stops active runs across all runtime profiles, parks
+    /// non-terminal tasks cleanly, and pauses all pending scheduled timers tagged with
+    /// `pause_reason = 'archived_project'` (`POST /v1/projects/{id}/archive`, D2-ARCH-02).
+    /// Never deletes disk files.
     ///
     /// # Errors
     ///
     /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "archive_project atomically locks project, pauses timers with archived_project reason, parks tasks, cancels active runs, transitions dispatching effects, and closes all runtime sessions"
+    )]
     pub async fn archive_project(
         &self,
         project_id: ProjectId,
@@ -444,7 +493,19 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let existing = fetch_project(&tx, project_id, self.pg_target()).await?;
+        let lock_proj_sql =
+            format!("SELECT {PROJECT_SELECT_COLS} FROM projects WHERE project_id = $1 FOR UPDATE");
+        let Some(existing_row) = tx
+            .query_opt(&lock_proj_sql, &[&project_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("project"),
+                id: project_id.to_string(),
+            });
+        };
+        let existing = decode_project_row(&existing_row)?;
         if existing.lifecycle_state == ProjectLifecycleState::DeletedRecord {
             return Err(DennettError::Conflict {
                 resource: String::from("project"),
@@ -468,11 +529,35 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_project_row(&row)?;
 
-        // Pause all pending timers of this project's tasks so archived projects never fire silently!
+        let mut pending_events: Vec<PendingControlEvent> = Vec::new();
+        let archive_reason = "Проект перенесён в архив";
+
+        // Transition any in-flight `dispatching` external effects -> `unknown` (D2-ARCH-03).
+        let dispatching_sql = format!(
+            "UPDATE effect_claims
+             SET status = 'unknown',
+                 error_summary = COALESCE(error_summary, $2),
+                 updated_at = now()
+             WHERE project_id = $1 AND status = 'dispatching'
+             RETURNING {EFFECT_CLAIM_SELECT_COLS}"
+        );
+        let dispatching_rows = tx
+            .query(&dispatching_sql, &[&project_id.as_uuid(), &archive_reason])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        for eff_row in &dispatching_rows {
+            let claim = decode_effect_claim_row(eff_row)?;
+            self.mark_unknown_effect_side_effects_in_tx(&tx, &claim, &mut pending_events)
+                .await?;
+        }
+
+        // Pause all pending timers of this project's tasks with `pause_reason = 'archived_project'`
+        // so `unarchive_project` restores ONLY archived-project timers and never touches `misfire_ask`!
         let paused_timers = tx
             .execute(
                 "UPDATE task_timers t
-                 SET status = 'paused'
+                 SET status = 'paused',
+                     pause_reason = 'archived_project'
                  FROM tasks tk
                  WHERE t.task_id = tk.task_id
                    AND tk.project_id = $1
@@ -481,8 +566,143 @@ impl HeadService {
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-
         let paused_usize = usize::try_from(paused_timers).unwrap_or(0);
+
+        // Park scheduled tasks that have a paused `archived_project` timer in `waiting_timer`.
+        let parked_timer_task_rows = tx
+            .query(
+                "UPDATE tasks tk
+                 SET status = 'waiting_timer',
+                     active_run_id = NULL,
+                     wait_detail = 'Проект в архиве — расписание приостановлено',
+                     updated_at = now()
+                 WHERE tk.project_id = $1
+                   AND tk.status NOT IN ('succeeded', 'failed', 'cancelled', 'unknown_external')
+                   AND EXISTS (
+                       SELECT 1 FROM task_timers tt
+                       WHERE tt.task_id = tk.task_id
+                         AND tt.status = 'paused'
+                         AND tt.pause_reason = 'archived_project'
+                   )
+                 RETURNING tk.task_id",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        // Cancel remaining non-terminal tasks (running/queued/waiting_approval/waiting_signal without paused timer).
+        let cancelled_task_rows = tx
+            .query(
+                "UPDATE tasks tk
+                 SET status = 'cancelled',
+                     active_run_id = NULL,
+                     wait_detail = NULL,
+                     expected_signal_name = NULL,
+                     error_code = 'project_archived',
+                     error_summary = $2,
+                     finished_at = COALESCE(finished_at, now()),
+                     updated_at = now()
+                 WHERE tk.project_id = $1
+                   AND tk.status NOT IN ('succeeded', 'failed', 'cancelled', 'unknown_external')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_timers tt
+                       WHERE tt.task_id = tk.task_id
+                         AND tt.status = 'paused'
+                   )
+                 RETURNING tk.task_id",
+                &[&project_id.as_uuid(), &archive_reason],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let mut cancelled_task_ids: Vec<TaskId> = parked_timer_task_rows
+            .iter()
+            .chain(cancelled_task_rows.iter())
+            .map(|r| TaskId::from_uuid(r.get(0)))
+            .collect();
+        cancelled_task_ids.sort_by_key(|t| t.as_uuid());
+        cancelled_task_ids.dedup();
+
+        // Release `agent_messages` stamped onto runs we are cancelling (D2-BUG-04).
+        tx.execute(
+            "UPDATE agent_messages m
+             SET delivered_in_run_id = NULL,
+                 delivered_at = NULL
+             FROM runs r
+             JOIN sessions s ON s.session_id = r.session_id
+             WHERE m.delivered_in_run_id = r.run_id
+               AND s.project_id = $1
+               AND r.status = 'running'",
+            &[&project_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        // Cancel active runs for this project's sessions.
+        tx.execute(
+            "UPDATE runs r
+             SET status = 'cancelled',
+                 stop_reason = 'project_archived',
+                 finished_at = now()
+             FROM sessions s
+             WHERE r.session_id = s.session_id
+               AND s.project_id = $1
+               AND r.status = 'running'",
+            &[&project_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        // Expire pending permission requests and withdraw open non-`unknown_effect` / non-`missed_schedule` inbox cards.
+        let perm_rows = tx
+            .query(
+                "UPDATE permission_requests
+                 SET status = 'expired',
+                     revision = revision + 1,
+                     resolved_at = now()
+                 WHERE project_id = $1 AND status = 'pending'
+                 RETURNING request_id, session_id",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let expired_perms: Vec<(PermissionRequestId, SessionId)> = perm_rows
+            .iter()
+            .map(|r| {
+                (
+                    PermissionRequestId::from_uuid(r.get(0)),
+                    SessionId::from_uuid(r.get(1)),
+                )
+            })
+            .collect();
+
+        tx.execute(
+            "UPDATE inbox_cards
+             SET status = 'withdrawn',
+                 resolution_summary = $2,
+                 revision = revision + 1,
+                 resolved_at = now(),
+                 updated_at = now()
+             WHERE project_id = $1
+               AND status = 'open'
+               AND kind NOT IN ('unknown_effect', 'missed_schedule')",
+            &[&project_id.as_uuid(), &archive_reason],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let session_rows = tx
+            .query(
+                "SELECT session_id FROM sessions WHERE project_id = $1",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let session_ids: Vec<SessionId> = session_rows
+            .iter()
+            .map(|r| SessionId::from_uuid(r.get(0)))
+            .collect();
+
         let _ = append_audit_event(
             &tx,
             self.pg_target(),
@@ -491,32 +711,49 @@ impl HeadService {
             None,
             "head",
             "project_archived",
-            &format!("archived project {project_id} (paused_timers={paused_usize})"),
+            &format!(
+                "archived project {project_id} (paused_timers={paused_usize}, stopped_tasks={}, sessions={})",
+                cancelled_task_ids.len(),
+                session_ids.len()
+            ),
         )
         .await?;
 
-        let _ = append_control_event_in_tx(
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("project:{project_id}"),
+            event_type: "project.archived",
+            project_id: Some(project_id),
+            session_id: None,
+            task_id: None,
+            payload: json!({
+                "project_id": project_id,
+                "paused_timers": paused_usize,
+                "stopped_tasks": cancelled_task_ids.len(),
+                "user_workspace_files_deleted": false,
+            }),
+        });
+        let _ = append_control_events_batch_in_tx(
             &tx,
             self.pg_target(),
-            ControlEventAppend {
-                entity_key: &format!("project:{project_id}"),
-                event_type: "project.archived",
-                project_id: Some(project_id),
-                session_id: None,
-                task_id: None,
-                correlation_id,
-                payload: json!({
-                    "project_id": project_id,
-                    "paused_timers": paused_usize,
-                    "user_workspace_files_deleted": false,
-                }),
-            },
+            correlation_id,
+            &pending_events,
         )
         .await?;
 
         tx.commit()
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        self.finish_project_work_shutdown(
+            TerminatedProjectWork {
+                affected_timers: paused_usize,
+                cancelled_task_ids,
+                session_ids,
+                expired_perms,
+            },
+            "project archived",
+        )
+        .await;
 
         Ok(ProjectLifecycleResponse {
             project: updated,
@@ -526,7 +763,8 @@ impl HeadService {
     }
 
     /// Restores an archived project back to `active` (or `detached` when folderless) and resumes
-    /// its paused timers (`POST /v1/projects/{id}/unarchive`, Scenario 90 §30).
+    /// ONLY timers paused due to project archival (`pause_reason = 'archived_project'`), leaving
+    /// `misfire_ask` timers intact (`POST /v1/projects/{id}/unarchive`, D2-ARCH-02).
     ///
     /// # Errors
     ///
@@ -575,20 +813,38 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_project_row(&row)?;
 
-        let resumed_timers = tx
-            .execute(
+        let resumed_rows = tx
+            .query(
                 "UPDATE task_timers t
-                 SET status = 'pending'
+                 SET status = 'pending',
+                     pause_reason = NULL
                  FROM tasks tk
                  WHERE t.task_id = tk.task_id
                    AND tk.project_id = $1
                    AND t.status = 'paused'
-                   AND tk.status = 'waiting_timer'",
+                   AND t.pause_reason = 'archived_project'
+                   AND tk.status NOT IN ('succeeded', 'failed', 'cancelled', 'unknown_external')
+                 RETURNING tk.task_id",
                 &[&project_id.as_uuid()],
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-        let resumed_usize = usize::try_from(resumed_timers).unwrap_or(0);
+        let resumed_usize = resumed_rows.len();
+
+        let resumed_task_ids: Vec<uuid::Uuid> = resumed_rows.iter().map(|r| r.get(0)).collect();
+        if !resumed_task_ids.is_empty() {
+            tx.execute(
+                "UPDATE tasks
+                 SET wait_detail = NULL,
+                     updated_at = now()
+                 WHERE task_id = ANY($1)
+                   AND status = 'waiting_timer'
+                   AND wait_detail = 'Проект в архиве — расписание приостановлено'",
+                &[&resumed_task_ids],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        }
 
         let _ = append_control_event_in_tx(
             &tx,
@@ -654,8 +910,14 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_project_row(&row)?;
 
+        let mut pending_events = Vec::new();
         let work = self
-            .terminate_project_work_in_tx(&tx, project_id, "Проект убран из списка Dennett")
+            .terminate_project_work_in_tx(
+                &tx,
+                project_id,
+                "Проект убран из списка Dennett",
+                &mut pending_events,
+            )
             .await?;
         let affected = work.affected_timers;
 
@@ -671,23 +933,24 @@ impl HeadService {
         )
         .await?;
 
-        let _ = append_control_event_in_tx(
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("project:{project_id}"),
+            event_type: "project.removed",
+            project_id: Some(project_id),
+            session_id: None,
+            task_id: None,
+            payload: json!({
+                "project_id": project_id,
+                "cancelled_timers": affected,
+                "cancelled_tasks": work.cancelled_task_ids.len(),
+                "user_workspace_files_deleted": false,
+            }),
+        });
+        let _ = append_control_events_batch_in_tx(
             &tx,
             self.pg_target(),
-            ControlEventAppend {
-                entity_key: &format!("project:{project_id}"),
-                event_type: "project.removed",
-                project_id: Some(project_id),
-                session_id: None,
-                task_id: None,
-                correlation_id,
-                payload: json!({
-                    "project_id": project_id,
-                    "cancelled_timers": affected,
-                    "cancelled_tasks": work.cancelled_task_ids.len(),
-                    "user_workspace_files_deleted": false,
-                }),
-            },
+            correlation_id,
+            &pending_events,
         )
         .await?;
 
@@ -750,8 +1013,14 @@ impl HeadService {
         .await
         .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
+        let mut pending_events = Vec::new();
         let work = self
-            .terminate_project_work_in_tx(&tx, project_id, "Проект удалён в Dennett")
+            .terminate_project_work_in_tx(
+                &tx,
+                project_id,
+                "Проект удалён в Dennett",
+                &mut pending_events,
+            )
             .await?;
         let affected = work.affected_timers;
 
@@ -784,23 +1053,24 @@ impl HeadService {
         )
         .await?;
 
-        let _ = append_control_event_in_tx(
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("project:{project_id}"),
+            event_type: "project.deleted",
+            project_id: Some(project_id),
+            session_id: None,
+            task_id: None,
+            payload: json!({
+                "project_id": project_id,
+                "cancelled_timers": affected,
+                "cancelled_tasks": work.cancelled_task_ids.len(),
+                "user_workspace_files_deleted": false,
+            }),
+        });
+        let _ = append_control_events_batch_in_tx(
             &tx,
             self.pg_target(),
-            ControlEventAppend {
-                entity_key: &format!("project:{project_id}"),
-                event_type: "project.deleted",
-                project_id: Some(project_id),
-                session_id: None,
-                task_id: None,
-                correlation_id,
-                payload: json!({
-                    "project_id": project_id,
-                    "cancelled_timers": affected,
-                    "cancelled_tasks": work.cancelled_task_ids.len(),
-                    "user_workspace_files_deleted": false,
-                }),
-            },
+            correlation_id,
+            &pending_events,
         )
         .await?;
 

@@ -9,6 +9,7 @@ members = [
     "services/memoryd",
     "services/head",
     "adapters/memory-mcp",
+    "adapters/control-mcp",
     "adapters/antigravity-acp",
     "apps/desktop/src-tauri",
 ]

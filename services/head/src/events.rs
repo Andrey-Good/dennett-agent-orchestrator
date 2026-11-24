@@ -25,8 +25,8 @@ use crate::pg_target::ValidatedControlPgTarget;
 use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService};
 use crate::store::{
     AGENT_JOIN_SELECT, CAPABILITY_GRANT_SELECT_COLS, CONTROL_EVENT_SELECT_COLS,
-    INBOX_CARD_SELECT_COLS, ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, TASK_SELECT_COLS,
-    decode_agent_join_row, decode_capability_grant_row, decode_control_event_row,
+    INBOX_CARD_SELECT_COLS, ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, SESSION_SELECT_COLS,
+    TASK_SELECT_COLS, decode_agent_join_row, decode_capability_grant_row, decode_control_event_row,
     decode_inbox_card_row, decode_ordered_outbox_row, decode_project_row, decode_session_row,
     decode_task_row, fetch_all_runtime_bindings, map_pg_err, ms_to_pg_epoch_secs,
     next_global_journal_cursor, next_stream_seq, truncate_utf8,
@@ -242,10 +242,10 @@ pub async fn enqueue_ordered_outbox_in_tx<C: GenericClient>(
     let existing_sql = format!(
         "SELECT {ORDERED_OUTBOX_SELECT_COLS}
          FROM ordered_outbox
-         WHERE destination = $1 AND idempotency_key = $2"
+         WHERE destination = $1 AND ordering_key = $2 AND idempotency_key = $3"
     );
     if let Some(existing) = tx
-        .query_opt(&existing_sql, &[&dest, &idempotency_key.as_str()])
+        .query_opt(&existing_sql, &[&dest, &key, &idempotency_key.as_str()])
         .await
         .map_err(|err| map_pg_err(target, &err))?
     {
@@ -387,10 +387,8 @@ impl HeadService {
 
         let mut bindings = fetch_all_runtime_bindings(&tx, self.pg_target()).await?;
         let session_rows = if let Some(pid) = project_id {
-            tx.query(
-                "SELECT session_id, agent_id, project_id, title, status,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+            let sql = format!(
+                "SELECT {SESSION_SELECT_COLS}
                  FROM sessions
                  WHERE project_id = $1
                    AND EXISTS (
@@ -398,27 +396,25 @@ impl HeadService {
                        WHERE p.project_id = sessions.project_id
                          AND p.lifecycle_state <> 'deleted_record'
                    )
-                 ORDER BY updated_at DESC",
-                &[&pid.as_uuid()],
-            )
-            .await
-            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                 ORDER BY updated_at DESC"
+            );
+            tx.query(&sql, &[&pid.as_uuid()])
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
         } else {
-            tx.query(
-                "SELECT session_id, agent_id, project_id, title, status,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+            let sql = format!(
+                "SELECT {SESSION_SELECT_COLS}
                  FROM sessions
                  WHERE EXISTS (
                      SELECT 1 FROM projects p
                      WHERE p.project_id = sessions.project_id
                        AND p.lifecycle_state <> 'deleted_record'
                  )
-                 ORDER BY updated_at DESC",
-                &[],
-            )
-            .await
-            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                 ORDER BY updated_at DESC"
+            );
+            tx.query(&sql, &[])
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
         };
         let mut sessions = Vec::with_capacity(session_rows.len());
         for row in &session_rows {
@@ -463,10 +459,13 @@ impl HeadService {
             let sql = format!(
                 "SELECT {INBOX_CARD_SELECT_COLS} FROM inbox_cards
                  WHERE status = 'open' AND project_id = $1
-                   AND EXISTS (
-                       SELECT 1 FROM projects p
-                       WHERE p.project_id = inbox_cards.project_id
-                         AND p.lifecycle_state <> 'deleted_record'
+                   AND (
+                       kind = 'unknown_effect'
+                       OR EXISTS (
+                           SELECT 1 FROM projects p
+                           WHERE p.project_id = inbox_cards.project_id
+                             AND p.lifecycle_state <> 'deleted_record'
+                       )
                    )
                  ORDER BY created_at DESC"
             );
@@ -477,10 +476,13 @@ impl HeadService {
             let sql = format!(
                 "SELECT {INBOX_CARD_SELECT_COLS} FROM inbox_cards
                  WHERE status = 'open'
-                   AND EXISTS (
-                       SELECT 1 FROM projects p
-                       WHERE p.project_id = inbox_cards.project_id
-                         AND p.lifecycle_state <> 'deleted_record'
+                   AND (
+                       kind = 'unknown_effect'
+                       OR EXISTS (
+                           SELECT 1 FROM projects p
+                           WHERE p.project_id = inbox_cards.project_id
+                             AND p.lifecycle_state <> 'deleted_record'
+                       )
                    )
                  ORDER BY created_at DESC"
             );
@@ -532,6 +534,37 @@ impl HeadService {
             .map(decode_capability_grant_row)
             .collect::<Result<Vec<_>, _>>()?;
 
+        let running_rows = if let Some(pid) = project_id {
+            tx.query(
+                "SELECT DISTINCT r.session_id
+                 FROM runs r
+                 JOIN sessions s ON s.session_id = r.session_id
+                 JOIN projects p ON p.project_id = s.project_id
+                 WHERE r.status = 'running'
+                   AND s.project_id = $1
+                   AND p.lifecycle_state <> 'deleted_record'",
+                &[&pid.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        } else {
+            tx.query(
+                "SELECT DISTINCT r.session_id
+                 FROM runs r
+                 JOIN sessions s ON s.session_id = r.session_id
+                 JOIN projects p ON p.project_id = s.project_id
+                 WHERE r.status = 'running'
+                   AND p.lifecycle_state <> 'deleted_record'",
+                &[],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        };
+        let running_session_ids: Vec<SessionId> = running_rows
+            .iter()
+            .map(|r| SessionId::from_uuid(r.get(0)))
+            .collect();
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
@@ -546,6 +579,7 @@ impl HeadService {
             inbox_cards,
             active_grants,
             unresolved_inbox_count,
+            running_session_ids,
         })
     }
 
@@ -819,6 +853,23 @@ impl HeadService {
         item_id: OrderedOutboxItemId,
         expected_lease_generation: i64,
     ) -> Result<OrderedOutboxItem, DennettError> {
+        self.ack_ordered_outbox_item_with_payload(item_id, expected_lease_generation, None)
+            .await
+    }
+
+    /// Acknowledges a leased `ordered_outbox` item fenced by `expected_lease_generation`,
+    /// optionally updating `payload_json` (e.g. recording `delivered_event_id`/`delivered_note_id`)
+    /// and advancing `ordered_outbox_heads.next_deliver_seq` atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn ack_ordered_outbox_item_with_payload(
+        &self,
+        item_id: OrderedOutboxItemId,
+        expected_lease_generation: i64,
+        updated_payload: Option<&JsonValue>,
+    ) -> Result<OrderedOutboxItem, DennettError> {
         let _ = self.ensure_migrated().await?;
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let tx = conn
@@ -861,6 +912,8 @@ impl HeadService {
         let update_sql = format!(
             "UPDATE ordered_outbox
              SET status = 'delivered',
+                 payload_json = COALESCE($3, payload_json),
+                 last_error = NULL,
                  updated_at = now()
              WHERE item_id = $1
                AND status = 'leased'
@@ -870,7 +923,11 @@ impl HeadService {
         let updated = tx
             .query_opt(
                 &update_sql,
-                &[&item_id.as_uuid(), &expected_lease_generation],
+                &[
+                    &item_id.as_uuid(),
+                    &expected_lease_generation,
+                    &updated_payload,
+                ],
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;

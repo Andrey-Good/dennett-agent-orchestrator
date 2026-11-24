@@ -37,6 +37,7 @@ struct ServeOptions {
     pg_url: Option<String>,
     memory_url: Option<String>,
     memory_mcp_bin: Option<PathBuf>,
+    control_mcp_bin: Option<PathBuf>,
     memory_hmac_secret: Option<String>,
     runtime_kind: RuntimeKind,
     auth_profile: RuntimeAuthProfile,
@@ -119,6 +120,7 @@ where
     let mut pg_url: Option<String> = None;
     let mut memory_url: Option<String> = None;
     let mut memory_mcp_bin: Option<PathBuf> = None;
+    let mut control_mcp_bin: Option<PathBuf> = None;
     let mut memory_hmac_secret: Option<String> = None;
     let mut runtime_kind = RuntimeKind::Antigravity;
     let mut auth_profile = RuntimeAuthProfile::OAuthPersonal;
@@ -147,6 +149,12 @@ where
                 memory_mcp_bin = Some(PathBuf::from(next_flag_value(
                     &mut iter,
                     "--memory-mcp-bin",
+                )?));
+            }
+            "--control-mcp-bin" => {
+                control_mcp_bin = Some(PathBuf::from(next_flag_value(
+                    &mut iter,
+                    "--control-mcp-bin",
                 )?));
             }
             "--memory-hmac-secret" => {
@@ -233,6 +241,7 @@ where
                 pg_url,
                 memory_url,
                 memory_mcp_bin,
+                control_mcp_bin,
                 memory_hmac_secret,
                 runtime_kind,
                 auth_profile,
@@ -373,10 +382,18 @@ fn build_memory_components(
 }
 
 fn find_sibling_memory_mcp_bin() -> Option<PathBuf> {
+    find_sibling_bin("dennett-memory-mcp")
+}
+
+fn find_sibling_control_mcp_bin() -> Option<PathBuf> {
+    find_sibling_bin("dennett-control-mcp")
+}
+
+fn find_sibling_bin(base_name: &str) -> Option<PathBuf> {
     let exe_name = if cfg!(windows) {
-        "dennett-memory-mcp.exe"
+        format!("{base_name}.exe")
     } else {
-        "dennett-memory-mcp"
+        base_name.to_owned()
     };
     let current = env::current_exe().ok()?;
     let candidate = current.parent()?.join(exe_name);
@@ -572,6 +589,15 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
     let runtime_adapter_id = runtime.adapter_id().to_owned();
     let runtime_is_simulated = runtime.is_simulated();
 
+    let control_mcp_bin = opts
+        .control_mcp_bin
+        .or_else(|| {
+            env::var_os("DENNETT_CONTROL_MCP_BIN")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(find_sibling_control_mcp_bin);
+
     let service = match target {
         Some(pg_target) => match HeadService::new_with_extras(
             pg_target,
@@ -582,6 +608,8 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
             secrets,
             HeadServiceExtras {
                 memory_hmac_signer,
+                control_mcp_bin,
+                control_hmac_signer: None,
                 detached_projects_root,
                 background_runtime,
                 effect_port: None,
@@ -633,6 +661,9 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if let Some(ref svc) = service {
+        svc.set_self_http_url(format!("http://{bound_addr}"));
+    }
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let ctrl_c_tx = shutdown_tx.clone();
@@ -715,6 +746,7 @@ fn print_usage() {
            --pg-url <dsn>                      Override control PostgreSQL DSN\n\
            --memory-url <url>                  Base URL of standalone dennett-memoryd\n\
            --memory-mcp-bin <path>             Path to dennett-memory-mcp binary\n\
+           --control-mcp-bin <path>            Path to dennett-control-mcp binary\n\
            --memory-hmac-secret <secret>       HMAC-SHA256 secret for minting per-project scoped memoryd tokens\n\
            --runtime <antigravity|simulated>   Runtime adapter (default: antigravity)\n\
            --auth-profile <oauth-personal|gemini-api-key>\n\

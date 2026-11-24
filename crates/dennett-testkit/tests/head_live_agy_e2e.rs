@@ -18,7 +18,7 @@ use dennett_contracts::{
     CreateAgentRequest, CreateArtifactRequest, CreateNoteRequest, CreateProjectRequest,
     CreateSessionRequest, DennettError, IdempotencyKey, MemoryCapability, MemoryScope,
     MemoryStatus, PolicyEffect, PrincipalId, RunStatus, RuntimeAuthProfile, SearchNotesRequest,
-    SendMessageRequest, TimestampMs, WorkspaceWritePolicy,
+    SendMessageRequest, SessionKind, TimestampMs, WorkspaceWritePolicy,
 };
 use dennett_head_client::HeadClient;
 use dennett_memory_client::MemoryClient;
@@ -313,6 +313,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 agent_id: agent.agent_id,
                 project_id: project.project_id,
                 title: String::from("D1 Live Vertical Slice"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )
@@ -688,6 +689,7 @@ async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
                 agent_id: agent.agent_id,
                 project_id: project.project_id,
                 title: String::from("Missing API Key Session"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )

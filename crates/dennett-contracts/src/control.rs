@@ -549,6 +549,50 @@ impl FromStr for SessionStatus {
     }
 }
 
+/// Semantic kind distinguishing interactive human chats from dedicated task execution sessions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SessionKind {
+    /// Interactive user-owned conversation shown in the main sidebar chats list.
+    #[default]
+    UserChat,
+    /// Dedicated execution session backing a durable task or scheduled obligation.
+    TaskRun,
+}
+
+impl SessionKind {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UserChat => "user_chat",
+            Self::TaskRun => "task_run",
+        }
+    }
+}
+
+impl fmt::Display for SessionKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for SessionKind {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "user_chat" => Ok(Self::UserChat),
+            "task_run" => Ok(Self::TaskRun),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("session_kind"),
+                reason: format!("unknown session kind `{other}` (expected user_chat|task_run)"),
+            }),
+        }
+    }
+}
+
 /// Persisted conversation session tying together an agent, project, and optional [`RuntimeBinding`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -560,6 +604,9 @@ pub struct SessionRecord {
     pub project_id: ProjectId,
     /// Human-readable session title.
     pub title: String,
+    /// Whether this session is an interactive user chat or a dedicated task run session.
+    #[serde(default)]
+    pub session_kind: SessionKind,
     /// Active or last-known runtime binding, when initialized.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_binding: Option<RuntimeBinding>,
@@ -1271,6 +1318,9 @@ pub struct CreateSessionRequest {
     pub project_id: ProjectId,
     /// Human-readable session title.
     pub title: String,
+    /// Session semantic kind (defaults to [`SessionKind::UserChat`]).
+    #[serde(default)]
+    pub session_kind: SessionKind,
 }
 
 impl CreateSessionRequest {
@@ -1641,7 +1691,7 @@ pub struct HeadHealth {
     pub runtime_adapter_id: String,
     /// `true` only when Head is wired to the deterministic CI test double.
     pub runtime_is_simulated: bool,
-    /// Count of pending rows in `memory_commit_outbox`.
+    /// Count of pending/leased `memoryd` rows in `ordered_outbox`.
     pub pending_outbox_count: i64,
     /// Explicitly supported Head capabilities for the current milestone.
     pub capabilities: Vec<String>,

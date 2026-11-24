@@ -9,47 +9,43 @@
 //! - Semantic decisions stay with the agent; `Head` persists commitments, enforces external
 //!   budgets & permissions, and fences stale generations cleanly.
 
-use std::fmt::Write as _;
-use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use deadpool_postgres::GenericClient;
 use dennett_contracts::{
-    AgentId, AgentMessageId, AgentMessageRecord, ArtifactCompleteness, BudgetExceedPolicy,
-    CancelTaskResponse, CorrelationId, CreateArtifactRequest, CreateTaskRequest, DennettError,
-    DispatchEffectRequest, EffectClaimRecord, ExternalEffectStatus, IdempotencyKey, InboxCardId,
-    ListAgentMessagesResponse, ListTasksResponse, MessageId, MissedRunPolicy, ProjectId,
-    ProjectLifecycleState, ReplyTaskRequest, RunId, RunStatus, ScheduleKind, SchedulerTickResponse,
-    SendAgentMessageRequest, SendAgentMessageResponse, SessionId, SimEffectBehavior,
+    AgentId, AgentMessageId, AgentMessageRecord, BudgetExceedPolicy, CancelTaskResponse,
+    CorrelationId, CreateTaskRequest, DennettError, EffectClaimRecord, ExternalEffectStatus,
+    InboxCardId, ListAgentMessagesResponse, ListTasksResponse, MessageId, MissedRunPolicy,
+    ProjectId, ProjectLifecycleState, ReplyTaskRequest, RunId, RunStatus, ScheduleKind,
+    SchedulerTickResponse, SendAgentMessageRequest, SendAgentMessageResponse, SessionId,
     TaskDetailResponse, TaskId, TaskRecord, TaskSchedule, TaskSignalId, TaskSignalOutcome,
-    TaskSignalRequest, TaskSignalResponse, TaskStatus, TaskTimerId, TaskUsage, TimestampMs,
-    UpdateTaskRequest, UsageConfidence, WorkspaceWritePolicy, write_policy_is_subset_of,
+    TaskSignalRequest, TaskSignalResponse, TaskStatus, TaskTimerId, TaskUsage, TimerPauseReason,
+    TimestampMs, UpdateTaskRequest, UsageConfidence, write_policy_is_subset_of,
 };
-use dennett_runtime_antigravity::{RuntimeEvent, SessionStartRequest, TurnOutcome, TurnRequest};
+use dennett_runtime_antigravity::{RuntimeEvent, TurnOutcome};
 use serde_json::json;
 use tokio::sync::watch;
 use tokio::time;
 
-use crate::approvals::{DEFAULT_APPROVAL_WAIT_TIMEOUT, InteractivePolicyEvaluator};
-use crate::effects::SIMULATED_EXTERNAL_CONNECTOR_ID;
+use crate::approvals::DEFAULT_APPROVAL_WAIT_TIMEOUT;
 use crate::events::{
     ControlEventAppend, PendingControlEvent, append_control_event_in_tx,
     append_control_events_batch_in_tx,
 };
 use crate::migrations::sha256_hex;
-use crate::policy::PolicyContext;
 use crate::service::{
-    ActiveRunGuard, ActiveRunHandle, ActiveTaskGuard, ActiveTaskHandle, DEFAULT_PG_OP_TIMEOUT,
-    DEFAULT_TURN_TIMEOUT, HeadService, derive_auto_session_title, insert_permission_decision,
+    ActiveRunGuard, ActiveRunHandle, ActiveTaskGuard, ActiveTaskHandle, CoreTurnInput,
+    DEFAULT_PG_OP_TIMEOUT, DEFAULT_TURN_TIMEOUT, HeadService, TurnTrigger,
+    derive_auto_session_title, insert_permission_decision,
 };
 use crate::store::{
     AGENT_MESSAGE_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS, INBOX_CARD_SELECT_COLS, TASK_SELECT_COLS,
     TASK_SIGNAL_SELECT_COLS, TASK_TIMER_SELECT_COLS, append_audit_event, decode_agent_message_row,
     decode_effect_claim_row, decode_inbox_card_row, decode_task_row, decode_task_signal_row,
-    decode_task_timer_row, fetch_agent, fetch_policy_rules, fetch_project, fetch_runtime_binding,
-    fetch_session, fetch_session_messages, fetch_task, fetch_task_runs, map_pg_err,
-    ms_to_pg_epoch_secs, next_stream_seq, truncate_utf8,
+    decode_task_timer_row, ensure_project_active_in_tx, fetch_agent, fetch_policy_rules,
+    fetch_project, fetch_runtime_binding, fetch_session, fetch_session_messages, fetch_task,
+    fetch_task_runs, map_pg_err, ms_to_pg_epoch_secs, next_stream_seq, truncate_utf8,
 };
 
 /// Grace threshold (60s) beyond `fire_at` before an overdue timer triggers `missed_run_policy` (`Skip`/`Ask`).
@@ -130,6 +126,42 @@ pub async fn compute_next_fire_at_pg<C: GenericClient>(
                      SELECT TRUNC(EXTRACT(EPOCH FROM (CASE WHEN today_utc > ref_utc THEN today_utc ELSE tomorrow_utc END)) * 1000)::bigint
                      FROM candidate",
                     &[&ref_secs, &schedule.timezone.as_str(), &h, &m],
+                )
+                .await
+                .map_err(|err| map_pg_err(target, &err))?
+                .get(0);
+            Ok(Some(TimestampMs::from_millis(next_ms)))
+        }
+        ScheduleKind::WeeklyWallTime {
+            weekdays_mask,
+            hour,
+            minute,
+        } => {
+            let ref_secs = ms_to_pg_epoch_secs(reference_now.as_millis());
+            let h = i32::from(hour);
+            let m = i32::from(minute);
+            let mask = i32::from(weekdays_mask);
+            let next_ms: i64 = client
+                .query_one(
+                    "WITH ref AS (
+                         SELECT to_timestamp($1::double precision) AS ref_utc
+                     ),
+                     local_ref AS (
+                         SELECT ref_utc, (ref_utc AT TIME ZONE $2) AS local_ts
+                         FROM ref
+                     ),
+                     candidates AS (
+                         SELECT
+                             ref_utc,
+                             (date_trunc('day', local_ts) + (d * INTERVAL '1 day')) AS local_day,
+                             ((date_trunc('day', local_ts) + (d * INTERVAL '1 day') + make_interval(hours => $3, mins => $4)) AT TIME ZONE $2) AS cand_utc
+                         FROM local_ref, generate_series(0, 7) AS d
+                     )
+                     SELECT TRUNC(EXTRACT(EPOCH FROM MIN(cand_utc)) * 1000)::bigint
+                     FROM candidates
+                     WHERE cand_utc > ref_utc
+                       AND ((1 << (EXTRACT(ISODOW FROM local_day)::int - 1)) & $5::int) <> 0",
+                    &[&ref_secs, &schedule.timezone.as_str(), &h, &m, &mask],
                 )
                 .await
                 .map_err(|err| map_pg_err(target, &err))?
@@ -253,8 +285,8 @@ impl HeadService {
         } else {
             let sid = SessionId::new();
             tx.execute(
-                "INSERT INTO sessions (session_id, agent_id, project_id, title, status)
-                 VALUES ($1, $2, $3, $4, 'active')",
+                "INSERT INTO sessions (session_id, agent_id, project_id, title, status, session_kind)
+                 VALUES ($1, $2, $3, $4, 'active', 'task_run')",
                 &[
                     &sid.as_uuid(),
                     &req.agent_id.as_uuid(),
@@ -399,7 +431,7 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         if task.status == TaskStatus::Queued && req.execute_immediately.unwrap_or(true) {
-            self.spawn_task_execution(task.task_id, task.generation, None, correlation_id.clone());
+            self.spawn_task_execution(task.task_id, task.generation, correlation_id.clone());
         }
 
         Ok(task)
@@ -554,6 +586,9 @@ impl HeadService {
             });
         };
         let existing = decode_task_row(&row)?;
+        let _ =
+            ensure_project_active_in_tx(&tx, existing.project_id, "update task", self.pg_target())
+                .await?;
 
         if existing.status == TaskStatus::UnknownExternal {
             return Err(DennettError::Conflict {
@@ -784,12 +819,7 @@ impl HeadService {
             self.signal_old_task_generation_preempt(task_id, updated.generation)
                 .await;
             if updated.status == TaskStatus::Queued && req.execute_immediately.unwrap_or(true) {
-                self.spawn_task_execution(
-                    task_id,
-                    updated.generation,
-                    None,
-                    correlation_id.clone(),
-                );
+                self.spawn_task_execution(task_id, updated.generation, correlation_id.clone());
             }
         }
 
@@ -843,6 +873,9 @@ impl HeadService {
             });
         };
         let task = decode_task_row(&task_row)?;
+        let _ =
+            ensure_project_active_in_tx(&tx, task.project_id, "send task signal", self.pg_target())
+                .await?;
 
         let existing_sig_sql = format!(
             "SELECT {TASK_SIGNAL_SELECT_COLS}
@@ -966,16 +999,9 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         if should_wake {
-            let extra = format!(
-                "[Signal `{}` received]\n{}",
-                signal.signal_name, signal.payload_text
-            );
-            self.spawn_task_execution(
-                task_id,
-                updated_task.generation,
-                Some(extra),
-                correlation_id.clone(),
-            );
+            // D2-BUG-01: Signal payload is durably persisted in `task_signals (consumed_in_generation IS NULL)`
+            // and atomically consumed inside `execute_task_generation` — surviving any Head restart!
+            self.spawn_task_execution(task_id, updated_task.generation, correlation_id.clone());
         }
 
         Ok(TaskSignalResponse {
@@ -986,7 +1012,8 @@ impl HeadService {
     }
 
     /// Answers an agent's native clarification request (`POST /v1/tasks/{task_id}/reply`),
-    /// resolving the open `clarification` Inbox card and continuing task execution cleanly.
+    /// resolving the open `clarification` Inbox card, persisting the reply in
+    /// `tasks.pending_continuation_input` (`D2-BUG-01`), and continuing task execution cleanly.
     ///
     /// # Errors
     ///
@@ -996,6 +1023,23 @@ impl HeadService {
         &self,
         task_id: TaskId,
         req: ReplyTaskRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<TaskRecord, DennettError> {
+        self.reply_to_task_with_card_guard(task_id, req, None, correlation_id)
+            .await
+    }
+
+    /// Internal clarification-reply implementation supporting an atomic optimistic-concurrency
+    /// `(card_id, expected_revision)` guard when invoked via `resolve_inbox_card` (`D2-BUG-04`).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "persists clarification continuation input, enforces optimistic card guard, emits journal events, and schedules next task generation"
+    )]
+    pub(crate) async fn reply_to_task_with_card_guard(
+        &self,
+        task_id: TaskId,
+        req: ReplyTaskRequest,
+        card_revision_guard: Option<(InboxCardId, i64)>,
         correlation_id: &CorrelationId,
     ) -> Result<TaskRecord, DennettError> {
         req.validate()?;
@@ -1021,6 +1065,14 @@ impl HeadService {
             });
         };
         let existing = decode_task_row(&row)?;
+        let _ = ensure_project_active_in_tx(
+            &tx,
+            existing.project_id,
+            "reply to task",
+            self.pg_target(),
+        )
+        .await?;
+
         if existing.status != TaskStatus::WaitingClarification {
             return Err(DennettError::Conflict {
                 resource: String::from("task"),
@@ -1034,29 +1086,66 @@ impl HeadService {
         }
 
         let summary = truncate_utf8(&safe_answer, 2000).to_owned();
-        tx.execute(
-            "UPDATE inbox_cards
-             SET status = 'resolved',
-                 resolution_summary = $2,
-                 revision = revision + 1,
-                 resolved_at = now(),
-                 updated_at = now()
-             WHERE task_id = $1 AND kind = 'clarification' AND status = 'open'",
-            &[&task_id.as_uuid(), &summary],
-        )
-        .await
-        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        if let Some((card_id, expected_rev)) = card_revision_guard {
+            let updated_cards = tx
+                .execute(
+                    "UPDATE inbox_cards
+                     SET status = 'resolved',
+                         resolution_summary = $2,
+                         revision = revision + 1,
+                         resolved_at = now(),
+                         updated_at = now()
+                     WHERE card_id = $1
+                       AND task_id = $3
+                       AND kind = 'clarification'
+                       AND status = 'open'
+                       AND revision = $4",
+                    &[
+                        &card_id.as_uuid(),
+                        &summary,
+                        &task_id.as_uuid(),
+                        &expected_rev,
+                    ],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            if updated_cards == 0 {
+                return Err(DennettError::Conflict {
+                    resource: String::from("inbox_card"),
+                    expected_revision: Some(expected_rev),
+                    actual_revision: None,
+                    reason: String::from(
+                        "clarification inbox card was modified or already resolved concurrently",
+                    ),
+                });
+            }
+        } else {
+            tx.execute(
+                "UPDATE inbox_cards
+                 SET status = 'resolved',
+                     resolution_summary = $2,
+                     revision = revision + 1,
+                     resolved_at = now(),
+                     updated_at = now()
+                 WHERE task_id = $1 AND kind = 'clarification' AND status = 'open'",
+                &[&task_id.as_uuid(), &summary],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        }
 
+        let continuation_input = format!("[User Clarification Reply]\n{safe_answer}");
         let update_sql = format!(
             "UPDATE tasks
              SET status = 'queued',
                  wait_detail = NULL,
+                 pending_continuation_input = $2,
                  updated_at = now()
              WHERE task_id = $1
              RETURNING {TASK_SELECT_COLS}"
         );
         let updated_row = tx
-            .query_one(&update_sql, &[&task_id.as_uuid()])
+            .query_one(&update_sql, &[&task_id.as_uuid(), &continuation_input])
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_task_row(&updated_row)?;
@@ -1083,13 +1172,7 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let continuation_input = format!("[User Clarification Reply]\n{safe_answer}");
-        self.spawn_task_execution(
-            task_id,
-            updated.generation,
-            Some(continuation_input),
-            correlation_id.clone(),
-        );
+        self.spawn_task_execution(task_id, updated.generation, correlation_id.clone());
 
         Ok(updated)
     }
@@ -1123,7 +1206,7 @@ impl HeadService {
             let _ = self
                 .signal_session_run_if_matching(session_id, run_id)
                 .await;
-            let _ = self.runtime().cancel_turn(session_id).await;
+            let _ = self.runtime_router().cancel_turn_all(session_id).await;
         }
 
         // 2. Withdraw pending interactive approval requests for THIS task ONLY!
@@ -1310,6 +1393,10 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
+        if active_handle_info.is_none() {
+            self.clear_stopped_task(task_id).await;
+        }
+
         Ok(CancelTaskResponse {
             task: updated_task,
             cancelled_run_id: active_handle_info
@@ -1472,7 +1559,10 @@ impl HeadService {
                 skipped_timers += 1;
             } else if is_misfired && timer.missed_run_policy == MissedRunPolicy::Ask {
                 tx.execute(
-                    "UPDATE task_timers SET status = 'paused' WHERE timer_id = $1",
+                    "UPDATE task_timers
+                     SET status = 'paused',
+                         pause_reason = 'misfire_ask'
+                     WHERE timer_id = $1",
                     &[&timer.timer_id.as_uuid()],
                 )
                 .await
@@ -1645,7 +1735,7 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         for (tid, gen_num) in to_spawn {
-            self.spawn_task_execution(tid, gen_num, None, correlation_id.clone());
+            self.spawn_task_execution(tid, gen_num, correlation_id.clone());
         }
 
         Ok(SchedulerTickResponse {
@@ -1799,19 +1889,34 @@ impl HeadService {
         .await
         .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let stranded_runs = tx
-            .execute(
+        let stranded_run_rows = tx
+            .query(
                 "UPDATE runs
                  SET status = 'failed',
                      error_code = 'HEAD_RESTARTED_DURING_RUN',
                      error_summary = 'Выполнение прервано перезапуском dennett-head',
                      finished_at = now()
                  WHERE status = 'running'
-                   AND NOT (run_id = ANY($1))",
+                   AND NOT (run_id = ANY($1))
+                 RETURNING run_id",
                 &[&active_run_uuids],
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let stranded_runs = stranded_run_rows.len() as u64;
+        if !stranded_run_rows.is_empty() {
+            let stranded_ids: Vec<uuid::Uuid> =
+                stranded_run_rows.iter().map(|r| r.get(0)).collect();
+            // D2-BUG-04: Return undelivered inter-agent messages from crashed runs back to queue!
+            tx.execute(
+                "UPDATE agent_messages
+                 SET delivered_in_run_id = NULL, delivered_at = NULL
+                 WHERE delivered_in_run_id = ANY($1)",
+                &[&stranded_ids],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        }
 
         let interrupted_sql = format!(
             "SELECT {TASK_SELECT_COLS}
@@ -1993,6 +2098,7 @@ impl HeadService {
             let _ = svc.recover_after_startup_once(&boot_cid).await;
             let mut interval = time::interval(BACKGROUND_SCHEDULER_POLL_INTERVAL);
             interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            let mut tick_count: u64 = 0;
             loop {
                 tokio::select! {
                     biased;
@@ -2002,8 +2108,15 @@ impl HeadService {
                         }
                     }
                     _ = interval.tick() => {
+                        tick_count = tick_count.wrapping_add(1);
                         let cid = CorrelationId::generate();
                         let _ = svc.tick_scheduler_at(TimestampMs::now(), &cid).await;
+                        // D2-OVER-01: Automatic background drain of unified `ordered_outbox`
+                        // (`destination = 'memoryd'`) every ~3s when pending items exist.
+                        if tick_count.is_multiple_of(6) && svc.has_pending_memory_outbox().await {
+                            let flush_cid = CorrelationId::generate();
+                            let _ = svc.flush_memory_outbox(&flush_cid).await;
+                        }
                     }
                 }
             }
@@ -2035,6 +2148,13 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let task = decode_task_row(&task_row)?;
+        let _ = ensure_project_active_in_tx(
+            &tx,
+            task.project_id,
+            "resolve missed schedule card",
+            self.pg_target(),
+        )
+        .await?;
 
         let summary = if run_now {
             "Владелец подтвердил однократный запуск пропущенного расписания"
@@ -2068,8 +2188,11 @@ impl HeadService {
         tx.execute(
             "UPDATE task_timers
              SET status = $2,
+                 pause_reason = NULL,
                  fired_at = CASE WHEN $2 = 'fired' THEN now() ELSE fired_at END
-             WHERE task_id = $1 AND status = 'paused'",
+             WHERE task_id = $1
+               AND status = 'paused'
+               AND (pause_reason = 'misfire_ask' OR pause_reason IS NULL)",
             &[&task_id.as_uuid(), &next_timer_status],
         )
         .await
@@ -2127,17 +2250,49 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated_task = decode_task_row(&updated_row)?;
 
+        // D2-BUG-04: Emit ordered journal events for missed-schedule card resolution + task transition.
+        let pending_events = vec![
+            PendingControlEvent {
+                entity_key: format!("inbox_card:{card_id}"),
+                event_type: "inbox_card.resolved",
+                project_id: Some(updated_task.project_id),
+                session_id: Some(updated_task.session_id),
+                task_id: Some(task_id),
+                payload: json!({
+                    "card_id": card_id,
+                    "kind": "missed_schedule",
+                    "run_now": run_now,
+                    "resolution_summary": summary,
+                }),
+            },
+            PendingControlEvent {
+                entity_key: format!("task:{task_id}"),
+                event_type: "task.missed_schedule_resolved",
+                project_id: Some(updated_task.project_id),
+                session_id: Some(updated_task.session_id),
+                task_id: Some(task_id),
+                payload: json!({
+                    "task_id": task_id,
+                    "card_id": card_id,
+                    "run_now": run_now,
+                    "status": updated_task.status,
+                }),
+            },
+        ];
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         if run_now {
-            self.spawn_task_execution(
-                task_id,
-                updated_task.generation,
-                None,
-                correlation_id.clone(),
-            );
+            self.spawn_task_execution(task_id, updated_task.generation, correlation_id.clone());
         }
         Ok(updated_task)
     }
@@ -2146,33 +2301,32 @@ impl HeadService {
         &self,
         task_id: TaskId,
         expected_generation: i64,
-        extra_input: Option<String>,
         correlation_id: CorrelationId,
     ) {
         let svc = self.clone();
         tokio::spawn(async move {
             let _ = svc
-                .execute_task_generation(task_id, expected_generation, extra_input, correlation_id)
+                .execute_task_generation(task_id, expected_generation, correlation_id)
                 .await;
         });
     }
 
-    /// Executes one queued task turn for `(task_id, expected_generation)` with external budget
-    /// enforcement, interactive `ask_before_write` support, plain-text `agent_messages` delivery,
-    /// `auth_profile_override` fail-closed separation, and strict `generation` fencing (V07).
+    /// Executes one queued task turn for `(task_id, expected_generation)` with durable PG
+    /// continuation/signal pickup (`D2-BUG-01`), external budget enforcement, unified turn core
+    /// (`D2-OVER-02`), `human_wait_ms` exclusion (`D2-BUG-03`), `auth_profile_override` fail-closed
+    /// separation, and strict `generation` fencing (`V07`).
     ///
     /// # Errors
     ///
     /// Returns [`DennettError`] if control PostgreSQL fails.
     #[expect(
         clippy::too_many_lines,
-        reason = "task execution orchestrates per-session serialization, pre-turn budget/auth guards, out-of-tx runtime turn, partial artifacts/effects, and generation-fenced completion"
+        reason = "task execution orchestrates per-session serialization, pre-turn budget/auth guards, durable continuation/signal pickup, unified turn core, and generation-fenced completion"
     )]
     pub async fn execute_task_generation(
         &self,
         task_id: TaskId,
         expected_generation: i64,
-        extra_input: Option<String>,
         correlation_id: CorrelationId,
     ) -> Result<(), DennettError> {
         let _ = self.ensure_migrated().await?;
@@ -2185,11 +2339,12 @@ impl HeadService {
             task.session_id
         };
         let session_lock = self.session_exec_lock(session_id).await;
-        let _session_guard = session_lock.lock().await;
+        let session_guard = session_lock.lock().await;
 
         let run_id = RunId::new();
         let (
             task,
+            session,
             agent,
             project,
             existing_binding,
@@ -2217,6 +2372,8 @@ impl HeadService {
                 tx.commit()
                     .await
                     .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                drop(session_guard);
+                self.prune_session_lock(session_id).await;
                 return Ok(());
             }
 
@@ -2228,6 +2385,8 @@ impl HeadService {
                 tx.commit()
                     .await
                     .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                drop(session_guard);
+                self.prune_session_lock(session_id).await;
                 return Ok(());
             }
 
@@ -2246,6 +2405,8 @@ impl HeadService {
                 tx.commit()
                     .await
                     .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                drop(session_guard);
+                self.prune_session_lock(session_id).await;
                 return Ok(());
             }
 
@@ -2286,20 +2447,54 @@ impl HeadService {
                 tx.commit()
                     .await
                     .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                drop(session_guard);
+                self.prune_session_lock(session_id).await;
                 return Ok(());
             }
 
+            let session = fetch_session(&tx, task.session_id, self.pg_target()).await?;
             let agent = fetch_agent(&tx, task.agent_id, self.pg_target()).await?;
             let binding = fetch_runtime_binding(&tx, task.session_id, self.pg_target()).await?;
             let history = fetch_session_messages(&tx, task.session_id, self.pg_target()).await?;
             let rules = fetch_policy_rules(&tx, self.pg_target()).await?;
 
-            // Collect undelivered plain-text inter-agent messages for `(agent_id, project_id)` (A07, V07)!
+            // D2-BUG-01: Atomically fetch & clear durable `pending_continuation_input` plus any
+            // unconsumed `task_signals` rows under the task's `FOR UPDATE` lock!
+            let pending_continuation: Option<String> = tx
+                .query_one(
+                    "SELECT pending_continuation_input FROM tasks WHERE task_id = $1",
+                    &[&task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                .get(0);
+
+            let signal_rows = tx
+                .query(
+                    "UPDATE task_signals
+                     SET consumed_in_generation = $2
+                     WHERE signal_id IN (
+                         SELECT signal_id
+                         FROM task_signals
+                         WHERE task_id = $1
+                           AND outcome_status IN ('woke_task', 'queued_on_task')
+                           AND consumed_in_generation IS NULL
+                         ORDER BY created_at ASC
+                         FOR UPDATE
+                     )
+                     RETURNING signal_name, payload_text",
+                    &[&task_id.as_uuid(), &expected_generation],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+            // Collect undelivered plain-text inter-agent messages scoped to general OR this task (`D2-BUG-04`).
             let undelivered_sql = format!(
                 "SELECT {AGENT_MESSAGE_SELECT_COLS}
                  FROM agent_messages
                  WHERE recipient_agent_id = $1
                    AND project_id = $2
+                   AND (related_task_id IS NULL OR related_task_id = $3)
                    AND delivered_in_run_id IS NULL
                  ORDER BY created_at ASC
                  FOR UPDATE"
@@ -2307,7 +2502,11 @@ impl HeadService {
             let msg_rows = tx
                 .query(
                     &undelivered_sql,
-                    &[&agent.agent_id.as_uuid(), &project.project_id.as_uuid()],
+                    &[
+                        &agent.agent_id.as_uuid(),
+                        &project.project_id.as_uuid(),
+                        &task_id.as_uuid(),
+                    ],
                 )
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?;
@@ -2318,16 +2517,17 @@ impl HeadService {
 
             let mut prompt_sections = Vec::new();
             if !incoming_agent_msgs.is_empty() {
-                let mut block = String::from("[Inter-Agent Messages]\n");
-                for m in &incoming_agent_msgs {
-                    let _ = writeln!(block, "- From {:?}: {}", m.sender_agent_id, m.body_text);
-                }
-                prompt_sections.push(block);
+                prompt_sections.push(self.format_inter_agent_messages_block(&incoming_agent_msgs));
             }
-            let is_clarification_reply = extra_input
+            for srow in &signal_rows {
+                let sig_name: String = srow.get(0);
+                let sig_payload: String = srow.get(1);
+                prompt_sections.push(format!("[Signal `{sig_name}` received]\n{sig_payload}"));
+            }
+            let is_clarification_reply = pending_continuation
                 .as_deref()
                 .is_some_and(|extra| extra.starts_with("[User Clarification Reply]"));
-            if let Some(ref extra) = extra_input {
+            if let Some(ref extra) = pending_continuation {
                 prompt_sections.push(extra.clone());
             }
             // Clarification replies continue an existing session where `task.goal` is already
@@ -2394,6 +2594,7 @@ impl HeadService {
                  SET status = 'running',
                      active_run_id = $2,
                      wait_detail = NULL,
+                     pending_continuation_input = NULL,
                      updated_at = now()
                  WHERE task_id = $1",
                 &[&task_id.as_uuid(), &run_id.as_uuid()],
@@ -2426,6 +2627,7 @@ impl HeadService {
 
             (
                 task,
+                session,
                 agent,
                 project,
                 binding,
@@ -2441,7 +2643,9 @@ impl HeadService {
             task.session_id,
             ActiveRunHandle {
                 run_id,
+                client_message_id: None,
                 cancel_tx: cancel_tx.clone(),
+                completion_rx: None,
             },
         )
         .await?;
@@ -2466,65 +2670,6 @@ impl HeadService {
         let _task_guard = ActiveTaskGuard::new(self.active_tasks_map(), task_id, run_id);
 
         let runtime = self.runtime_for_profile(task.auth_profile_override)?;
-        let (effective_workspace_cwd, effective_write_policy) = match project.workspace_path {
-            Some(ref ws_path) => (
-                PathBuf::from(ws_path),
-                agent.current_config.workspace_write_policy.clone(),
-            ),
-            None => (
-                self.ensure_detached_project_dir(project.project_id)?,
-                WorkspaceWritePolicy::DenyAll,
-            ),
-        };
-
-        let mcp_servers = self.build_memory_mcp_specs(&agent);
-        let turn_secrets = self.collect_turn_secrets(&mcp_servers);
-        let started_instant = Instant::now();
-
-        let start_outcome = match runtime
-            .start_or_resume_session(SessionStartRequest {
-                dennett_session_id: task.session_id,
-                workspace_cwd: effective_workspace_cwd.clone(),
-                system_prompt: agent.current_config.system_prompt.clone(),
-                model_preference: agent.current_config.model_preference.clone(),
-                thinking_level: agent.current_config.thinking_level,
-                workspace_write_policy: effective_write_policy.clone(),
-                mcp_servers,
-                existing_binding,
-                history_for_rehydrate: prior_history,
-                allow_rehydrate: true,
-            })
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                let elapsed_ms = u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(0);
-                self.complete_task_run_error(
-                    task_id,
-                    run_id,
-                    expected_generation,
-                    &err,
-                    elapsed_ms,
-                    &[],
-                    &correlation_id,
-                )
-                .await;
-                run_guard.mark_completed();
-                self.unregister_active_session_run(task.session_id, run_id)
-                    .await;
-                return Ok(());
-            }
-        };
-
-        let _ = self
-            .upsert_runtime_binding(
-                task.session_id,
-                &start_outcome,
-                &correlation_id,
-                Some(run_id),
-            )
-            .await;
-
         let turn_timeout = task
             .budget
             .max_wall_secs
@@ -2534,150 +2679,82 @@ impl HeadService {
                 Duration::from_millis(rem_ms).min(DEFAULT_TURN_TIMEOUT)
             });
 
-        // Align interactive approval wait with turn_timeout so `await_interactive_approval`
-        // expires cleanly before `transport.rs`'s turn deadline fires (H2-01).
-        let approval_timeout = turn_timeout
-            .saturating_sub(Duration::from_secs(2))
-            .max(Duration::from_millis(250))
-            .min(DEFAULT_APPROVAL_WAIT_TIMEOUT);
-
-        let policy_ctx = PolicyContext {
-            project_id: project.project_id,
-            agent_id: agent.agent_id,
-            session_id: task.session_id,
-            task_id: Some(task_id),
-            workspace_root: effective_workspace_cwd,
-            workspace_write_policy: effective_write_policy,
-            allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
-            rules: policy_rules,
-        };
-        let (interactive_policy, decisions_buf) = InteractivePolicyEvaluator::new(
-            self.clone(),
-            policy_ctx,
-            Some(task_id),
-            correlation_id.clone(),
-            turn_secrets,
-            cancel_rx.clone(),
-            approval_timeout,
-        );
-
-        let turn_result = runtime
-            .send_prompt_turn(
-                TurnRequest {
-                    dennett_session_id: task.session_id,
-                    provider_session_id: start_outcome.provider_session_id.clone(),
-                    run_id,
-                    prompt_text,
-                    timeout: turn_timeout,
-                    cancel_rx: cancel_rx.clone(),
-                },
-                std::sync::Arc::new(interactive_policy),
-                None,
-            )
+        // D2-BUG-03: Give interactive human approval the full `DEFAULT_APPROVAL_WAIT_TIMEOUT`,
+        // independent of `max_wall_secs` — RPC deadline & wall_ms budget pause while human decides!
+        let core_res = self
+            .execute_session_turn_core(CoreTurnInput {
+                trigger: TurnTrigger::TaskGeneration { task_id },
+                session_id: task.session_id,
+                session_kind: session.session_kind,
+                run_id,
+                agent,
+                project,
+                existing_binding,
+                prior_history,
+                policy_rules,
+                prompt_text,
+                runtime,
+                turn_timeout,
+                approval_timeout: DEFAULT_APPROVAL_WAIT_TIMEOUT,
+                cancel_rx,
+                correlation_id: correlation_id.clone(),
+            })
             .await;
 
-        let elapsed_ms = u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(0);
-        let captured = decisions_buf.lock().map_or_default(|g| g.clone());
-
-        let turn_outcome = match turn_result {
-            Ok(outcome) => outcome,
-            Err(err) => {
+        let core = match core_res {
+            Ok(out) => out,
+            Err(failure) => {
                 self.complete_task_run_error(
                     task_id,
                     run_id,
                     expected_generation,
-                    &err,
-                    elapsed_ms,
-                    &captured,
+                    &failure.error,
+                    failure.effective_elapsed_ms,
+                    &failure.captured_decisions,
                     &correlation_id,
                 )
                 .await;
                 run_guard.mark_completed();
                 self.unregister_active_session_run(task.session_id, run_id)
                     .await;
+                drop(session_guard);
+                self.prune_session_lock(session_id).await;
                 return Ok(());
             }
         };
 
-        // Process any emitted partial artifacts and external effects (strictly checking cancel FIRST!).
-        let mut hit_unknown_external = false;
-        for ev in &turn_outcome.events {
-            match ev {
-                RuntimeEvent::PartialArtifactEmitted { name, content } => {
-                    let _ = self
-                        .create_artifact(
-                            task.session_id,
-                            CreateArtifactRequest {
-                                run_id: Some(run_id),
-                                name: name.clone(),
-                                mime_type: String::from("text/markdown"),
-                                content: Some(content.clone()),
-                                relative_path: None,
-                                completeness_status: ArtifactCompleteness::Partial,
-                            },
-                            &correlation_id,
-                        )
-                        .await;
-                }
-                RuntimeEvent::ExternalEffectRequested {
-                    recipient,
-                    operation,
-                    behavior,
-                    idempotency_key,
-                } => {
-                    if *cancel_rx.borrow() || self.is_task_cancel_signalled(task_id).await {
-                        break;
-                    }
-                    if let Ok(idem) = IdempotencyKey::try_new(idempotency_key.clone()) {
-                        let sim_behavior =
-                            SimEffectBehavior::from_str(behavior).unwrap_or_default();
-                        if let Ok(eff_resp) = self
-                            .dispatch_external_effect(
-                                DispatchEffectRequest {
-                                    project_id: task.project_id,
-                                    session_id: task.session_id,
-                                    task_id: Some(task_id),
-                                    run_id: Some(run_id),
-                                    agent_id: task.agent_id,
-                                    effect_idempotency_key: idem,
-                                    connector_id: Some(String::from(
-                                        SIMULATED_EXTERNAL_CONNECTOR_ID,
-                                    )),
-                                    operation: operation.clone(),
-                                    target_recipient: recipient.clone(),
-                                    parameters_json: String::from("{}"),
-                                    simulated_behavior: Some(sim_behavior),
-                                },
-                                &correlation_id,
-                            )
-                            .await
-                            && eff_resp.external_outcome_unknown
-                        {
-                            hit_unknown_external = true;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let _ = self
+        if let Err(err) = self
             .complete_task_run(
                 task_id,
                 run_id,
                 expected_generation,
                 user_msg_id,
-                start_outcome.rehydrated,
-                &turn_outcome,
-                elapsed_ms,
-                &captured,
-                hit_unknown_external,
+                core.start_outcome.rehydrated,
+                &core.turn_outcome,
+                core.effective_elapsed_ms,
+                &core.captured_decisions,
+                core.hit_unknown_external,
                 &correlation_id,
             )
-            .await?;
+            .await
+        {
+            // D2-BUG-04: Fallback so a PG commit failure never strands the task in `running`!
+            self.complete_task_run_error(
+                task_id,
+                run_id,
+                expected_generation,
+                &err,
+                core.effective_elapsed_ms,
+                &core.captured_decisions,
+                &correlation_id,
+            )
+            .await;
+        }
         run_guard.mark_completed();
         self.unregister_active_session_run(task.session_id, run_id)
             .await;
+        drop(session_guard);
+        self.prune_session_lock(session_id).await;
 
         Ok(())
     }
@@ -2846,6 +2923,29 @@ impl HeadService {
             Some(mid)
         };
 
+        // D2-OVER-02: Persist `tool_observed` audit trace for task runs identically to user chats.
+        for ev in &outcome.events {
+            if let RuntimeEvent::ToolObserved {
+                tool_name,
+                title,
+                status,
+                ..
+            } = ev
+            {
+                let _ = append_audit_event(
+                    &tx,
+                    self.pg_target(),
+                    correlation_id,
+                    Some(current_task.session_id),
+                    Some(run_id),
+                    self.runtime().adapter_id(),
+                    "tool_observed",
+                    &self.redact(&format!("tool `{tool_name}` ({title}) status={status}")),
+                )
+                .await?;
+            }
+        }
+
         let partial_summary = if safe_text.trim().is_empty() {
             current_task.partial_result_summary.clone()
         } else {
@@ -2854,10 +2954,20 @@ impl HeadService {
 
         // Check if task was already cancelled or hit unknown_external.
         if current_task.status == TaskStatus::Cancelled || outcome.status == RunStatus::Cancelled {
+            if assistant_msg_id.is_none() {
+                tx.execute(
+                    "UPDATE agent_messages
+                     SET delivered_in_run_id = NULL, delivered_at = NULL
+                     WHERE delivered_in_run_id = $1",
+                    &[&run_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            }
             tx.execute(
                 "UPDATE runs
                  SET assistant_message_id = $2,
-                     status = 'cancelled',
+                     status = CASE WHEN status = 'unknown_external' THEN 'unknown_external' ELSE 'cancelled' END,
                      stop_reason = 'cancelled',
                      rehydrated = $3,
                      tokens_used = $4,
@@ -2875,27 +2985,96 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
+            let has_unknown_effect_on_cancel: bool = hit_unknown_external
+                || current_task.status == TaskStatus::UnknownExternal
+                || tx
+                    .query_one(
+                        "SELECT EXISTS(
+                            SELECT 1 FROM effect_claims
+                            WHERE task_id = $1 AND status IN ('unknown', 'dispatching')
+                        )",
+                        &[&task_id.as_uuid()],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                    .get(0);
+            let final_task_status = if has_unknown_effect_on_cancel {
+                TaskStatus::UnknownExternal
+            } else {
+                TaskStatus::Cancelled
+            };
+
             tx.execute(
                 "UPDATE tasks
-                 SET status = CASE WHEN status = 'unknown_external' THEN 'unknown_external' ELSE 'cancelled' END,
+                 SET status = CASE WHEN status = 'unknown_external' THEN 'unknown_external' ELSE $4 END,
                      active_run_id = CASE WHEN active_run_id = $2 THEN NULL ELSE active_run_id END,
                      partial_result_summary = COALESCE($3, partial_result_summary),
-                     finished_at = COALESCE(finished_at, now()),
+                     finished_at = CASE WHEN $4 = 'cancelled' THEN COALESCE(finished_at, now()) ELSE finished_at END,
                      updated_at = now()
                  WHERE task_id = $1",
                 &[
                     &task_id.as_uuid(),
                     &run_id.as_uuid(),
                     &partial_summary.as_deref(),
+                    &final_task_status.as_str(),
                 ],
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
+            // D2-BUG-04: Emit ordered journal event on task run cancellation.
+            let mut cancel_events = vec![PendingControlEvent {
+                entity_key: format!("task:{task_id}"),
+                event_type: if final_task_status == TaskStatus::UnknownExternal {
+                    "task.stopped_with_unknown_external"
+                } else {
+                    "task.cancelled"
+                },
+                project_id: Some(current_task.project_id),
+                session_id: Some(current_task.session_id),
+                task_id: Some(task_id),
+                payload: json!({
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "generation": run_generation,
+                    "status": final_task_status,
+                }),
+            }];
+            let expired_perms = self
+                .expire_pending_approvals_for_run_in_tx(
+                    &tx,
+                    run_id,
+                    "withdrawn",
+                    "Ход поручения отменён",
+                    &mut cancel_events,
+                )
+                .await?;
+            let _ = append_control_events_batch_in_tx(
+                &tx,
+                self.pg_target(),
+                correlation_id,
+                &cancel_events,
+            )
+            .await?;
+
             tx.commit()
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-            return Ok(RunStatus::Cancelled);
+
+            if !expired_perms.is_empty() {
+                self.wake_expired_approval_waiters(
+                    &expired_perms,
+                    current_task.session_id,
+                    "task run cancelled",
+                )
+                .await;
+            }
+            self.clear_stopped_task(task_id).await;
+            return Ok(if has_unknown_effect_on_cancel {
+                RunStatus::UnknownExternal
+            } else {
+                RunStatus::Cancelled
+            });
         }
 
         let has_unknown_effect: bool = hit_unknown_external
@@ -3050,32 +3229,54 @@ impl HeadService {
                 }),
             });
         } else {
-            // Check whether a recurring future timer is already armed for this task.
-            let has_pending_timer: bool = tx
-                .query_one(
-                    "SELECT EXISTS(
-                        SELECT 1 FROM task_timers
-                        WHERE task_id = $1 AND status = 'pending' AND task_generation = $2
-                    )",
+            // D2-ARCH-02: Recognize BOTH `pending` AND `paused` recurring timers so a periodic
+            // task whose project was archived mid-run transitions to `waiting_timer` instead of
+            // being erroneously closed as `succeeded`!
+            let timer_state_row = tx
+                .query_opt(
+                    "SELECT status, pause_reason
+                     FROM task_timers
+                     WHERE task_id = $1
+                       AND task_generation = $2
+                       AND status IN ('pending', 'paused')
+                     ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, fire_at ASC
+                     LIMIT 1",
                     &[&task_id.as_uuid(), &run_generation],
                 )
                 .await
-                .map_err(|err| map_pg_err(self.pg_target(), &err))?
-                .get(0);
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-            let (next_status, event_type) = if has_pending_timer {
-                (TaskStatus::WaitingTimer, "task.turn_completed")
-            } else {
-                (TaskStatus::Succeeded, "task.succeeded")
+            let (next_status, next_wait_detail, event_type) = match timer_state_row {
+                Some(row) => {
+                    let t_status: String = row.get(0);
+                    let pause_reason = row
+                        .get::<_, Option<String>>(1)
+                        .and_then(|s| TimerPauseReason::from_str(&s).ok());
+                    let detail = if t_status == "paused" {
+                        match pause_reason {
+                            Some(TimerPauseReason::ArchivedProject) => {
+                                Some("Проект в архиве — расписание приостановлено")
+                            }
+                            Some(TimerPauseReason::MisfireAsk) => {
+                                Some("Пропущено окно расписания — ожидает решения")
+                            }
+                            None | Some(_) => Some("Расписание приостановлено"),
+                        }
+                    } else {
+                        Some("Ожидает следующего запуска по расписанию")
+                    };
+                    (TaskStatus::WaitingTimer, detail, "task.turn_completed")
+                }
+                None => (TaskStatus::Succeeded, None, "task.succeeded"),
             };
             tx.execute(
                 "UPDATE tasks
                  SET status = $2,
-                     wait_detail = CASE WHEN $2 = 'waiting_timer' THEN 'Ожидает следующего запуска по расписанию' ELSE NULL END,
+                     wait_detail = $3,
                      finished_at = CASE WHEN $2 = 'succeeded' THEN now() ELSE finished_at END,
                      updated_at = now()
                  WHERE task_id = $1",
-                &[&task_id.as_uuid(), &next_status.as_str()],
+                &[&task_id.as_uuid(), &next_status.as_str(), &next_wait_detail],
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
@@ -3131,13 +3332,14 @@ impl HeadService {
             )
             .await;
         }
+        self.clear_stopped_task(task_id).await;
         Ok(final_run_status)
     }
 
     #[expect(
         clippy::too_many_arguments,
         clippy::too_many_lines,
-        reason = "records failed task run safely respecting generation fencing and expiring any pending approvals"
+        reason = "records failed task run safely under FOR UPDATE generation fencing, releasing agent messages and expiring pending approvals"
     )]
     async fn complete_task_run_error(
         &self,
@@ -3160,16 +3362,32 @@ impl HeadService {
                 let _ = insert_permission_decision(&tx, self.pg_target(), &cap.record).await;
             }
         }
+        // D2-BUG-04: Return undelivered inter-agent messages stamped by this failed run!
+        let _ = tx
+            .execute(
+                "UPDATE agent_messages
+                 SET delivered_in_run_id = NULL, delivered_at = NULL
+                 WHERE delivered_in_run_id = $1",
+                &[&run_id.as_uuid()],
+            )
+            .await;
+
         let safe_err = truncate_utf8(&self.redact(&err.to_string()), 2000).to_owned();
         let wall_i64 = i64::try_from(elapsed_ms).ok();
         let mut pending_events: Vec<PendingControlEvent> = Vec::new();
-        let task_res = fetch_task(&tx, task_id, self.pg_target()).await;
-        if let Ok(task) = task_res {
+        // D2-BUG-04: Lock task row `FOR UPDATE` and fence strictly on `generation = $5`!
+        let lock_sql =
+            format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 FOR UPDATE");
+        let task_res = match tx.query_opt(&lock_sql, &[&task_id.as_uuid()]).await {
+            Ok(Some(row)) => decode_task_row(&row).ok(),
+            _ => None,
+        };
+        if let Some(task) = task_res {
             if task.generation == run_generation {
                 let _ = tx
                     .execute(
                         "UPDATE runs
-                         SET status = 'failed',
+                         SET status = CASE WHEN status = 'unknown_external' THEN 'unknown_external' ELSE 'failed' END,
                              error_code = $2,
                              error_summary = $3,
                              wall_ms = $4,
@@ -3180,7 +3398,7 @@ impl HeadService {
                     .await;
                 if !matches!(
                     task.status,
-                    TaskStatus::Cancelled | TaskStatus::UnknownExternal
+                    TaskStatus::Cancelled | TaskStatus::Succeeded | TaskStatus::UnknownExternal
                 ) {
                     let _ = tx
                         .execute(
@@ -3191,12 +3409,13 @@ impl HeadService {
                                  active_run_id = CASE WHEN active_run_id = $4 THEN NULL ELSE active_run_id END,
                                  finished_at = now(),
                                  updated_at = now()
-                             WHERE task_id = $1",
+                             WHERE task_id = $1 AND generation = $5",
                             &[
                                 &task_id.as_uuid(),
                                 &err.code(),
                                 &safe_err,
                                 &run_id.as_uuid(),
+                                &run_generation,
                             ],
                         )
                         .await;
@@ -3254,6 +3473,7 @@ impl HeadService {
                 self.wake_expired_approval_waiters(&expired_perms, task.session_id, &safe_err)
                     .await;
             }
+            self.clear_stopped_task(task_id).await;
             return;
         }
         let _ = self
@@ -3276,6 +3496,7 @@ impl HeadService {
         )
         .await;
         let _ = tx.commit().await;
+        self.clear_stopped_task(task_id).await;
     }
 
     async fn record_budget_exceeded_in_tx<C: GenericClient>(
@@ -3370,15 +3591,19 @@ impl HeadService {
             serde_json::to_value(&sched.kind).map_err(|err| DennettError::Internal {
                 detail: format!("failed serializing timer recurrence_spec: {err}"),
             })?;
+        let weekdays_mask: Option<i16> = match sched.kind {
+            ScheduleKind::WeeklyWallTime { weekdays_mask, .. } => Some(i16::from(weekdays_mask)),
+            _ => None,
+        };
         tx.execute(
             "INSERT INTO task_timers (
                 timer_id, task_id, task_generation, idempotency_key,
                 fire_at, timezone, original_expression, recurrence_kind,
-                recurrence_spec, missed_run_policy, status
+                recurrence_spec, missed_run_policy, weekdays_mask, status
              ) VALUES (
                 $1, $2, $3, $4,
                 to_timestamp($5), $6, $7, $8,
-                $9, $10, 'pending'
+                $9, $10, $11, 'pending'
              )
              ON CONFLICT (task_id, idempotency_key) DO NOTHING",
             &[
@@ -3392,6 +3617,7 @@ impl HeadService {
                 &sched.kind.recurrence_label(),
                 &spec_json,
                 &sched.missed_run_policy.as_str(),
+                &weekdays_mask,
             ],
         )
         .await
@@ -3429,22 +3655,35 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let _recipient = fetch_agent(&tx, recipient_agent_id, self.pg_target()).await?;
-        let project = fetch_project(&tx, req.project_id, self.pg_target()).await?;
+        let recipient = fetch_agent(&tx, recipient_agent_id, self.pg_target()).await?;
+        let project = ensure_project_active_in_tx(
+            &tx,
+            req.project_id,
+            "send agent message",
+            self.pg_target(),
+        )
+        .await?;
 
+        // D2-SEC-01: Empty `allowed_memory_scopes` is DENY (never full access!), and sender &
+        // recipient must share at least one permitted scope including the project's scope.
         if let Some(sender_id) = req.sender_agent_id {
             let sender = fetch_agent(&tx, sender_id, self.pg_target()).await?;
-            if !sender.current_config.allowed_memory_scopes.is_empty()
-                && !sender
-                    .current_config
-                    .allowed_memory_scopes
-                    .contains(&project.memory_scope)
-            {
+            let sender_scopes = &sender.current_config.allowed_memory_scopes;
+            let recipient_scopes = &recipient.current_config.allowed_memory_scopes;
+            if sender_scopes.is_empty() || !sender_scopes.contains(&project.memory_scope) {
                 return Err(DennettError::ForbiddenScope {
                     scope: project.memory_scope.to_string(),
                     reason: format!(
                         "sender agent `{sender_id}` lacks access to project scope `{}`",
                         project.memory_scope
+                    ),
+                });
+            }
+            if sender_scopes.is_disjoint(recipient_scopes) {
+                return Err(DennettError::ForbiddenScope {
+                    scope: project.memory_scope.to_string(),
+                    reason: format!(
+                        "sender agent `{sender_id}` and recipient agent `{recipient_agent_id}` share no allowed_memory_scopes"
                     ),
                 });
             }

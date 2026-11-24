@@ -425,7 +425,19 @@ pub enum ScheduleKind {
         interval_secs: u64,
     },
     /// Fire daily at local wall-clock `hour:minute` in `TaskSchedule::timezone` (DST-aware via PG 16).
+    #[serde(alias = "daily_local_time")]
     DailyWallTime {
+        /// Local hour in `0..=23`.
+        hour: u8,
+        /// Local minute in `0..=59`.
+        minute: u8,
+    },
+    /// Fire weekly on selected ISO-8601 weekdays (`1..=127`, bit 0 = Monday .. bit 6 = Sunday)
+    /// at local wall-clock `hour:minute` in `TaskSchedule::timezone` (DST-aware via PG 16).
+    #[serde(alias = "weekly_local_time")]
+    WeeklyWallTime {
+        /// ISO-8601 weekday bitmask (`1..=127`, bit 0 = Monday .. bit 6 = Sunday).
+        weekdays_mask: u8,
         /// Local hour in `0..=23`.
         hour: u8,
         /// Local minute in `0..=59`.
@@ -434,24 +446,26 @@ pub enum ScheduleKind {
 }
 
 impl ScheduleKind {
-    /// Returns the database `recurrence_kind` label (`once`, `interval`, or `daily_wall`).
+    /// Returns the database `recurrence_kind` label (`once`, `interval`, `daily_wall`, or `weekly_wall`).
     #[must_use]
     pub const fn recurrence_label(&self) -> &'static str {
         match self {
             Self::OnceAt { .. } => "once",
             Self::Interval { .. } => "interval",
             Self::DailyWallTime { .. } => "daily_wall",
+            Self::WeeklyWallTime { .. } => "weekly_wall",
         }
     }
 
-    /// Validates numeric schedule bounds.
+    /// Validates numeric schedule bounds and timestamp range.
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`] on zero intervals or out-of-range hour/minute values.
+    /// Returns [`DennettError::InvalidInput`] on out-of-range timestamps, zero intervals,
+    /// invalid weekday masks, or out-of-range hour/minute values.
     pub fn validate(&self) -> Result<(), DennettError> {
         match *self {
-            Self::OnceAt { .. } => Ok(()),
+            Self::OnceAt { fire_at } => fire_at.validate("schedule.fire_at"),
             Self::Interval { interval_secs } => {
                 if interval_secs == 0 || interval_secs > 366 * 86_400 {
                     return Err(DennettError::InvalidInput {
@@ -461,23 +475,40 @@ impl ScheduleKind {
                 }
                 Ok(())
             }
-            Self::DailyWallTime { hour, minute } => {
-                if hour > 23 {
+            Self::DailyWallTime { hour, minute } => validate_wall_clock_hhmm(hour, minute),
+            Self::WeeklyWallTime {
+                weekdays_mask,
+                hour,
+                minute,
+            } => {
+                if weekdays_mask == 0 || weekdays_mask > 0b0111_1111 {
                     return Err(DennettError::InvalidInput {
-                        field: String::from("schedule.hour"),
-                        reason: String::from("must be between 0 and 23"),
+                        field: String::from("schedule.weekdays_mask"),
+                        reason: String::from(
+                            "must be a non-empty 7-bit ISO weekday mask in 1..=127 (bit 0=Mon .. bit 6=Sun)",
+                        ),
                     });
                 }
-                if minute > 59 {
-                    return Err(DennettError::InvalidInput {
-                        field: String::from("schedule.minute"),
-                        reason: String::from("must be between 0 and 59"),
-                    });
-                }
-                Ok(())
+                validate_wall_clock_hhmm(hour, minute)
             }
         }
     }
+}
+
+fn validate_wall_clock_hhmm(hour: u8, minute: u8) -> Result<(), DennettError> {
+    if hour > 23 {
+        return Err(DennettError::InvalidInput {
+            field: String::from("schedule.hour"),
+            reason: String::from("must be between 0 and 23"),
+        });
+    }
+    if minute > 59 {
+        return Err(DennettError::InvalidInput {
+            field: String::from("schedule.minute"),
+            reason: String::from("must be between 0 and 59"),
+        });
+    }
+    Ok(())
 }
 
 /// Misfire handling policy when `dennett-head` recovers overdue timers after downtime (Contract I).
@@ -961,6 +992,51 @@ impl FromStr for TaskTimerStatus {
     }
 }
 
+/// Explicit reason explaining why a [`TaskTimerRecord`] is currently in [`TaskTimerStatus::Paused`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TimerPauseReason {
+    /// Timer was paused automatically because its owning project was archived (restored on unarchive).
+    ArchivedProject,
+    /// Timer was paused after an overdue misfire awaiting owner decision via `missed_schedule` Inbox card.
+    MisfireAsk,
+}
+
+impl TimerPauseReason {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ArchivedProject => "archived_project",
+            Self::MisfireAsk => "misfire_ask",
+        }
+    }
+}
+
+impl fmt::Display for TimerPauseReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for TimerPauseReason {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "archived_project" => Ok(Self::ArchivedProject),
+            "misfire_ask" => Ok(Self::MisfireAsk),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("pause_reason"),
+                reason: format!(
+                    "unknown timer pause reason `{other}` (expected archived_project|misfire_ask)"
+                ),
+            }),
+        }
+    }
+}
+
 /// Persisted PostgreSQL timer owned by `dennett-head` (survives UI close and Head restart, A10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskTimerRecord {
@@ -979,12 +1055,15 @@ pub struct TaskTimerRecord {
     /// Optional human-readable original schedule expression.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_expression: Option<String>,
-    /// Recurrence kind (`once`, `interval`, or `daily_wall`).
+    /// Recurrence kind (`once`, `interval`, `daily_wall`, or `weekly_wall`).
     pub recurrence_kind: String,
     /// Misfire policy applied on overdue recovery.
     pub missed_run_policy: MissedRunPolicy,
     /// Current timer status.
     pub status: TaskTimerStatus,
+    /// Explicit reason when `status == Paused` (`archived_project` vs `misfire_ask`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_reason: Option<TimerPauseReason>,
     /// Scheduler instance owning the current claim lease, if claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_owner: Option<String>,
@@ -1216,6 +1295,9 @@ pub struct PermissionRequestRecord {
     pub normalized_targets: Vec<String>,
     /// SHA-256 hash of tool name, targets, and raw parameters binding approval to exact action.
     pub parameters_sha256: Sha256Hex,
+    /// Optional secret-redacted bounded preview of proposed write/edit payload for owner review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_snippet: Option<String>,
     /// Secret-redacted rationale explaining why owner approval is required.
     pub reason: String,
     /// Current resolution state.
@@ -1883,6 +1965,9 @@ pub struct StateSnapshotResponse {
     pub active_grants: Vec<CapabilityGrantRecord>,
     /// Count of open Action Inbox cards in this snapshot.
     pub unresolved_inbox_count: usize,
+    /// Session identifiers that currently have an active `running` execution in PostgreSQL.
+    #[serde(default)]
+    pub running_session_ids: Vec<SessionId>,
 }
 
 /// Ordered event feed page returned by `GET /v1/events` (V15, V18).
@@ -2522,6 +2607,9 @@ pub struct ReconcileEffectResponse {
     pub provider_found: bool,
     /// Total execution count observed at the external provider (proves zero duplicate re-sends).
     pub provider_execution_count: u64,
+    /// Human-readable summary of the reconciliation result (status, provider count, and mode).
+    #[serde(default)]
+    pub resolution_summary: String,
 }
 
 /// Request payload for `POST /v1/projects/{project_id}/rebind` (Contract C).
@@ -2729,10 +2817,7 @@ pub fn write_policy_is_subset_of(
     match (child, parent) {
         (WorkspaceWritePolicy::DenyAll, _)
         | (_, WorkspaceWritePolicy::AllowWorkspace)
-        | (
-            WorkspaceWritePolicy::AskBeforeWrite,
-            WorkspaceWritePolicy::AskBeforeWrite | WorkspaceWritePolicy::AllowPaths { .. },
-        ) => true,
+        | (WorkspaceWritePolicy::AskBeforeWrite, WorkspaceWritePolicy::AskBeforeWrite) => true,
         (
             WorkspaceWritePolicy::AllowPaths {
                 allowed_prefixes: child_prefixes,
@@ -2938,8 +3023,86 @@ mod tests {
             &WorkspaceWritePolicy::AskBeforeWrite,
             &WorkspaceWritePolicy::DenyAll
         ));
+        assert!(
+            !write_policy_is_subset_of(&WorkspaceWritePolicy::AskBeforeWrite, &docs),
+            "D2-SEC-02: AskBeforeWrite must NOT be treated as a subset of path-restricted AllowPaths"
+        );
         assert!(!write_policy_is_subset_of(&docs, &docs_sub));
         assert!(!write_policy_is_subset_of(&src, &docs));
+    }
+
+    #[test]
+    fn schedule_validation_enforces_once_at_bounds_and_weekly_mask() {
+        use crate::memory::{MAX_TIMESTAMP_MS, MIN_TIMESTAMP_MS};
+
+        assert!(
+            ScheduleKind::OnceAt {
+                fire_at: TimestampMs::from_millis(MAX_TIMESTAMP_MS)
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            ScheduleKind::OnceAt {
+                fire_at: TimestampMs::from_millis(MAX_TIMESTAMP_MS + 1)
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ScheduleKind::OnceAt {
+                fire_at: TimestampMs::from_millis(MIN_TIMESTAMP_MS - 1)
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ScheduleKind::OnceAt {
+                fire_at: TimestampMs::from_millis(i64::MAX)
+            }
+            .validate()
+            .is_err()
+        );
+
+        let weekly = ScheduleKind::WeeklyWallTime {
+            weekdays_mask: 0b001_1111,
+            hour: 9,
+            minute: 30,
+        };
+        assert!(weekly.validate().is_ok());
+        assert_eq!(weekly.recurrence_label(), "weekly_wall");
+
+        assert!(
+            ScheduleKind::WeeklyWallTime {
+                weekdays_mask: 0,
+                hour: 9,
+                minute: 0,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ScheduleKind::WeeklyWallTime {
+                weekdays_mask: 128,
+                hour: 9,
+                minute: 0,
+            }
+            .validate()
+            .is_err()
+        );
+
+        let aliased: ScheduleKind = serde_json::from_str(
+            r#"{"kind":"weekly_local_time","weekdays_mask":1,"hour":10,"minute":0}"#,
+        )
+        .expect("weekly_local_time alias");
+        assert_eq!(
+            aliased,
+            ScheduleKind::WeeklyWallTime {
+                weekdays_mask: 1,
+                hour: 10,
+                minute: 0,
+            }
+        );
     }
 
     proptest! {

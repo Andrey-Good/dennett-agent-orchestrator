@@ -21,15 +21,15 @@ use std::time::Duration;
 
 use dennett_contracts::{
     ArtifactCompleteness, ArtifactLifecycleAction, ArtifactLifecycleRequest, BudgetExceedPolicy,
-    CreateAgentRequest, CreateArtifactRequest, CreateProjectRequest, CreateSessionRequest,
-    CreateTaskRequest, DennettError, DispatchEffectRequest, ExternalEffectStatus, IdempotencyKey,
-    InboxCardKind, InboxCardStatus, InboxResolutionAction, MemoryScope, MissedRunPolicy,
-    PermissionRequestStatus, PermissionResolutionDecision, ProjectLifecycleState,
-    RebindProjectRequest, ReconcileEffectRequest, ReplyTaskRequest, ResolveInboxCardRequest,
-    ResolvePermissionRequest, RevokeGrantRequest, RunStatus, ScheduleKind, SchedulerTickRequest,
-    SendAgentMessageRequest, SendMessageRequest, SimEffectBehavior, TaskBudget, TaskId,
-    TaskSchedule, TaskSignalRequest, TaskStatus, TimestampMs, UpdateTaskRequest,
-    WorkspaceWritePolicy,
+    CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest,
+    CreateSessionRequest, CreateTaskRequest, DennettError, DispatchEffectRequest,
+    ExternalEffectStatus, IdempotencyKey, InboxCardKind, InboxCardStatus, InboxResolutionAction,
+    MemoryScope, MissedRunPolicy, PermissionRequestStatus, PermissionResolutionDecision,
+    PolicyEffect, ProjectLifecycleState, RebindProjectRequest, ReconcileEffectRequest,
+    ReplyTaskRequest, ResolveInboxCardRequest, ResolvePermissionRequest, RevokeGrantRequest,
+    RunStatus, ScheduleKind, SchedulerTickRequest, SendAgentMessageRequest, SendMessageRequest,
+    SessionKind, SimEffectBehavior, TaskBudget, TaskId, TaskSchedule, TaskSignalRequest,
+    TaskStatus, TimestampMs, UpdateTaskRequest, WorkspaceWritePolicy,
 };
 use dennett_head_client::HeadClient;
 use dennett_testkit::profile::{TEST_PROFILE_ENV, TestProfile};
@@ -228,7 +228,7 @@ async fn d2_timers_survive_head_restart_misfire_policies_and_concurrent_idempote
     let c1 = HeadClient::new(&head1.base_url).expect("head client 1");
     let health1 = c1.healthz(None).await.expect("health1");
     assert_eq!(health1.stage, "D2");
-    assert_eq!(health1.schema_version, Some(5));
+    assert_eq!(health1.schema_version, Some(6));
     assert!(health1.capabilities.iter().any(|c| c == "control.tasks.v1"));
 
     let proj = c1
@@ -996,6 +996,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
                 agent_id: agent.agent_id,
                 project_id: proj.project_id,
                 title: String::from("Approval Chat"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )
@@ -1292,6 +1293,26 @@ async fn d2_lost_ack_unknown_external_effect_survives_restart_honest_stop_and_re
         simulated_behavior: Some(SimEffectBehavior::LostAck),
     };
 
+    // 0. D2-ARCH-03: Without an explicit Allow policy rule, external effect dispatch MUST fail closed!
+    let denied_first = c1.dispatch_effect(&dispatch_req, None).await;
+    assert!(
+        matches!(denied_first, Err(DennettError::AccessDenied { .. })),
+        "external effect without Allow rule MUST fail closed with AccessDenied, got: {denied_first:?}"
+    );
+    let _allow_rule = c1
+        .create_policy_rule(
+            &CreatePolicyRuleRequest {
+                scope: format!("project:{}", proj.project_id),
+                tool_name: String::from("external_effect:send_webhook"),
+                target_pattern: Some(String::from("https://partner.example/*")),
+                effect: PolicyEffect::Allow,
+                reason: String::from("Allow partner webhook for LostAck reconciliation test"),
+            },
+            None,
+        )
+        .await
+        .expect("create allow policy rule for external_effect:send_webhook");
+
     // 1. Dispatch with LostAck -> persisted as `Unknown`, task -> `UnknownExternal`, Inbox card opened!
     let first = c1
         .dispatch_effect(&dispatch_req, None)
@@ -1586,6 +1607,7 @@ async fn d2_clarification_budgets_client_idempotency_strict_lifecycle_and_dennet
                 agent_id: agent.agent_id,
                 project_id: proj.project_id,
                 title: String::from("Idempotency Session"),
+                session_kind: SessionKind::UserChat,
             },
             None,
         )

@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 const CONTROL_MIGRATION_ADVISORY_LOCK_KEY: i64 = 842_190_537_612_049_311;
 
 /// Latest Control schema migration version bundled in this build.
-pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 5;
+pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 6;
 
 /// One forward-only PostgreSQL migration owned by `dennett-head`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +50,11 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 5,
         name: "0005_d2_h2_signal_and_recovery",
         sql: include_str!("../migrations/0005_d2_h2_signal_and_recovery.sql"),
+    },
+    ControlMigration {
+        version: 6,
+        name: "0006_d2_hardening_and_events",
+        sql: include_str!("../migrations/0006_d2_hardening_and_events.sql"),
     },
 ];
 

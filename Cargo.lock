@@ -743,6 +743,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dennett-control-mcp"
+version = "0.1.0"
+dependencies = [
+ "dennett-contracts",
+ "dennett-head-client",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "dennett-desktop"
 version = "0.1.0"
 dependencies = [
@@ -768,6 +779,7 @@ dependencies = [
  "base64 0.22.1",
  "deadpool-postgres",
  "dennett-contracts",
+ "dennett-head-client",
  "dennett-memory-client",
  "dennett-runtime-antigravity",
  "hmac 0.12.1",

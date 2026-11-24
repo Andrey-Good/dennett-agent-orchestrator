@@ -20,10 +20,11 @@ use std::sync::Mutex;
 use dennett_contracts::{
     CorrelationId, DennettError, DispatchEffectRequest, DispatchEffectResponse, EffectClaimId,
     EffectClaimRecord, ExternalEffectStatus, InboxCardId, ListEffectsResponse,
-    ManualEffectResolution, ReconcileEffectRequest, ReconcileEffectResponse, SimEffectBehavior,
-    TaskId, TaskStatus,
+    ManualEffectResolution, PermissionDecisionId, PermissionDecisionRecord, PolicyEffect,
+    ProjectLifecycleState, ReconcileEffectRequest, ReconcileEffectResponse, SimEffectBehavior,
+    TaskId, TaskStatus, TimestampMs,
 };
-use dennett_runtime_antigravity::BoxFuture;
+use dennett_runtime_antigravity::{BoxFuture, PolicyEvaluationRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use uuid::Uuid;
@@ -33,10 +34,12 @@ use crate::events::{
     append_control_events_batch_in_tx,
 };
 use crate::migrations::sha256_hex;
-use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService};
+use crate::policy::{PolicyContext, PolicyEngine, PolicyEvaluationDecision};
+use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService, insert_permission_decision};
 use crate::store::{
-    EFFECT_CLAIM_SELECT_COLS, append_audit_event, decode_effect_claim_row, fetch_agent,
-    fetch_project, fetch_session, fetch_task, map_pg_err, truncate_utf8,
+    EFFECT_CLAIM_SELECT_COLS, append_audit_event, decode_effect_claim_row,
+    fetch_active_project_grants, fetch_agent, fetch_policy_rules, fetch_project, fetch_session,
+    fetch_task, map_pg_err, truncate_utf8,
 };
 
 /// Default connector identifier used in Phase D2 for deterministic external effect verification.
@@ -435,7 +438,8 @@ impl HeadService {
             });
         }
 
-        // Transaction 1: Validate entities, deduplicate or refuse blind retry on `unknown`/`dispatching`,
+        // Transaction 1: Validate entities + active project + ownership + external PolicyEngine
+        // authorization (D2-ARCH-03), deduplicate or refuse blind retry on `unknown`/`dispatching`,
         // and persist `dispatching` claim before releasing the SQL transaction.
         let (claim, already_existing) = {
             let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
@@ -444,17 +448,166 @@ impl HeadService {
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-            let _ = fetch_project(&tx, req.project_id, self.pg_target()).await?;
-            let _ = fetch_session(&tx, req.session_id, self.pg_target()).await?;
-            let _ = fetch_agent(&tx, req.agent_id, self.pg_target()).await?;
+            let project = fetch_project(&tx, req.project_id, self.pg_target()).await?;
+            if project.lifecycle_state != ProjectLifecycleState::Active {
+                return Err(DennettError::Conflict {
+                    resource: String::from("project"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "cannot dispatch external effect: project `{}` is in `{}` lifecycle state",
+                        project.project_id, project.lifecycle_state
+                    ),
+                });
+            }
+            let session = fetch_session(&tx, req.session_id, self.pg_target()).await?;
+            if session.project_id != req.project_id {
+                return Err(DennettError::AccessDenied {
+                    scope: format!("project:{}", req.project_id),
+                    reason: format!(
+                        "session `{}` does not belong to project `{}`",
+                        req.session_id, req.project_id
+                    ),
+                });
+            }
+            let agent = fetch_agent(&tx, req.agent_id, self.pg_target()).await?;
 
             if let Some(tid) = req.task_id {
                 let task = fetch_task(&tx, tid, self.pg_target()).await?;
+                if task.project_id != req.project_id || task.session_id != req.session_id {
+                    return Err(DennettError::AccessDenied {
+                        scope: format!("project:{}", req.project_id),
+                        reason: format!(
+                            "task `{tid}` does not belong to project `{}` and session `{}`",
+                            req.project_id, req.session_id
+                        ),
+                    });
+                }
                 if task.status == TaskStatus::Cancelled {
                     return Err(DennettError::Cancelled {
                         operation: format!("external_effect:task:{tid}"),
                     });
                 }
+            }
+
+            // D2-ARCH-03: Route every external effect through `PolicyEngine` outside the model
+            // and persist an audited `permission_decisions` record. Fail CLOSED (`Deny`) unless
+            // matched by an explicit `Allow` rule or active `CapabilityGrant`.
+            let rules = fetch_policy_rules(&tx, self.pg_target()).await?;
+            let grants = fetch_active_project_grants(&tx, req.project_id, self.pg_target()).await?;
+            let ws_root = project.workspace_path.as_deref().map_or_else(
+                || self.fallback_workspace_root(req.project_id),
+                PathBuf::from,
+            );
+            let engine = PolicyEngine::new(PolicyContext {
+                project_id: project.project_id,
+                project_lifecycle_state: project.lifecycle_state,
+                workspace_bound: project.workspace_path.is_some(),
+                agent_id: agent.agent_id,
+                session_id: req.session_id,
+                task_id: req.task_id,
+                workspace_root: ws_root,
+                workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
+                parent_write_ceiling: None,
+                allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
+                rules,
+            });
+            let tool_name = format!("external_effect:{}", req.operation.trim());
+            let tool_call_id = format!("effect:{}", req.effect_idempotency_key);
+            let eval_req = PolicyEvaluationRequest {
+                session_id: req.session_id,
+                run_id: req.run_id.unwrap_or_default(),
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+                tool_kind: String::from("external_effect"),
+                title: format!("{tool_name} -> {safe_recipient}"),
+                target: Some(safe_recipient.clone()),
+                locations: Vec::new(),
+                raw_input: safe_params_val.clone(),
+            };
+            let policy_outcome = match engine.evaluate_with_grants(
+                &eval_req,
+                &grants,
+                TimestampMs::now(),
+            ) {
+                PolicyEvaluationDecision::Immediate(o) => o,
+                PolicyEvaluationDecision::AllowedByGrant { grant_id, outcome } => {
+                    let consumed = tx
+                        .query_opt(
+                            "UPDATE capability_grants
+                             SET uses_consumed = uses_consumed + 1
+                             WHERE grant_id = $1
+                               AND revoked_at IS NULL
+                               AND (expires_at IS NULL OR expires_at > now())
+                               AND (max_uses IS NULL OR uses_consumed < max_uses)
+                             RETURNING grant_id",
+                            &[&grant_id.as_uuid()],
+                        )
+                        .await
+                        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                    if consumed.is_some() {
+                        outcome
+                    } else {
+                        dennett_runtime_antigravity::PolicyEvaluationOutcome {
+                            effect: PolicyEffect::Deny,
+                            matched_rule_id: None,
+                            reason: format!(
+                                "denied external effect `{tool_name}`: capability grant {grant_id} was concurrently revoked or exhausted"
+                            ),
+                            scope: format!("project:{}", req.project_id),
+                        }
+                    }
+                }
+                PolicyEvaluationDecision::NeedsInteractiveApproval { scope, reason, .. } => {
+                    dennett_runtime_antigravity::PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Deny,
+                        matched_rule_id: None,
+                        reason,
+                        scope,
+                    }
+                }
+            };
+
+            let decision_record = PermissionDecisionRecord {
+                decision_id: PermissionDecisionId::new(),
+                session_id: req.session_id,
+                run_id: req.run_id,
+                tool_call_id,
+                tool_name,
+                target_pattern: Some(safe_recipient.clone()),
+                scope: policy_outcome.scope.clone(),
+                effect: policy_outcome.effect,
+                matched_rule_id: policy_outcome.matched_rule_id,
+                reason: truncate_utf8(&self.redact(&policy_outcome.reason), 1000).to_owned(),
+                evaluated_outside_model: true,
+                correlation_id: correlation_id.clone(),
+                created_at: TimestampMs::now(),
+            };
+            insert_permission_decision(&tx, self.pg_target(), &decision_record).await?;
+
+            if policy_outcome.effect != PolicyEffect::Allow {
+                let _ = append_audit_event(
+                    &tx,
+                    self.pg_target(),
+                    correlation_id,
+                    Some(req.session_id),
+                    req.run_id,
+                    "policy_engine",
+                    "external_effect_denied",
+                    &self.redact(&format!(
+                        "denied external effect `{}` -> `{safe_recipient}`: {}",
+                        req.operation.trim(),
+                        policy_outcome.reason
+                    )),
+                )
+                .await?;
+                tx.commit()
+                    .await
+                    .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                return Err(DennettError::AccessDenied {
+                    scope: policy_outcome.scope,
+                    reason: policy_outcome.reason,
+                });
             }
 
             let existing_sql = format!(
@@ -469,6 +622,14 @@ impl HeadService {
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?
             {
                 let existing = decode_effect_claim_row(&row)?;
+                if existing.project_id != req.project_id {
+                    return Err(DennettError::AccessDenied {
+                        scope: format!("project:{}", req.project_id),
+                        reason: String::from(
+                            "effect_idempotency_key belongs to a different project",
+                        ),
+                    });
+                }
                 if existing.parameters_sha256 != params_sha {
                     return Err(DennettError::IdempotencyMismatch {
                         idempotency_key: req.effect_idempotency_key.to_string(),
@@ -813,15 +974,19 @@ impl HeadService {
         let sql = format!(
             "SELECT {EFFECT_CLAIM_SELECT_COLS}
              FROM effect_claims
-             WHERE EXISTS (
-                 SELECT 1 FROM projects p
-                 WHERE p.project_id = effect_claims.project_id
-                   AND p.lifecycle_state <> 'deleted_record'
+             WHERE (
+                 status IN ('dispatching', 'unknown')
+                 OR EXISTS (
+                     SELECT 1 FROM projects p
+                     WHERE p.project_id = effect_claims.project_id
+                       AND p.lifecycle_state <> 'deleted_record'
+                 )
              )
                AND ($1::uuid IS NULL OR task_id = $1)
                AND ($2::uuid IS NULL OR session_id = $2)
                AND ($3::text IS NULL OR status = $3)
-             ORDER BY created_at DESC"
+             ORDER BY (status IN ('dispatching', 'unknown')) DESC, created_at DESC
+             LIMIT 250"
         );
         let status_str = parsed_status.map(|s| s.as_str().to_owned());
         let rows = conn
@@ -879,6 +1044,20 @@ impl HeadService {
             };
             decode_effect_claim_row(&row)?
         };
+
+        // D2-ARCH-03: Only `unknown` claims can be reconciled; reject concurrent/already-resolved
+        // or still-dispatching claims with 409 Conflict before issuing external lookups.
+        if claim.status != ExternalEffectStatus::Unknown {
+            return Err(DennettError::Conflict {
+                resource: String::from("effect_claim"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!(
+                    "cannot reconcile effect `{effect_id}` in status `{}` (expected `unknown`)",
+                    claim.status
+                ),
+            });
+        }
 
         // Query external provider strictly outside SQL transaction (read-only lookup: 0 retries!).
         let provider_lookup = self
@@ -969,6 +1148,28 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
+        // D2-ARCH-03: Lock the claim row `FOR UPDATE` and enforce `AND status = 'unknown'` so
+        // concurrent reconcile calls never overwrite each other's terminal outcome.
+        let locked_status: Option<String> = tx
+            .query_opt(
+                "SELECT status FROM effect_claims WHERE effect_id = $1 FOR UPDATE",
+                &[&effect_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+            .map(|r| r.get(0));
+        if locked_status.as_deref() != Some("unknown") {
+            return Err(DennettError::Conflict {
+                resource: String::from("effect_claim"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!(
+                    "effect `{effect_id}` was already reconciled concurrently (status={})",
+                    locked_status.as_deref().unwrap_or("missing")
+                ),
+            });
+        }
+
         let update_sql = format!(
             "UPDATE effect_claims
              SET status = $2,
@@ -977,12 +1178,12 @@ impl HeadService {
                  error_summary = CASE WHEN $2 = 'confirmed' THEN NULL ELSE $5 END,
                  reconciled_at = now(),
                  updated_at = now()
-             WHERE effect_id = $1
+             WHERE effect_id = $1 AND status = 'unknown'
              RETURNING {EFFECT_CLAIM_SELECT_COLS}"
         );
         let safe_note = truncate_utf8(&self.redact(&resolution_note), 2000).to_owned();
-        let updated_row = tx
-            .query_one(
+        let Some(updated_row) = tx
+            .query_opt(
                 &update_sql,
                 &[
                     &effect_id.as_uuid(),
@@ -993,7 +1194,15 @@ impl HeadService {
                 ],
             )
             .await
-            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        else {
+            return Err(DennettError::Conflict {
+                resource: String::from("effect_claim"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!("effect `{effect_id}` was already reconciled concurrently"),
+            });
+        };
         let updated_claim = decode_effect_claim_row(&updated_row)?;
 
         // Close open `unknown_effect` Action Inbox cards for this effect.
@@ -1098,6 +1307,7 @@ impl HeadService {
             task: updated_task,
             provider_found,
             provider_execution_count: provider_lookup.provider_execution_count,
+            resolution_summary: safe_note,
         })
     }
 }
