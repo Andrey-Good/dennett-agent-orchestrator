@@ -18,11 +18,11 @@ use dennett_contracts::{
     MissedRunPolicy, OrderedOutboxItem, OrderedOutboxItemId, OrderedOutboxStatus,
     PermissionDecisionId, PermissionDecisionRecord, PermissionRequestId, PermissionRequestRecord,
     PermissionRequestStatus, PolicyEffect, PolicyRule, PolicyRuleId, ProjectId,
-    ProjectLifecycleState, ProjectRecord, RunId, RunRecord, RunStatus, RuntimeAuthProfile,
-    RuntimeBinding, RuntimeBindingId, SessionId, SessionKind, SessionRecord, SessionStatus,
-    Sha256Hex, TaskBudget, TaskId, TaskRecord, TaskSchedule, TaskSignalId, TaskSignalOutcome,
-    TaskSignalRecord, TaskStatus, TaskTimerId, TaskTimerRecord, TaskTimerStatus, TaskUsage,
-    ThinkingLevel, TimerPauseReason, TimestampMs, UsageConfidence, WorkspaceWritePolicy,
+    ProjectLifecycleState, ProjectRecord, ProviderConnectionId, RunId, RunRecord, RunStatus,
+    RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, SessionId, SessionKind, SessionRecord,
+    SessionStatus, Sha256Hex, TaskBudget, TaskId, TaskRecord, TaskSchedule, TaskSignalId,
+    TaskSignalOutcome, TaskSignalRecord, TaskStatus, TaskTimerId, TaskTimerRecord, TaskTimerStatus,
+    TaskUsage, ThinkingLevel, TimerPauseReason, TimestampMs, UsageConfidence, WorkspaceWritePolicy,
 };
 use serde_json::Value as JsonValue;
 use tokio_postgres::Row;
@@ -204,7 +204,8 @@ pub(crate) const AGENT_JOIN_SELECT: &str = "
            v.model_preference, v.thinking_level,
            v.allowed_memory_scopes, v.workspace_write_policy,
            v.default_budget, v.attached_skills,
-           TRUNC(EXTRACT(EPOCH FROM v.created_at) * 1000)::bigint
+           TRUNC(EXTRACT(EPOCH FROM v.created_at) * 1000)::bigint,
+           v.preferred_connection_id
     FROM agents a
     JOIN agent_config_versions v ON v.config_version_id = a.current_config_version_id
 ";
@@ -436,7 +437,8 @@ pub(crate) async fn fetch_runtime_binding<C: GenericClient>(
             "SELECT binding_id, session_id, adapter_id, auth_profile, tier, agy_version,
                     provider_session_id, workspace_cwd, is_simulated, rehydrate_count,
                     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
+                    connection_id, endpoint_fingerprint
              FROM runtime_bindings
              WHERE session_id = $1",
             &[&session_id.as_uuid()],
@@ -456,7 +458,8 @@ pub(crate) async fn fetch_all_runtime_bindings<C: GenericClient>(
             "SELECT binding_id, session_id, adapter_id, auth_profile, tier, agy_version,
                     provider_session_id, workspace_cwd, is_simulated, rehydrate_count,
                     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
+                    connection_id, endpoint_fingerprint
              FROM runtime_bindings",
             &[],
         )
@@ -656,7 +659,9 @@ pub(crate) fn decode_agent_join_row(row: &Row) -> Result<AgentRecord, DennettErr
         workspace_write_policy: write_policy,
         default_budget,
         attached_skills,
-        preferred_connection_id: None,
+        preferred_connection_id: row
+            .get::<_, Option<Uuid>>(16)
+            .map(ProviderConnectionId::from_uuid),
         created_at: TimestampMs::from_millis(row.get(15)),
     };
 
@@ -712,7 +717,9 @@ pub(crate) fn decode_config_version_row(row: &Row) -> Result<AgentConfigVersion,
         workspace_write_policy: write_policy,
         default_budget,
         attached_skills,
-        preferred_connection_id: None,
+        preferred_connection_id: row
+            .get::<_, Option<Uuid>>(11)
+            .map(ProviderConnectionId::from_uuid),
         created_at: TimestampMs::from_millis(row.get(10)),
     })
 }
@@ -764,8 +771,10 @@ pub(crate) fn decode_runtime_binding_row(row: &Row) -> Result<RuntimeBinding, De
         workspace_cwd: row.get(7),
         is_simulated: row.get(8),
         rehydrate_count: row.get(9),
-        connection_id: None,
-        endpoint_fingerprint: None,
+        connection_id: row
+            .get::<_, Option<Uuid>>(12)
+            .map(ProviderConnectionId::from_uuid),
+        endpoint_fingerprint: row.get(13),
         created_at: TimestampMs::from_millis(row.get(10)),
         updated_at: TimestampMs::from_millis(row.get(11)),
     })

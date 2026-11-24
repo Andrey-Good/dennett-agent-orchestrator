@@ -2350,6 +2350,7 @@ impl HeadService {
             existing_binding,
             prior_history,
             policy_rules,
+            resolved_runtime,
             user_msg_id,
             prompt_text,
         ) = {
@@ -2410,50 +2411,60 @@ impl HeadService {
                 return Ok(());
             }
 
-            // 2. Auth profile separation check (A10: fail closed if gemini-api-key not configured!).
-            if let Err(auth_err) = self.runtime_for_profile(task.auth_profile_override) {
-                let err_summary =
-                    truncate_utf8(&self.redact(&auth_err.to_string()), 2000).to_owned();
-                tx.execute(
-                    "UPDATE tasks
-                     SET status = 'failed',
-                         error_code = $2,
-                         error_summary = $3,
-                         finished_at = now(),
-                         updated_at = now()
-                     WHERE task_id = $1",
-                    &[&task_id.as_uuid(), &auth_err.code(), &err_summary],
-                )
-                .await
-                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-                let _ = append_control_event_in_tx(
-                    &tx,
-                    self.pg_target(),
-                    ControlEventAppend {
-                        entity_key: &format!("task:{task_id}"),
-                        event_type: "task.failed",
-                        project_id: Some(task.project_id),
-                        session_id: Some(task.session_id),
-                        task_id: Some(task_id),
-                        correlation_id: &correlation_id,
-                        payload: json!({
-                            "task_id": task_id,
-                            "error_code": auth_err.code(),
-                            "error_summary": err_summary,
-                        }),
-                    },
-                )
-                .await?;
-                tx.commit()
-                    .await
-                    .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-                drop(session_guard);
-                self.prune_session_lock(session_id).await;
-                return Ok(());
-            }
-
             let session = fetch_session(&tx, task.session_id, self.pg_target()).await?;
             let agent = fetch_agent(&tx, task.agent_id, self.pg_target()).await?;
+
+            // 2. Runtime & auth profile separation check (A09/A10/M: fail closed without silent fallback!).
+            let resolved_runtime = match self
+                .resolve_runtime_for_turn(
+                    agent.current_config.preferred_connection_id,
+                    task.auth_profile_override,
+                )
+                .await
+            {
+                Ok(rt) => rt,
+                Err(auth_err) => {
+                    let err_summary =
+                        truncate_utf8(&self.redact(&auth_err.to_string()), 2000).to_owned();
+                    tx.execute(
+                        "UPDATE tasks
+                         SET status = 'failed',
+                             error_code = $2,
+                             error_summary = $3,
+                             finished_at = now(),
+                             updated_at = now()
+                         WHERE task_id = $1",
+                        &[&task_id.as_uuid(), &auth_err.code(), &err_summary],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                    let _ = append_control_event_in_tx(
+                        &tx,
+                        self.pg_target(),
+                        ControlEventAppend {
+                            entity_key: &format!("task:{task_id}"),
+                            event_type: "task.failed",
+                            project_id: Some(task.project_id),
+                            session_id: Some(task.session_id),
+                            task_id: Some(task_id),
+                            correlation_id: &correlation_id,
+                            payload: json!({
+                                "task_id": task_id,
+                                "error_code": auth_err.code(),
+                                "error_summary": err_summary,
+                            }),
+                        },
+                    )
+                    .await?;
+                    tx.commit()
+                        .await
+                        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                    drop(session_guard);
+                    self.prune_session_lock(session_id).await;
+                    return Ok(());
+                }
+            };
+
             let binding = fetch_runtime_binding(&tx, task.session_id, self.pg_target()).await?;
             let history = fetch_session_messages(&tx, task.session_id, self.pg_target()).await?;
             let rules = fetch_policy_rules(&tx, self.pg_target()).await?;
@@ -2633,6 +2644,7 @@ impl HeadService {
                 binding,
                 history,
                 rules,
+                resolved_runtime,
                 user_msg_id,
                 full_prompt,
             )
@@ -2669,7 +2681,6 @@ impl HeadService {
         .await;
         let _task_guard = ActiveTaskGuard::new(self.active_tasks_map(), task_id, run_id);
 
-        let runtime = self.runtime_for_profile(task.auth_profile_override)?;
         let turn_timeout = task
             .budget
             .max_wall_secs
@@ -2693,7 +2704,8 @@ impl HeadService {
                 prior_history,
                 policy_rules,
                 prompt_text,
-                runtime,
+                runtime: resolved_runtime.runtime,
+                connection_id: resolved_runtime.connection_id,
                 turn_timeout,
                 approval_timeout: DEFAULT_APPROVAL_WAIT_TIMEOUT,
                 cancel_rx,
@@ -3805,5 +3817,49 @@ impl HeadService {
             .map(decode_agent_message_row)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ListAgentMessagesResponse { messages })
+    }
+
+    /// Enforces `child_scope ⊆ parent_scope` (A07) when an agent delegates work to another agent
+    /// via `dennett-control-mcp` (even when `parent_task_id` is omitted in an interactive chat).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`] or [`DennettError::AccessDenied`] on privilege escalation.
+    pub(crate) async fn enforce_delegated_agent_scope_subset(
+        &self,
+        parent_agent_id: AgentId,
+        child_agent_id: AgentId,
+    ) -> Result<(), DennettError> {
+        if parent_agent_id == child_agent_id {
+            return Ok(());
+        }
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let parent = fetch_agent(&conn, parent_agent_id, self.pg_target()).await?;
+        let child = fetch_agent(&conn, child_agent_id, self.pg_target()).await?;
+        if !child
+            .current_config
+            .allowed_memory_scopes
+            .is_subset(&parent.current_config.allowed_memory_scopes)
+        {
+            return Err(DennettError::ForbiddenScope {
+                scope: format!("agent:{child_agent_id}"),
+                reason: String::from(
+                    "delegated helper agent's allowed_memory_scopes must be a subset of delegating agent's scopes",
+                ),
+            });
+        }
+        if !write_policy_is_subset_of(
+            &child.current_config.workspace_write_policy,
+            &parent.current_config.workspace_write_policy,
+        ) {
+            return Err(DennettError::AccessDenied {
+                scope: format!("agent:{child_agent_id}"),
+                reason: String::from(
+                    "delegated helper agent's workspace_write_policy cannot exceed delegating agent's permissions",
+                ),
+            });
+        }
+        Ok(())
     }
 }

@@ -16,29 +16,38 @@ use axum::http::header::{HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    AgentId, ApiErrorResponse, ArtifactId, ArtifactLifecycleRequest, CapabilityGrantId,
-    CommitMemoryNoteRequest, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
+    ActivateConnectionRequest, AgentId, ApiErrorResponse, ArtifactId, ArtifactLifecycleRequest,
+    CapabilityGrantId, CapabilityId, CapabilityKind, CapabilityOrigin, CapabilityScopeKind,
+    ClaimId, CommitMemoryNoteRequest, ConflictId, ConsolidationJobId, CorrectNoteRequest,
+    CorrelationId, CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest,
+    CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
     CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
-    DennettError, DispatchEffectRequest, EffectClaimId, HeadHealth, HeadMemorySearchRequest,
-    InboxCardId, MemoryStatus, PermissionRequestId, ProfileMode, ProjectId, RebindProjectRequest,
-    ReconcileEffectRequest, ReplyTaskRequest, ResolveInboxCardRequest, ResolvePermissionRequest,
-    RevokeGrantRequest, SchedulerTickRequest, SendAgentMessageRequest, SendMessageRequest,
-    ServiceKind, SessionId, SessionKind, TaskId, TaskSignalRequest, TimestampMs,
-    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    DennettError, DiscoverCapabilitiesRequest, DispatchEffectRequest, DocumentId, EffectClaimId,
+    ExportRequest, ForgetRequest, HeadHealth, HeadMemorySearchRequest, ImportRequest, InboxCardId,
+    MemoryNoteId, MemoryScope, MemoryStatus, PermissionRequestId, ProfileMode, ProjectId,
+    ProviderConnectionId, RebindProjectRequest, ReconcileEffectRequest, ReplyTaskRequest,
+    ResolveConflictRequest, ResolveInboxCardRequest, ResolvePermissionRequest, RevokeGrantRequest,
+    SchedulerTickRequest, SendAgentMessageRequest, SendMessageRequest, ServiceKind, SessionId,
+    SessionKind, SetProjectCapabilityBindingRequest, SetSecretRequest, SupersedeClaimRequest,
+    TaskId, TaskSignalRequest, TimestampMs, TriggerIndexRebuildRequest, UpdateAgentConfigRequest,
+    UpdateCapabilityRequest, UpdateDocumentRequest, UpdateProjectRequest, UpdateSessionRequest,
+    UpdateTaskRequest, UpsertProviderConnectionRequest,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, watch};
 use tokio::time;
 
 use crate::memory_auth::ControlTokenClaims;
-use crate::service::{HEAD_STAGE_LABEL, HeadService, d2_head_capabilities};
+use crate::service::{HEAD_STAGE_LABEL, HeadService, d3_head_capabilities};
 
 /// Maximum incoming HTTP request body size (1 MiB).
 pub const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
+/// Maximum incoming HTTP request body size for `/v1/memory/import` packages (16 MiB + 64 KiB JSON envelope).
+pub const MAX_MEMORY_IMPORT_BODY_BYTES: usize = 16 * 1024 * 1024 + 64 * 1024;
 /// Maximum concurrent in-flight HTTP requests accepted by `dennett-head`.
 pub const MAX_CONCURRENT_REQUESTS: usize = 64;
 /// Upper bound on end-to-end HTTP request wall time (accommodates live runtime turns).
@@ -179,6 +188,32 @@ struct ListEffectsQuery {
     status: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ListCapabilitiesQuery {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    scope_kind: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    origin: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryScopeQuery {
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListMemoryClaimsQuery {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    topic_key: Option<String>,
+}
+
 /// Builds the complete `axum` HTTP [`Router`] for `dennett-head`.
 #[expect(
     clippy::too_many_lines,
@@ -306,6 +341,108 @@ pub fn build_head_router(state: HeadAppState) -> Router {
         .route("/v1/memory/outbox", get(handle_list_outbox))
         .route("/v1/memory/outbox/flush", post(handle_flush_outbox))
         .route("/v1/memory/search", post(handle_search_memory))
+        // Phase D3: Write-only SecretBroker, Provider Connections, A08 Capabilities, Owner Memory Proxy.
+        .route("/v1/secrets", get(handle_list_secrets))
+        .route(
+            "/v1/secrets/{slot_key}",
+            put(handle_set_secret).delete(handle_delete_secret),
+        )
+        .route(
+            "/v1/runtime/connections",
+            get(handle_list_provider_connections).post(handle_create_provider_connection),
+        )
+        .route(
+            "/v1/runtime/connections/{connection_id}",
+            patch(handle_update_provider_connection).delete(handle_delete_provider_connection),
+        )
+        .route(
+            "/v1/runtime/connections/{connection_id}/probe",
+            post(handle_probe_provider_connection),
+        )
+        .route(
+            "/v1/runtime/connections/{connection_id}/activate",
+            post(handle_activate_provider_connection),
+        )
+        .route(
+            "/v1/capabilities",
+            get(handle_list_capabilities).post(handle_create_capability),
+        )
+        .route(
+            "/v1/capabilities/discover",
+            post(handle_discover_capabilities),
+        )
+        .route(
+            "/v1/capabilities/{capability_id}",
+            patch(handle_update_capability).delete(handle_delete_capability),
+        )
+        .route(
+            "/v1/capabilities/{capability_id}/rollback",
+            post(handle_rollback_capability),
+        )
+        .route(
+            "/v1/projects/{project_id}/capabilities/{capability_id}",
+            put(handle_set_project_capability_binding),
+        )
+        .route("/v1/memory/overview", get(handle_memory_overview))
+        .route(
+            "/v1/memory/notes/{note_id}/correct",
+            post(handle_correct_memory_note),
+        )
+        .route(
+            "/v1/memory/notes/{note_id}/history",
+            get(handle_get_memory_note_history),
+        )
+        .route(
+            "/v1/memory/claims",
+            get(handle_list_memory_claims).post(handle_create_memory_claim),
+        )
+        .route(
+            "/v1/memory/claims/{claim_id}/supersede",
+            post(handle_supersede_memory_claim),
+        )
+        .route("/v1/memory/conflicts", get(handle_list_memory_conflicts))
+        .route(
+            "/v1/memory/conflicts/{conflict_id}/resolve",
+            post(handle_resolve_memory_conflict),
+        )
+        .route(
+            "/v1/memory/documents",
+            get(handle_list_memory_documents).post(handle_create_memory_document),
+        )
+        .route(
+            "/v1/memory/documents/{document_id}",
+            get(handle_get_memory_document).put(handle_update_memory_document),
+        )
+        .route(
+            "/v1/memory/documents/{document_id}/versions",
+            get(handle_get_memory_document_versions),
+        )
+        .route("/v1/memory/forget", post(handle_forget_memory))
+        .route(
+            "/v1/memory/forget/tombstones",
+            get(handle_list_memory_tombstones),
+        )
+        .route("/v1/memory/export", post(handle_export_memory))
+        .route(
+            "/v1/memory/import",
+            post(handle_import_memory).layer(DefaultBodyLimit::max(MAX_MEMORY_IMPORT_BODY_BYTES)),
+        )
+        .route(
+            "/v1/memory/index/rebuild",
+            post(handle_trigger_memory_index_rebuild),
+        )
+        .route(
+            "/v1/memory/consolidation/jobs",
+            get(handle_list_memory_consolidation_jobs).post(handle_create_memory_consolidation_job),
+        )
+        .route(
+            "/v1/memory/consolidation/jobs/{job_id}/pause",
+            post(handle_pause_memory_consolidation_job),
+        )
+        .route(
+            "/v1/memory/consolidation/jobs/{job_id}/resume",
+            post(handle_resume_memory_consolidation_job),
+        )
         .route("/v1/diagnostics", get(handle_diagnostics));
 
     if state.profile_mode == ProfileMode::TestIsolated {
@@ -402,6 +539,14 @@ fn is_control_token_allowed_route(method: &Method, path: &str) -> bool {
             return true;
         }
     }
+    if let Some(rest) = path.strip_prefix("/v1/agents/")
+        && let Some(agent_seg) = rest.strip_suffix("/messages")
+        && !agent_seg.is_empty()
+        && !agent_seg.contains('/')
+        && matches!(*method, Method::GET | Method::POST)
+    {
+        return true;
+    }
     false
 }
 
@@ -491,7 +636,7 @@ async fn handle_healthz(State(state): State<HeadAppState>, headers: HeaderMap) -
                     runtime_adapter_id: state.runtime_adapter_id.clone(),
                     runtime_is_simulated: state.runtime_is_simulated,
                     pending_outbox_count: 0,
-                    capabilities: d2_head_capabilities(),
+                    capabilities: d3_head_capabilities(),
                     correlation_id: correlation_id.clone(),
                 },
                 error: err,
@@ -1134,7 +1279,9 @@ async fn handle_create_task(
                 &cid,
             );
         }
-        if claims.session_kind == SessionKind::TaskRun {
+        if claims.session_kind == SessionKind::TaskRun
+            && (req.parent_task_id.is_none() || req.schedule.is_some())
+        {
             return domain_error_response(
                 DennettError::AccessDenied {
                     scope: format!("session:{}", claims.session_id),
@@ -1144,6 +1291,13 @@ async fn handle_create_task(
                 },
                 &cid,
             );
+        }
+        if req.agent_id != claims.agent_id
+            && let Err(err) = svc
+                .enforce_delegated_agent_scope_subset(claims.agent_id, req.agent_id)
+                .await
+        {
+            return domain_error_response(err, &cid);
         }
     }
     match svc.create_task(req, &cid).await {
@@ -1571,14 +1725,43 @@ async fn handle_send_agent_message(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let agent_id = match AgentId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
-    let Json(req) = match payload {
+    let Json(mut req) = match payload {
         Ok(j) => j,
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
+    if let Some(claims) = control_claims {
+        if req.project_id != claims.project_id {
+            return domain_error_response(
+                DennettError::AccessDenied {
+                    scope: format!("project:{}", claims.project_id),
+                    reason: String::from(
+                        "control MCP token cannot send agent messages across projects",
+                    ),
+                },
+                &cid,
+            );
+        }
+        if let Some(sender) = req.sender_agent_id
+            && sender != claims.agent_id
+        {
+            return domain_error_response(
+                DennettError::AccessDenied {
+                    scope: format!("agent:{}", claims.agent_id),
+                    reason: String::from("control MCP token cannot spoof another sender_agent_id"),
+                },
+                &cid,
+            );
+        }
+        req.sender_agent_id = Some(claims.agent_id);
+    }
     match svc.send_agent_message(agent_id, req, &cid).await {
         Ok(resp) => {
             let status = if resp.deduplicated {
@@ -1602,13 +1785,33 @@ async fn handle_list_agent_messages(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let agent_id = match AgentId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
+    if let Some(ref claims) = control_claims
+        && agent_id != claims.agent_id
+    {
+        return domain_error_response(
+            DennettError::AccessDenied {
+                scope: format!("agent:{}", claims.agent_id),
+                reason: String::from("control MCP token can only list messages for its own agent"),
+            },
+            &cid,
+        );
+    }
     let undelivered_only = query.undelivered_only.unwrap_or(false);
     match svc.list_agent_messages(agent_id, undelivered_only).await {
-        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Ok(mut resp) => {
+            if let Some(claims) = control_claims {
+                resp.messages.retain(|m| m.project_id == claims.project_id);
+            }
+            json_with_correlation(StatusCode::OK, &resp, &cid)
+        }
         Err(err) => domain_error_response(err, &cid),
     }
 }
@@ -1872,6 +2075,839 @@ async fn handle_apply_artifact_lifecycle(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase D3 Handlers: SecretBroker, Provider Connections, Capabilities, Memory
+// ---------------------------------------------------------------------------
+
+async fn handle_list_secrets(State(state): State<HeadAppState>, headers: HeaderMap) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    match svc.list_secrets().await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_set_secret(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(slot_key): Path<String>,
+    payload: Result<Json<SetSecretRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.set_secret(&slot_key, req, &cid).await {
+        Ok(meta) => json_with_correlation(StatusCode::OK, &meta, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_delete_secret(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(slot_key): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    match svc.delete_secret(&slot_key, &cid).await {
+        Ok(meta) => json_with_correlation(StatusCode::OK, &meta, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_provider_connections(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    match svc.list_provider_connections().await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_create_provider_connection(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<UpsertProviderConnectionRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.create_provider_connection(req, &cid).await {
+        Ok(conn) => json_with_correlation(StatusCode::CREATED, &conn, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_update_provider_connection(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<UpsertProviderConnectionRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let connection_id = match ProviderConnectionId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc
+        .update_provider_connection(connection_id, req, &cid)
+        .await
+    {
+        Ok(conn) => json_with_correlation(StatusCode::OK, &conn, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_delete_provider_connection(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let connection_id = match ProviderConnectionId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.delete_provider_connection(connection_id, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_probe_provider_connection(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let connection_id = match ProviderConnectionId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.probe_provider_connection(connection_id, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_activate_provider_connection(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<ActivateConnectionRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let connection_id = match ProviderConnectionId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc
+        .activate_provider_connection(connection_id, req, &cid)
+        .await
+    {
+        Ok(conn) => json_with_correlation(StatusCode::OK, &conn, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_capabilities(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ListCapabilitiesQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let project_id = match parse_optional_id::<ProjectId>(query.project_id.as_deref()) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let scope_kind = match parse_optional_id::<CapabilityScopeKind>(query.scope_kind.as_deref()) {
+        Ok(sk) => sk,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let kind = match parse_optional_id::<CapabilityKind>(query.kind.as_deref()) {
+        Ok(k) => k,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let origin = match parse_optional_id::<CapabilityOrigin>(query.origin.as_deref()) {
+        Ok(o) => o,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc
+        .list_capabilities(project_id, scope_kind, kind, origin)
+        .await
+    {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_create_capability(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateCapabilityRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.create_capability(req, &cid).await {
+        Ok(cap) => json_with_correlation(StatusCode::CREATED, &cap, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_discover_capabilities(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<DiscoverCapabilitiesRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.discover_capabilities(req, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_update_capability(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<UpdateCapabilityRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let capability_id = match CapabilityId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.update_capability(capability_id, req, &cid).await {
+        Ok(cap) => json_with_correlation(StatusCode::OK, &cap, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_delete_capability(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let capability_id = match CapabilityId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.delete_capability(capability_id, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_rollback_capability(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let capability_id = match CapabilityId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.rollback_capability(capability_id, &cid).await {
+        Ok(cap) => json_with_correlation(StatusCode::OK, &cap, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_set_project_capability_binding(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path((raw_project_id, raw_cap_id)): Path<(String, String)>,
+    payload: Result<Json<SetProjectCapabilityBindingRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let project_id = match ProjectId::from_str(&raw_project_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let capability_id = match CapabilityId::from_str(&raw_cap_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc
+        .set_project_capability_binding(project_id, capability_id, req, &cid)
+        .await
+    {
+        Ok(binding) => json_with_correlation(StatusCode::OK, &binding, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+fn parse_optional_memory_scope(raw: Option<&str>) -> Result<Option<MemoryScope>, DennettError> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(MemoryScope::try_new)
+        .transpose()
+}
+
+async fn handle_memory_overview(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryScopeQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let scope = match parse_optional_memory_scope(query.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.get_memory_overview(scope, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_correct_memory_note(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<CorrectNoteRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let note_id = match MemoryNoteId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    if req.note_id != note_id {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("note_id"),
+                reason: String::from("path note_id does not match request body note_id"),
+            },
+            &cid,
+        );
+    }
+    match svc.proxy_correct_memory_note(&req, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_get_memory_note_history(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let note_id = match MemoryNoteId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.proxy_get_memory_note_history(note_id, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_memory_claims(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ListMemoryClaimsQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let scope = match parse_optional_memory_scope(query.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc
+        .proxy_list_memory_claims(scope.as_ref(), query.topic_key.as_deref(), &cid)
+        .await
+    {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_create_memory_claim(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateClaimRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.proxy_create_memory_claim(&req, &cid).await {
+        Ok(claim) => json_with_correlation(StatusCode::CREATED, &claim, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_supersede_memory_claim(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<SupersedeClaimRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let claim_id = match ClaimId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    if req.claim_id != claim_id {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("claim_id"),
+                reason: String::from("path claim_id does not match request body claim_id"),
+            },
+            &cid,
+        );
+    }
+    match svc.proxy_supersede_memory_claim(&req, &cid).await {
+        Ok(claim) => json_with_correlation(StatusCode::OK, &claim, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_memory_conflicts(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryScopeQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let scope = match parse_optional_memory_scope(query.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.proxy_list_memory_conflicts(scope.as_ref(), &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_resolve_memory_conflict(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<ResolveConflictRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let conflict_id = match ConflictId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    if req.conflict_id != conflict_id {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("conflict_id"),
+                reason: String::from("path conflict_id does not match request body conflict_id"),
+            },
+            &cid,
+        );
+    }
+    match svc.proxy_resolve_memory_conflict(&req, &cid).await {
+        Ok(conflict) => json_with_correlation(StatusCode::OK, &conflict, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_memory_documents(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryScopeQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let scope = match parse_optional_memory_scope(query.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.proxy_list_memory_documents(scope.as_ref(), &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_create_memory_document(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateDocumentRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.proxy_create_memory_document(&req, &cid).await {
+        Ok(doc) => json_with_correlation(StatusCode::CREATED, &doc, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_get_memory_document(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let document_id = match DocumentId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.proxy_get_memory_document(document_id, &cid).await {
+        Ok(doc) => json_with_correlation(StatusCode::OK, &doc, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_update_memory_document(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<UpdateDocumentRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let document_id = match DocumentId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    if req.document_id != document_id {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("document_id"),
+                reason: String::from("path document_id does not match request body document_id"),
+            },
+            &cid,
+        );
+    }
+    match svc.proxy_update_memory_document(&req, &cid).await {
+        Ok(doc) => json_with_correlation(StatusCode::OK, &doc, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_get_memory_document_versions(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let document_id = match DocumentId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc
+        .proxy_get_memory_document_versions(document_id, &cid)
+        .await
+    {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_forget_memory(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<ForgetRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.proxy_forget_memory_item(&req, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_memory_tombstones(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryScopeQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let scope = match parse_optional_memory_scope(query.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.proxy_list_memory_tombstones(scope.as_ref(), &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_export_memory(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<ExportRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.proxy_export_memory_package(&req, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_import_memory(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<ImportRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.proxy_import_memory_package(&req, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_trigger_memory_index_rebuild(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<TriggerIndexRebuildRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.proxy_trigger_memory_index_rebuild(&req, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_list_memory_consolidation_jobs(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryScopeQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let scope = match parse_optional_memory_scope(query.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc
+        .proxy_list_memory_consolidation_jobs(scope.as_ref(), &cid)
+        .await
+    {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_create_memory_consolidation_job(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateConsolidationJobRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.proxy_create_memory_consolidation_job(&req, &cid).await {
+        Ok(job) => json_with_correlation(StatusCode::CREATED, &job, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_pause_memory_consolidation_job(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let job_id = match ConsolidationJobId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.proxy_pause_memory_consolidation_job(job_id, &cid).await {
+        Ok(job) => json_with_correlation(StatusCode::OK, &job, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_resume_memory_consolidation_job(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let job_id = match ConsolidationJobId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc
+        .proxy_resume_memory_consolidation_job(job_id, &cid)
+        .await
+    {
+        Ok(job) => json_with_correlation(StatusCode::OK, &job, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
 async fn handle_not_found(headers: HeaderMap) -> Response {
     let cid = extract_correlation_id_lossy(&headers);
     let err = DennettError::NotFound {
@@ -1945,6 +2981,7 @@ fn domain_error_response(err: DennettError, correlation_id: &CorrelationId) -> R
         DennettError::Conflict { .. } | DennettError::IdempotencyMismatch { .. } => {
             StatusCode::CONFLICT
         }
+        DennettError::ProviderQuotaExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
         DennettError::DatabaseUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         DennettError::Timeout { .. } => StatusCode::GATEWAY_TIMEOUT,
         DennettError::RuntimeProtocol { .. } | DennettError::RuntimeVersionUnsupported { .. } => {

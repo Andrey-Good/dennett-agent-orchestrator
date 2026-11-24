@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 const CONTROL_MIGRATION_ADVISORY_LOCK_KEY: i64 = 842_190_537_612_049_311;
 
 /// Latest Control schema migration version bundled in this build.
-pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 7;
+pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 8;
 
 /// One forward-only PostgreSQL migration owned by `dennett-head`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +61,11 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         name: "0007_standalone_chats_and_pins",
         sql: include_str!("../migrations/0007_standalone_chats_and_pins.sql"),
     },
+    ControlMigration {
+        version: 8,
+        name: "0008_d3_capabilities_and_secrets",
+        sql: include_str!("../migrations/0008_d3_capabilities_and_secrets.sql"),
+    },
 ];
 
 /// Computes lowercase SHA-256 hex digest of `bytes`.
@@ -99,7 +104,7 @@ pub async fn run_control_migrations(
         .map_err(map_pg)?;
 
     tx.execute(
-        "SELECT pg_advisory_xact_lock($1)",
+        "SELECT pg_advisory_xact_lock(hashtextextended(COALESCE(current_schema()::text, 'public'), $1))",
         &[&CONTROL_MIGRATION_ADVISORY_LOCK_KEY],
     )
     .await

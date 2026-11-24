@@ -4,28 +4,39 @@
 //! - Never connects to PostgreSQL directly and never links `dennett-head` or `dennett-memory-core`.
 //! - Calls the exact same versioned Head HTTP API that future Desktop/Mobile UIs will call.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fs;
 use std::process::ExitCode;
 use std::str::FromStr;
 
 use dennett_contracts::redact::{redact_secrets, sanitize_cli_arg};
 use dennett_contracts::{
-    AgentId, ArtifactCompleteness, ArtifactId, ArtifactLifecycleAction, ArtifactLifecycleRequest,
-    BudgetExceedPolicy, CapabilityGrantId, CommitMemoryNoteRequest, CorrelationId,
-    CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest,
-    CreateSessionRequest, CreateTaskRequest, DennettError, DispatchEffectRequest, EffectClaimId,
-    HeadMemorySearchRequest, IdempotencyKey, InboxCardId, InboxResolutionAction,
-    ManualEffectResolution, MemoryScope, MissedRunPolicy, PermissionRequestId,
-    PermissionResolutionDecision, PolicyEffect, ProjectId, RebindProjectRequest,
-    ReconcileEffectRequest, ReplyTaskRequest, ResolveInboxCardRequest, ResolvePermissionRequest,
-    RevokeGrantRequest, RuntimeAuthProfile, ScheduleKind, SendAgentMessageRequest,
-    SendMessageRequest, SessionId, SessionKind, SimEffectBehavior, TaskBudget, TaskId,
-    TaskSchedule, TaskSignalRequest, ThinkingLevel, TimestampMs, UpdateAgentConfigRequest,
-    UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest, WorkspaceWritePolicy,
+    ActivateConnectionRequest, AgentId, ArtifactCompleteness, ArtifactId, ArtifactLifecycleAction,
+    ArtifactLifecycleRequest, BudgetExceedPolicy, CapabilityActivation, CapabilityGrantId,
+    CapabilityId, CapabilityKind, CapabilityOrigin, CapabilityOwnership, CapabilityScopeKind,
+    CapabilitySpec, CapabilityTrust, ClaimId, CommitMemoryNoteRequest, ConflictId, ConflictStatus,
+    ConnectionActivationRole, ConsolidationJobId, ConsolidationJobType, CorrectNoteRequest,
+    CorrelationId, CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest,
+    CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
+    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
+    DennettError, DiscoverCapabilitiesRequest, DispatchEffectRequest, DocumentId, EffectClaimId,
+    EpistemicStatus, ExportRequest, ForgetRequest, ForgetTargetType, HeadMemorySearchRequest,
+    IdempotencyKey, ImportRequest, InboxCardId, InboxResolutionAction, ManualEffectResolution,
+    MemoryNoteId, MemoryScope, MissedRunPolicy, PermissionRequestId, PermissionResolutionDecision,
+    PolicyEffect, ProjectId, ProviderConnectionId, ProviderKind, RebindProjectRequest,
+    ReconcileEffectRequest, ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest,
+    ResolvePermissionRequest, RevokeGrantRequest, RuntimeAuthProfile, ScheduleKind,
+    SendAgentMessageRequest, SendMessageRequest, SessionId, SessionKind,
+    SetProjectCapabilityBindingRequest, SetSecretRequest, SimEffectBehavior, SupersedeClaimRequest,
+    TaskBudget, TaskId, TaskSchedule, TaskSignalRequest, ThinkingLevel, TimestampMs,
+    TriggerIndexRebuildRequest, UpdateAgentConfigRequest, UpdateCapabilityRequest,
+    UpdateDocumentRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    UpsertProviderConnectionRequest, WorkspaceWritePolicy, validate_secret_slot_key,
 };
 use dennett_head_client::HeadClient;
 use serde::Serialize;
+use uuid::Uuid;
 
 const DEFAULT_HEAD_URL: &str = "http://127.0.0.1:18081";
 const ENV_HEAD_URL: &str = "DENNETT_HEAD_URL";
@@ -261,6 +272,161 @@ enum Action {
         g: GlobalOpts,
         req: HeadMemorySearchRequest,
     },
+    SecretsList(GlobalOpts),
+    SecretsSet {
+        g: GlobalOpts,
+        slot_key: String,
+        req: SetSecretRequest,
+    },
+    SecretsDelete {
+        g: GlobalOpts,
+        slot_key: String,
+    },
+    ConnectionsList(GlobalOpts),
+    ConnectionsCreate {
+        g: GlobalOpts,
+        req: UpsertProviderConnectionRequest,
+    },
+    ConnectionsUpdate {
+        g: GlobalOpts,
+        connection_id: ProviderConnectionId,
+        req: UpsertProviderConnectionRequest,
+    },
+    ConnectionsDelete {
+        g: GlobalOpts,
+        connection_id: ProviderConnectionId,
+    },
+    ConnectionsProbe {
+        g: GlobalOpts,
+        connection_id: ProviderConnectionId,
+    },
+    ConnectionsActivate {
+        g: GlobalOpts,
+        connection_id: ProviderConnectionId,
+        req: ActivateConnectionRequest,
+    },
+    CapabilitiesList {
+        g: GlobalOpts,
+        project_id: Option<ProjectId>,
+        scope_kind: Option<CapabilityScopeKind>,
+        kind: Option<CapabilityKind>,
+    },
+    CapabilitiesDiscover {
+        g: GlobalOpts,
+        req: DiscoverCapabilitiesRequest,
+    },
+    CapabilitiesCreate {
+        g: GlobalOpts,
+        req: CreateCapabilityRequest,
+    },
+    CapabilitiesUpdate {
+        g: GlobalOpts,
+        capability_id: CapabilityId,
+        req: UpdateCapabilityRequest,
+    },
+    CapabilitiesRollback {
+        g: GlobalOpts,
+        capability_id: CapabilityId,
+    },
+    CapabilitiesDelete {
+        g: GlobalOpts,
+        capability_id: CapabilityId,
+    },
+    CapabilitiesBind {
+        g: GlobalOpts,
+        project_id: ProjectId,
+        capability_id: CapabilityId,
+        req: SetProjectCapabilityBindingRequest,
+    },
+    MemoryOverview {
+        g: GlobalOpts,
+        scope: Option<MemoryScope>,
+    },
+    MemoryNoteCorrect {
+        g: GlobalOpts,
+        req: CorrectNoteRequest,
+    },
+    MemoryNoteHistory {
+        g: GlobalOpts,
+        note_id: MemoryNoteId,
+    },
+    MemoryClaimsList {
+        g: GlobalOpts,
+        scope: Option<MemoryScope>,
+        topic_key: Option<String>,
+    },
+    MemoryClaimsCreate {
+        g: GlobalOpts,
+        req: CreateClaimRequest,
+    },
+    MemoryClaimsSupersede {
+        g: GlobalOpts,
+        req: SupersedeClaimRequest,
+    },
+    MemoryConflictsList {
+        g: GlobalOpts,
+        scope: Option<MemoryScope>,
+    },
+    MemoryConflictsResolve {
+        g: GlobalOpts,
+        req: ResolveConflictRequest,
+    },
+    MemoryDocsList {
+        g: GlobalOpts,
+        scope: Option<MemoryScope>,
+    },
+    MemoryDocsCreate {
+        g: GlobalOpts,
+        req: CreateDocumentRequest,
+    },
+    MemoryDocsGet {
+        g: GlobalOpts,
+        document_id: DocumentId,
+    },
+    MemoryDocsUpdate {
+        g: GlobalOpts,
+        req: UpdateDocumentRequest,
+    },
+    MemoryDocsVersions {
+        g: GlobalOpts,
+        document_id: DocumentId,
+    },
+    MemoryForget {
+        g: GlobalOpts,
+        req: ForgetRequest,
+    },
+    MemoryTombstones {
+        g: GlobalOpts,
+        scope: Option<MemoryScope>,
+    },
+    MemoryExport {
+        g: GlobalOpts,
+        req: ExportRequest,
+    },
+    MemoryImport {
+        g: GlobalOpts,
+        req: ImportRequest,
+    },
+    MemoryIndexRebuild {
+        g: GlobalOpts,
+        req: TriggerIndexRebuildRequest,
+    },
+    MemoryConsolidationList {
+        g: GlobalOpts,
+        scope: Option<MemoryScope>,
+    },
+    MemoryConsolidationCreate {
+        g: GlobalOpts,
+        req: CreateConsolidationJobRequest,
+    },
+    MemoryConsolidationPause {
+        g: GlobalOpts,
+        job_id: ConsolidationJobId,
+    },
+    MemoryConsolidationResume {
+        g: GlobalOpts,
+        job_id: ConsolidationJobId,
+    },
     Diagnostics {
         g: GlobalOpts,
         limit: Option<i64>,
@@ -360,6 +526,44 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::MemoryFlushOutbox(g)
         | Action::MemoryOutbox(g)
         | Action::MemorySearch { g, .. }
+        | Action::SecretsList(g)
+        | Action::SecretsSet { g, .. }
+        | Action::SecretsDelete { g, .. }
+        | Action::ConnectionsList(g)
+        | Action::ConnectionsCreate { g, .. }
+        | Action::ConnectionsUpdate { g, .. }
+        | Action::ConnectionsDelete { g, .. }
+        | Action::ConnectionsProbe { g, .. }
+        | Action::ConnectionsActivate { g, .. }
+        | Action::CapabilitiesList { g, .. }
+        | Action::CapabilitiesDiscover { g, .. }
+        | Action::CapabilitiesCreate { g, .. }
+        | Action::CapabilitiesUpdate { g, .. }
+        | Action::CapabilitiesRollback { g, .. }
+        | Action::CapabilitiesDelete { g, .. }
+        | Action::CapabilitiesBind { g, .. }
+        | Action::MemoryOverview { g, .. }
+        | Action::MemoryNoteCorrect { g, .. }
+        | Action::MemoryNoteHistory { g, .. }
+        | Action::MemoryClaimsList { g, .. }
+        | Action::MemoryClaimsCreate { g, .. }
+        | Action::MemoryClaimsSupersede { g, .. }
+        | Action::MemoryConflictsList { g, .. }
+        | Action::MemoryConflictsResolve { g, .. }
+        | Action::MemoryDocsList { g, .. }
+        | Action::MemoryDocsCreate { g, .. }
+        | Action::MemoryDocsGet { g, .. }
+        | Action::MemoryDocsUpdate { g, .. }
+        | Action::MemoryDocsVersions { g, .. }
+        | Action::MemoryForget { g, .. }
+        | Action::MemoryTombstones { g, .. }
+        | Action::MemoryExport { g, .. }
+        | Action::MemoryImport { g, .. }
+        | Action::MemoryIndexRebuild { g, .. }
+        | Action::MemoryConsolidationList { g, .. }
+        | Action::MemoryConsolidationCreate { g, .. }
+        | Action::MemoryConsolidationPause { g, .. }
+        | Action::MemoryConsolidationResume { g, .. }
         | Action::Diagnostics { g, .. } => g.json,
     }
 }
@@ -787,6 +991,305 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
                 .await?;
             print_output(&resp, g.json)
         }
+        Action::SecretsList(g) => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client.list_secrets(g.correlation_id.as_ref()).await?;
+            print_output(&resp, g.json)
+        }
+        Action::SecretsSet { g, slot_key, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .set_secret(&slot_key, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SecretsDelete { g, slot_key } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .delete_secret(&slot_key, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::ConnectionsList(g) => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_provider_connections(g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::ConnectionsCreate { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .create_provider_connection(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::ConnectionsUpdate {
+            g,
+            connection_id,
+            req,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .update_provider_connection(connection_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::ConnectionsDelete { g, connection_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .delete_provider_connection(connection_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::ConnectionsProbe { g, connection_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .probe_provider_connection(connection_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::ConnectionsActivate {
+            g,
+            connection_id,
+            req,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .activate_provider_connection(connection_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::CapabilitiesList {
+            g,
+            project_id,
+            scope_kind,
+            kind,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_capabilities(project_id, scope_kind, kind, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::CapabilitiesDiscover { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .discover_capabilities(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::CapabilitiesCreate { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .create_capability(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::CapabilitiesUpdate {
+            g,
+            capability_id,
+            req,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .update_capability(capability_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::CapabilitiesRollback { g, capability_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .rollback_capability(capability_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::CapabilitiesDelete { g, capability_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .delete_capability(capability_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::CapabilitiesBind {
+            g,
+            project_id,
+            capability_id,
+            req,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .set_project_capability_binding(
+                    project_id,
+                    capability_id,
+                    &req,
+                    g.correlation_id.as_ref(),
+                )
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryOverview { g, scope } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .get_memory_overview(scope.as_ref(), g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryNoteCorrect { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .correct_memory_note(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryNoteHistory { g, note_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .get_memory_note_history(note_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryClaimsList {
+            g,
+            scope,
+            topic_key,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_memory_claims(
+                    scope.as_ref(),
+                    topic_key.as_deref(),
+                    g.correlation_id.as_ref(),
+                )
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryClaimsCreate { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .create_memory_claim(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryClaimsSupersede { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .supersede_memory_claim(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryConflictsList { g, scope } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_memory_conflicts(scope.as_ref(), g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryConflictsResolve { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .resolve_memory_conflict(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryDocsList { g, scope } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_memory_documents(scope.as_ref(), g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryDocsCreate { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .create_memory_document(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryDocsGet { g, document_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .get_memory_document(document_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryDocsUpdate { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .update_memory_document(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryDocsVersions { g, document_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .get_memory_document_versions(document_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryForget { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .forget_memory_item(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryTombstones { g, scope } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_memory_tombstones(scope.as_ref(), g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryExport { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .export_memory_package(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryImport { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .import_memory_package(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryIndexRebuild { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .trigger_memory_index_rebuild(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryConsolidationList { g, scope } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .list_memory_consolidation_jobs(scope.as_ref(), g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryConsolidationCreate { g, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .create_memory_consolidation_job(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryConsolidationPause { g, job_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .pause_memory_consolidation_job(job_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::MemoryConsolidationResume { g, job_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .resume_memory_consolidation_job(job_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
         Action::Diagnostics { g, limit } => {
             let client = HeadClient::new(&g.url)?;
             let resp = client
@@ -847,6 +1350,9 @@ where
         "events" => parse_events_subcommand(g, &mut pos),
         "policy" => parse_policy_subcommand(g, &mut pos),
         "memory" => parse_memory_subcommand(g, &mut pos),
+        "secrets" | "secret" => parse_secrets_subcommand(g, &mut pos),
+        "connections" | "connection" => parse_connections_subcommand(g, &mut pos),
+        "capabilities" | "capability" => parse_capabilities_subcommand(g, &mut pos),
         "diagnostics" => parse_diagnostics(g, &mut pos),
         other => Err(DennettError::InvalidInput {
             field: String::from("command"),
@@ -898,6 +1404,7 @@ fn parse_agent_subcommand(
             let mut scopes = BTreeSet::new();
             let mut write_policy = WorkspaceWritePolicy::AskBeforeWrite;
             let mut attached_skills = Vec::new();
+            let mut preferred_connection_id = None;
             let mut max_turns: Option<u32> = None;
             let mut max_tokens: Option<u64> = None;
             let mut max_wall_secs: Option<u64> = None;
@@ -919,6 +1426,12 @@ fn parse_agent_subcommand(
                         write_policy = parse_write_policy(&next_val(iter, "--write-policy")?)?;
                     }
                     "--skill" => attached_skills.push(next_val(iter, "--skill")?),
+                    "--preferred-connection" => {
+                        preferred_connection_id = Some(ProviderConnectionId::from_str(&next_val(
+                            iter,
+                            "--preferred-connection",
+                        )?)?);
+                    }
                     "--max-turns" => {
                         max_turns =
                             Some(parse_u32(&next_val(iter, "--max-turns")?, "--max-turns")?);
@@ -957,7 +1470,7 @@ fn parse_agent_subcommand(
                 workspace_write_policy: write_policy,
                 default_budget,
                 attached_skills,
-                preferred_connection_id: None,
+                preferred_connection_id,
             };
             req.validate()?;
             Ok(Action::AgentCreate { g, req })
@@ -970,6 +1483,7 @@ fn parse_agent_subcommand(
             let mut scopes = BTreeSet::new();
             let mut write_policy = WorkspaceWritePolicy::AskBeforeWrite;
             let mut attached_skills = Vec::new();
+            let mut preferred_connection_id = None;
             let mut max_turns: Option<u32> = None;
             let mut max_tokens: Option<u64> = None;
             let mut max_wall_secs: Option<u64> = None;
@@ -990,6 +1504,12 @@ fn parse_agent_subcommand(
                         write_policy = parse_write_policy(&next_val(iter, "--write-policy")?)?;
                     }
                     "--skill" => attached_skills.push(next_val(iter, "--skill")?),
+                    "--preferred-connection" => {
+                        preferred_connection_id = Some(ProviderConnectionId::from_str(&next_val(
+                            iter,
+                            "--preferred-connection",
+                        )?)?);
+                    }
                     "--max-turns" => {
                         max_turns =
                             Some(parse_u32(&next_val(iter, "--max-turns")?, "--max-turns")?);
@@ -1026,7 +1546,7 @@ fn parse_agent_subcommand(
                 workspace_write_policy: write_policy,
                 default_budget,
                 attached_skills,
-                preferred_connection_id: None,
+                preferred_connection_id,
             };
             req.validate()?;
             Ok(Action::AgentUpdateConfig {
@@ -2287,6 +2807,10 @@ fn parse_policy_subcommand(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "parses all D1/D2/D3 memory subcommands in one transparent dispatcher"
+)]
 fn parse_memory_subcommand(
     g: GlobalOpts,
     iter: &mut impl Iterator<Item = String>,
@@ -2366,8 +2890,940 @@ fn parse_memory_subcommand(
                 },
             })
         }
+        "overview" => {
+            let scope = parse_optional_scope_flag(iter)?;
+            Ok(Action::MemoryOverview { g, scope })
+        }
+        "note-correct" => {
+            let mut note_id = None;
+            let mut scope = None;
+            let mut expected_revision = None;
+            let mut title = None;
+            let mut body = None;
+            let mut rationale = None;
+            let mut tags = Vec::new();
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => note_id = Some(MemoryNoteId::from_str(&next_val(iter, "--id")?)?),
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--expected-revision" => {
+                        expected_revision = Some(parse_i64(
+                            &next_val(iter, "--expected-revision")?,
+                            "--expected-revision",
+                        )?);
+                    }
+                    "--title" => title = Some(next_val(iter, "--title")?),
+                    "--body" => body = Some(next_val(iter, "--body")?),
+                    "--rationale" => rationale = Some(next_val(iter, "--rationale")?),
+                    "--tag" => tags.push(next_val(iter, "--tag")?),
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = CorrectNoteRequest {
+                note_id: req_opt(note_id, "--id")?,
+                scope: req_opt(scope, "--scope")?,
+                expected_revision: req_opt(expected_revision, "--expected-revision")?,
+                title: req_opt(title, "--title")?,
+                body: req_opt(body, "--body")?,
+                tags,
+                rationale: req_opt(rationale, "--rationale")?,
+                evidence_links: Vec::new(),
+                author_label: None,
+                idempotency_key: idempotency_key.unwrap_or_else(IdempotencyKey::generate),
+            };
+            req.validate()?;
+            Ok(Action::MemoryNoteCorrect { g, req })
+        }
+        "note-history" => {
+            let note_id = parse_only_id::<MemoryNoteId>(iter, "--id")?;
+            Ok(Action::MemoryNoteHistory { g, note_id })
+        }
+        "claims-list" => {
+            let mut scope = None;
+            let mut topic_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--topic" => topic_key = Some(next_val(iter, "--topic")?),
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::MemoryClaimsList {
+                g,
+                scope,
+                topic_key,
+            })
+        }
+        "claims-create" => {
+            let mut scope = None;
+            let mut topic_key = None;
+            let mut claim_key = None;
+            let mut natural_language = None;
+            let mut epistemic_status = EpistemicStatus::default();
+            let mut caveats = Vec::new();
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--topic" => topic_key = Some(next_val(iter, "--topic")?),
+                    "--claim-key" => claim_key = Some(next_val(iter, "--claim-key")?),
+                    "--text" => natural_language = Some(next_val(iter, "--text")?),
+                    "--status" => {
+                        epistemic_status = EpistemicStatus::from_str(&next_val(iter, "--status")?)?;
+                    }
+                    "--caveat" => caveats.push(next_val(iter, "--caveat")?),
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = CreateClaimRequest {
+                scope: req_opt(scope, "--scope")?,
+                topic_key: req_opt(topic_key, "--topic")?,
+                claim_key,
+                natural_language: req_opt(natural_language, "--text")?,
+                epistemic_status,
+                supersedes_claim_id: None,
+                valid_from: None,
+                valid_to: None,
+                source_note_id: None,
+                caveats,
+                provenance: BTreeMap::new(),
+                evidence_links: Vec::new(),
+                idempotency_key: idempotency_key.unwrap_or_else(IdempotencyKey::generate),
+            };
+            req.validate()?;
+            Ok(Action::MemoryClaimsCreate { g, req })
+        }
+        "claims-supersede" => {
+            let mut claim_id = None;
+            let mut scope = None;
+            let mut topic_key = None;
+            let mut claim_key = None;
+            let mut natural_language = None;
+            let mut epistemic_status = EpistemicStatus::default();
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => claim_id = Some(ClaimId::from_str(&next_val(iter, "--id")?)?),
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--topic" => topic_key = Some(next_val(iter, "--topic")?),
+                    "--claim-key" => claim_key = Some(next_val(iter, "--claim-key")?),
+                    "--text" => natural_language = Some(next_val(iter, "--text")?),
+                    "--status" => {
+                        epistemic_status = EpistemicStatus::from_str(&next_val(iter, "--status")?)?;
+                    }
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let scope_val = req_opt(scope, "--scope")?;
+            let cid = req_opt(claim_id, "--id")?;
+            let req = SupersedeClaimRequest {
+                claim_id: cid,
+                scope: scope_val.clone(),
+                new_claim: CreateClaimRequest {
+                    scope: scope_val,
+                    topic_key: req_opt(topic_key, "--topic")?,
+                    claim_key,
+                    natural_language: req_opt(natural_language, "--text")?,
+                    epistemic_status,
+                    supersedes_claim_id: Some(cid),
+                    valid_from: None,
+                    valid_to: None,
+                    source_note_id: None,
+                    caveats: Vec::new(),
+                    provenance: BTreeMap::new(),
+                    evidence_links: Vec::new(),
+                    idempotency_key: idempotency_key.unwrap_or_else(IdempotencyKey::generate),
+                },
+                resolution_event_id: None,
+            };
+            req.validate()?;
+            Ok(Action::MemoryClaimsSupersede { g, req })
+        }
+        "conflicts-list" => {
+            let scope = parse_optional_scope_flag(iter)?;
+            Ok(Action::MemoryConflictsList { g, scope })
+        }
+        "conflicts-resolve" => {
+            let mut conflict_id = None;
+            let mut scope = None;
+            let mut note = None;
+            let mut winning_claim_id = None;
+            let mut target_status = None;
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => conflict_id = Some(ConflictId::from_str(&next_val(iter, "--id")?)?),
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--note" => note = Some(next_val(iter, "--note")?),
+                    "--winning-claim" => {
+                        winning_claim_id =
+                            Some(ClaimId::from_str(&next_val(iter, "--winning-claim")?)?);
+                    }
+                    "--status" => {
+                        target_status =
+                            Some(ConflictStatus::from_str(&next_val(iter, "--status")?)?);
+                    }
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = ResolveConflictRequest {
+                conflict_id: req_opt(conflict_id, "--id")?,
+                scope: req_opt(scope, "--scope")?,
+                resolution_note: req_opt(note, "--note")?,
+                winning_claim_id,
+                target_status,
+                idempotency_key: idempotency_key.unwrap_or_else(IdempotencyKey::generate),
+            };
+            req.validate()?;
+            Ok(Action::MemoryConflictsResolve { g, req })
+        }
+        "docs-list" => {
+            let scope = parse_optional_scope_flag(iter)?;
+            Ok(Action::MemoryDocsList { g, scope })
+        }
+        "docs-create" => {
+            let mut scope = None;
+            let mut document_key = None;
+            let mut title = None;
+            let mut body = None;
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--key" => document_key = Some(next_val(iter, "--key")?),
+                    "--title" => title = Some(next_val(iter, "--title")?),
+                    "--body" => body = Some(next_val(iter, "--body")?),
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = CreateDocumentRequest {
+                scope: req_opt(scope, "--scope")?,
+                document_key: req_opt(document_key, "--key")?,
+                title: req_opt(title, "--title")?,
+                body: req_opt(body, "--body")?,
+                provenance_claim_ids: Vec::new(),
+                provenance_note_ids: Vec::new(),
+                idempotency_key: idempotency_key.unwrap_or_else(IdempotencyKey::generate),
+            };
+            req.validate()?;
+            Ok(Action::MemoryDocsCreate { g, req })
+        }
+        "docs-get" => {
+            let document_id = parse_only_id::<DocumentId>(iter, "--id")?;
+            Ok(Action::MemoryDocsGet { g, document_id })
+        }
+        "docs-update" => {
+            let mut document_id = None;
+            let mut scope = None;
+            let mut expected_version = None;
+            let mut title = None;
+            let mut body = None;
+            let mut diff_summary = None;
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => document_id = Some(DocumentId::from_str(&next_val(iter, "--id")?)?),
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--expected-version" => {
+                        expected_version = Some(parse_i32(
+                            &next_val(iter, "--expected-version")?,
+                            "--expected-version",
+                        )?);
+                    }
+                    "--title" => title = Some(next_val(iter, "--title")?),
+                    "--body" => body = Some(next_val(iter, "--body")?),
+                    "--diff-summary" => diff_summary = Some(next_val(iter, "--diff-summary")?),
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = UpdateDocumentRequest {
+                document_id: req_opt(document_id, "--id")?,
+                scope: req_opt(scope, "--scope")?,
+                expected_version: req_opt(expected_version, "--expected-version")?,
+                title: req_opt(title, "--title")?,
+                body: req_opt(body, "--body")?,
+                provenance_claim_ids: Vec::new(),
+                provenance_note_ids: Vec::new(),
+                diff_summary,
+                idempotency_key: idempotency_key.unwrap_or_else(IdempotencyKey::generate),
+            };
+            req.validate()?;
+            Ok(Action::MemoryDocsUpdate { g, req })
+        }
+        "docs-versions" => {
+            let document_id = parse_only_id::<DocumentId>(iter, "--id")?;
+            Ok(Action::MemoryDocsVersions { g, document_id })
+        }
+        "forget" => {
+            let mut scope = None;
+            let mut target_type = None;
+            let mut target_id = None;
+            let mut reason = None;
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--target-type" => {
+                        target_type = Some(ForgetTargetType::from_str(&next_val(
+                            iter,
+                            "--target-type",
+                        )?)?);
+                    }
+                    "--target-id" => {
+                        let raw = next_val(iter, "--target-id")?;
+                        target_id = Some(Uuid::parse_str(&raw).map_err(|_| {
+                            DennettError::InvalidInput {
+                                field: String::from("--target-id"),
+                                reason: String::from("must be a valid UUID"),
+                            }
+                        })?);
+                    }
+                    "--reason" => reason = Some(next_val(iter, "--reason")?),
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = ForgetRequest {
+                scope: req_opt(scope, "--scope")?,
+                target_type: req_opt(target_type, "--target-type")?,
+                target_id: req_opt(target_id, "--target-id")?,
+                reason: req_opt(reason, "--reason")?,
+                idempotency_key: idempotency_key.unwrap_or_else(IdempotencyKey::generate),
+            };
+            req.validate()?;
+            Ok(Action::MemoryForget { g, req })
+        }
+        "tombstones" => {
+            let scope = parse_optional_scope_flag(iter)?;
+            Ok(Action::MemoryTombstones { g, scope })
+        }
+        "export" => {
+            let mut scope = None;
+            let mut format_version = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--format-version" => {
+                        format_version = Some(next_val(iter, "--format-version")?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::MemoryExport {
+                g,
+                req: ExportRequest {
+                    scope: req_opt(scope, "--scope")?,
+                    format_version,
+                },
+            })
+        }
+        "import" => {
+            let mut scope = None;
+            let mut package_json = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--package-json" => package_json = Some(next_val(iter, "--package-json")?),
+                    "--package-file" => {
+                        let path = next_val(iter, "--package-file")?;
+                        let content = fs::read_to_string(&path).map_err(|err| {
+                            DennettError::InvalidInput {
+                                field: String::from("--package-file"),
+                                reason: format!("failed reading `{path}`: {err}"),
+                            }
+                        })?;
+                        package_json = Some(content);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = ImportRequest {
+                scope: req_opt(scope, "--scope")?,
+                package_json: req_opt(package_json, "--package-json|--package-file")?,
+            };
+            req.validate()?;
+            Ok(Action::MemoryImport { g, req })
+        }
+        "index-rebuild" => {
+            let scope = req_opt(parse_optional_scope_flag(iter)?, "--scope")?;
+            Ok(Action::MemoryIndexRebuild {
+                g,
+                req: TriggerIndexRebuildRequest { scope },
+            })
+        }
+        "consolidation-list" => {
+            let scope = parse_optional_scope_flag(iter)?;
+            Ok(Action::MemoryConsolidationList { g, scope })
+        }
+        "consolidation-create" => {
+            let mut scope = None;
+            let mut job_type = None;
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+                    "--job-type" => {
+                        job_type = Some(ConsolidationJobType::from_str(&next_val(
+                            iter,
+                            "--job-type",
+                        )?)?);
+                    }
+                    "--idempotency-key" => {
+                        idempotency_key = Some(IdempotencyKey::try_new(next_val(
+                            iter,
+                            "--idempotency-key",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::MemoryConsolidationCreate {
+                g,
+                req: CreateConsolidationJobRequest {
+                    scope: req_opt(scope, "--scope")?,
+                    job_type: req_opt(job_type, "--job-type")?,
+                    idempotency_key,
+                },
+            })
+        }
+        "consolidation-pause" => {
+            let job_id = parse_only_id::<ConsolidationJobId>(iter, "--id")?;
+            Ok(Action::MemoryConsolidationPause { g, job_id })
+        }
+        "consolidation-resume" => {
+            let job_id = parse_only_id::<ConsolidationJobId>(iter, "--id")?;
+            Ok(Action::MemoryConsolidationResume { g, job_id })
+        }
         other => Err(unknown_flag(other)),
     }
+}
+
+fn parse_optional_scope_flag(
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<Option<MemoryScope>, DennettError> {
+    let mut scope = None;
+    while let Some(flag) = iter.next() {
+        match flag.as_str() {
+            "--scope" => scope = Some(MemoryScope::try_new(next_val(iter, "--scope")?)?),
+            other => return Err(unknown_flag(other)),
+        }
+    }
+    Ok(scope)
+}
+
+fn parse_secrets_subcommand(
+    g: GlobalOpts,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<Action, DennettError> {
+    let sub = next_val(iter, "secrets <subcommand>")?;
+    match sub.as_str() {
+        "list" => {
+            ensure_no_extra(iter)?;
+            Ok(Action::SecretsList(g))
+        }
+        "set" => {
+            let mut slot_key = None;
+            let mut value = None;
+            let mut scope = String::from("global");
+            let mut description = String::new();
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--slot" => slot_key = Some(next_val(iter, "--slot")?),
+                    "--value" => value = Some(next_val(iter, "--value")?),
+                    "--value-env" => {
+                        let var_name = next_val(iter, "--value-env")?;
+                        let env_val =
+                            env::var(&var_name).map_err(|_| DennettError::InvalidInput {
+                                field: String::from("--value-env"),
+                                reason: format!("environment variable `{var_name}` is not set"),
+                            })?;
+                        value = Some(env_val);
+                    }
+                    "--scope" => scope = next_val(iter, "--scope")?,
+                    "--description" => description = next_val(iter, "--description")?,
+                    other if slot_key.is_none() && !other.starts_with("--") => {
+                        slot_key = Some(other.to_owned());
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let slot_key = req_opt(slot_key, "<slot_key>|--slot")?;
+            validate_secret_slot_key(&slot_key)?;
+            let req = SetSecretRequest {
+                value: req_opt(value, "--value|--value-env")?,
+                scope,
+                description,
+            };
+            req.validate()?;
+            Ok(Action::SecretsSet { g, slot_key, req })
+        }
+        "delete" => {
+            let mut slot_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--slot" => slot_key = Some(next_val(iter, "--slot")?),
+                    other if slot_key.is_none() && !other.starts_with("--") => {
+                        slot_key = Some(other.to_owned());
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let slot_key = req_opt(slot_key, "<slot_key>|--slot")?;
+            validate_secret_slot_key(&slot_key)?;
+            Ok(Action::SecretsDelete { g, slot_key })
+        }
+        other => Err(unknown_flag(other)),
+    }
+}
+
+fn parse_connections_subcommand(
+    g: GlobalOpts,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<Action, DennettError> {
+    let sub = next_val(iter, "connections <subcommand>")?;
+    match sub.as_str() {
+        "list" => {
+            ensure_no_extra(iter)?;
+            Ok(Action::ConnectionsList(g))
+        }
+        "create" | "update" => {
+            let is_update = sub == "update";
+            let mut id = None;
+            let mut provider_kind = None;
+            let mut display_name = None;
+            let mut adapter_id = None;
+            let mut auth_profile = None;
+            let mut endpoint_url = None;
+            let mut secret_slot_key = None;
+            let mut is_default_interactive = None;
+            let mut is_default_background = None;
+            let mut enabled = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" if is_update => {
+                        id = Some(ProviderConnectionId::from_str(&next_val(iter, "--id")?)?);
+                    }
+                    "--kind" => {
+                        provider_kind = Some(ProviderKind::from_str(&next_val(iter, "--kind")?)?);
+                    }
+                    "--name" => display_name = Some(next_val(iter, "--name")?),
+                    "--adapter" => adapter_id = Some(next_val(iter, "--adapter")?),
+                    "--auth-profile" => {
+                        auth_profile =
+                            Some(parse_auth_profile(&next_val(iter, "--auth-profile")?)?);
+                    }
+                    "--endpoint" => endpoint_url = Some(next_val(iter, "--endpoint")?),
+                    "--secret-slot" => secret_slot_key = Some(next_val(iter, "--secret-slot")?),
+                    "--default-interactive" => is_default_interactive = Some(true),
+                    "--default-background" => is_default_background = Some(true),
+                    "--enabled" => enabled = Some(true),
+                    "--disabled" => enabled = Some(false),
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = UpsertProviderConnectionRequest {
+                provider_kind: req_opt(provider_kind, "--kind")?,
+                display_name: req_opt(display_name, "--name")?,
+                adapter_id,
+                auth_profile: req_opt(auth_profile, "--auth-profile")?,
+                endpoint_url,
+                secret_slot_key,
+                is_default_interactive,
+                is_default_background,
+                enabled,
+            };
+            req.validate()?;
+            if is_update {
+                Ok(Action::ConnectionsUpdate {
+                    g,
+                    connection_id: req_opt(id, "--id")?,
+                    req,
+                })
+            } else {
+                Ok(Action::ConnectionsCreate { g, req })
+            }
+        }
+        "delete" => {
+            let connection_id = parse_only_id::<ProviderConnectionId>(iter, "--id")?;
+            Ok(Action::ConnectionsDelete { g, connection_id })
+        }
+        "probe" => {
+            let connection_id = parse_only_id::<ProviderConnectionId>(iter, "--id")?;
+            Ok(Action::ConnectionsProbe { g, connection_id })
+        }
+        "activate" => {
+            let mut id = None;
+            let mut role = ConnectionActivationRole::Interactive;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => {
+                        id = Some(ProviderConnectionId::from_str(&next_val(iter, "--id")?)?);
+                    }
+                    "--role" => role = parse_activation_role(&next_val(iter, "--role")?)?,
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::ConnectionsActivate {
+                g,
+                connection_id: req_opt(id, "--id")?,
+                req: ActivateConnectionRequest { role },
+            })
+        }
+        other => Err(unknown_flag(other)),
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "parses all A08 capabilities list/discover/create/update/rollback/delete/bind subcommands"
+)]
+fn parse_capabilities_subcommand(
+    g: GlobalOpts,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<Action, DennettError> {
+    let sub = next_val(iter, "capabilities <subcommand>")?;
+    match sub.as_str() {
+        "list" => {
+            let mut project_id = None;
+            let mut scope_kind = None;
+            let mut kind = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--project" => {
+                        project_id = Some(ProjectId::from_str(&next_val(iter, "--project")?)?);
+                    }
+                    "--scope-kind" => {
+                        scope_kind = Some(CapabilityScopeKind::from_str(&next_val(
+                            iter,
+                            "--scope-kind",
+                        )?)?);
+                    }
+                    "--kind" => {
+                        kind = Some(CapabilityKind::from_str(&next_val(iter, "--kind")?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::CapabilitiesList {
+                g,
+                project_id,
+                scope_kind,
+                kind,
+            })
+        }
+        "discover" => {
+            let mut project_id = None;
+            let mut scan_personal_gemini_readonly = false;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--project" => {
+                        project_id = Some(ProjectId::from_str(&next_val(iter, "--project")?)?);
+                    }
+                    "--scan-personal" => scan_personal_gemini_readonly = true,
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::CapabilitiesDiscover {
+                g,
+                req: DiscoverCapabilitiesRequest {
+                    project_id,
+                    scan_personal_gemini_readonly,
+                },
+            })
+        }
+        "create" => {
+            let mut slug = None;
+            let mut display_name = None;
+            let mut description = String::new();
+            let mut version = String::from("1.0.0");
+            let mut scope_kind = CapabilityScopeKind::Global;
+            let mut project_id = None;
+            let mut trust_state = CapabilityTrust::Unreviewed;
+            let mut activation_state = CapabilityActivation::Disabled;
+            let mut source_path = None;
+            let mut skill_markdown = None;
+            let mut has_scripts = false;
+            let mut mcp_command = None;
+            let mut mcp_args = Vec::new();
+            let mut env_vars = BTreeMap::new();
+            let mut secret_slots = BTreeMap::new();
+            let mut spec_json = None;
+
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--slug" => slug = Some(next_val(iter, "--slug")?),
+                    "--name" => display_name = Some(next_val(iter, "--name")?),
+                    "--description" => description = next_val(iter, "--description")?,
+                    "--version" => version = next_val(iter, "--version")?,
+                    "--scope-kind" => {
+                        scope_kind =
+                            CapabilityScopeKind::from_str(&next_val(iter, "--scope-kind")?)?;
+                    }
+                    "--project" => {
+                        project_id = Some(ProjectId::from_str(&next_val(iter, "--project")?)?);
+                    }
+                    "--trust" => {
+                        trust_state = CapabilityTrust::from_str(&next_val(iter, "--trust")?)?;
+                    }
+                    "--activation" => {
+                        activation_state =
+                            CapabilityActivation::from_str(&next_val(iter, "--activation")?)?;
+                    }
+                    "--source-path" => source_path = Some(next_val(iter, "--source-path")?),
+                    "--skill-markdown" => {
+                        skill_markdown = Some(next_val(iter, "--skill-markdown")?);
+                    }
+                    "--has-scripts" => has_scripts = true,
+                    "--mcp-command" => mcp_command = Some(next_val(iter, "--mcp-command")?),
+                    "--mcp-arg" => mcp_args.push(next_val(iter, "--mcp-arg")?),
+                    "--env" => {
+                        let (k, v) = parse_kv_pair(&next_val(iter, "--env")?, "--env")?;
+                        env_vars.insert(k, v);
+                    }
+                    "--secret-slot" => {
+                        let (k, v) =
+                            parse_kv_pair(&next_val(iter, "--secret-slot")?, "--secret-slot")?;
+                        secret_slots.insert(k, v);
+                    }
+                    "--spec-json" => spec_json = Some(next_val(iter, "--spec-json")?),
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let spec = if let Some(raw_json) = spec_json {
+                serde_json::from_str::<CapabilitySpec>(&raw_json).map_err(|err| {
+                    DennettError::InvalidInput {
+                        field: String::from("--spec-json"),
+                        reason: format!("invalid CapabilitySpec JSON: {err}"),
+                    }
+                })?
+            } else if let Some(md) = skill_markdown {
+                CapabilitySpec::Skill {
+                    skill_markdown: md,
+                    has_scripts,
+                    entry_files: Vec::new(),
+                }
+            } else if let Some(command) = mcp_command {
+                CapabilitySpec::McpServer {
+                    command,
+                    args: mcp_args,
+                    env_vars,
+                    secret_slots,
+                }
+            } else {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("spec"),
+                    reason: String::from(
+                        "specify one of --skill-markdown, --mcp-command, or --spec-json",
+                    ),
+                });
+            };
+            let req = CreateCapabilityRequest {
+                slug: req_opt(slug, "--slug")?,
+                display_name: req_opt(display_name, "--name")?,
+                description,
+                version,
+                origin_kind: CapabilityOrigin::UserManual,
+                ownership: CapabilityOwnership::User,
+                scope_kind,
+                project_id,
+                trust_state,
+                activation_state,
+                source_path,
+                spec,
+            };
+            req.validate()?;
+            Ok(Action::CapabilitiesCreate { g, req })
+        }
+        "update" => {
+            let mut id = None;
+            let mut display_name = None;
+            let mut description = None;
+            let mut version = None;
+            let mut scope_kind = None;
+            let mut project_id = None;
+            let mut trust_state = None;
+            let mut activation_state = None;
+            let mut skill_markdown = None;
+            let mut has_scripts = false;
+            let mut spec_json = None;
+
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" => id = Some(CapabilityId::from_str(&next_val(iter, "--id")?)?),
+                    "--name" => display_name = Some(next_val(iter, "--name")?),
+                    "--description" => description = Some(next_val(iter, "--description")?),
+                    "--version" => version = Some(next_val(iter, "--version")?),
+                    "--scope-kind" => {
+                        scope_kind = Some(CapabilityScopeKind::from_str(&next_val(
+                            iter,
+                            "--scope-kind",
+                        )?)?);
+                    }
+                    "--project" => {
+                        project_id = Some(ProjectId::from_str(&next_val(iter, "--project")?)?);
+                    }
+                    "--trust" => {
+                        trust_state = Some(CapabilityTrust::from_str(&next_val(iter, "--trust")?)?);
+                    }
+                    "--activation" => {
+                        activation_state = Some(CapabilityActivation::from_str(&next_val(
+                            iter,
+                            "--activation",
+                        )?)?);
+                    }
+                    "--skill-markdown" => {
+                        skill_markdown = Some(next_val(iter, "--skill-markdown")?);
+                    }
+                    "--has-scripts" => has_scripts = true,
+                    "--spec-json" => spec_json = Some(next_val(iter, "--spec-json")?),
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let spec = if let Some(raw_json) = spec_json {
+                Some(
+                    serde_json::from_str::<CapabilitySpec>(&raw_json).map_err(|err| {
+                        DennettError::InvalidInput {
+                            field: String::from("--spec-json"),
+                            reason: format!("invalid CapabilitySpec JSON: {err}"),
+                        }
+                    })?,
+                )
+            } else {
+                skill_markdown.map(|md| CapabilitySpec::Skill {
+                    skill_markdown: md,
+                    has_scripts,
+                    entry_files: Vec::new(),
+                })
+            };
+            let req = UpdateCapabilityRequest {
+                display_name,
+                description,
+                version,
+                scope_kind,
+                project_id,
+                trust_state,
+                activation_state,
+                spec,
+            };
+            req.validate()?;
+            Ok(Action::CapabilitiesUpdate {
+                g,
+                capability_id: req_opt(id, "--id")?,
+                req,
+            })
+        }
+        "rollback" => {
+            let capability_id = parse_only_id::<CapabilityId>(iter, "--id")?;
+            Ok(Action::CapabilitiesRollback { g, capability_id })
+        }
+        "delete" => {
+            let capability_id = parse_only_id::<CapabilityId>(iter, "--id")?;
+            Ok(Action::CapabilitiesDelete { g, capability_id })
+        }
+        "bind" => {
+            let mut project_id = None;
+            let mut capability_id = None;
+            let mut activation_state = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--project" => {
+                        project_id = Some(ProjectId::from_str(&next_val(iter, "--project")?)?);
+                    }
+                    "--id" => {
+                        capability_id = Some(CapabilityId::from_str(&next_val(iter, "--id")?)?);
+                    }
+                    "--activation" => {
+                        activation_state = Some(CapabilityActivation::from_str(&next_val(
+                            iter,
+                            "--activation",
+                        )?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::CapabilitiesBind {
+                g,
+                project_id: req_opt(project_id, "--project")?,
+                capability_id: req_opt(capability_id, "--id")?,
+                req: SetProjectCapabilityBindingRequest {
+                    activation_state: req_opt(activation_state, "--activation")?,
+                },
+            })
+        }
+        other => Err(unknown_flag(other)),
+    }
+}
+
+fn parse_activation_role(raw: &str) -> Result<ConnectionActivationRole, DennettError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "interactive" => Ok(ConnectionActivationRole::Interactive),
+        "background" => Ok(ConnectionActivationRole::Background),
+        "both" => Ok(ConnectionActivationRole::Both),
+        other => Err(DennettError::InvalidInput {
+            field: String::from("--role"),
+            reason: format!(
+                "unsupported activation role `{other}` (expected interactive|background|both)"
+            ),
+        }),
+    }
+}
+
+fn parse_kv_pair(raw: &str, flag: &str) -> Result<(String, String), DennettError> {
+    let Some((k, v)) = raw.split_once('=') else {
+        return Err(DennettError::InvalidInput {
+            field: flag.to_owned(),
+            reason: String::from("expected KEY=VALUE format"),
+        });
+    };
+    if k.trim().is_empty() {
+        return Err(DennettError::InvalidInput {
+            field: flag.to_owned(),
+            reason: String::from("key in KEY=VALUE must be non-empty"),
+        });
+    }
+    Ok((k.trim().to_owned(), v.to_owned()))
 }
 
 fn parse_diagnostics(
@@ -2489,10 +3945,11 @@ fn parse_auth_profile(raw: &str) -> Result<RuntimeAuthProfile, DennettError> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "oauth-personal" => Ok(RuntimeAuthProfile::OAuthPersonal),
         "gemini-api-key" => Ok(RuntimeAuthProfile::GeminiApiKey),
+        "local-endpoint" => Ok(RuntimeAuthProfile::LocalEndpoint),
         other => Err(DennettError::InvalidInput {
             field: String::from("--auth-profile"),
             reason: format!(
-                "unsupported auth profile `{other}` (expected oauth-personal|gemini-api-key)"
+                "unsupported auth profile `{other}` (expected oauth-personal|gemini-api-key|local-endpoint)"
             ),
         }),
     }
@@ -2685,6 +4142,7 @@ fn exit_code_for_error(err: &DennettError) -> ExitCode {
         DennettError::DatabaseUnavailable { .. } | DennettError::Timeout { .. } => {
             ExitCode::from(7)
         }
+        DennettError::ProviderQuotaExceeded { .. } => ExitCode::from(8),
         _ => ExitCode::from(1),
     }
 }
@@ -2749,6 +4207,14 @@ fn print_usage() {
            memory outbox\n\
            memory flush-outbox\n\
            memory search [--scope <s>] [--query <q>] [--limit <n>]\n\
+           memory overview [--scope <s>]\n\
+           memory note-correct|note-history|claims-list|claims-create|claims-supersede [...]\n\
+           memory conflicts-list|conflicts-resolve|docs-list|docs-create|docs-get|docs-update|docs-versions [...]\n\
+           memory forget|tombstones|export|import|index-rebuild [...]\n\
+           memory consolidation-list|consolidation-create|consolidation-pause|consolidation-resume [...]\n\
+           secrets list|set|delete [...]\n\
+           connections list|create|update|delete|probe|activate [...]\n\
+           capabilities list|discover|create|update|rollback|delete|bind [...]\n\
            diagnostics [--limit <n>]",
         env!("CARGO_PKG_VERSION")
     );
@@ -3072,6 +4538,167 @@ mod tests {
                 epoch: Some(1),
                 ..
             }
+        ));
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exercises all D3 CLI subcommand parsers in one test"
+    )]
+    fn cli_parses_d3_secrets_connections_capabilities_and_memory_commands() {
+        let conn_id = ProviderConnectionId::new();
+        let cap_id = CapabilityId::new();
+        let pid = ProjectId::new();
+        let target_uuid = Uuid::new_v4();
+
+        assert!(matches!(
+            parse_cli(
+                [
+                    "secrets",
+                    "set",
+                    "local_runtime_token",
+                    "--value",
+                    "tok-secret-1",
+                    "--description",
+                    "Ollama auth",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse secrets set"),
+            Action::SecretsSet { ref slot_key, ref req, .. }
+                if slot_key == "local_runtime_token" && req.scope == "global"
+        ));
+
+        assert!(matches!(
+            parse_cli(
+                [
+                    "connections",
+                    "create",
+                    "--kind",
+                    "local_http",
+                    "--name",
+                    "Local Ollama",
+                    "--auth-profile",
+                    "local-endpoint",
+                    "--endpoint",
+                    "http://127.0.0.1:11434",
+                    "--secret-slot",
+                    "local_runtime_token",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse connections create"),
+            Action::ConnectionsCreate { ref req, .. }
+                if req.provider_kind == ProviderKind::LocalHttp
+                    && req.auth_profile == RuntimeAuthProfile::LocalEndpoint
+        ));
+
+        assert!(matches!(
+            parse_cli(
+                [
+                    "connections",
+                    "activate",
+                    "--id",
+                    &conn_id.to_string(),
+                    "--role",
+                    "both",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse connections activate"),
+            Action::ConnectionsActivate { ref req, .. }
+                if req.role == ConnectionActivationRole::Both
+        ));
+
+        assert!(matches!(
+            parse_cli(
+                [
+                    "agent",
+                    "create",
+                    "--name",
+                    "LocalCoder",
+                    "--system-prompt",
+                    "Code carefully.",
+                    "--preferred-connection",
+                    &conn_id.to_string(),
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse agent with preferred connection"),
+            Action::AgentCreate { ref req, .. } if req.preferred_connection_id == Some(conn_id)
+        ));
+
+        assert!(matches!(
+            parse_cli(
+                [
+                    "capabilities",
+                    "discover",
+                    "--project",
+                    &pid.to_string(),
+                    "--scan-personal",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse capabilities discover"),
+            Action::CapabilitiesDiscover { ref req, .. }
+                if req.project_id == Some(pid) && req.scan_personal_gemini_readonly
+        ));
+
+        assert!(matches!(
+            parse_cli(
+                [
+                    "capabilities",
+                    "bind",
+                    "--project",
+                    &pid.to_string(),
+                    "--id",
+                    &cap_id.to_string(),
+                    "--activation",
+                    "active",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse capabilities bind"),
+            Action::CapabilitiesBind { ref req, .. }
+                if req.activation_state == CapabilityActivation::Active
+        ));
+
+        assert!(matches!(
+            parse_cli(
+                ["memory", "overview", "--scope", "project:alpha"].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse memory overview"),
+            Action::MemoryOverview { scope: Some(_), .. }
+        ));
+
+        assert!(matches!(
+            parse_cli(
+                [
+                    "memory",
+                    "forget",
+                    "--scope",
+                    "project:alpha",
+                    "--target-type",
+                    "note",
+                    "--target-id",
+                    &target_uuid.to_string(),
+                    "--reason",
+                    "obsolete",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse memory forget"),
+            Action::MemoryForget { ref req, .. }
+                if req.target_type == ForgetTargetType::Note && req.target_id == target_uuid
         ));
     }
 }

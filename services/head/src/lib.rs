@@ -9,14 +9,18 @@
 //!   (NEVER depends on `dennett-memory-core`).
 
 pub mod approvals;
+pub mod capabilities;
+pub mod connections;
 pub mod effects;
 pub mod events;
 pub mod http;
 pub mod lifecycle;
 pub mod memory_auth;
+pub mod memory_proxy;
 pub mod migrations;
 pub mod pg_target;
 pub mod policy;
+pub mod secrets;
 pub mod service;
 pub mod store;
 pub mod tasks;
@@ -25,6 +29,8 @@ pub mod workspace_files;
 pub use approvals::{
     CapturedPermissionDecision, DEFAULT_APPROVAL_WAIT_TIMEOUT, InteractivePolicyEvaluator,
 };
+pub use capabilities::{compute_capability_sha256, executable_surface_expanded};
+pub use connections::static_planned_providers;
 pub use effects::{
     ExternalDispatchInput, ExternalDispatchOutcome, ExternalEffectPort, ExternalReconcileResult,
     ProviderEffectReceipt, SIMULATED_EXTERNAL_CONNECTOR_ID, SimulatedExternalConnector,
@@ -46,10 +52,14 @@ pub use policy::{
     PolicyContext, PolicyEngine, PolicyEvaluationDecision, RecordingPolicyEvaluator,
     resolve_within_workspace,
 };
+pub use secrets::{
+    GEMINI_API_KEY_SLOT, SECRET_AEAD_ALGORITHM, SecretCipher, VaultMasterKey,
+    compute_secret_fingerprint,
+};
 pub use service::{
     DEFAULT_CONTROL_POOL_SIZE, DEFAULT_PG_OP_TIMEOUT, DEFAULT_PROBE_TIMEOUT, DEFAULT_TURN_TIMEOUT,
     HEAD_STAGE_LABEL, HeadService, HeadServiceExtras, MemoryMcpWiring, RUNTIME_CATALOG_CACHE_TTL,
-    d1_head_capabilities, d2_head_capabilities,
+    d1_head_capabilities, d2_head_capabilities, d3_head_capabilities,
 };
 pub use tasks::{
     BACKGROUND_SCHEDULER_POLL_INTERVAL, MISFIRE_GRACE_MS, TIMER_CLAIM_LEASE_SECS,

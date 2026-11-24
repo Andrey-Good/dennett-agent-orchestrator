@@ -14,8 +14,9 @@ use std::str::FromStr;
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
     AgentId, BudgetExceedPolicy, CorrelationId, CreateSessionRequest, CreateTaskRequest,
-    DennettError, MissedRunPolicy, ProjectId, ScheduleKind, SessionId, SessionKind, TaskBudget,
-    TaskId, TaskSchedule, TaskStatus, TimestampMs, UpdateTaskRequest,
+    DennettError, IdempotencyKey, MissedRunPolicy, ProjectId, ScheduleKind,
+    SendAgentMessageRequest, SessionId, SessionKind, TaskBudget, TaskId, TaskSchedule, TaskStatus,
+    TimestampMs, UpdateTaskRequest,
 };
 use dennett_head_client::HeadClient;
 use serde_json::{Value, json};
@@ -331,6 +332,9 @@ impl ControlMcpServer {
             "dennett_event_list" => self.tool_event_list(args, &cid).await,
             "dennett_event_update" => self.tool_event_update(args, &cid).await,
             "dennett_event_cancel" => self.tool_event_cancel(args, &cid).await,
+            "dennett_agent_send_message" => self.tool_agent_send_message(args, &cid).await,
+            "dennett_agent_list_messages" => self.tool_agent_list_messages(args, &cid).await,
+            "dennett_delegate_task" => self.tool_delegate_task(args, &cid).await,
             other => Err(DennettError::InvalidInput {
                 field: String::from("name"),
                 reason: format!("unknown control MCP tool `{other}`"),
@@ -688,10 +692,197 @@ impl ControlMcpServer {
             "external_outcome_unknown": resp.external_outcome_unknown,
         }))
     }
+
+    async fn tool_agent_send_message(
+        &self,
+        args: &Value,
+        cid: &CorrelationId,
+    ) -> Result<Value, DennettError> {
+        self.enforce_optional_project_arg(args)?;
+        let recipient_raw = required_trimmed_str(args, "recipient_agent_id")?;
+        let recipient_agent_id = AgentId::from_str(&recipient_raw)?;
+        let body_text = args
+            .get("body_text")
+            .or_else(|| args.get("message"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| DennettError::InvalidInput {
+                field: String::from("body_text"),
+                reason: String::from("missing or empty required plain-text `body_text`"),
+            })?;
+        let related_task_id = args
+            .get("related_task_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(TaskId::from_str)
+            .transpose()?;
+        let idempotency_key = match args
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(k) => IdempotencyKey::try_new(k)?,
+            None => IdempotencyKey::generate(),
+        };
+
+        let resp = self
+            .client
+            .send_agent_message(
+                recipient_agent_id,
+                &SendAgentMessageRequest {
+                    sender_agent_id: Some(self.agent_id),
+                    project_id: self.project_id,
+                    related_task_id,
+                    idempotency_key,
+                    body_text,
+                },
+                Some(cid),
+            )
+            .await?;
+
+        Ok(json!({
+            "agent_message_id": resp.message.agent_message_id,
+            "sender_agent_id": resp.message.sender_agent_id,
+            "recipient_agent_id": resp.message.recipient_agent_id,
+            "project_id": resp.message.project_id,
+            "related_task_id": resp.message.related_task_id,
+            "deduplicated": resp.deduplicated,
+        }))
+    }
+
+    async fn tool_agent_list_messages(
+        &self,
+        args: &Value,
+        cid: &CorrelationId,
+    ) -> Result<Value, DennettError> {
+        self.enforce_optional_project_arg(args)?;
+        let undelivered_only = args
+            .get("undelivered_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let resp = self
+            .client
+            .list_agent_messages(self.agent_id, undelivered_only, Some(cid))
+            .await?;
+        let messages: Vec<Value> = resp
+            .messages
+            .into_iter()
+            .filter(|m| m.project_id == self.project_id)
+            .map(|m| {
+                json!({
+                    "agent_message_id": m.agent_message_id,
+                    "sender_agent_id": m.sender_agent_id,
+                    "recipient_agent_id": m.recipient_agent_id,
+                    "related_task_id": m.related_task_id,
+                    "body_text": m.body_text,
+                    "delivered_in_run_id": m.delivered_in_run_id,
+                    "created_at": m.created_at,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "agent_id": self.agent_id,
+            "project_id": self.project_id,
+            "count": messages.len(),
+            "messages": messages,
+        }))
+    }
+
+    async fn tool_delegate_task(
+        &self,
+        args: &Value,
+        cid: &CorrelationId,
+    ) -> Result<Value, DennettError> {
+        self.enforce_optional_project_arg(args)?;
+        let target_raw = args
+            .get("recipient_agent_id")
+            .or_else(|| args.get("agent_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| DennettError::InvalidInput {
+                field: String::from("recipient_agent_id"),
+                reason: String::from("missing or empty `recipient_agent_id`"),
+            })?;
+        let target_agent_id = AgentId::from_str(target_raw)?;
+        let goal = required_trimmed_str(args, "goal")?;
+        let title = args
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map_or_else(
+                || goal.chars().take(80).collect::<String>(),
+                ToOwned::to_owned,
+            );
+        let parent_task_id = args
+            .get("parent_task_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(TaskId::from_str)
+            .transpose()?;
+        let budget = parse_optional_budget(args)?;
+        let execute_immediately = args
+            .get("execute_immediately")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+
+        let task_session = self
+            .client
+            .create_session(
+                &CreateSessionRequest {
+                    agent_id: target_agent_id,
+                    project_id: Some(self.project_id),
+                    title: title.clone(),
+                    session_kind: SessionKind::TaskRun,
+                },
+                Some(cid),
+            )
+            .await?;
+
+        let created_task = self
+            .client
+            .create_task(
+                &CreateTaskRequest {
+                    project_id: self.project_id,
+                    agent_id: target_agent_id,
+                    session_id: Some(task_session.session_id),
+                    parent_task_id,
+                    title: Some(title),
+                    goal,
+                    schedule: None,
+                    wait_for_signal: None,
+                    budget,
+                    attached_skills: Vec::new(),
+                    auth_profile_override: None,
+                    execute_immediately: Some(execute_immediately),
+                },
+                Some(cid),
+            )
+            .await?;
+
+        Ok(json!({
+            "task_id": created_task.task_id,
+            "session_id": created_task.session_id,
+            "agent_id": created_task.agent_id,
+            "parent_task_id": created_task.parent_task_id,
+            "title": created_task.title,
+            "status": created_task.status,
+        }))
+    }
 }
 
-/// Returns the JSON Schema definitions for the 4 clean event/schedule MCP tools.
+/// Returns the JSON Schema definitions for the 7 clean event & agent-cooperation MCP tools.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "declares all 7 static MCP tool JSON schemas in one declarative array"
+)]
 pub fn tool_definitions() -> Value {
     json!([
         {
@@ -762,6 +953,48 @@ pub fn tool_definitions() -> Value {
                 "required": ["task_id"],
                 "properties": {
                     "task_id": { "type": "string" }
+                }
+            }
+        },
+        {
+            "name": "dennett_agent_send_message",
+            "description": "Send a free-form plain-text coordination message to another agent inside the current Dennett project (A07, no rigid delegation forms).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["recipient_agent_id", "body_text"],
+                "properties": {
+                    "recipient_agent_id": { "type": "string", "description": "Target agent UUID" },
+                    "body_text": { "type": "string", "description": "Free-form plain-text message body" },
+                    "related_task_id": { "type": "string", "description": "Optional related task UUID" },
+                    "idempotency_key": { "type": "string", "description": "Optional idempotency key" }
+                }
+            }
+        },
+        {
+            "name": "dennett_agent_list_messages",
+            "description": "List plain-text coordination messages addressed to the current agent inside the current Dennett project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "undelivered_only": { "type": "boolean" }
+                }
+            }
+        },
+        {
+            "name": "dennett_delegate_task",
+            "description": "Delegate a free-form plain-text task to another agent within the current project; Head strictly enforces child_scope subset of parent_scope (A07).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["recipient_agent_id", "goal"],
+                "properties": {
+                    "recipient_agent_id": { "type": "string", "description": "Helper agent UUID" },
+                    "goal": { "type": "string", "description": "Free-form plain-text instructions for the helper agent" },
+                    "title": { "type": "string" },
+                    "parent_task_id": { "type": "string" },
+                    "max_turns": { "type": "integer", "minimum": 1 },
+                    "max_tokens": { "type": "integer", "minimum": 1 },
+                    "max_wall_secs": { "type": "integer", "minimum": 1 },
+                    "execute_immediately": { "type": "boolean" }
                 }
             }
         }
@@ -1133,7 +1366,18 @@ mod tests {
         let tools = list_resp["result"]["tools"]
             .as_array()
             .expect("tools array");
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 7);
+        assert!(
+            tools
+                .iter()
+                .any(|t| t["name"] == "dennett_agent_send_message")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|t| t["name"] == "dennett_agent_list_messages")
+        );
+        assert!(tools.iter().any(|t| t["name"] == "dennett_delegate_task"));
 
         let foreign_call = server
             .handle_message(&json!({

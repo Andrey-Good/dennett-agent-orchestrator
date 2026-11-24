@@ -1780,7 +1780,10 @@ async fn r1_over_01_v5_to_v6_memory_outbox_migration_and_ordered_drain() {
     let _ = svc.ensure_migrated().await.expect("apply v7 migration");
 
     let health_before = svc.health_check(cid.clone()).await.expect("health before");
-    assert_eq!(health_before.schema_version, Some(7));
+    assert_eq!(
+        health_before.schema_version,
+        Some(dennett_head::LATEST_CONTROL_SCHEMA_VERSION)
+    );
     assert_eq!(
         health_before.pending_outbox_count, 1,
         "D2-OVER-01: legacy v5 row must appear as pending_outbox_count=1 in ordered_outbox"
@@ -2225,7 +2228,10 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
 
     let client = HeadClient::new(&head_url).expect("client");
     let health = client.healthz(None).await.expect("healthz");
-    assert_eq!(health.schema_version, Some(7));
+    assert_eq!(
+        health.schema_version,
+        Some(dennett_head::LATEST_CONTROL_SCHEMA_VERSION)
+    );
 
     let project_scope = unique_scope("standalone-proj");
     let standalone_scope = MemoryScope::try_new("chat:standalone").expect("standalone scope");
