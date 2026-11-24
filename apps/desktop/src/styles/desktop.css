@@ -4100,7 +4100,6 @@ html.native-shell .workbench {
 .memory-alert {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 10px;
   padding: 10px 13px;
   border: 1px solid var(--line);
@@ -4112,6 +4111,16 @@ html.native-shell .workbench {
 .memory-alert > svg {
   flex: 0 0 auto;
   margin-top: 2px;
+}
+
+.memory-alert > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.memory-alert > button {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .memory-alert__body {

@@ -8,11 +8,28 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 
-import type { IndexStatus } from "../api/contracts";
+import type { ConsolidationJobStatus, IndexStatus } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
 
 export interface StatsPopoverProps {
   onClose(): void;
+}
+
+function consolidationStatusLabel(status: ConsolidationJobStatus): string {
+  switch (status) {
+    case "pending":
+      return "ожидает";
+    case "running":
+      return "выполняется";
+    case "paused":
+      return "приостановлено";
+    case "completed":
+      return "завершено";
+    case "failed":
+      return "ошибка";
+    case "cancelled":
+      return "отменено";
+  }
 }
 
 function indexStatusLabel(status: IndexStatus): { text: string; className: string } {
@@ -99,7 +116,7 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
     setActionFeedback(null);
     const job = await actions.createMemoryConsolidationJob(targetScope, "dossier_update");
     if (job) {
-      setActionFeedback(`Консолидация: ${job.status}`);
+      setActionFeedback(`Консолидация: ${consolidationStatusLabel(job.status)}`);
     }
   };
 

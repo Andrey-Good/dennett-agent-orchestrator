@@ -144,6 +144,25 @@ function bumpPatchVersion(version: string): string {
   return `${version.trim() || "1.0.0"}.1`;
 }
 
+function formatAgentIdentityHeading(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "Агент";
+  }
+  return /^агент(?:\b|[\s·:-])/i.test(trimmed) ? trimmed : `Агент ${trimmed}`;
+}
+
+function localizePlannedProviderNote(note?: string | null): string {
+  const trimmed = note?.trim() ?? "";
+  if (!trimmed) {
+    return "Отложено за пределы этапов D0–D9 — подключение пока недоступно.";
+  }
+  if (/[а-яА-ЯёЁ]/.test(trimmed)) {
+    return trimmed;
+  }
+  return "Отложено за пределы этапов D0–D9 — подключение пока недоступно.";
+}
+
 export function SettingsSheet() {
   const { state, actions, meta } = useWorkspace();
   const [activeTab, setActiveTab] = useState<SettingsTab>("providers");
@@ -627,6 +646,23 @@ export function SettingsSheet() {
         </div>
 
         <div className="settings-sheet__body">
+          {state.errorBanner && (
+            <div
+              className="memory-alert memory-alert--danger"
+              role="alert"
+              data-testid="settings-error-banner"
+            >
+              <WarningCircle size={15} aria-hidden="true" />
+              <span>{state.errorBanner.message}</span>
+              <button
+                type="button"
+                className="popover-action-link"
+                onClick={actions.dismissError}
+              >
+                Скрыть
+              </button>
+            </div>
+          )}
           {activeTab === "providers" ? (
             <>
               {/* 1. Google Antigravity + SecretBroker (write-only) */}
@@ -940,7 +976,7 @@ export function SettingsSheet() {
 
                 {meta.activeAgent && (
                   <p className="settings-note" data-testid="settings-agent-identity-note">
-                    Агент <strong>{meta.activeAgent.name}</strong> (
+                    <strong>{formatAgentIdentityHeading(meta.activeAgent.name)}</strong> (
                     <code>{meta.activeAgent.agent_id}</code> · config v
                     {meta.activeAgent.current_config.version_number}): смена подключения и модели не
                     меняет личность и память агента.
@@ -1042,7 +1078,7 @@ export function SettingsSheet() {
                     >
                       <div className="settings-planned-card__copy">
                         <strong>{provider.label}</strong>
-                        {provider.note && <small>{provider.note}</small>}
+                        <small>{localizePlannedProviderNote(provider.note)}</small>
                       </div>
                       <span className="d2-meta-chip">Запланировано</span>
                     </div>

@@ -337,7 +337,7 @@ describe("Phase D3 Desktop UI — Memory Fabric, Providers/Secrets/Capabilities 
   });
 
   it("3. creates notes & claims with caveats, inspects note history, corrects a note (rev 1 -> rev 2), and supersedes a claim", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const fx = makeBaseFixture();
     const bridge = new MockDesktopBridge({
       connected: true,
@@ -905,5 +905,257 @@ describe("Phase D3 Desktop UI — Memory Fabric, Providers/Secrets/Capabilities 
     const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
     expect(stripComments(desktopCss)).not.toMatch(/backdrop-filter/i);
     expect(stripComments(tokensCss)).not.toMatch(/backdrop-filter/i);
+  });
+
+  it("14. D3-UI-01 regression: opening Память and Досье calls getMemoryOverview and getMemoryDocumentVersions exactly once (no fetch loop)", async () => {
+    const user = userEvent.setup();
+    const fx = makeBaseFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.projectA],
+      agents: [fx.agent],
+      sessions: [fx.session],
+      notesByScope: { [fx.projectA.memory_scope]: [fx.noteAlpha] },
+      memoryClaims: [fx.claimActive],
+      memoryDocuments: [fx.dossier],
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId("chat-card");
+
+    // Wait for initial boot calls to settle, then clear call log before opening Memory
+    await waitFor(() => {
+      expect(bridge.calls.some((c) => c.method === "getMemoryOverview")).toBe(true);
+    });
+    bridge.calls.length = 0;
+
+    await user.click(screen.getByTestId("rail-nav-memory"));
+    expect(await screen.findByTestId("memory-card")).toBeInTheDocument();
+    expect(await screen.findByTestId(`memory-note-${fx.noteAlpha.note_id}`)).toBeInTheDocument();
+
+    // Open Dossiers tab and let effects settle
+    await user.click(screen.getByTestId("memory-tab-dossiers"));
+    expect(await screen.findByTestId("dossier-markdown-body")).toBeInTheDocument();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+    const overviewCalls = bridge.calls.filter((c) => c.method === "getMemoryOverview");
+    const docVersionCalls = bridge.calls.filter((c) => c.method === "getMemoryDocumentVersions");
+    expect(overviewCalls).toHaveLength(1);
+    expect(docVersionCalls).toHaveLength(1);
+  });
+
+  it("15. D3-UI-02 regression: addCapabilityFromFolder sends real source_path without fake stub, surfaces folder error inside SettingsSheet, and shows server-inspected metadata", async () => {
+    const user = userEvent.setup();
+    const fx = makeBaseFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      supportsNativeFolderPicker: true,
+      mockPickedFolder: "A:\\Skills\\empty-folder",
+      projects: [fx.projectA],
+      agents: [fx.agent],
+      sessions: [fx.session],
+      folderCapabilitiesByPath: {
+        "A:\\Skills\\real-audit-skill": {
+          display_name: "Real Audit Skill",
+          description: "Настоящее описание из SKILL.md на диске",
+          skill_markdown: "# Real Audit Skill\nInspect real invariants.",
+          has_scripts: true,
+          entry_files: ["SKILL.md", "scripts/audit.py"],
+        },
+      },
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await user.click(await screen.findByTestId("settings-trigger"));
+    await user.click(await screen.findByTestId("settings-tab-capabilities"));
+
+    // 1) Empty folder -> rejected cleanly & error banner visible inside SettingsSheet with zero fake card
+    await user.click(screen.getByTestId("cap-add-skill-btn"));
+    expect(await screen.findByTestId("settings-error-banner")).toHaveTextContent(/SKILL\.md/i);
+    expect(screen.queryByText("empty-folder")).not.toBeInTheDocument();
+
+    // Verify request carried real source_path and NO hardcoded fake description
+    const firstCreateCall = bridge.calls.find((c) => c.method === "createCapability");
+    expect(firstCreateCall).toBeDefined();
+    expect((firstCreateCall?.args as { source_path?: string })?.source_path).toBe(
+      "A:\\Skills\\empty-folder",
+    );
+    expect((firstCreateCall?.args as { description?: string })?.description).toBe("");
+
+    // 2) Valid folder -> Head inspection populates real metadata & Restricted trust when has_scripts=true
+    bridge.mockPickedFolder = "A:\\Skills\\real-audit-skill";
+    await user.click(screen.getByTestId("cap-add-skill-btn"));
+    expect(await screen.findByText("Real Audit Skill")).toBeInTheDocument();
+    expect(screen.getByText("Настоящее описание из SKILL.md на диске")).toBeInTheDocument();
+    expect(screen.getByText("Ограниченный")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-error-banner")).not.toBeInTheDocument();
+  });
+
+  it("16. D3-UI-04 regression: local scope filter in MemoryCard does not clobber global ActivityRail conflict badge", async () => {
+    const user = userEvent.setup();
+    const fx = makeBaseFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.projectA],
+      agents: [fx.agent],
+      sessions: [fx.session],
+      notesByScope: {
+        [fx.projectA.memory_scope]: [fx.noteAlpha],
+        "chat:standalone": [fx.noteStandalone],
+      },
+      memoryClaims: [fx.claimActive, fx.claimCompeting],
+      memoryConflicts: [fx.conflict],
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    expect(await screen.findByTestId("rail-memory-badge")).toHaveTextContent("1");
+
+    // Open Память and filter locally to Одиночные чаты (0 conflicts there)
+    await user.click(screen.getByTestId("rail-nav-memory"));
+    expect(await screen.findByTestId("memory-card")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("project-scope-filter-trigger"));
+    await user.click(await screen.findByTestId("project-scope-option-standalone"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(`memory-note-${fx.noteAlpha.note_id}`)).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("memory-tab-conflicts")).toHaveTextContent("Конфликты (0)");
+    // Global rail badge MUST still show 1!
+    expect(screen.getByTestId("rail-memory-badge")).toHaveTextContent("1");
+
+    // Return to Chat (Alt+1) -> global rail badge STILL shows 1
+    fireEvent.keyDown(window, { key: "1", altKey: true });
+    await waitFor(() => {
+      expect(screen.queryByTestId("memory-card")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("rail-memory-badge")).toHaveTextContent("1");
+  });
+
+  it("17. D3-UI-05 regression: clicking dossier provenance chip auto-enables История & clears search to highlight a superseded claim", async () => {
+    const user = userEvent.setup();
+    const fx = makeBaseFixture();
+    const dossierWithSupersededProv: MemoryDocument = {
+      ...fx.dossier,
+      provenance_claim_ids: [fx.claimSuperseded.claim_id],
+      provenance_note_ids: [],
+    };
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.projectA],
+      agents: [fx.agent],
+      sessions: [fx.session],
+      notesByScope: { [fx.projectA.memory_scope]: [fx.noteAlpha] },
+      memoryClaims: [fx.claimActive, fx.claimSuperseded],
+      memoryDocuments: [dossierWithSupersededProv],
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await user.click(await screen.findByTestId("rail-nav-memory"));
+    expect(await screen.findByTestId("memory-card")).toBeInTheDocument();
+
+    // История is OFF by default -> superseded claim is hidden
+    expect(screen.getByTestId("memory-include-history-toggle")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(screen.queryByTestId(`memory-claim-${fx.claimSuperseded.claim_id}`)).not.toBeInTheDocument();
+
+    // Open Dossiers and click provenance chip referencing the superseded claim
+    await user.click(screen.getByTestId("memory-tab-dossiers"));
+    const provChip = await screen.findByTestId(
+      `dossier-prov-claim-${fx.claimSuperseded.claim_id}`,
+    );
+    await user.click(provChip);
+
+    // Switches back to Knowledge, enables История, and highlights the superseded claim
+    const targetClaim = await screen.findByTestId(`memory-claim-${fx.claimSuperseded.claim_id}`);
+    expect(targetClaim).toHaveAttribute("data-highlighted", "true");
+    expect(screen.getByTestId("memory-include-history-toggle")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("18. D3-UI-06 regression: localizes forget/tombstone/consolidation/planned strings, removes Агент Агент tautology, and fixes .memory-alert layout", async () => {
+    const user = userEvent.setup();
+    const fx = makeBaseFixture();
+    const agentWithPrefix: AgentRecord = {
+      ...fx.agent,
+      name: "Агент · Чаты",
+    };
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.projectA],
+      agents: [agentWithPrefix],
+      sessions: [fx.session],
+      notesByScope: { [fx.projectA.memory_scope]: [fx.noteAlpha] },
+      plannedProviders: [
+        {
+          id: "r-claude",
+          label: "Claude Code (R-CLAUDE)",
+          status: "planned",
+          note: "Deferred beyond D0-D9 rollout.",
+        },
+        {
+          id: "r-codex",
+          label: "Codex (R-CODEX)",
+          status: "planned",
+          note: "Deferred beyond D0-D9 rollout.",
+        },
+      ],
+      tombstones: [
+        {
+          tombstone_id: "tomb-en-1",
+          scope: fx.projectA.memory_scope,
+          target_type: "note",
+          target_id: "deadbeef-1234",
+          forget_event_id: "evt-f1",
+          principal_id: "owner",
+          reason: "Удалено владельцем",
+          residual_backup_notice:
+            "Active memory projections and search index entries have been scrubbed. Historical backups remain untouched.",
+          propagation_status: "completed",
+          created_at: Date.now() - 1_000,
+        },
+      ],
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+
+    // 1) SettingsSheet: no "Агент Агент" tautology & Russian localized planned provider notes
+    await user.click(await screen.findByTestId("settings-trigger"));
+    const identityNote = await screen.findByTestId("settings-agent-identity-note");
+    expect(identityNote).toHaveTextContent("Агент · Чаты");
+    expect(identityNote.textContent).not.toMatch(/Агент\s+Агент/i);
+
+    const plannedSection = screen.getByTestId("settings-planned-providers");
+    expect(plannedSection).toHaveTextContent("Отложено за пределы этапов D0–D9");
+    expect(plannedSection.textContent).not.toContain("Deferred beyond");
+    await user.click(screen.getByRole("button", { name: "Закрыть настройки" }));
+
+    // 2) StatsPopover: consolidation status localized ("завершено", not raw "completed")
+    await user.click(screen.getByTestId("system-status-pill"));
+    await user.click(await screen.findByTestId("stats-consolidate-btn"));
+    const statsFeedback = await screen.findByTestId("stats-action-feedback");
+    expect(statsFeedback).toHaveTextContent("Консолидация: завершено");
+    expect(statsFeedback.textContent).not.toContain("completed");
+
+    // 3) MemoryCard: tombstone status & residual_backup_notice localized in Russian
+    await user.click(screen.getByTestId("stats-open-memory-btn"));
+    const tombSection = await screen.findByTestId("memory-tombstones-section");
+    expect(tombSection).toHaveTextContent("завершено");
+    expect(tombSection).toHaveTextContent(/резервные копии|бэкап/i);
+    expect(tombSection.textContent).not.toContain("completed");
+    expect(tombSection.textContent).not.toContain("Active memory projections");
+
+    // 4) CSS: .memory-alert does NOT have justify-content: space-between
+    const desktopCss = fs.readFileSync(
+      path.resolve(__dirname, "../styles/desktop.css"),
+      "utf-8",
+    );
+    const alertBlock = desktopCss.match(/\.memory-alert\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(alertBlock).not.toContain("justify-content: space-between");
   });
 });
