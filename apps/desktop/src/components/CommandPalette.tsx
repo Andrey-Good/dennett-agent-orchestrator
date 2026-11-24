@@ -311,8 +311,7 @@ export function CommandPalette() {
     .map((item, idx) => ({ item, idx }))
     .filter(({ item }) => item.section === "actions");
 
-  const noDataMatches =
-    trimmed.length > 0 && projectItems.length === 0 && sessionItems.length === 0;
+  const hasNoMatches = trimmed.length > 0 && items.length === 0;
 
   return (
     <div
@@ -344,9 +343,9 @@ export function CommandPalette() {
         </label>
 
         <div className="command-results" role="listbox" aria-label="Результаты поиска">
-          {noDataMatches && (
+          {hasNoMatches && (
             <p className="command-empty" data-testid="command-palette-empty">
-              По запросу «{query.trim()}» проекты и чаты не найдены.
+              По запросу «{query.trim()}» ничего не найдено.
             </p>
           )}
 

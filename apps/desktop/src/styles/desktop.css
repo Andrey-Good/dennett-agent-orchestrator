@@ -1346,7 +1346,7 @@ html.native-shell .workbench {
 
 .message-copy-button {
   position: absolute;
-  top: -11px;
+  top: -15px;
   right: 8px;
   z-index: 2;
   display: inline-flex;
@@ -1366,8 +1366,23 @@ html.native-shell .workbench {
 }
 
 .message--assistant .message-copy-button {
-  top: -10px;
+  top: -26px;
   right: 0;
+}
+
+.message--assistant .message-block::before {
+  content: "";
+  position: absolute;
+  top: -26px;
+  right: 0;
+  width: 120px;
+  height: 26px;
+  pointer-events: none;
+}
+
+.message--assistant:hover .message-block::before,
+.message--assistant:focus-within .message-block::before {
+  pointer-events: auto;
 }
 
 .message:hover .message-copy-button,
@@ -1400,6 +1415,10 @@ html.native-shell .workbench {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.message-turn-group:first-child {
+  margin-top: 10px;
 }
 
 .message--optimistic .message-copy {

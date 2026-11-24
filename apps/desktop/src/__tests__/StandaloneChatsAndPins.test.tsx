@@ -428,6 +428,22 @@ describe("Standalone Chats, Two-Zone Split Sidebar, Pinning & Message Copy", () 
       "Новый одиночный чат",
     );
     const paletteInput = within(palette).getByLabelText("Поиск в командной палитре");
+
+    // CHATS-UI-02: matching a quick action ("одиночный") must NOT render the empty-state notice!
+    await user.type(paletteInput, "одиночный");
+    expect(
+      within(palette).getByTestId("palette-item-action:new-standalone-chat"),
+    ).toBeInTheDocument();
+    expect(within(palette).queryByTestId("command-palette-empty")).not.toBeInTheDocument();
+
+    // Truly unmatched query shows honest "По запросу «…» ничего не найдено."
+    await user.clear(paletteInput);
+    await user.type(paletteInput, "совсем-нет-совпадений-404");
+    expect(await within(palette).findByTestId("command-palette-empty")).toHaveTextContent(
+      "По запросу «совсем-нет-совпадений-404» ничего не найдено.",
+    );
+
+    await user.clear(paletteInput);
     await user.type(paletteInput, "Философия");
     const standalonePaletteItem = await within(palette).findByTestId(
       `palette-item-session:${standaloneChat.session_id}`,
@@ -502,5 +518,12 @@ describe("Standalone Chats, Two-Zone Split Sidebar, Pinning & Message Copy", () 
     await user.click(assistantCopyBtn);
     expect(writeTextMock).toHaveBeenCalledWith(rawAssistantContent);
     expect(assistantCopyBtn).toHaveTextContent("Скопировано");
+
+    // CHATS-UI-01: Copy pills sit strictly clear of assistant line 1, user bubble text, and top fade mask
+    expect(desktopCss).toMatch(/\.message-copy-button\s*\{[^}]*top:\s*-15px;[^}]*right:\s*8px;/s);
+    expect(desktopCss).toMatch(
+      /\.message--assistant\s+\.message-copy-button\s*\{[^}]*top:\s*-26px;[^}]*right:\s*0;/s,
+    );
+    expect(desktopCss).toMatch(/\.message-turn-group:first-child\s*\{\s*margin-top:\s*10px;\s*\}/s);
   });
 });
