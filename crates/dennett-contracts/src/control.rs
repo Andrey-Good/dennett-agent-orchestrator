@@ -12,6 +12,10 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::d2::{
+    ArtifactCompleteness, ArtifactLifecycleState, EffectClaimRecord, ProjectLifecycleState,
+    TaskBudget, TaskId, validate_attached_skills, validate_client_message_id,
+};
 use crate::{
     CorrelationId, DennettError, IdempotencyKey, MemoryEventId, MemoryNote, MemoryNoteId,
     MemoryScope, ProfileMode, RuntimeAuthProfile, ServiceKind, Sha256Hex, TimestampMs,
@@ -412,6 +416,12 @@ pub struct AgentConfigVersion {
     pub allowed_memory_scopes: BTreeSet<MemoryScope>,
     /// Workspace write policy enforced outside the model.
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Optional default external resource budget applied to tasks created for this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_budget: Option<TaskBudget>,
+    /// Shared skill metadata identifiers attached to this agent configuration (A07).
+    #[serde(default)]
+    pub attached_skills: Vec<String>,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
 }
@@ -447,6 +457,12 @@ pub struct ProjectRecord {
     pub workspace_path: Option<String>,
     /// Default memory scope associated with this project.
     pub memory_scope: MemoryScope,
+    /// Distinct project lifecycle state (`active`, `archived`, `detached`, `deleted_record`; Contract C).
+    #[serde(default)]
+    pub lifecycle_state: ProjectLifecycleState,
+    /// UTC archival timestamp in epoch milliseconds when `lifecycle_state == Archived`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<TimestampMs>,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
 }
@@ -616,6 +632,9 @@ pub struct MessageRecord {
     /// Optional execution run that produced or consumed this message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
+    /// Optional caller-supplied idempotency key deduplicating offline reconnect retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
     /// Correlation identifier linking this message to audit/policy traces.
     pub correlation_id: CorrelationId,
     /// UTC creation timestamp in epoch milliseconds.
@@ -637,6 +656,10 @@ pub enum RunStatus {
     Failed,
     /// Run completed its control turn while a downstream dependency (e.g. `memoryd`) was degraded.
     Degraded,
+    /// Run finished late after its owning task advanced to a newer goal `generation` (V07).
+    Superseded,
+    /// Run dispatched an external effect whose acknowledgement was lost (`UNKNOWN`, Contract B).
+    UnknownExternal,
 }
 
 impl RunStatus {
@@ -649,6 +672,8 @@ impl RunStatus {
             Self::Cancelled => "cancelled",
             Self::Failed => "failed",
             Self::Degraded => "degraded",
+            Self::Superseded => "superseded",
+            Self::UnknownExternal => "unknown_external",
         }
     }
 }
@@ -669,6 +694,8 @@ impl FromStr for RunStatus {
             "cancelled" => Ok(Self::Cancelled),
             "failed" => Ok(Self::Failed),
             "degraded" => Ok(Self::Degraded),
+            "superseded" => Ok(Self::Superseded),
+            "unknown_external" => Ok(Self::UnknownExternal),
             other => Err(DennettError::InvalidInput {
                 field: String::from("run_status"),
                 reason: format!("unknown run status `{other}`"),
@@ -706,6 +733,18 @@ pub struct RunRecord {
     pub error_summary: Option<String>,
     /// Whether this turn required explicit Dennett-side context rehydration.
     pub rehydrated: bool,
+    /// Optional owning durable task identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<TaskId>,
+    /// Optional task goal generation fenced onto this run (V07).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_generation: Option<i64>,
+    /// Optional tokens consumed by this run when reported by runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
+    /// Optional wall-clock execution duration in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_ms: Option<u64>,
     /// Correlation identifier linking run, messages, decisions, and audit events.
     pub correlation_id: CorrelationId,
     /// UTC start timestamp in epoch milliseconds.
@@ -715,7 +754,7 @@ pub struct RunRecord {
     pub finished_at: Option<TimestampMs>,
 }
 
-/// Ordinary D1 persisted artifact record (text/file/code output attached to a session/project).
+/// Persisted artifact record (text/file/code output attached to a session/project) with completeness & lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactRecord {
     /// Stable artifact identifier.
@@ -733,7 +772,7 @@ pub struct ArtifactRecord {
     pub mime_type: String,
     /// Monotonic artifact revision number (`>= 1`).
     pub revision: i64,
-    /// Optional inline UTF-8 content for small artifacts.
+    /// Optional inline UTF-8 content for small artifacts (`None` for deleted tombstones).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     /// Optional workspace-relative file path for filesystem-backed artifacts.
@@ -741,6 +780,12 @@ pub struct ArtifactRecord {
     pub relative_path: Option<String>,
     /// Lowercase SHA-256 hex digest of the artifact payload.
     pub sha256: Sha256Hex,
+    /// Completeness status (`partial` vs `final`, Contract D).
+    #[serde(default)]
+    pub completeness_status: ArtifactCompleteness,
+    /// Lifecycle state (`active`, `archived`, `removed`, `deleted`, Contract D).
+    #[serde(default)]
+    pub lifecycle_state: ArtifactLifecycleState,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
 }
@@ -1007,6 +1052,12 @@ pub struct CreateAgentRequest {
     /// Workspace write policy enforced outside the model.
     #[serde(default)]
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Optional default external resource budget applied to tasks created for this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_budget: Option<TaskBudget>,
+    /// Shared skill metadata identifiers attached to this agent (A07).
+    #[serde(default)]
+    pub attached_skills: Vec<String>,
 }
 
 impl CreateAgentRequest {
@@ -1027,7 +1078,11 @@ impl CreateAgentRequest {
             self.model_preference.as_deref(),
             &self.allowed_memory_scopes,
             &self.workspace_write_policy,
-        )
+        )?;
+        if let Some(ref budget) = self.default_budget {
+            budget.validate()?;
+        }
+        validate_attached_skills(&self.attached_skills)
     }
 }
 
@@ -1050,6 +1105,12 @@ pub struct UpdateAgentConfigRequest {
     /// Workspace write policy under the new configuration version.
     #[serde(default)]
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Optional default external resource budget for this configuration version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_budget: Option<TaskBudget>,
+    /// Shared skill metadata identifiers attached to this configuration version (A07).
+    #[serde(default)]
+    pub attached_skills: Vec<String>,
 }
 
 impl UpdateAgentConfigRequest {
@@ -1064,7 +1125,11 @@ impl UpdateAgentConfigRequest {
             self.model_preference.as_deref(),
             &self.allowed_memory_scopes,
             &self.workspace_write_policy,
-        )
+        )?;
+        if let Some(ref budget) = self.default_budget {
+            budget.validate()?;
+        }
+        validate_attached_skills(&self.attached_skills)
     }
 }
 
@@ -1267,14 +1332,18 @@ pub struct SendMessageRequest {
     /// Optional explicit turn timeout override in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Optional caller-supplied idempotency key (`UNIQUE (session_id, client_message_id)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
 }
 
 impl SendMessageRequest {
-    /// Validates message body bounds.
+    /// Validates message body bounds and optional client idempotency key.
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`] if `content` is empty, oversized, or contains NUL.
+    /// Returns [`DennettError::InvalidInput`] if `content` is empty, oversized, or contains NUL,
+    /// or if `client_message_id` fails syntax validation.
     pub fn validate(&self) -> Result<(), DennettError> {
         validate_non_empty_text(&self.content, "content", MAX_MESSAGE_CONTENT_BYTES)?;
         if let Some(ms) = self.timeout_ms
@@ -1284,6 +1353,9 @@ impl SendMessageRequest {
                 field: String::from("timeout_ms"),
                 reason: String::from("must be greater than zero when provided"),
             });
+        }
+        if let Some(ref cid) = self.client_message_id {
+            validate_client_message_id(cid)?;
         }
         Ok(())
     }
@@ -1310,6 +1382,9 @@ pub struct SendMessageResponse {
     /// Effective session title after any first-message auto-titling.
     #[serde(default)]
     pub session_title: String,
+    /// `true` when deduplicated against an existing `client_message_id` without invoking the runtime twice.
+    #[serde(default)]
+    pub deduplicated: bool,
 }
 
 /// Response payload for `POST /v1/sessions/{session_id}/cancel`.
@@ -1327,6 +1402,15 @@ pub struct CancelRunResponse {
     pub status: Option<RunStatus>,
     /// Current `memoryd` reachability (Stop NEVER blocks on `memoryd`).
     pub memory_status: MemoryStatus,
+    /// `true` when any external effect in this session has an unknown remote outcome (Stop NEVER claims guaranteed external cancel).
+    #[serde(default)]
+    pub external_outcome_unknown: bool,
+    /// Already-confirmed external effects executed in this session prior to Stop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub committed_effects: Vec<EffectClaimRecord>,
+    /// External effects currently in `unknown` state requiring explicit reconciliation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown_effects: Vec<EffectClaimRecord>,
 }
 
 /// Request payload for `POST /v1/sessions/{session_id}/artifacts`.
@@ -1345,6 +1429,9 @@ pub struct CreateArtifactRequest {
     /// Optional workspace-relative path to the produced file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_path: Option<String>,
+    /// Completeness status (`partial` vs `final`, defaults to `final`).
+    #[serde(default)]
+    pub completeness_status: ArtifactCompleteness,
 }
 
 impl CreateArtifactRequest {
@@ -1795,6 +1882,7 @@ mod tests {
             mime_type: String::from("text/plain"),
             content: None,
             relative_path: None,
+            completeness_status: ArtifactCompleteness::Final,
         };
         assert!(missing.validate().is_err());
 
@@ -1804,6 +1892,7 @@ mod tests {
             mime_type: String::from("text/plain"),
             content: Some(String::from("hi")),
             relative_path: Some(String::from("../outside.txt")),
+            completeness_status: ArtifactCompleteness::Final,
         };
         assert!(traversal.validate().is_err());
 
@@ -1813,6 +1902,7 @@ mod tests {
             mime_type: String::from("text/markdown"),
             content: Some(String::from("# Report")),
             relative_path: Some(String::from("out/report.md")),
+            completeness_status: ArtifactCompleteness::Partial,
         };
         assert!(ok.validate().is_ok());
     }

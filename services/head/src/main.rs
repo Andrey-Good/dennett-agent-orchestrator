@@ -41,6 +41,7 @@ struct ServeOptions {
     runtime_kind: RuntimeKind,
     auth_profile: RuntimeAuthProfile,
     profile_root: Option<PathBuf>,
+    effects_ledger: Option<PathBuf>,
     enable_sandbox: bool,
     allow_non_loopback: bool,
 }
@@ -122,6 +123,7 @@ where
     let mut runtime_kind = RuntimeKind::Antigravity;
     let mut auth_profile = RuntimeAuthProfile::OAuthPersonal;
     let mut profile_root: Option<PathBuf> = None;
+    let mut effects_ledger: Option<PathBuf> = None;
     let mut enable_sandbox = false;
     let mut allow_non_loopback = false;
 
@@ -152,6 +154,12 @@ where
             }
             "--profile-root" => {
                 profile_root = Some(PathBuf::from(next_flag_value(&mut iter, "--profile-root")?));
+            }
+            "--effects-ledger" => {
+                effects_ledger = Some(PathBuf::from(next_flag_value(
+                    &mut iter,
+                    "--effects-ledger",
+                )?));
             }
             "--runtime" => {
                 let raw = next_flag_value(&mut iter, "--runtime")?;
@@ -229,6 +237,7 @@ where
                 runtime_kind,
                 auth_profile,
                 profile_root,
+                effects_ledger,
                 enable_sandbox,
                 allow_non_loopback,
             }))
@@ -456,6 +465,7 @@ async fn run_health_once(
         HeadServiceExtras {
             memory_hmac_signer,
             detached_projects_root,
+            ..HeadServiceExtras::default()
         },
     ) {
         Ok(s) => s,
@@ -516,6 +526,18 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
     };
 
     let detached_projects_root = opts.profile_root.clone();
+    let effects_ledger_path = opts
+        .effects_ledger
+        .or_else(|| {
+            env::var_os("DENNETT_EFFECTS_LEDGER_PATH")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            opts.profile_root
+                .as_ref()
+                .map(|root| root.join("sim-effects-ledger.json"))
+        });
     let (runtime, rt_secrets) = build_runtime(
         opts.runtime_kind,
         opts.auth_profile,
@@ -537,11 +559,20 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
             HeadServiceExtras {
                 memory_hmac_signer,
                 detached_projects_root,
+                background_runtime: None,
+                effect_port: None,
+                effects_ledger_path,
             },
         ) {
             Ok(svc) => {
                 match svc.ensure_migrated().await {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        let startup_cid = CorrelationId::generate();
+                        if let Err(err) = svc.recover_stale_dispatching_effects(&startup_cid).await
+                        {
+                            emit_stderr_error(&err);
+                        }
+                    }
                     Err(err @ DennettError::SafetyGuardRejected { .. }) => {
                         emit_stderr_error(&err);
                         return ExitCode::from(1);
@@ -588,6 +619,10 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         }
     });
 
+    let scheduler_handle = service
+        .as_ref()
+        .map(|svc| svc.spawn_background_scheduler(shutdown_rx.clone()));
+
     let state = HeadAppState {
         service,
         profile_mode,
@@ -618,6 +653,10 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         }
     })
     .await;
+
+    if let Some(handle) = scheduler_handle {
+        let _ = handle.await;
+    }
 
     if let Err(err) = serve_result {
         emit_stderr_error(&DennettError::Internal {
@@ -658,6 +697,7 @@ fn print_usage() {
            --auth-profile <oauth-personal|gemini-api-key>\n\
                                                Runtime auth profile (default: oauth-personal)\n\
            --profile-root <dir>                Isolated directory for agy acp profiles\n\
+           --effects-ledger <path>             JSON ledger path for simulated external connector persistence\n\
            --sandbox                           Enable agy acp --sandbox terminal restrictions\n\
            -h, --help                          Show this help text\n\
            -V, --version                       Show version\n\
@@ -669,6 +709,7 @@ fn print_usage() {
            DENNETT_MEMORY_URL                  Standalone dennett-memoryd HTTP URL\n\
            DENNETT_MEMORY_TOKEN                Scoped bearer token for memoryd and dennett-memory-mcp\n\
            DENNETT_MEMORY_HMAC_SECRET          Shared HMAC-SHA256 secret for minting dynamic project tokens\n\
+           DENNETT_EFFECTS_LEDGER_PATH         Optional JSON ledger file path for simulated external connector\n\
            DENNETT_GEMINI_API_KEY              API key used ONLY when --auth-profile gemini-api-key",
         env!("CARGO_PKG_VERSION")
     );

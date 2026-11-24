@@ -118,9 +118,16 @@ pub struct PolicyEvaluationOutcome {
 }
 
 /// External reference monitor invoked by the runtime on every `session/request_permission`.
+///
+/// Async (`BoxFuture`) so `WorkspaceWritePolicy::AskBeforeWrite` can persist an interactive
+/// permission request + Action Inbox card and await owner approval or cancellation strictly
+/// outside the model.
 pub trait PolicyEvaluator: Send + Sync {
     /// Evaluates a pending tool call strictly outside the model.
-    fn evaluate(&self, req: &PolicyEvaluationRequest) -> PolicyEvaluationOutcome;
+    fn evaluate<'a>(
+        &'a self,
+        req: &'a PolicyEvaluationRequest,
+    ) -> BoxFuture<'a, PolicyEvaluationOutcome>;
 }
 
 /// Normalized runtime event emitted during session setup and prompt execution.
@@ -187,6 +194,29 @@ pub enum RuntimeEvent {
         reason: String,
         /// Number of persisted visible messages injected into the rehydrated context.
         history_messages: usize,
+    },
+    /// Agent requested an explicit clarification from the owner before continuing (`waiting_clarification`).
+    ClarificationRequested {
+        /// Plain-text clarifying question presented to the user.
+        question: String,
+    },
+    /// Runtime emitted a partial intermediate artifact checkpoint (`completeness_status = partial`).
+    PartialArtifactEmitted {
+        /// Logical artifact name.
+        name: String,
+        /// Partial UTF-8 artifact body.
+        content: String,
+    },
+    /// Runtime requested execution of an external effect through Head's `ExternalEffectPort`.
+    ExternalEffectRequested {
+        /// Target recipient or endpoint.
+        recipient: String,
+        /// Logical operation label.
+        operation: String,
+        /// Deterministic simulated connector behavior (`success`, `denied`, `failed_before_accept`, `lost_ack`).
+        behavior: String,
+        /// Deterministic idempotency key for this effect.
+        idempotency_key: String,
     },
     /// Turn completed cleanly with a provider `stopReason`.
     Completed {
@@ -291,6 +321,44 @@ pub struct TurnOutcome {
     pub events: Vec<RuntimeEvent>,
     /// Optional provider usage payload.
     pub usage: Option<Value>,
+}
+
+impl TurnOutcome {
+    /// Extracts total token count from provider `usage` metadata when available.
+    #[must_use]
+    pub fn total_tokens(&self) -> Option<u64> {
+        let usage = self.usage.as_ref()?;
+        if let Some(total) = usage
+            .get("totalTokens")
+            .or_else(|| usage.get("total_tokens"))
+            .and_then(Value::as_u64)
+        {
+            return Some(total);
+        }
+        let input = usage
+            .get("inputTokens")
+            .or_else(|| usage.get("input_tokens"))
+            .and_then(Value::as_u64);
+        let output = usage
+            .get("outputTokens")
+            .or_else(|| usage.get("output_tokens"))
+            .and_then(Value::as_u64);
+        match (input, output) {
+            (Some(i), Some(o)) => Some(i.saturating_add(o)),
+            (Some(i), None) => Some(i),
+            (None, Some(o)) => Some(o),
+            (None, None) => None,
+        }
+    }
+
+    /// Returns the clarifying question if the runtime requested user clarification during this turn.
+    #[must_use]
+    pub fn clarification_question(&self) -> Option<&str> {
+        self.events.iter().find_map(|ev| match ev {
+            RuntimeEvent::ClarificationRequested { question } => Some(question.as_str()),
+            _ => None,
+        })
+    }
 }
 
 /// Narrow port implemented by concrete agent runtimes (live `agy acp` and CI test doubles).

@@ -240,6 +240,10 @@ struct CreatedV03Fixtures {
     expected_sha: dennett_contracts::Sha256Hex,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "creates V03 project/agent/config/session/message/artifact fixtures over live Head before dropping UI bridge"
+)]
 async fn run_v03_session_and_drop_bridge(
     head_base_url: &str,
     workspace_dir: &std::path::Path,
@@ -279,6 +283,8 @@ async fn run_v03_session_and_drop_bridge(
             thinking_level: Some(ThinkingLevel::Medium),
             allowed_memory_scopes: allowed.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            default_budget: None,
+            attached_skills: Vec::new(),
         })
         .await
         .expect("create_agent");
@@ -292,6 +298,8 @@ async fn run_v03_session_and_drop_bridge(
                 thinking_level: Some(ThinkingLevel::High),
                 allowed_memory_scopes: allowed,
                 workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
         )
         .await
@@ -314,6 +322,7 @@ async fn run_v03_session_and_drop_bridge(
             &SendMessageRequest {
                 content: String::from("Remember V03 desktop lifecycle invariant"),
                 timeout_ms: None,
+                client_message_id: None,
             },
         )
         .await
@@ -330,6 +339,7 @@ async fn run_v03_session_and_drop_bridge(
                 mime_type: String::from("text/markdown"),
                 content: Some(String::from("# V03 Summary\nDaemons survived UI close.")),
                 relative_path: None,
+                completeness_status: dennett_contracts::ArtifactCompleteness::Final,
             },
         )
         .await
@@ -471,6 +481,8 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
             thinking_level: Some(ThinkingLevel::Low),
             allowed_memory_scopes: allowed,
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            default_budget: None,
+            attached_skills: Vec::new(),
         })
         .await
         .expect("create_agent");
@@ -507,6 +519,7 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
             &SendMessageRequest {
                 content: String::from("Continue safely during memory outage"),
                 timeout_ms: None,
+                client_message_id: None,
             },
         )
         .await

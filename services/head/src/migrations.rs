@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 const CONTROL_MIGRATION_ADVISORY_LOCK_KEY: i64 = 842_190_537_612_049_311;
 
 /// Latest Control schema migration version bundled in this build.
-pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 3;
+pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 4;
 
 /// One forward-only PostgreSQL migration owned by `dennett-head`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,11 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         name: "0003_artifacts_unique_revision",
         sql: include_str!("../migrations/0003_artifacts_unique_revision.sql"),
     },
+    ControlMigration {
+        version: 4,
+        name: "0004_d2_durable_tasks_and_lifecycle",
+        sql: include_str!("../migrations/0004_d2_durable_tasks_and_lifecycle.sql"),
+    },
 ];
 
 /// Computes lowercase SHA-256 hex digest of `bytes`.
@@ -66,7 +71,11 @@ pub async fn run_control_migrations(
     parsed_password: Option<&str>,
 ) -> Result<i64, DennettError> {
     let map_pg = |err: tokio_postgres::Error| DennettError::DatabaseUnavailable {
-        detail: sanitize_pg_error_with_password(&err.to_string(), pg_url, parsed_password),
+        detail: sanitize_pg_error_with_password(
+            &crate::store::format_pg_error_detail(&err),
+            pg_url,
+            parsed_password,
+        ),
     };
 
     let tx = client.transaction().await.map_err(map_pg)?;
@@ -156,7 +165,11 @@ pub async fn query_control_schema_version(
     parsed_password: Option<&str>,
 ) -> Result<Option<i64>, DennettError> {
     let map_pg = |err: tokio_postgres::Error| DennettError::DatabaseUnavailable {
-        detail: sanitize_pg_error_with_password(&err.to_string(), pg_url, parsed_password),
+        detail: sanitize_pg_error_with_password(
+            &crate::store::format_pg_error_detail(&err),
+            pg_url,
+            parsed_password,
+        ),
     };
 
     let regclass: Option<String> = client

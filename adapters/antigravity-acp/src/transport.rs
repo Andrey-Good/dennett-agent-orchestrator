@@ -870,7 +870,8 @@ where
             &mut acc,
             &policy,
             event_tx.as_ref(),
-            &cancel_rx,
+            &mut cancel_rx,
+            &mut deadline,
         )
         .await?;
     }
@@ -878,7 +879,8 @@ where
 
 #[expect(
     clippy::too_many_lines,
-    reason = "server message handler keeps cancellation-race guards and non-escalating permission replies adjacent"
+    clippy::too_many_arguments,
+    reason = "server message handler keeps cancellation-race guards, async interactive approval waits, and non-escalating permission replies adjacent"
 )]
 async fn handle_turn_server_message<W: AsyncWrite + Unpin>(
     writer: &mut W,
@@ -887,7 +889,8 @@ async fn handle_turn_server_message<W: AsyncWrite + Unpin>(
     acc: &mut TurnAccumulator,
     policy: &Arc<dyn PolicyEvaluator>,
     event_tx: Option<&mpsc::Sender<RuntimeEvent>>,
-    cancel_rx: &watch::Receiver<bool>,
+    cancel_rx: &mut watch::Receiver<bool>,
+    deadline: &mut time::Instant,
 ) -> Result<(), DennettError> {
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
         return Ok(());
@@ -959,7 +962,94 @@ async fn handle_turn_server_message<W: AsyncWrite + Unpin>(
                     locations: parsed.locations.clone(),
                     raw_input: parsed.raw_input.clone(),
                 };
-                let outcome = policy.evaluate(&eval_req);
+                let remaining = deadline.saturating_duration_since(time::Instant::now());
+                let mut eval_fut = policy.evaluate(&eval_req);
+                let timeout_sleep = time::sleep(remaining);
+                tokio::pin!(timeout_sleep);
+                let mut cancel_channel_open = true;
+
+                let maybe_outcome = loop {
+                    tokio::select! {
+                        biased;
+                        outcome = &mut eval_fut => break Some(outcome),
+                        changed = cancel_rx.changed(), if cancel_channel_open && !acc.cancelled => {
+                            if changed.is_ok() {
+                                if *cancel_rx.borrow() {
+                                    acc.cancelled = true;
+                                    break None;
+                                }
+                            } else {
+                                cancel_channel_open = false;
+                            }
+                        }
+                        () = &mut timeout_sleep => {
+                            write_json_to(
+                                writer,
+                                &json!({
+                                    "jsonrpc": "2.0",
+                                    "id": server_req_id,
+                                    "result": {
+                                        "outcome": {
+                                            "outcome": "cancelled"
+                                        }
+                                    }
+                                }),
+                            )
+                            .await?;
+                            return Err(DennettError::Timeout {
+                                operation: String::from("session/request_permission"),
+                            });
+                        }
+                    }
+                };
+
+                let Some(outcome) = maybe_outcome else {
+                    if !acc.cancel_sent {
+                        let _ = write_json_to(
+                            writer,
+                            &json!({
+                                "jsonrpc": "2.0",
+                                "method": "session/cancel",
+                                "params": { "sessionId": args.provider_session_id }
+                            }),
+                        )
+                        .await;
+                        acc.cancel_sent = true;
+                    }
+                    let grace_deadline = time::Instant::now() + CANCEL_GRACE_TIMEOUT;
+                    if grace_deadline < *deadline {
+                        *deadline = grace_deadline;
+                    }
+                    write_json_to(
+                        writer,
+                        &json!({
+                            "jsonrpc": "2.0",
+                            "id": server_req_id,
+                            "result": {
+                                "outcome": {
+                                    "outcome": "cancelled"
+                                }
+                            }
+                        }),
+                    )
+                    .await?;
+                    acc.emit(
+                        RuntimeEvent::PermissionResolved {
+                            tool_call_id: parsed.tool_call_id,
+                            tool_name: parsed.tool_name,
+                            target: parsed.target,
+                            effect: PolicyEffect::Deny,
+                            matched_rule_id: None,
+                            reason: String::from(
+                                "abandoned because run was cancelled during approval wait",
+                            ),
+                            scope: format!("session:{}", args.dennett_session_id),
+                            chosen_option_id: None,
+                        },
+                        event_tx,
+                    );
+                    return Ok(());
+                };
 
                 // Re-check cancellation right after evaluation so a late approval never slips through.
                 if acc.cancelled || *cancel_rx.borrow() {
@@ -1941,7 +2031,7 @@ fn extract_text_chunks(content: &Value, dst: &mut String) {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::port::PolicyEvaluationOutcome;
+    use crate::port::{BoxFuture, PolicyEvaluationOutcome};
 
     use super::*;
 
@@ -1950,14 +2040,19 @@ mod tests {
     }
 
     impl PolicyEvaluator for CountingAllowPolicy {
-        fn evaluate(&self, _req: &PolicyEvaluationRequest) -> PolicyEvaluationOutcome {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            PolicyEvaluationOutcome {
-                effect: PolicyEffect::Allow,
-                matched_rule_id: None,
-                reason: String::from("allowed for test"),
-                scope: String::from("global"),
-            }
+        fn evaluate<'a>(
+            &'a self,
+            _req: &'a PolicyEvaluationRequest,
+        ) -> BoxFuture<'a, PolicyEvaluationOutcome> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Allow,
+                    matched_rule_id: None,
+                    reason: String::from("allowed for test"),
+                    scope: String::from("global"),
+                }
+            })
         }
     }
 
@@ -2361,5 +2456,188 @@ mod tests {
         assert_eq!(q_info.quotas[0].label, "5ч");
         assert_eq!(q_info.quotas[0].remaining_percent, 87);
         assert_eq!(q_info.quotas[1].remaining_percent, 100);
+    }
+
+    struct DeferredOneshotPolicy {
+        tx_notify: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        rx_outcome:
+            tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<PolicyEvaluationOutcome>>>,
+    }
+
+    impl PolicyEvaluator for DeferredOneshotPolicy {
+        fn evaluate<'a>(
+            &'a self,
+            _req: &'a PolicyEvaluationRequest,
+        ) -> BoxFuture<'a, PolicyEvaluationOutcome> {
+            Box::pin(async move {
+                if let Some(n) = self.tx_notify.lock().await.take() {
+                    let _ = n.send(());
+                }
+                let rx_opt = self.rx_outcome.lock().await.take();
+                if let Some(rx) = rx_opt
+                    && let Ok(outcome) = rx.await
+                {
+                    return outcome;
+                }
+                PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: String::from("dropped waiter"),
+                    scope: String::from("test"),
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "verifies both deferred async Allow->allow_once and mid-wait Stop cancellation over ACP duplex streams"
+    )]
+    async fn async_policy_evaluator_resolves_allow_once_and_cancels_mid_wait() {
+        // Case 1: Deferred async approval resolves to `allow_once` (NEVER `allow_always`!).
+        let (mut c2s_w, s_from_c_r) = tokio::io::duplex(8192);
+        let (mut s2c_w, c_from_s_r) = tokio::io::duplex(8192);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resolve_tx, resolve_rx) = tokio::sync::oneshot::channel();
+        let policy: Arc<dyn PolicyEvaluator> = Arc::new(DeferredOneshotPolicy {
+            tx_notify: tokio::sync::Mutex::new(Some(entered_tx)),
+            rx_outcome: tokio::sync::Mutex::new(Some(resolve_rx)),
+        });
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let srv1 = tokio::spawn(async move {
+            let mut srv_in = BufReader::new(s_from_c_r);
+            let mut line = String::new();
+            srv_in.read_line(&mut line).await.expect("read prompt");
+            s2c_w
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"session/request_permission\",\"params\":{\"toolCall\":{\"toolCallId\":\"w1\",\"name\":\"write_file\",\"kind\":\"edit\",\"title\":\"docs/out.txt\"},\"options\":[{\"optionId\":\"always-opt\",\"kind\":\"allow_always\",\"name\":\"Always\"},{\"optionId\":\"once-opt\",\"kind\":\"allow_once\",\"name\":\"Once\"}]}}\n")
+                .await
+                .expect("write perm");
+            line.clear();
+            srv_in.read_line(&mut line).await.expect("read perm resp");
+            let resp: Value = serde_json::from_str(line.trim()).expect("parse resp");
+            assert_eq!(resp["id"], 77);
+            assert_eq!(resp["result"]["outcome"]["outcome"], "selected");
+            assert_eq!(
+                resp["result"]["outcome"]["optionId"], "once-opt",
+                "transport MUST pick allow_once, NEVER allow_always!"
+            );
+            s2c_w
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"stopReason\":\"end_turn\"}}\n",
+                )
+                .await
+                .expect("write end_turn");
+        });
+
+        let approver = tokio::spawn(async move {
+            entered_rx.await.expect("policy entered");
+            let _ = resolve_tx.send(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                matched_rule_id: None,
+                reason: String::from("approved interactively"),
+                scope: String::from("project:test"),
+            });
+        });
+
+        let mut reader = BufReader::new(c_from_s_r);
+        let (outcome1, _) = exchange_prompt_turn_io(
+            &mut reader,
+            &mut c2s_w,
+            PromptTurnIoArgs {
+                req_id: 1,
+                dennett_session_id: SessionId::new(),
+                provider_session_id: "prov-async-allow",
+                run_id: RunId::new(),
+                prompt_text: "write file",
+                timeout: Duration::from_secs(10),
+                secrets: &[],
+            },
+            cancel_rx,
+            policy,
+            None,
+            String::new,
+        )
+        .await
+        .expect("async allow turn");
+        srv1.await.expect("srv1");
+        approver.await.expect("approver");
+        assert_eq!(outcome1.status, RunStatus::Succeeded);
+
+        // Case 2: `cancel_tx` fires WHILE `PolicyEvaluator::evaluate` is suspended mid-wait!
+        let (mut c2s_w2, s_from_c_r2) = tokio::io::duplex(8192);
+        let (mut s2c_w2, c_from_s_r2) = tokio::io::duplex(8192);
+        let (wait_entered_send, wait_entered_recv) = tokio::sync::oneshot::channel();
+        let (_never_resolve_tx, never_resolve_rx) = tokio::sync::oneshot::channel();
+        let policy2: Arc<dyn PolicyEvaluator> = Arc::new(DeferredOneshotPolicy {
+            tx_notify: tokio::sync::Mutex::new(Some(wait_entered_send)),
+            rx_outcome: tokio::sync::Mutex::new(Some(never_resolve_rx)),
+        });
+        let (stop_sender, stop_receiver) = watch::channel(false);
+
+        let srv2 = tokio::spawn(async move {
+            let mut srv_in = BufReader::new(s_from_c_r2);
+            let mut line = String::new();
+            srv_in.read_line(&mut line).await.expect("read prompt 2");
+            s2c_w2
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":88,\"method\":\"session/request_permission\",\"params\":{\"toolCall\":{\"toolCallId\":\"w2\",\"name\":\"write_file\",\"kind\":\"edit\",\"title\":\"docs/cancel.txt\"},\"options\":[{\"optionId\":\"once-opt\",\"kind\":\"allow_once\",\"name\":\"Once\"}]}}\n")
+                .await
+                .expect("write perm 2");
+            // Client must emit `session/cancel` AND reply `cancelled` to id=88 without waiting forever!
+            let mut saw_cancel_notif = false;
+            let mut saw_perm_cancelled = false;
+            for _ in 0..2 {
+                line.clear();
+                srv_in
+                    .read_line(&mut line)
+                    .await
+                    .expect("read cancel frame");
+                let v: Value = serde_json::from_str(line.trim()).expect("parse frame");
+                if v.get("method").and_then(Value::as_str) == Some("session/cancel") {
+                    saw_cancel_notif = true;
+                } else if v.get("id") == Some(&json!(88)) {
+                    assert_eq!(v["result"]["outcome"]["outcome"], "cancelled");
+                    saw_perm_cancelled = true;
+                }
+            }
+            assert!(saw_cancel_notif, "expected session/cancel notification");
+            assert!(saw_perm_cancelled, "expected permission cancelled response");
+            s2c_w2
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"stopReason\":\"cancelled\"}}\n",
+                )
+                .await
+                .expect("write final cancelled 2");
+        });
+
+        let canceller = tokio::spawn(async move {
+            wait_entered_recv.await.expect("policy2 entered");
+            let _ = stop_sender.send(true);
+        });
+
+        let mut reader2 = BufReader::new(c_from_s_r2);
+        let (outcome2, _) = exchange_prompt_turn_io(
+            &mut reader2,
+            &mut c2s_w2,
+            PromptTurnIoArgs {
+                req_id: 2,
+                dennett_session_id: SessionId::new(),
+                provider_session_id: "prov-async-cancel",
+                run_id: RunId::new(),
+                prompt_text: "write cancelled file",
+                timeout: Duration::from_secs(10),
+                secrets: &[],
+            },
+            stop_receiver,
+            policy2,
+            None,
+            String::new,
+        )
+        .await
+        .expect("mid-wait cancel turn");
+        srv2.await.expect("srv2");
+        canceller.await.expect("canceller");
+        assert_eq!(outcome2.status, RunStatus::Cancelled);
     }
 }

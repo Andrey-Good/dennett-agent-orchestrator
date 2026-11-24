@@ -10,56 +10,69 @@
 //!   keeps Stop/cancellation completely unblocked, queues memory commits into `memory_commit_outbox`
 //!   with deterministic idempotency keys, and never fabricates confident memory answers.
 
-use core::fmt;
-use std::collections::{BTreeSet, HashMap};
+use core::fmt::{self, Write as _};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets_owned};
 use dennett_contracts::{
-    AgentConfigHistoryResponse, AgentConfigVersionId, AgentId, AgentRecord, ArtifactId,
-    ArtifactRecord, CancelRunResponse, CommitMemoryNoteRequest, CommitMemoryNoteResponse,
-    CorrelationId, CreateAgentRequest, CreateArtifactRequest, CreateNoteRequest,
-    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, DennettError,
-    DiagnosticsResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
+    AgentConfigHistoryResponse, AgentConfigVersionId, AgentId, AgentRecord, ArtifactCompleteness,
+    ArtifactId, ArtifactLifecycleState, ArtifactRecord, CancelRunResponse, CommitMemoryNoteRequest,
+    CommitMemoryNoteResponse, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
+    CreateNoteRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
+    DennettError, DiagnosticsResponse, DispatchEffectRequest, EffectClaimRecord,
+    ExternalEffectStatus, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
     HeadMemorySearchResponse, IdempotencyKey, ListAgentsResponse, ListArtifactsResponse,
     ListOutboxResponse, ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
     ListSessionsResponse, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
     MemoryStatus, MessageId, MessageRecord, MessageRole, OutboxItemId, PermissionDecisionRecord,
-    PolicyRule, PolicyRuleId, PrincipalId, ProfileMode, ProjectId, ProjectRecord, RunId, RunRecord,
-    RunStatus, RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
+    PermissionRequestId, PolicyRule, PolicyRuleId, PrincipalId, ProfileMode, ProjectId,
+    ProjectLifecycleState, ProjectRecord, RunId, RunRecord, RunStatus, RuntimeAuthProfile,
+    RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
     SendMessageRequest, SendMessageResponse, ServiceKind, SessionDetailResponse, SessionId,
-    SessionRecord, SessionStatus, Sha256Hex, TimestampMs, UpdateAgentConfigRequest,
-    UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
+    SessionRecord, SessionStatus, Sha256Hex, SimEffectBehavior, TaskId, TimestampMs,
+    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
     AgentRuntimePort, RuntimeEvent, RuntimeMcpEnvEntry, RuntimeMcpServerSpec, SessionStartRequest,
     TurnRequest,
 };
+use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, Notify, oneshot, watch};
 use tokio::time;
 use tokio_postgres::NoTls;
 
+use crate::approvals::{
+    ApprovalResolutionSignal, CapturedPermissionDecision, DEFAULT_APPROVAL_WAIT_TIMEOUT,
+    InteractivePolicyEvaluator,
+};
+use crate::effects::{
+    ExternalEffectPort, SIMULATED_EXTERNAL_CONNECTOR_ID, SimulatedExternalConnector,
+};
+use crate::events::{ControlEventAppend, append_control_event_in_tx};
 use crate::memory_auth::MemoryTokenSigner;
 use crate::migrations::{query_control_schema_version, run_control_migrations, sha256_hex};
 use crate::pg_target::ValidatedControlPgTarget;
-use crate::policy::{
-    PolicyContext, PolicyEngine, RecordingPolicyEvaluator, resolve_within_workspace,
-};
+use crate::policy::{PolicyContext, resolve_within_workspace};
 use crate::store::{
-    append_audit_event, decode_agent_join_row, decode_audit_event_row, decode_config_version_row,
+    AGENT_JOIN_SELECT, AGENT_MESSAGE_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS, PROJECT_SELECT_COLS,
+    RUN_SELECT_COLS, append_audit_event, decode_agent_join_row, decode_agent_message_row,
+    decode_audit_event_row, decode_config_version_row, decode_effect_claim_row, decode_message_row,
     decode_outbox_row, decode_permission_decision_row, decode_policy_rule_row, decode_project_row,
-    decode_runtime_binding_row, decode_session_row, fetch_agent, fetch_all_runtime_bindings,
-    fetch_policy_rules, fetch_project, fetch_runtime_binding, fetch_session,
-    fetch_session_artifacts, fetch_session_messages, fetch_session_permission_decisions,
-    fetch_session_runs, map_pg_err, next_stream_seq, truncate_utf8,
+    decode_run_row, decode_runtime_binding_row, decode_session_row, fetch_agent,
+    fetch_all_runtime_bindings, fetch_policy_rules, fetch_project, fetch_runtime_binding,
+    fetch_session, fetch_session_artifacts, fetch_session_messages,
+    fetch_session_permission_decisions, fetch_session_runs, is_pg_unique_violation, map_pg_err,
+    next_stream_seq, truncate_utf8,
 };
 use crate::workspace_files::{
     clean_display_path, is_symlink_or_reparse_point, list_project_workspace_files,
@@ -67,7 +80,7 @@ use crate::workspace_files::{
 };
 
 /// Current implementation milestone label advertised in [`HeadHealth`].
-pub const HEAD_STAGE_LABEL: &str = "D1";
+pub const HEAD_STAGE_LABEL: &str = "D2";
 /// Default PostgreSQL pool size for `dennett-head`.
 pub const DEFAULT_CONTROL_POOL_SIZE: usize = 16;
 /// Default timeout for standard control-plane PostgreSQL queries.
@@ -80,12 +93,31 @@ pub const DEFAULT_TURN_TIMEOUT: Duration = Duration::from_secs(120);
 pub const RUNTIME_CATALOG_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Optional extra configuration for [`HeadService::new_with_extras`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct HeadServiceExtras {
     /// Optional HMAC-SHA256 signer for dynamically issuing scoped `dnt1.` memory tokens per project.
     pub memory_hmac_signer: Option<MemoryTokenSigner>,
     /// Root directory under which isolated scratch `cwd` folders for folderless projects are created.
     pub detached_projects_root: Option<PathBuf>,
+    /// Optional dedicated runtime configured for background tasks (`gemini-api-key`, never silently
+    /// substituted for `oauth-personal` or vice versa).
+    pub background_runtime: Option<Arc<dyn AgentRuntimePort>>,
+    /// Optional explicit [`ExternalEffectPort`] connector (defaults to [`SimulatedExternalConnector`]).
+    pub effect_port: Option<Arc<dyn ExternalEffectPort>>,
+    /// Optional JSON ledger path backing the default [`SimulatedExternalConnector`] across restarts.
+    pub effects_ledger_path: Option<PathBuf>,
+}
+
+impl fmt::Debug for HeadServiceExtras {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeadServiceExtras")
+            .field("memory_hmac_signer", &self.memory_hmac_signer.is_some())
+            .field("detached_projects_root", &self.detached_projects_root)
+            .field("background_runtime", &self.background_runtime.is_some())
+            .field("effect_port", &self.effect_port.is_some())
+            .field("effects_ledger_path", &self.effects_ledger_path)
+            .finish()
+    }
 }
 
 /// Scoped configuration passed to `dennett-memory-mcp` when launched by the agent runtime.
@@ -129,15 +161,48 @@ pub fn d1_head_capabilities() -> Vec<String> {
     ]
 }
 
-struct ActiveRunHandle {
-    run_id: RunId,
-    cancel_tx: watch::Sender<bool>,
+/// Returns the complete D2 capability list advertised by `dennett-head`.
+#[must_use]
+pub fn d2_head_capabilities() -> Vec<String> {
+    let mut caps = d1_head_capabilities();
+    caps.extend([
+        String::from("control.tasks.v1"),
+        String::from("control.timers.pg_iana.v1"),
+        String::from("control.signals.idempotent.v1"),
+        String::from("control.approvals.interactive.v1"),
+        String::from("control.grants.revocable.v1"),
+        String::from("control.inbox.v1"),
+        String::from("control.events.ordered_journal.v1"),
+        String::from("control.effects.lost_ack_unknown.v1"),
+        String::from("control.lifecycle.strict_separation.v1"),
+        String::from("control.agent_messages.plain_text.v1"),
+    ]);
+    caps
 }
 
-struct ActiveRunGuard {
+pub(crate) struct ActiveRunHandle {
+    pub(crate) run_id: RunId,
+    pub(crate) cancel_tx: watch::Sender<bool>,
+}
+
+pub(crate) struct ActiveRunGuard {
     active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
     session_id: SessionId,
     run_id: RunId,
+}
+
+impl ActiveRunGuard {
+    pub(crate) fn new(
+        active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> Self {
+        Self {
+            active_runs,
+            session_id,
+            run_id,
+        }
+    }
 }
 
 impl Drop for ActiveRunGuard {
@@ -160,6 +225,79 @@ impl Drop for ActiveRunGuard {
     }
 }
 
+pub(crate) struct ActiveTaskHandle {
+    pub(crate) generation: i64,
+    pub(crate) session_id: SessionId,
+    pub(crate) run_id: RunId,
+    pub(crate) cancel_tx: watch::Sender<bool>,
+}
+
+pub(crate) struct ActiveTaskGuard {
+    active_tasks: Arc<Mutex<HashMap<TaskId, ActiveTaskHandle>>>,
+    task_id: TaskId,
+    run_id: RunId,
+}
+
+impl ActiveTaskGuard {
+    pub(crate) fn new(
+        active_tasks: Arc<Mutex<HashMap<TaskId, ActiveTaskHandle>>>,
+        task_id: TaskId,
+        run_id: RunId,
+    ) -> Self {
+        Self {
+            active_tasks,
+            task_id,
+            run_id,
+        }
+    }
+}
+
+impl Drop for ActiveTaskGuard {
+    fn drop(&mut self) {
+        let map = Arc::clone(&self.active_tasks);
+        let task_id = self.task_id;
+        let run_id = self.run_id;
+        if let Ok(mut guard) = map.try_lock() {
+            if guard.get(&task_id).is_some_and(|h| h.run_id == run_id) {
+                guard.remove(&task_id);
+            }
+            return;
+        }
+        tokio::spawn(async move {
+            let mut guard = map.lock().await;
+            if guard.get(&task_id).is_some_and(|h| h.run_id == run_id) {
+                guard.remove(&task_id);
+            }
+        });
+    }
+}
+
+type InFlightClientMessageMap = Arc<Mutex<HashMap<(SessionId, String), Arc<Notify>>>>;
+
+struct InFlightClientMessageGuard {
+    map: InFlightClientMessageMap,
+    key: (SessionId, String),
+    notify: Arc<Notify>,
+}
+
+impl Drop for InFlightClientMessageGuard {
+    fn drop(&mut self) {
+        let map = Arc::clone(&self.map);
+        let key = self.key.clone();
+        let notify = Arc::clone(&self.notify);
+        if let Ok(mut guard) = map.try_lock() {
+            guard.remove(&key);
+            notify.notify_waiters();
+            return;
+        }
+        tokio::spawn(async move {
+            let mut guard = map.lock().await;
+            guard.remove(&key);
+            notify.notify_waiters();
+        });
+    }
+}
+
 const MEMORY_STATUS_DEGRADED: u8 = 0;
 const MEMORY_STATUS_HEALTHY: u8 = 1;
 
@@ -168,6 +306,8 @@ struct HeadServiceInner {
     pool: Pool,
     migrated_version: Mutex<Option<i64>>,
     runtime: Arc<dyn AgentRuntimePort>,
+    background_runtime: Option<Arc<dyn AgentRuntimePort>>,
+    effect_port: Arc<dyn ExternalEffectPort>,
     memory_client: Option<MemoryClient>,
     memory_mcp: Option<MemoryMcpWiring>,
     memory_hmac_signer: Option<MemoryTokenSigner>,
@@ -175,6 +315,12 @@ struct HeadServiceInner {
     runtime_catalog_cache: Mutex<Option<(time::Instant, RuntimeCatalogResponse)>>,
     last_memory_status: AtomicU8,
     active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
+    active_tasks: Arc<Mutex<HashMap<TaskId, ActiveTaskHandle>>>,
+    stopped_tasks: Arc<Mutex<HashSet<TaskId>>>,
+    pending_approvals:
+        Arc<Mutex<HashMap<PermissionRequestId, oneshot::Sender<ApprovalResolutionSignal>>>>,
+    session_locks: Arc<Mutex<HashMap<SessionId, Arc<Mutex<()>>>>>,
+    in_flight_client_messages: InFlightClientMessageMap,
     profile_mode: ProfileMode,
     secrets_to_redact: Vec<String>,
 }
@@ -260,6 +406,14 @@ impl HeadService {
         let detached_projects_root = extras.detached_projects_root.unwrap_or_else(|| {
             std::env::temp_dir().join(format!("dennett-head-detached-{}", std::process::id()))
         });
+        let effect_port: Arc<dyn ExternalEffectPort> = if let Some(custom_port) = extras.effect_port
+        {
+            custom_port
+        } else if let Some(ledger_path) = extras.effects_ledger_path {
+            Arc::new(SimulatedExternalConnector::with_ledger_file(ledger_path))
+        } else {
+            Arc::new(SimulatedExternalConnector::in_memory())
+        };
 
         Ok(Self {
             inner: Arc::new(HeadServiceInner {
@@ -267,6 +421,8 @@ impl HeadService {
                 pool,
                 migrated_version: Mutex::new(None),
                 runtime,
+                background_runtime: extras.background_runtime,
+                effect_port,
                 memory_client,
                 memory_mcp,
                 memory_hmac_signer: extras.memory_hmac_signer,
@@ -274,6 +430,11 @@ impl HeadService {
                 runtime_catalog_cache: Mutex::new(None),
                 last_memory_status: AtomicU8::new(initial_memory_status),
                 active_runs: Arc::new(Mutex::new(HashMap::new())),
+                active_tasks: Arc::new(Mutex::new(HashMap::new())),
+                stopped_tasks: Arc::new(Mutex::new(HashSet::new())),
+                pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+                session_locks: Arc::new(Mutex::new(HashMap::new())),
+                in_flight_client_messages: Arc::new(Mutex::new(HashMap::new())),
                 profile_mode,
                 secrets_to_redact: secrets,
             }),
@@ -446,7 +607,7 @@ impl HeadService {
             runtime_adapter_id: self.inner.runtime.adapter_id().to_owned(),
             runtime_is_simulated: self.inner.runtime.is_simulated(),
             pending_outbox_count,
-            capabilities: d1_head_capabilities(),
+            capabilities: d2_head_capabilities(),
             correlation_id,
         })
     }
@@ -456,6 +617,10 @@ impl HeadService {
     /// # Errors
     ///
     /// Returns [`DennettError::InvalidInput`] or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "persists agent row, v1 config version, audit event, and control journal event atomically"
+    )]
     pub async fn create_agent(
         &self,
         req: CreateAgentRequest,
@@ -482,6 +647,18 @@ impl HeadService {
                     detail: format!("failed serializing workspace_write_policy: {err}"),
                 }
             })?;
+        let default_budget_json = req
+            .default_budget
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing default_budget: {err}"),
+            })?;
+        let attached_skills_json =
+            serde_json::to_value(&req.attached_skills).map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing attached_skills: {err}"),
+            })?;
         let thinking_str = req.thinking_level.map(|t| t.as_str().to_owned());
 
         tx.execute(
@@ -500,8 +677,9 @@ impl HeadService {
         tx.execute(
             "INSERT INTO agent_config_versions (
                 config_version_id, agent_id, version_number, system_prompt,
-                model_preference, thinking_level, allowed_memory_scopes, workspace_write_policy
-             ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7)",
+                model_preference, thinking_level, allowed_memory_scopes,
+                workspace_write_policy, default_budget, attached_skills
+             ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9)",
             &[
                 &config_version_id.as_uuid(),
                 &agent_id.as_uuid(),
@@ -510,6 +688,8 @@ impl HeadService {
                 &thinking_str,
                 &scopes_json,
                 &write_policy_json,
+                &default_budget_json,
+                &attached_skills_json,
             ],
         )
         .await
@@ -528,6 +708,25 @@ impl HeadService {
         .await?;
 
         let record = fetch_agent(&tx, agent_id, &self.inner.pg_target).await?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("agent:{agent_id}"),
+                event_type: "agent.created",
+                project_id: None,
+                session_id: None,
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "agent_id": agent_id,
+                    "name": record.name,
+                    "version_number": 1,
+                }),
+            },
+        )
+        .await?;
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -542,20 +741,9 @@ impl HeadService {
     pub async fn list_agents(&self) -> Result<ListAgentsResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let sql = format!("{AGENT_JOIN_SELECT} ORDER BY a.created_at DESC");
         let rows = conn
-            .query(
-                "SELECT a.agent_id, a.name, a.description, a.current_config_version_id,
-                        TRUNC(EXTRACT(EPOCH FROM a.created_at) * 1000)::bigint,
-                        TRUNC(EXTRACT(EPOCH FROM a.updated_at) * 1000)::bigint,
-                        v.config_version_id, v.version_number, v.system_prompt,
-                        v.model_preference, v.thinking_level,
-                        v.allowed_memory_scopes, v.workspace_write_policy,
-                        TRUNC(EXTRACT(EPOCH FROM v.created_at) * 1000)::bigint
-                 FROM agents a
-                 JOIN agent_config_versions v ON v.config_version_id = a.current_config_version_id
-                 ORDER BY a.created_at DESC",
-                &[],
-            )
+            .query(&sql, &[])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
@@ -584,6 +772,10 @@ impl HeadService {
     ///
     /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`], or
     /// [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "locks agent row, inserts next immutable config version, updates pointer, and emits audit + journal events atomically"
+    )]
     pub async fn update_agent_config(
         &self,
         agent_id: AgentId,
@@ -634,13 +826,26 @@ impl HeadService {
                     detail: format!("failed serializing workspace_write_policy: {err}"),
                 }
             })?;
+        let default_budget_json = req
+            .default_budget
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing default_budget: {err}"),
+            })?;
+        let attached_skills_json =
+            serde_json::to_value(&req.attached_skills).map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing attached_skills: {err}"),
+            })?;
         let thinking_str = req.thinking_level.map(|t| t.as_str().to_owned());
 
         tx.execute(
             "INSERT INTO agent_config_versions (
                 config_version_id, agent_id, version_number, system_prompt,
-                model_preference, thinking_level, allowed_memory_scopes, workspace_write_policy
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                model_preference, thinking_level, allowed_memory_scopes,
+                workspace_write_policy, default_budget, attached_skills
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             &[
                 &new_version_id.as_uuid(),
                 &agent_id.as_uuid(),
@@ -650,6 +855,8 @@ impl HeadService {
                 &thinking_str,
                 &scopes_json,
                 &write_policy_json,
+                &default_budget_json,
+                &attached_skills_json,
             ],
         )
         .await
@@ -679,6 +886,25 @@ impl HeadService {
         .await?;
 
         let record = fetch_agent(&tx, agent_id, &self.inner.pg_target).await?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("agent:{agent_id}"),
+                event_type: "agent.config_updated",
+                project_id: None,
+                session_id: None,
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "agent_id": agent_id,
+                    "version_number": next_ver,
+                    "config_version_id": new_version_id,
+                }),
+            },
+        )
+        .await?;
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -702,7 +928,7 @@ impl HeadService {
             .query(
                 "SELECT config_version_id, agent_id, version_number, system_prompt,
                         model_preference, thinking_level, allowed_memory_scopes,
-                        workspace_write_policy,
+                        workspace_write_policy, default_budget, attached_skills,
                         TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
                  FROM agent_config_versions
                  WHERE agent_id = $1
@@ -772,12 +998,14 @@ impl HeadService {
             Some(scope) => scope,
             None => generate_project_memory_scope(&req.name, project_id)?,
         };
+        let insert_sql = format!(
+            "INSERT INTO projects (project_id, name, workspace_path, memory_scope, lifecycle_state)
+             VALUES ($1, $2, $3, $4, 'active')
+             RETURNING {PROJECT_SELECT_COLS}"
+        );
         let row = tx
             .query_one(
-                "INSERT INTO projects (project_id, name, workspace_path, memory_scope)
-                 VALUES ($1, $2, $3, $4)
-                 RETURNING project_id, name, workspace_path, memory_scope,
-                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
+                &insert_sql,
                 &[
                     &project_id.as_uuid(),
                     &req.name.trim(),
@@ -806,6 +1034,27 @@ impl HeadService {
         .await?;
 
         let record = decode_project_row(&row)?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("project:{project_id}"),
+                event_type: "project.created",
+                project_id: Some(project_id),
+                session_id: None,
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "project_id": project_id,
+                    "name": record.name,
+                    "memory_scope": record.memory_scope,
+                    "lifecycle_state": record.lifecycle_state,
+                    "bound": record.workspace_path.is_some(),
+                }),
+            },
+        )
+        .await?;
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -853,6 +1102,14 @@ impl HeadService {
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         let existing = fetch_project(&tx, project_id, &self.inner.pg_target).await?;
+        if existing.lifecycle_state == ProjectLifecycleState::DeletedRecord {
+            return Err(DennettError::Conflict {
+                resource: String::from("project"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: String::from("cannot update a deleted project record"),
+            });
+        }
         let next_name = req
             .name
             .as_deref()
@@ -860,14 +1117,17 @@ impl HeadService {
             .to_owned();
         let next_workspace = validated_workspace.or(existing.workspace_path);
 
+        let update_sql = format!(
+            "UPDATE projects
+             SET name = $2,
+                 workspace_path = $3,
+                 updated_at = now()
+             WHERE project_id = $1
+             RETURNING {PROJECT_SELECT_COLS}"
+        );
         let row = tx
             .query_one(
-                "UPDATE projects
-                 SET name = $2,
-                     workspace_path = $3
-                 WHERE project_id = $1
-                 RETURNING project_id, name, workspace_path, memory_scope,
-                           TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
+                &update_sql,
                 &[&project_id.as_uuid(), &next_name, &next_workspace],
             )
             .await
@@ -889,6 +1149,26 @@ impl HeadService {
         .await?;
 
         let record = decode_project_row(&row)?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("project:{project_id}"),
+                event_type: "project.updated",
+                project_id: Some(project_id),
+                session_id: None,
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "project_id": project_id,
+                    "name": record.name,
+                    "lifecycle_state": record.lifecycle_state,
+                    "bound": record.workspace_path.is_some(),
+                }),
+            },
+        )
+        .await?;
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -923,22 +1203,44 @@ impl HeadService {
         })?
     }
 
-    /// Lists all registered projects.
+    /// Lists active/detached registered projects (excluding `archived` and `deleted_record`).
     ///
     /// # Errors
     ///
     /// Returns [`DennettError::DatabaseUnavailable`] on PG failure.
     pub async fn list_projects(&self) -> Result<ListProjectsResponse, DennettError> {
+        self.list_projects_with_options(false).await
+    }
+
+    /// Lists registered projects with explicit `include_archived` toggle (`deleted_record` rows
+    /// are never returned in active lists per Contract C).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] on PG failure.
+    pub async fn list_projects_with_options(
+        &self,
+        include_archived: bool,
+    ) -> Result<ListProjectsResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-        let rows = conn
-            .query(
-                "SELECT project_id, name, workspace_path, memory_scope,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
+        let sql = if include_archived {
+            format!(
+                "SELECT {PROJECT_SELECT_COLS}
                  FROM projects
-                 ORDER BY created_at DESC",
-                &[],
+                 WHERE lifecycle_state <> 'deleted_record'
+                 ORDER BY created_at DESC"
             )
+        } else {
+            format!(
+                "SELECT {PROJECT_SELECT_COLS}
+                 FROM projects
+                 WHERE lifecycle_state NOT IN ('archived', 'deleted_record')
+                 ORDER BY created_at DESC"
+            )
+        };
+        let rows = conn
+            .query(&sql, &[])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
@@ -980,7 +1282,21 @@ impl HeadService {
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         let _ = fetch_agent(&tx, req.agent_id, &self.inner.pg_target).await?;
-        let _ = fetch_project(&tx, req.project_id, &self.inner.pg_target).await?;
+        let project = fetch_project(&tx, req.project_id, &self.inner.pg_target).await?;
+        if matches!(
+            project.lifecycle_state,
+            ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+        ) {
+            return Err(DennettError::Conflict {
+                resource: String::from("project"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!(
+                    "project `{}` is `{}` and does not accept new sessions",
+                    project.project_id, project.lifecycle_state
+                ),
+            });
+        }
 
         let session_id = SessionId::new();
         let row = tx
@@ -1013,6 +1329,26 @@ impl HeadService {
         .await?;
 
         let record = decode_session_row(&row, None)?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{session_id}"),
+                event_type: "session.created",
+                project_id: Some(req.project_id),
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": session_id,
+                    "project_id": req.project_id,
+                    "agent_id": req.agent_id,
+                    "title": record.title,
+                }),
+            },
+        )
+        .await?;
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -1238,6 +1574,20 @@ impl HeadService {
             let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
             let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
             let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
+            if matches!(
+                project.lifecycle_state,
+                ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+            ) {
+                return Err(DennettError::Conflict {
+                    resource: String::from("project"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "project `{}` is `{}` and does not accept new artifacts",
+                        project.project_id, project.lifecycle_state
+                    ),
+                });
+            }
             (project.project_id, project.workspace_path)
         };
 
@@ -1322,8 +1672,9 @@ impl HeadService {
             .query_one(
                 "INSERT INTO artifacts (
                     artifact_id, session_id, project_id, run_id, name, mime_type,
-                    revision, content, relative_path, sha256
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    revision, content, relative_path, sha256,
+                    completeness_status, lifecycle_state
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active')
                  RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
                 &[
                     &artifact_id.as_uuid(),
@@ -1336,6 +1687,7 @@ impl HeadService {
                     &req.content,
                     &normalized_rel_path,
                     &digest.as_str(),
+                    &req.completeness_status.as_str(),
                 ],
             )
             .await
@@ -1350,9 +1702,32 @@ impl HeadService {
             "head",
             "artifact_created",
             &format!(
-                "registered artifact `{}` rev {revision} ({artifact_id})",
-                req.name.trim()
+                "registered artifact `{}` rev {revision} ({artifact_id}) status={}",
+                req.name.trim(),
+                req.completeness_status
             ),
+        )
+        .await?;
+
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("artifact:{artifact_id}"),
+                event_type: "artifact.created",
+                project_id: Some(project_id),
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "artifact_id": artifact_id,
+                    "session_id": session_id,
+                    "name": req.name.trim(),
+                    "revision": revision,
+                    "completeness_status": req.completeness_status,
+                    "lifecycle_state": ArtifactLifecycleState::Active,
+                }),
+            },
         )
         .await?;
 
@@ -1371,6 +1746,8 @@ impl HeadService {
             content: req.content,
             relative_path: normalized_rel_path,
             sha256: digest,
+            completeness_status: req.completeness_status,
+            lifecycle_state: ArtifactLifecycleState::Active,
             created_at: TimestampMs::from_millis(row.get(0)),
         })
     }
@@ -1392,16 +1769,22 @@ impl HeadService {
     }
 
     /// Persists a user message BEFORE invoking the runtime, starts or resumes the runtime session
-    /// with scoped `dennett-memory-mcp`, executes one turn with external [`PolicyEngine`] callbacks
-    /// and live cancellation support, and persists all decisions, audit traces, and outcomes.
+    /// with scoped `dennett-memory-mcp`, executes one turn with external [`crate::policy::PolicyEngine`] callbacks
+    /// (including live interactive `AskBeforeWrite` approvals) and live cancellation support, and
+    /// persists all decisions, audit traces, and outcomes.
+    ///
+    /// Supports optional `client_message_id` idempotency (`UNIQUE (session_id, client_message_id)`):
+    /// - Replaying the same `client_message_id` with identical content returns the persisted
+    ///   [`SendMessageResponse`] with `deduplicated = true` without invoking the runtime again.
+    /// - Reusing `client_message_id` with different content fails closed with `409 IdempotencyMismatch`.
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError`] on validation, missing session, concurrent active run conflict,
-    /// auth failure, runtime error, or database unavailability.
+    /// Returns [`DennettError`] on validation, missing session, idempotency conflict, concurrent
+    /// active run conflict, auth failure, runtime error, or database unavailability.
     #[expect(
         clippy::too_many_lines,
-        reason = "send_message orchestrates pre-run persistence, runtime turn execution, and post-run atomic recording without holding SQL locks across runtime I/O"
+        reason = "send_message orchestrates client idempotency deduplication, pre-run persistence, interactive policy evaluation, runtime turn execution, and post-run atomic recording without holding SQL locks across runtime I/O"
     )]
     pub async fn send_message(
         &self,
@@ -1411,6 +1794,59 @@ impl HeadService {
     ) -> Result<SendMessageResponse, DennettError> {
         req.validate()?;
         let _ = self.ensure_migrated().await?;
+
+        let client_message_id = req
+            .client_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let turn_timeout = req
+            .timeout_ms
+            .map_or(DEFAULT_TURN_TIMEOUT, Duration::from_millis);
+
+        // 0. Client-side retry idempotency (`client_message_id`): deduplicate both completed
+        //    and concurrently in-flight retries before touching active_runs or runtime!
+        let mut _in_flight_cmid_guard: Option<InFlightClientMessageGuard> = None;
+        if let Some(ref cmid) = client_message_id {
+            loop {
+                let existing_notify = {
+                    let mut map = self.inner.in_flight_client_messages.lock().await;
+                    let key = (session_id, cmid.clone());
+                    if let Some(notify) = map.get(&key) {
+                        Some(Arc::clone(notify))
+                    } else {
+                        let notify = Arc::new(Notify::new());
+                        map.insert(key.clone(), Arc::clone(&notify));
+                        _in_flight_cmid_guard = Some(InFlightClientMessageGuard {
+                            map: Arc::clone(&self.inner.in_flight_client_messages),
+                            key,
+                            notify,
+                        });
+                        None
+                    }
+                };
+
+                if let Some(notify) = existing_notify {
+                    let _ = time::timeout(turn_timeout, notify.notified()).await;
+                    if let Some(replayed) = self
+                        .try_replay_client_message(session_id, cmid, &req.content, &correlation_id)
+                        .await?
+                    {
+                        return Ok(replayed);
+                    }
+                    continue;
+                }
+
+                if let Some(replayed) = self
+                    .try_replay_client_message(session_id, cmid, &req.content, &correlation_id)
+                    .await?
+                {
+                    return Ok(replayed);
+                }
+                break;
+            }
+        }
 
         // 1. Load session, agent+config, project, prior history, and policy rules.
         let (session, agent, project, existing_binding, prior_history, policy_rules) = {
@@ -1429,6 +1865,20 @@ impl HeadService {
             }
             let agent = fetch_agent(&conn, session.agent_id, &self.inner.pg_target).await?;
             let project = fetch_project(&conn, session.project_id, &self.inner.pg_target).await?;
+            if matches!(
+                project.lifecycle_state,
+                ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+            ) {
+                return Err(DennettError::Conflict {
+                    resource: String::from("project"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "project `{}` is `{}` and does not accept new messages",
+                        project.project_id, project.lifecycle_state
+                    ),
+                });
+            }
             let binding = fetch_runtime_binding(&conn, session_id, &self.inner.pg_target).await?;
             let history = fetch_session_messages(&conn, session_id, &self.inner.pg_target).await?;
             let rules = fetch_policy_rules(&conn, &self.inner.pg_target).await?;
@@ -1450,11 +1900,8 @@ impl HeadService {
             }
             active.insert(session_id, ActiveRunHandle { run_id, cancel_tx });
         }
-        let _active_guard = ActiveRunGuard {
-            active_runs: Arc::clone(&self.inner.active_runs),
-            session_id,
-            run_id,
-        };
+        let _active_guard =
+            ActiveRunGuard::new(Arc::clone(&self.inner.active_runs), session_id, run_id);
 
         // Determine automatic title if this is the very first user message on an untitled chat.
         let auto_title = if !prior_history.iter().any(|m| m.role == MessageRole::User)
@@ -1466,8 +1913,12 @@ impl HeadService {
         };
         let effective_session_title = auto_title.clone().unwrap_or_else(|| session.title.clone());
 
-        // 3. Persist user message + running RunRecord (and optional auto-title) BEFORE touching runtime (Architecture 80 §11).
-        let user_message = {
+        // 3. Persist user message + running RunRecord + claim undelivered inter-agent messages
+        //    BEFORE touching runtime (Architecture 80 §11).
+        let pre_run_res: Result<
+            (MessageRecord, Vec<dennett_contracts::AgentMessageRecord>),
+            Result<SendMessageResponse, DennettError>,
+        > = {
             let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
             let tx = conn
                 .transaction()
@@ -1504,11 +1955,12 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
-            let msg_row = tx
+            let msg_insert = tx
                 .query_one(
                     "INSERT INTO messages (
-                        message_id, session_id, stream_seq, role, content, run_id, correlation_id
-                     ) VALUES ($1, $2, $3, 'user', $4, $5, $6)
+                        message_id, session_id, stream_seq, role, content, run_id,
+                        client_message_id, correlation_id
+                     ) VALUES ($1, $2, $3, 'user', $4, $5, $6, $7)
                      RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
                     &[
                         &msg_id.as_uuid(),
@@ -1516,42 +1968,110 @@ impl HeadService {
                         &msg_seq,
                         &req.content,
                         &run_id.as_uuid(),
+                        &client_message_id,
                         &correlation_id.as_str(),
                     ],
                 )
-                .await
-                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                .await;
 
-            let _ = append_audit_event(
-                &tx,
-                &self.inner.pg_target,
-                &correlation_id,
-                Some(session_id),
-                Some(run_id),
-                "head",
-                "run_started",
-                &format!(
-                    "started run {run_id} for agent `{}` config v{} adapter={}",
-                    agent.name,
-                    agent.current_config.version_number,
-                    self.inner.runtime.adapter_id()
-                ),
-            )
-            .await?;
+            match msg_insert {
+                Ok(msg_row) => {
+                    let agent_msg_sql = format!(
+                        "SELECT {AGENT_MESSAGE_SELECT_COLS}
+                         FROM agent_messages
+                         WHERE recipient_agent_id = $1
+                           AND project_id = $2
+                           AND delivered_in_run_id IS NULL
+                         ORDER BY created_at ASC
+                         FOR UPDATE"
+                    );
+                    let agent_msg_rows = tx
+                        .query(
+                            &agent_msg_sql,
+                            &[&agent.agent_id.as_uuid(), &project.project_id.as_uuid()],
+                        )
+                        .await
+                        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                    let mut inbox_msgs = Vec::with_capacity(agent_msg_rows.len());
+                    for row in &agent_msg_rows {
+                        inbox_msgs.push(decode_agent_message_row(row)?);
+                    }
+                    if !inbox_msgs.is_empty() {
+                        let ids: Vec<uuid::Uuid> = inbox_msgs
+                            .iter()
+                            .map(|m| m.agent_message_id.as_uuid())
+                            .collect();
+                        tx.execute(
+                            "UPDATE agent_messages
+                             SET delivered_in_run_id = $2, delivered_at = now()
+                             WHERE agent_message_id = ANY($1)",
+                            &[&ids, &run_id.as_uuid()],
+                        )
+                        .await
+                        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                    }
 
-            tx.commit()
-                .await
-                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                    let _ = append_audit_event(
+                        &tx,
+                        &self.inner.pg_target,
+                        &correlation_id,
+                        Some(session_id),
+                        Some(run_id),
+                        "head",
+                        "run_started",
+                        &format!(
+                            "started run {run_id} for agent `{}` config v{} adapter={}",
+                            agent.name,
+                            agent.current_config.version_number,
+                            self.inner.runtime.adapter_id()
+                        ),
+                    )
+                    .await?;
 
-            MessageRecord {
-                message_id: msg_id,
-                session_id,
-                role: MessageRole::User,
-                content: req.content.clone(),
-                run_id: Some(run_id),
-                correlation_id: correlation_id.clone(),
-                created_at: TimestampMs::from_millis(msg_row.get(0)),
+                    tx.commit()
+                        .await
+                        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+                    Ok((
+                        MessageRecord {
+                            message_id: msg_id,
+                            session_id,
+                            role: MessageRole::User,
+                            content: req.content.clone(),
+                            run_id: Some(run_id),
+                            client_message_id: client_message_id.clone(),
+                            correlation_id: correlation_id.clone(),
+                            created_at: TimestampMs::from_millis(msg_row.get(0)),
+                        },
+                        inbox_msgs,
+                    ))
+                }
+                Err(pg_err) if is_pg_unique_violation(&pg_err) && client_message_id.is_some() => {
+                    drop(tx);
+                    drop(conn);
+                    let cmid = client_message_id.as_deref().unwrap_or_default();
+                    let replay = self
+                        .try_replay_client_message(session_id, cmid, &req.content, &correlation_id)
+                        .await
+                        .and_then(|opt| {
+                            opt.ok_or_else(|| DennettError::Conflict {
+                                resource: String::from("message"),
+                                expected_revision: None,
+                                actual_revision: None,
+                                reason: String::from(
+                                    "duplicate client_message_id raced during insertion",
+                                ),
+                            })
+                        });
+                    Err(replay)
+                }
+                Err(pg_err) => return Err(map_pg_err(&self.inner.pg_target, &pg_err)),
             }
+        };
+
+        let (user_message, inbox_agent_messages) = match pre_run_res {
+            Ok(pair) => pair,
+            Err(replay_res) => return replay_res,
         };
 
         // 4. Probe memoryd status (never blocks or aborts the control turn when memoryd is down!).
@@ -1572,14 +2092,8 @@ impl HeadService {
 
         // 5. Start or explicitly resume runtime session (with dynamically scoped `dennett-memory-mcp`).
         let mcp_servers = self.build_memory_mcp_specs(&agent);
-        let mut turn_secrets = self.inner.secrets_to_redact.clone();
-        for server in &mcp_servers {
-            for entry in &server.env {
-                if entry.name == "DENNETT_MEMORY_TOKEN" && !entry.value.trim().is_empty() {
-                    turn_secrets.push(entry.value.clone());
-                }
-            }
-        }
+        let turn_secrets = self.collect_turn_secrets(&mcp_servers);
+        let started_instant = Instant::now();
         let start_outcome = match self
             .inner
             .runtime
@@ -1609,21 +2123,45 @@ impl HeadService {
             .upsert_runtime_binding(session_id, &start_outcome, &correlation_id, Some(run_id))
             .await?;
 
-        // 6. Execute turn with external PolicyEngine + live cancellation handle.
-        let policy_engine = PolicyEngine::new(PolicyContext {
+        // 6. Execute turn with external InteractivePolicyEvaluator + live cancellation handle.
+        let policy_ctx = PolicyContext {
             project_id: project.project_id,
             agent_id: agent.agent_id,
             session_id: session.session_id,
+            task_id: None,
             workspace_root: effective_workspace_cwd,
             workspace_write_policy: effective_write_policy,
             allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
             rules: policy_rules,
-        });
-        let (recording_policy, decisions_buf) =
-            RecordingPolicyEvaluator::new(policy_engine, correlation_id.clone(), turn_secrets);
-        let turn_timeout = req
-            .timeout_ms
-            .map_or(DEFAULT_TURN_TIMEOUT, Duration::from_millis);
+        };
+        let (interactive_policy, decisions_buf) = InteractivePolicyEvaluator::new(
+            self.clone(),
+            policy_ctx,
+            None,
+            correlation_id.clone(),
+            turn_secrets,
+            cancel_rx.clone(),
+            DEFAULT_APPROVAL_WAIT_TIMEOUT,
+        );
+
+        let effective_prompt = if inbox_agent_messages.is_empty() {
+            req.content.clone()
+        } else {
+            let mut combined = String::from("[Messages from other agents]\n");
+            for msg in &inbox_agent_messages {
+                let sender_label = msg
+                    .sender_agent_id
+                    .map_or_else(|| String::from("user"), |id| id.to_string());
+                let _ = writeln!(
+                    combined,
+                    "- from {sender_label}: {}",
+                    self.redact(&msg.body_text)
+                );
+            }
+            combined.push('\n');
+            combined.push_str(&req.content);
+            combined
+        };
 
         let turn_result = self
             .inner
@@ -1633,16 +2171,17 @@ impl HeadService {
                     dennett_session_id: session_id,
                     provider_session_id: start_outcome.provider_session_id.clone(),
                     run_id,
-                    prompt_text: req.content,
+                    prompt_text: effective_prompt,
                     timeout: turn_timeout,
-                    cancel_rx,
+                    cancel_rx: cancel_rx.clone(),
                 },
-                Arc::new(recording_policy),
+                Arc::new(interactive_policy),
                 None,
             )
             .await;
 
-        let captured_decisions: Vec<PermissionDecisionRecord> =
+        let elapsed_ms = u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let captured_decisions: Vec<CapturedPermissionDecision> =
             decisions_buf.lock().map_or_default(|g| g.clone());
 
         let turn_outcome = match turn_result {
@@ -1660,15 +2199,78 @@ impl HeadService {
             }
         };
 
+        // Process any partial artifacts or external effects requested during the turn.
+        for ev in &turn_outcome.events {
+            match ev {
+                RuntimeEvent::PartialArtifactEmitted { name, content } => {
+                    let _ = self
+                        .create_artifact(
+                            session_id,
+                            CreateArtifactRequest {
+                                name: name.clone(),
+                                mime_type: String::from("text/plain"),
+                                content: Some(content.clone()),
+                                relative_path: None,
+                                run_id: Some(run_id),
+                                completeness_status: ArtifactCompleteness::Partial,
+                            },
+                            &correlation_id,
+                        )
+                        .await;
+                }
+                RuntimeEvent::ExternalEffectRequested {
+                    recipient,
+                    operation,
+                    behavior,
+                    idempotency_key,
+                } => {
+                    if *cancel_rx.borrow() {
+                        break;
+                    }
+                    if let Ok(idem) = IdempotencyKey::try_new(idempotency_key.clone()) {
+                        let sim_behavior = SimEffectBehavior::from_str(behavior)
+                            .unwrap_or(SimEffectBehavior::Success);
+                        let _ = self
+                            .dispatch_external_effect(
+                                DispatchEffectRequest {
+                                    project_id: project.project_id,
+                                    session_id,
+                                    task_id: None,
+                                    run_id: Some(run_id),
+                                    agent_id: agent.agent_id,
+                                    connector_id: Some(String::from(
+                                        SIMULATED_EXTERNAL_CONNECTOR_ID,
+                                    )),
+                                    operation: operation.clone(),
+                                    target_recipient: recipient.clone(),
+                                    parameters_json: json!({
+                                        "session_id": session_id,
+                                        "run_id": run_id,
+                                    })
+                                    .to_string(),
+                                    effect_idempotency_key: idem,
+                                    simulated_behavior: Some(sim_behavior),
+                                },
+                                &correlation_id,
+                            )
+                            .await;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // 7. Atomically persist decisions, tool audit trace, assistant reply, and terminal RunRecord.
         let (assistant_message, run_record) = self
             .finalize_turn(
                 session_id,
+                project.project_id,
                 run_id,
                 &agent,
                 user_message.message_id,
                 start_outcome.rehydrated,
                 &turn_outcome,
+                elapsed_ms,
                 &captured_decisions,
                 &correlation_id,
             )
@@ -1685,13 +2287,122 @@ impl HeadService {
             run: run_record,
             runtime_binding,
             artifacts,
-            permission_decisions: captured_decisions,
+            permission_decisions: captured_decisions.into_iter().map(|c| c.record).collect(),
             memory_status,
             session_title: effective_session_title,
+            deduplicated: false,
         })
     }
 
-    /// Triggers immediate live cancellation (`Stop`) on any active run in `session_id`.
+    async fn try_replay_client_message(
+        &self,
+        session_id: SessionId,
+        client_message_id: &str,
+        expected_content: &str,
+        _correlation_id: &CorrelationId,
+    ) -> Result<Option<SendMessageResponse>, DennettError> {
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let existing_msg_row = conn
+            .query_opt(
+                "SELECT message_id, session_id, role, content, run_id, client_message_id,
+                        correlation_id, TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
+                 FROM messages
+                 WHERE session_id = $1 AND client_message_id = $2",
+                &[&session_id.as_uuid(), &client_message_id],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let Some(msg_row) = existing_msg_row else {
+            return Ok(None);
+        };
+        let user_message = decode_message_row(&msg_row)?;
+        if user_message.content != expected_content {
+            return Err(DennettError::IdempotencyMismatch {
+                idempotency_key: client_message_id.to_owned(),
+                reason: String::from(
+                    "reused client_message_id on this session with different message content",
+                ),
+            });
+        }
+
+        let Some(run_id) = user_message.run_id else {
+            return Err(DennettError::Conflict {
+                resource: String::from("message"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: String::from("existing deduplicated user message has no associated run"),
+            });
+        };
+
+        let run_sql = format!("SELECT {RUN_SELECT_COLS} FROM runs WHERE run_id = $1");
+        let run_row = conn
+            .query_one(&run_sql, &[&run_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let run = decode_run_row(&run_row)?;
+        if run.status == RunStatus::Running {
+            return Err(DennettError::Conflict {
+                resource: String::from("session_run"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: String::from(
+                    "original message with this client_message_id is still running",
+                ),
+            });
+        }
+
+        let assistant_message = if let Some(amid) = run.assistant_message_id {
+            let am_row = conn
+                .query_opt(
+                    "SELECT message_id, session_id, role, content, run_id, client_message_id,
+                            correlation_id, TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
+                     FROM messages
+                     WHERE message_id = $1",
+                    &[&amid.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            am_row.as_ref().map(decode_message_row).transpose()?
+        } else {
+            None
+        };
+
+        let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+        let Some(runtime_binding) = session.runtime_binding else {
+            return Err(DennettError::Conflict {
+                resource: String::from("session_run"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!(
+                    "previous attempt for client_message_id `{client_message_id}` failed before binding runtime"
+                ),
+            });
+        };
+        let artifacts = fetch_session_artifacts(&conn, session_id, &self.inner.pg_target).await?;
+        let all_decisions =
+            fetch_session_permission_decisions(&conn, session_id, &self.inner.pg_target).await?;
+        let run_decisions = all_decisions
+            .into_iter()
+            .filter(|d| d.run_id == Some(run_id))
+            .collect();
+
+        Ok(Some(SendMessageResponse {
+            user_message,
+            assistant_message,
+            run,
+            runtime_binding,
+            artifacts,
+            permission_decisions: run_decisions,
+            memory_status: self.cached_memory_status(),
+            session_title: session.title,
+            deduplicated: true,
+        }))
+    }
+
+    /// Triggers immediate live cancellation (`Stop`) on any active run in `session_id`, withdraws
+    /// pending interactive approvals for the session, marks any in-flight `dispatching` external
+    /// effects as `unknown`, and reports honest external-outcome uncertainty (`external_outcome_unknown`).
     ///
     /// CRITICAL V02 INVARIANT: NEVER blocks on or calls `dennett-memoryd`!
     ///
@@ -1699,6 +2410,10 @@ impl HeadService {
     ///
     /// Returns [`DennettError::NotFound`] if `session_id` does not exist or
     /// [`DennettError::DatabaseUnavailable`] if control PG fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "signals live cancellation, withdraws pending approvals, transitions dispatching effects to unknown, and reports honest external outcome uncertainty without calling memoryd"
+    )]
     pub async fn cancel_session_run(
         &self,
         session_id: SessionId,
@@ -1721,13 +2436,70 @@ impl HeadService {
             .await
             .unwrap_or(false);
 
-        let cancelled = active_run_id.is_some() || runtime_cancelled;
+        let withdrawn_perms = self
+            .cancel_pending_permissions_for_scope(
+                Some(session_id),
+                None,
+                "cancelled by Stop on session",
+                correlation_id,
+            )
+            .await
+            .unwrap_or(0);
 
-        // Verify session exists and record cancel audit in control PG (never calls memoryd!).
-        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-        let _ = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+        let cancelled = active_run_id.is_some() || runtime_cancelled || withdrawn_perms > 0;
+
+        // Verify session exists, mark any `dispatching` external effects as `unknown`, and record
+        // cancel audit in control PG (never calls memoryd!).
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let session = fetch_session(&tx, session_id, &self.inner.pg_target).await?;
+
+        let dispatching_sql = format!(
+            "UPDATE effect_claims
+             SET status = 'unknown',
+                 error_summary = 'external effect outcome unknown after Stop/cancellation; manual reconciliation required',
+                 updated_at = now()
+             WHERE session_id = $1 AND status = 'dispatching'
+             RETURNING {EFFECT_CLAIM_SELECT_COLS}"
+        );
+        let dispatching_rows = tx
+            .query(&dispatching_sql, &[&session_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        for row in &dispatching_rows {
+            let eff = decode_effect_claim_row(row)?;
+            self.mark_unknown_effect_side_effects_in_tx(&tx, &eff, correlation_id)
+                .await?;
+        }
+
+        let effects_sql = format!(
+            "SELECT {EFFECT_CLAIM_SELECT_COLS}
+             FROM effect_claims
+             WHERE session_id = $1
+             ORDER BY created_at ASC"
+        );
+        let effect_rows = tx
+            .query(&effects_sql, &[&session_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let mut committed_effects: Vec<EffectClaimRecord> = Vec::new();
+        let mut unknown_effects: Vec<EffectClaimRecord> = Vec::new();
+        for row in &effect_rows {
+            let eff = decode_effect_claim_row(row)?;
+            match eff.status {
+                ExternalEffectStatus::Confirmed => committed_effects.push(eff),
+                ExternalEffectStatus::Unknown => unknown_effects.push(eff),
+                _ => {}
+            }
+        }
+        let external_outcome_unknown = !unknown_effects.is_empty();
+
         let _ = append_audit_event(
-            &conn,
+            &tx,
             &self.inner.pg_target,
             correlation_id,
             Some(session_id),
@@ -1735,19 +2507,44 @@ impl HeadService {
             "head",
             "run_cancel_requested",
             &format!(
-                "cancel requested for session {session_id} (active_run={active_run_id:?}, signalled={cancelled})"
+                "cancel requested for session {session_id} (active_run={active_run_id:?}, signalled={cancelled}, unknown_effects={})",
+                unknown_effects.len()
             ),
+        )
+        .await?;
+
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{session_id}"),
+                event_type: "session.run_cancel_requested",
+                project_id: Some(session.project_id),
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": session_id,
+                    "run_id": active_run_id,
+                    "cancelled": cancelled,
+                    "external_outcome_unknown": external_outcome_unknown,
+                }),
+            },
         )
         .await?;
 
         let status = if cancelled {
             Some(RunStatus::Cancelled)
         } else {
-            fetch_session_runs(&conn, session_id, &self.inner.pg_target)
+            fetch_session_runs(&tx, session_id, &self.inner.pg_target)
                 .await?
                 .last()
                 .map(|r| r.status)
         };
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         Ok(CancelRunResponse {
             session_id,
@@ -1757,6 +2554,9 @@ impl HeadService {
             // Non-blocking V02 report: returns the latest observed memoryd status from an
             // atomic cache without performing any synchronous network probe during Stop!
             memory_status: self.cached_memory_status(),
+            external_outcome_unknown,
+            committed_effects,
+            unknown_effects,
         })
     }
 
@@ -2303,7 +3103,7 @@ impl HeadService {
         Ok(item)
     }
 
-    async fn upsert_runtime_binding(
+    pub(crate) async fn upsert_runtime_binding(
         &self,
         session_id: SessionId,
         outcome: &dennett_runtime_antigravity::SessionStartOutcome,
@@ -2387,17 +3187,19 @@ impl HeadService {
     #[expect(
         clippy::too_many_arguments,
         clippy::too_many_lines,
-        reason = "atomic turn finalization persists decisions, tool observations, assistant message, and terminal run status together"
+        reason = "atomic turn finalization persists decisions, tool observations, assistant message, terminal run status, and ordered journal event together"
     )]
     async fn finalize_turn(
         &self,
         session_id: SessionId,
+        project_id: ProjectId,
         run_id: RunId,
         agent: &AgentRecord,
         user_message_id: MessageId,
         rehydrated: bool,
         outcome: &dennett_runtime_antigravity::TurnOutcome,
-        decisions: &[PermissionDecisionRecord],
+        elapsed_ms: u64,
+        decisions: &[CapturedPermissionDecision],
         correlation_id: &CorrelationId,
     ) -> Result<(Option<MessageRecord>, RunRecord), DennettError> {
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
@@ -2406,8 +3208,47 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
-        for dec in decisions {
-            insert_permission_decision(&tx, &self.inner.pg_target, dec).await?;
+        let assistant_message = if outcome.assistant_text.trim().is_empty() {
+            None
+        } else {
+            let msg_id = MessageId::new();
+            let stream_id = format!("session:{session_id}:messages");
+            let msg_seq = next_stream_seq(&tx, &stream_id, &self.inner.pg_target).await?;
+            let safe_text = self.redact(&outcome.assistant_text);
+            let msg_row = tx
+                .query_one(
+                    "INSERT INTO messages (
+                        message_id, session_id, stream_seq, role, content, run_id, correlation_id
+                     ) VALUES ($1, $2, $3, 'assistant', $4, $5, $6)
+                     RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
+                    &[
+                        &msg_id.as_uuid(),
+                        &session_id.as_uuid(),
+                        &msg_seq,
+                        &safe_text,
+                        &run_id.as_uuid(),
+                        &correlation_id.as_str(),
+                    ],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            Some(MessageRecord {
+                message_id: msg_id,
+                session_id,
+                role: MessageRole::Assistant,
+                content: safe_text,
+                run_id: Some(run_id),
+                client_message_id: None,
+                correlation_id: correlation_id.clone(),
+                created_at: TimestampMs::from_millis(msg_row.get(0)),
+            })
+        };
+
+        for cap in decisions {
+            let dec = &cap.record;
+            if !cap.already_persisted {
+                insert_permission_decision(&tx, &self.inner.pg_target, dec).await?;
+            }
             let _ = append_audit_event(
                 &tx,
                 &self.inner.pg_target,
@@ -2450,42 +3291,10 @@ impl HeadService {
             }
         }
 
-        let assistant_message = if outcome.assistant_text.trim().is_empty() {
-            None
-        } else {
-            let msg_id = MessageId::new();
-            let stream_id = format!("session:{session_id}:messages");
-            let msg_seq = next_stream_seq(&tx, &stream_id, &self.inner.pg_target).await?;
-            let safe_text = self.redact(&outcome.assistant_text);
-            let msg_row = tx
-                .query_one(
-                    "INSERT INTO messages (
-                        message_id, session_id, stream_seq, role, content, run_id, correlation_id
-                     ) VALUES ($1, $2, $3, 'assistant', $4, $5, $6)
-                     RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
-                    &[
-                        &msg_id.as_uuid(),
-                        &session_id.as_uuid(),
-                        &msg_seq,
-                        &safe_text,
-                        &run_id.as_uuid(),
-                        &correlation_id.as_str(),
-                    ],
-                )
-                .await
-                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-            Some(MessageRecord {
-                message_id: msg_id,
-                session_id,
-                role: MessageRole::Assistant,
-                content: safe_text,
-                run_id: Some(run_id),
-                correlation_id: correlation_id.clone(),
-                created_at: TimestampMs::from_millis(msg_row.get(0)),
-            })
-        };
-
         let stop_reason = truncate_utf8(&outcome.stop_reason, 128).to_owned();
+        let tokens_used = outcome.total_tokens();
+        let tokens_i64 = tokens_used.and_then(|v| i64::try_from(v).ok());
+        let wall_i64 = i64::try_from(elapsed_ms).ok();
         let run_row = tx
             .query_one(
                 "UPDATE runs
@@ -2493,6 +3302,8 @@ impl HeadService {
                      status = $3,
                      stop_reason = $4,
                      rehydrated = $5,
+                     tokens_used = $6,
+                     wall_ms = $7,
                      finished_at = now()
                  WHERE run_id = $1
                  RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
@@ -2503,6 +3314,8 @@ impl HeadService {
                     &outcome.status.as_str(),
                     &Some(stop_reason.as_str()),
                     &rehydrated,
+                    &tokens_i64,
+                    &wall_i64,
                 ],
             )
             .await
@@ -2536,6 +3349,27 @@ impl HeadService {
         )
         .await?;
 
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{session_id}"),
+                event_type: "session.message_completed",
+                project_id: Some(project_id),
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "status": outcome.status,
+                    "tokens_used": tokens_used,
+                    "wall_ms": elapsed_ms,
+                }),
+            },
+        )
+        .await?;
+
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -2552,6 +3386,10 @@ impl HeadService {
             error_code: None,
             error_summary: None,
             rehydrated,
+            task_id: None,
+            task_generation: None,
+            tokens_used,
+            wall_ms: Some(elapsed_ms),
             correlation_id: correlation_id.clone(),
             created_at: TimestampMs::from_millis(run_row.get(0)),
             finished_at: Some(TimestampMs::from_millis(run_row.get(1))),
@@ -2566,7 +3404,7 @@ impl HeadService {
         run_id: RunId,
         correlation_id: &CorrelationId,
         err: &DennettError,
-        decisions: &[PermissionDecisionRecord],
+        decisions: &[CapturedPermissionDecision],
     ) {
         let Ok(mut conn) = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await else {
             return;
@@ -2574,8 +3412,10 @@ impl HeadService {
         let Ok(tx) = conn.transaction().await else {
             return;
         };
-        for dec in decisions {
-            let _ = insert_permission_decision(&tx, &self.inner.pg_target, dec).await;
+        for cap in decisions {
+            if !cap.already_persisted {
+                let _ = insert_permission_decision(&tx, &self.inner.pg_target, &cap.record).await;
+            }
         }
         let safe_summary = self.redact(&err.to_string());
         let truncated = truncate_utf8(&safe_summary, 2000).to_owned();
@@ -2660,19 +3500,62 @@ impl HeadService {
         Ok(scopes)
     }
 
-    fn ensure_detached_project_dir(&self, project_id: ProjectId) -> Result<PathBuf, DennettError> {
-        let dir = self
-            .inner
+    pub(crate) fn pg_target(&self) -> &ValidatedControlPgTarget {
+        &self.inner.pg_target
+    }
+
+    pub(crate) fn runtime(&self) -> &Arc<dyn AgentRuntimePort> {
+        &self.inner.runtime
+    }
+
+    pub(crate) fn runtime_for_profile(
+        &self,
+        override_profile: Option<RuntimeAuthProfile>,
+    ) -> Result<Arc<dyn AgentRuntimePort>, DennettError> {
+        let Some(requested) = override_profile else {
+            return Ok(Arc::clone(&self.inner.runtime));
+        };
+        if self.inner.runtime.auth_profile() == requested {
+            return Ok(Arc::clone(&self.inner.runtime));
+        }
+        if let Some(ref bg) = self.inner.background_runtime
+            && bg.auth_profile() == requested
+        {
+            return Ok(Arc::clone(bg));
+        }
+        Err(DennettError::AuthRequired {
+            profile: requested,
+            detail: format!(
+                "runtime auth profile `{}` is not configured on dennett-head; refusing silent fallback to `{}`",
+                requested.as_method_id(),
+                self.inner.runtime.auth_profile().as_method_id(),
+            ),
+        })
+    }
+
+    pub(crate) fn effect_port(&self) -> &Arc<dyn ExternalEffectPort> {
+        &self.inner.effect_port
+    }
+
+    pub(crate) fn detached_project_scratch_dir(&self, project_id: ProjectId) -> PathBuf {
+        self.inner
             .detached_projects_root
             .join("detached-projects")
-            .join(project_id.to_string());
+            .join(project_id.to_string())
+    }
+
+    pub(crate) fn ensure_detached_project_dir(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<PathBuf, DennettError> {
+        let dir = self.detached_project_scratch_dir(project_id);
         fs::create_dir_all(&dir).map_err(|err| DennettError::Internal {
             detail: format!("failed creating isolated detached project workspace: {err}"),
         })?;
         Ok(dir)
     }
 
-    fn build_memory_mcp_specs(&self, agent: &AgentRecord) -> Vec<RuntimeMcpServerSpec> {
+    pub(crate) fn build_memory_mcp_specs(&self, agent: &AgentRecord) -> Vec<RuntimeMcpServerSpec> {
         let Some(ref mcp) = self.inner.memory_mcp else {
             return Vec::new();
         };
@@ -2720,7 +3603,150 @@ impl HeadService {
         }]
     }
 
-    fn cached_memory_status(&self) -> MemoryStatus {
+    pub(crate) fn collect_turn_secrets(&self, mcp_servers: &[RuntimeMcpServerSpec]) -> Vec<String> {
+        let mut turn_secrets = self.inner.secrets_to_redact.clone();
+        for server in mcp_servers {
+            for entry in &server.env {
+                if entry.name == "DENNETT_MEMORY_TOKEN" && !entry.value.trim().is_empty() {
+                    turn_secrets.push(entry.value.clone());
+                }
+            }
+        }
+        turn_secrets
+    }
+
+    pub(crate) async fn register_approval_waiter(
+        &self,
+        request_id: PermissionRequestId,
+        tx: oneshot::Sender<ApprovalResolutionSignal>,
+    ) {
+        self.inner
+            .pending_approvals
+            .lock()
+            .await
+            .insert(request_id, tx);
+    }
+
+    pub(crate) async fn remove_approval_waiter(&self, request_id: PermissionRequestId) {
+        self.inner
+            .pending_approvals
+            .lock()
+            .await
+            .remove(&request_id);
+    }
+
+    pub(crate) async fn wake_approval_waiter(
+        &self,
+        request_id: PermissionRequestId,
+        signal: ApprovalResolutionSignal,
+    ) {
+        if let Some(tx) = self
+            .inner
+            .pending_approvals
+            .lock()
+            .await
+            .remove(&request_id)
+        {
+            let _ = tx.send(signal);
+        }
+    }
+
+    pub(crate) fn active_tasks_map(&self) -> Arc<Mutex<HashMap<TaskId, ActiveTaskHandle>>> {
+        Arc::clone(&self.inner.active_tasks)
+    }
+
+    pub(crate) fn active_runs_map(&self) -> Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>> {
+        Arc::clone(&self.inner.active_runs)
+    }
+
+    pub(crate) async fn register_active_task(&self, task_id: TaskId, handle: ActiveTaskHandle) {
+        self.inner.active_tasks.lock().await.insert(task_id, handle);
+    }
+
+    pub(crate) async fn register_active_session_run(
+        &self,
+        session_id: SessionId,
+        handle: ActiveRunHandle,
+    ) {
+        self.inner
+            .active_runs
+            .lock()
+            .await
+            .insert(session_id, handle);
+    }
+
+    pub(crate) async fn is_task_cancel_signalled(&self, task_id: TaskId) -> bool {
+        if self.inner.stopped_tasks.lock().await.contains(&task_id) {
+            return true;
+        }
+        self.inner
+            .active_tasks
+            .lock()
+            .await
+            .get(&task_id)
+            .is_some_and(|h| *h.cancel_tx.borrow())
+    }
+
+    pub(crate) async fn signal_task_cancel_only(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(SessionId, RunId)> {
+        self.inner.stopped_tasks.lock().await.insert(task_id);
+        let active = self.inner.active_tasks.lock().await;
+        active.get(&task_id).map(|h| {
+            let _ = h.cancel_tx.send(true);
+            (h.session_id, h.run_id)
+        })
+    }
+
+    pub(crate) async fn signal_old_task_generation_preempt(
+        &self,
+        task_id: TaskId,
+        new_generation: i64,
+    ) {
+        let maybe_session = {
+            let active = self.inner.active_tasks.lock().await;
+            active
+                .get(&task_id)
+                .filter(|h| h.generation < new_generation)
+                .map(|h| {
+                    let _ = h.cancel_tx.send(true);
+                    (h.session_id, h.run_id)
+                })
+        };
+        if let Some((session_id, run_id)) = maybe_session {
+            let _ = self
+                .signal_session_run_if_matching(session_id, run_id)
+                .await;
+            let _ = self.inner.runtime.cancel_turn(session_id).await;
+        }
+    }
+
+    pub(crate) async fn signal_session_run_if_matching(
+        &self,
+        session_id: SessionId,
+        expected_run_id: RunId,
+    ) -> bool {
+        let active = self.inner.active_runs.lock().await;
+        if let Some(h) = active.get(&session_id)
+            && h.run_id == expected_run_id
+        {
+            let _ = h.cancel_tx.send(true);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) async fn session_exec_lock(&self, session_id: SessionId) -> Arc<Mutex<()>> {
+        let mut locks = self.inner.session_locks.lock().await;
+        Arc::clone(
+            locks
+                .entry(session_id)
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
+    pub(crate) fn cached_memory_status(&self) -> MemoryStatus {
         if self.inner.last_memory_status.load(Ordering::Acquire) == MEMORY_STATUS_HEALTHY {
             MemoryStatus::Healthy
         } else {
@@ -2774,7 +3800,10 @@ impl HeadService {
         result
     }
 
-    async fn get_conn(&self, timeout: Duration) -> Result<deadpool_postgres::Object, DennettError> {
+    pub(crate) async fn get_conn(
+        &self,
+        timeout: Duration,
+    ) -> Result<deadpool_postgres::Object, DennettError> {
         time::timeout(timeout, self.inner.pool.get())
             .await
             .map_err(|_| DennettError::DatabaseUnavailable {
@@ -2786,7 +3815,7 @@ impl HeadService {
     }
 }
 
-async fn insert_permission_decision<C: deadpool_postgres::GenericClient>(
+pub(crate) async fn insert_permission_decision<C: deadpool_postgres::GenericClient>(
     client: &C,
     target: &ValidatedControlPgTarget,
     dec: &PermissionDecisionRecord,
@@ -2941,7 +3970,7 @@ fn is_default_session_title(title: &str) -> bool {
     )
 }
 
-fn derive_auto_session_title(content: &str) -> Option<String> {
+pub(crate) fn derive_auto_session_title(content: &str) -> Option<String> {
     const MAX_CHARS: usize = 52;
 
     let first_line = content

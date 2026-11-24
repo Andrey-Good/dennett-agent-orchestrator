@@ -4,6 +4,7 @@
 //! and model-provider SDKs so that all services share stable boundary types.
 
 pub mod control;
+pub mod d2;
 pub mod memory;
 pub mod redact;
 
@@ -34,6 +35,35 @@ pub use control::{
     SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
     SessionStatus, ThinkingLevel, UpdateAgentConfigRequest, UpdateProjectRequest,
     UpdateSessionRequest, WorkspaceFileEntry, WorkspaceFileKind, WorkspaceWritePolicy,
+};
+
+pub use d2::{
+    AgentMessageId, AgentMessageRecord, ArtifactCompleteness, ArtifactLifecycleAction,
+    ArtifactLifecycleRequest, ArtifactLifecycleResponse, ArtifactLifecycleState, ArtifactStatus,
+    BudgetExceedPolicy, BudgetViolation, CancelTaskResponse, CapabilityGrantId,
+    CapabilityGrantRecord, ControlEventId, ControlEventRecord, CreateTaskRequest,
+    DispatchEffectRequest, DispatchEffectResponse, EffectClaimId, EffectClaimRecord,
+    EventStreamResponse, ExternalEffectRecord, ExternalEffectStatus, InboxCardId, InboxCardKind,
+    InboxCardRecord, InboxCardStatus, InboxCardUrgency, InboxResolutionAction,
+    ListAgentMessagesResponse, ListCapabilityGrantsResponse, ListEffectsResponse,
+    ListInboxResponse, ListPermissionRequestsResponse, ListTasksResponse, MAX_AGENT_MESSAGE_BYTES,
+    MAX_ATTACHED_SKILLS, MAX_CLARIFICATION_ANSWER_BYTES, MAX_CLIENT_MESSAGE_ID_LEN,
+    MAX_CONNECTOR_ID_LEN, MAX_EFFECT_OPERATION_LEN, MAX_EFFECT_PARAMS_BYTES,
+    MAX_EFFECT_RECIPIENT_LEN, MAX_SCHEDULE_EXPR_LEN, MAX_SIGNAL_NAME_LEN, MAX_SIGNAL_PAYLOAD_BYTES,
+    MAX_SKILL_NAME_LEN, MAX_TASK_GOAL_BYTES, MAX_TASK_TITLE_LEN, MAX_TIMEZONE_LEN,
+    ManualEffectResolution, MissedRunPolicy, OrderedOutboxItem, OrderedOutboxItemId,
+    OrderedOutboxStatus, PermissionRequestId, PermissionRequestRecord, PermissionRequestStatus,
+    PermissionResolutionDecision, ProjectLifecycleResponse, ProjectLifecycleState,
+    RebindProjectRequest, ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest,
+    ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
+    ResolvePermissionResponse, RevokeGrantRequest, ScheduleKind, SchedulerTickRequest,
+    SchedulerTickResponse, SendAgentMessageRequest, SendAgentMessageResponse, SimEffectBehavior,
+    StateSnapshotResponse, StreamCursor, TaskBudget, TaskDetailResponse, TaskId, TaskRecord,
+    TaskSchedule, TaskSignalId, TaskSignalOutcome, TaskSignalRecord, TaskSignalRequest,
+    TaskSignalResponse, TaskStatus, TaskTimerId, TaskTimerRecord, TaskTimerStatus, TaskUsage,
+    UpdateTaskRequest, UsageConfidence, validate_attached_skills, validate_client_message_id,
+    validate_grant_scope, validate_grant_tool_pattern, validate_iana_timezone_syntax,
+    write_policy_is_subset_of,
 };
 
 pub use memory::{

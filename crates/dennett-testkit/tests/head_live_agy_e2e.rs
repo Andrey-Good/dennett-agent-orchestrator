@@ -299,6 +299,8 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 workspace_write_policy: WorkspaceWritePolicy::AllowPaths {
                     allowed_prefixes: vec![String::from("docs/")],
                 },
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
             None,
         )
@@ -333,6 +335,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
             &SendMessageRequest {
                 content: prompt_turn1,
                 timeout_ms: Some(120_000),
+                client_message_id: None,
             },
             None,
         )
@@ -392,6 +395,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 mime_type: String::from("text/plain"),
                 content: None,
                 relative_path: Some(String::from("docs/summary.txt")),
+                completeness_status: dennett_contracts::ArtifactCompleteness::Final,
             },
             None,
         )
@@ -436,6 +440,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                      If that is denied, also try `run_command` to echo `should_fail`. Report the denial.",
                 ),
                 timeout_ms: Some(90_000),
+                client_message_id: None,
             },
             None,
         )
@@ -546,6 +551,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                          botanical species with three full sentences each. Do not abbreviate.",
                     ),
                     timeout_ms: Some(90_000),
+                    client_message_id: None,
                 },
                 None,
             )
@@ -607,6 +613,10 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
 
 #[tokio::test]
 #[ignore = "live agy acp 1.5.15+ isolated gemini-api-key fail-closed probe; run via dennett-check runtime-probe"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "provisions isolated live memoryd + Head + gemini-api-key profile and verifies fail-closed refusal without OAuth fallback"
+)]
 async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
     let (mem_pg, ctrl_pg, profile, _tmp, _guard) = require_live_e2e_env("d1-live-apikey-fail");
     let suffix = &Uuid::new_v4().simple().to_string()[..10];
@@ -664,6 +674,8 @@ async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
                 thinking_level: None,
                 allowed_memory_scopes: BTreeSet::from([scope]),
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
             None,
         )
@@ -689,6 +701,7 @@ async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
             &SendMessageRequest {
                 content: String::from("Hello"),
                 timeout_ms: Some(30_000),
+                client_message_id: None,
             },
             None,
         )

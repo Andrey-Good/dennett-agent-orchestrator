@@ -41,15 +41,21 @@ struct SimSessionState {
 
 /// Deterministic [`AgentRuntimePort`] test double for offline CI integration suites.
 ///
-/// Supports explicit test directives inside prompts:
-/// - `[SIM:TOOL:write_file:<relative_or_abs_path>|<content>]` — invokes real [`PolicyEvaluator`],
+/// Supports explicit test directives inside prompts (either at prompt start or on their own line):
+/// - `[SIM:TOOL:write_file:<relative_or_abs_path>|<content>]` — invokes real async [`PolicyEvaluator`],
 ///   writes the file once ONLY if allowed (zero double execution), and denies cleanly if blocked.
-/// - `[SIM:TOOL:run_command:<command>]` — invokes real [`PolicyEvaluator`] for shell execution.
-/// - `[SIM:TOOL:mcp:<tool_name>|<target>]` — invokes real [`PolicyEvaluator`] for MCP tool calls.
+/// - `[SIM:TOOL:run_command:<command>]` — invokes real async [`PolicyEvaluator`] for shell execution.
+/// - `[SIM:TOOL:mcp:<tool_name>|<target>]` — invokes real async [`PolicyEvaluator`] for MCP tool calls.
 /// - `[SIM:SLOW:<millis>]` — sleeps incrementally while watching `cancel_rx` to verify live Stop
 ///   and strict rejection of late permission requests after cancel.
 /// - `[SIM:ERROR:<message>]` — emits partial `TextDelta` then returns `Err(RuntimeProtocol)` so
 ///   callers prove partial output NEVER becomes `Succeeded`.
+/// - `[SIM:CLARIFY:<question>]` — emits [`RuntimeEvent::ClarificationRequested`] and ends turn with
+///   `stop_reason = "clarification_needed"`.
+/// - `[SIM:TOKENS:<count>]` — reports `usage: { "simulated": true, "totalTokens": <count> }`.
+/// - `[SIM:PARTIAL_ARTIFACT:<name>|<content>]` — emits [`RuntimeEvent::PartialArtifactEmitted`].
+/// - `[SIM:EFFECT:<recipient>|<operation>|<behavior>|<idem_key>]` — emits
+///   [`RuntimeEvent::ExternalEffectRequested`] for end-to-end external effect verification.
 pub struct SimulatedRuntime {
     auth_profile: RuntimeAuthProfile,
     sessions: Mutex<HashMap<SessionId, SimSessionState>>,
@@ -403,6 +409,26 @@ fn emit(events: &mut Vec<RuntimeEvent>, ev: RuntimeEvent, tx: Option<&mpsc::Send
     events.push(ev);
 }
 
+fn find_all_directives<'a>(prompt: &'a str, prefix: &str) -> Vec<&'a str> {
+    let mut results = Vec::new();
+    let mut rest = prompt;
+    while let Some(pos) = rest.find(prefix) {
+        let after_prefix = &rest[pos + prefix.len()..];
+        if let Some((value, tail)) = after_prefix.split_once(']') {
+            results.push(value.trim());
+            rest = tail;
+        } else {
+            results.push(after_prefix.trim());
+            break;
+        }
+    }
+    results
+}
+
+fn find_directive<'a>(prompt: &'a str, prefix: &str) -> Option<&'a str> {
+    find_all_directives(prompt, prefix).into_iter().next()
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "simulated directive dispatcher keeps all deterministic CI paths in one clear function"
@@ -419,8 +445,24 @@ async fn execute_sim_turn(
     let mut events = Vec::new();
     let prompt = prompt_text.trim();
 
-    if let Some(rest) = prompt.strip_prefix("[SIM:ERROR:") {
-        let detail = rest.trim_end_matches(']').trim();
+    if *cancel_rx.borrow() {
+        emit(
+            &mut events,
+            RuntimeEvent::Cancelled {
+                reason: String::from("cancelled before execution"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Cancelled,
+            stop_reason: String::from("cancelled"),
+            assistant_text: String::new(),
+            events,
+            usage: None,
+        });
+    }
+
+    if let Some(detail) = find_directive(prompt, "[SIM:ERROR:") {
         emit(
             &mut events,
             RuntimeEvent::TextDelta {
@@ -434,8 +476,8 @@ async fn execute_sim_turn(
         });
     }
 
-    if let Some(rest) = prompt.strip_prefix("[SIM:SLOW:") {
-        let millis: u64 = rest.trim_end_matches(']').trim().parse().unwrap_or(5_000);
+    if let Some(millis_str) = find_directive(prompt, "[SIM:SLOW:") {
+        let millis: u64 = millis_str.parse().unwrap_or(5_000);
         emit(
             &mut events,
             RuntimeEvent::TextDelta {
@@ -493,8 +535,101 @@ async fn execute_sim_turn(
         }
     }
 
-    if let Some(rest) = prompt.strip_prefix("[SIM:TOOL:") {
-        let body = rest.trim_end_matches(']');
+    let explicit_tokens =
+        find_directive(prompt, "[SIM:TOKENS:").and_then(|raw| raw.parse::<u64>().ok());
+    let usage_payload = match explicit_tokens {
+        Some(tokens) => {
+            let u = json!({ "simulated": true, "totalTokens": tokens });
+            emit(
+                &mut events,
+                RuntimeEvent::UsageReported { usage: u.clone() },
+                event_tx,
+            );
+            Some(u)
+        }
+        None => Some(json!({ "simulated": true })),
+    };
+
+    for raw_partial in find_all_directives(prompt, "[SIM:PARTIAL_ARTIFACT:") {
+        let (name, content) = match raw_partial.split_once('|') {
+            Some((n, c)) => (n.trim().to_owned(), c.to_owned()),
+            None => (String::from("partial-draft.md"), raw_partial.to_owned()),
+        };
+        if !name.is_empty() {
+            emit(
+                &mut events,
+                RuntimeEvent::PartialArtifactEmitted { name, content },
+                event_tx,
+            );
+        }
+    }
+
+    if let Some(question) = find_directive(prompt, "[SIM:CLARIFY:") {
+        let question_owned = if question.is_empty() {
+            String::from("Please clarify the expected parameters.")
+        } else {
+            question.to_owned()
+        };
+        emit(
+            &mut events,
+            RuntimeEvent::ClarificationRequested {
+                question: question_owned.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::TextDelta {
+                text: question_owned.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("clarification_needed"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("clarification_needed"),
+            assistant_text: question_owned,
+            events,
+            usage: usage_payload,
+        });
+    }
+
+    let mut effect_summaries = Vec::new();
+    for raw_effect in find_all_directives(prompt, "[SIM:EFFECT:") {
+        let mut parts = raw_effect.splitn(4, '|');
+        let recipient = parts.next().unwrap_or("sim-recipient").trim().to_owned();
+        let operation = parts.next().unwrap_or("send_notice").trim().to_owned();
+        let behavior = parts.next().unwrap_or("success").trim().to_owned();
+        let idempotency_key = parts
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map_or_else(
+                || format!("sim-eff-{}", &Uuid::new_v4().simple().to_string()[..12]),
+                ToOwned::to_owned,
+            );
+        effect_summaries.push(format!(
+            "effect `{operation}` -> `{recipient}` ({behavior}, key={idempotency_key})"
+        ));
+        emit(
+            &mut events,
+            RuntimeEvent::ExternalEffectRequested {
+                recipient,
+                operation,
+                behavior,
+                idempotency_key,
+            },
+            event_tx,
+        );
+    }
+
+    if let Some(body) = find_directive(prompt, "[SIM:TOOL:") {
         let mut parts = body.splitn(3, ':');
         let tool_name = parts.next().unwrap_or("unknown").trim().to_owned();
         let arg_tail = parts.next().unwrap_or_default();
@@ -559,7 +694,90 @@ async fn execute_sim_turn(
             event_tx,
         );
 
-        let decision = policy.evaluate(&eval_req);
+        let maybe_decision = {
+            let mut eval_fut = policy.evaluate(&eval_req);
+            let mut cancel_open = true;
+            loop {
+                tokio::select! {
+                    biased;
+                    res = &mut eval_fut => break Some(res),
+                    changed = cancel_rx.changed(), if cancel_open => {
+                        if changed.is_ok() {
+                            if *cancel_rx.borrow() {
+                                break None;
+                            }
+                        } else {
+                            cancel_open = false;
+                        }
+                    }
+                }
+            }
+        };
+
+        let Some(decision) = maybe_decision else {
+            emit(
+                &mut events,
+                RuntimeEvent::PermissionResolved {
+                    tool_call_id,
+                    tool_name,
+                    target: eval_req.target,
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: String::from(
+                        "abandoned because run was cancelled during approval wait",
+                    ),
+                    scope: format!("session:{dennett_session_id}"),
+                    chosen_option_id: None,
+                },
+                event_tx,
+            );
+            emit(
+                &mut events,
+                RuntimeEvent::Cancelled {
+                    reason: String::from("cancelled"),
+                },
+                event_tx,
+            );
+            return Ok(TurnOutcome {
+                status: RunStatus::Cancelled,
+                stop_reason: String::from("cancelled"),
+                assistant_text: String::new(),
+                events,
+                usage: None,
+            });
+        };
+
+        if *cancel_rx.borrow() {
+            emit(
+                &mut events,
+                RuntimeEvent::PermissionResolved {
+                    tool_call_id,
+                    tool_name,
+                    target: eval_req.target,
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: decision.matched_rule_id,
+                    reason: String::from("late approval rejected after cancellation"),
+                    scope: decision.scope,
+                    chosen_option_id: None,
+                },
+                event_tx,
+            );
+            emit(
+                &mut events,
+                RuntimeEvent::Cancelled {
+                    reason: String::from("cancelled"),
+                },
+                event_tx,
+            );
+            return Ok(TurnOutcome {
+                status: RunStatus::Cancelled,
+                stop_reason: String::from("cancelled"),
+                assistant_text: String::new(),
+                events,
+                usage: None,
+            });
+        }
+
         let chosen_option = match decision.effect {
             PolicyEffect::Allow => Some(String::from("allow_once")),
             PolicyEffect::Deny => Some(String::from("reject_once")),
@@ -652,7 +870,7 @@ async fn execute_sim_turn(
             stop_reason: String::from("end_turn"),
             assistant_text: reply,
             events,
-            usage: Some(json!({ "simulated": true })),
+            usage: usage_payload,
         });
     }
 
@@ -667,8 +885,13 @@ async fn execute_sim_turn(
         .cloned()
         .unwrap_or_else(|| String::from("none"));
     let write_mode = format!("{:?}", session.write_policy);
+    let effects_note = if effect_summaries.is_empty() {
+        String::new()
+    } else {
+        format!(" | effects=[{}]", effect_summaries.join("; "))
+    };
     let reply = format!(
-        "[simulated provider_session={} model={} thinking={} write_policy={} history_entries={} last_history={}] prompt_ack: {} | system_prompt_len={}",
+        "[simulated provider_session={} model={} thinking={} write_policy={} history_entries={} last_history={}] prompt_ack: {} | system_prompt_len={}{}",
         session.provider_session_id,
         model_label,
         thinking_label,
@@ -676,7 +899,8 @@ async fn execute_sim_turn(
         history_count,
         history_hint,
         prompt,
-        session.system_prompt.len()
+        session.system_prompt.len(),
+        effects_note
     );
 
     emit(
@@ -699,7 +923,7 @@ async fn execute_sim_turn(
         stop_reason: String::from("end_turn"),
         assistant_text: reply,
         events,
-        usage: Some(json!({ "simulated": true })),
+        usage: usage_payload,
     })
 }
 

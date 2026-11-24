@@ -17,14 +17,15 @@ use std::sync::{Arc, Mutex};
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    AgentId, CorrelationId, MemoryScope, PermissionDecisionId, PermissionDecisionRecord,
-    PolicyEffect, PolicyRule, ProjectId, SessionId, TimestampMs, WorkspaceWritePolicy,
+    AgentId, CapabilityGrantId, CapabilityGrantRecord, CorrelationId, MemoryScope,
+    PermissionDecisionId, PermissionDecisionRecord, PolicyEffect, PolicyRule, ProjectId, SessionId,
+    TaskId, TimestampMs, WorkspaceWritePolicy,
 };
 use dennett_runtime_antigravity::{
-    PolicyEvaluationOutcome, PolicyEvaluationRequest, PolicyEvaluator,
+    BoxFuture, PolicyEvaluationOutcome, PolicyEvaluationRequest, PolicyEvaluator,
 };
 
-/// Context snapshot evaluated by [`PolicyEngine`] for one session turn.
+/// Context snapshot evaluated by [`PolicyEngine`] for one session or task turn.
 #[derive(Debug, Clone)]
 pub struct PolicyContext {
     /// Owning project identifier.
@@ -33,6 +34,8 @@ pub struct PolicyContext {
     pub agent_id: AgentId,
     /// Owning session identifier.
     pub session_id: SessionId,
+    /// Optional owning durable task identifier.
+    pub task_id: Option<TaskId>,
     /// Project workspace root directory.
     pub workspace_root: PathBuf,
     /// Agent's configured workspace write policy.
@@ -41,6 +44,36 @@ pub struct PolicyContext {
     pub allowed_memory_scopes: BTreeSet<MemoryScope>,
     /// Active persisted policy rules loaded from `dennett_control`.
     pub rules: Vec<PolicyRule>,
+}
+
+/// Detailed policy evaluation result supporting revocable [`CapabilityGrantRecord`]s and
+/// interactive `AskBeforeWrite` owner approvals strictly outside the model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyEvaluationDecision {
+    /// Immediate deterministic `Allow` or `Deny` decision.
+    Immediate(PolicyEvaluationOutcome),
+    /// Approved by an active, non-revoked, non-expired [`CapabilityGrantRecord`].
+    ///
+    /// Callers interacting with PostgreSQL MUST atomically verify `revoked_at IS NULL` and
+    /// increment `uses_consumed` before granting `allow_once` to the runtime.
+    AllowedByGrant {
+        /// Identifier of the matching capability grant.
+        grant_id: CapabilityGrantId,
+        /// Outcome returned once atomic grant consumption succeeds.
+        outcome: PolicyEvaluationOutcome,
+    },
+    /// Safe in-workspace write under `WorkspaceWritePolicy::AskBeforeWrite` requiring explicit
+    /// interactive owner approval via `permission_requests` + `inbox_cards`.
+    NeedsInteractiveApproval {
+        /// Verified canonical workspace-relative target paths.
+        normalized_targets: Vec<String>,
+        /// Concise secret-safe target summary for the approval card.
+        target_summary: String,
+        /// Effective policy scope.
+        scope: String,
+        /// Rationale shown to the owner on the approval card.
+        reason: String,
+    },
 }
 
 /// Pure, deterministic external policy engine (reference monitor evaluated outside the model).
@@ -56,13 +89,46 @@ impl PolicyEngine {
         Self { ctx }
     }
 
-    /// Evaluates one pending tool invocation request outside the model.
+    /// Borrows the underlying [`PolicyContext`].
+    #[must_use]
+    pub const fn context(&self) -> &PolicyContext {
+        &self.ctx
+    }
+
+    /// Evaluates one pending tool invocation request outside the model (synchronous fallback
+    /// mapping interactive approval requests to default-deny when no interactive broker is attached).
+    #[must_use]
+    pub fn evaluate_request(&self, req: &PolicyEvaluationRequest) -> PolicyEvaluationOutcome {
+        match self.evaluate_with_grants(req, &[], TimestampMs::now()) {
+            PolicyEvaluationDecision::Immediate(outcome)
+            | PolicyEvaluationDecision::AllowedByGrant { outcome, .. } => outcome,
+            PolicyEvaluationDecision::NeedsInteractiveApproval { scope, .. } => {
+                PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Deny,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "default-deny outside model: tool `{}` requires interactive owner approval",
+                        req.tool_name
+                    ),
+                    scope,
+                }
+            }
+        }
+    }
+
+    /// Evaluates one pending tool invocation request against workspace containment, explicit `Deny`
+    /// rules, `WorkspaceWritePolicy`, active revocable [`CapabilityGrantRecord`]s, and MCP memory scopes.
     #[must_use]
     #[expect(
         clippy::too_many_lines,
         reason = "policy evaluation enforces strict 7-stage precedence order in one auditable sequence"
     )]
-    pub fn evaluate_request(&self, req: &PolicyEvaluationRequest) -> PolicyEvaluationOutcome {
+    pub fn evaluate_with_grants(
+        &self,
+        req: &PolicyEvaluationRequest,
+        active_grants: &[CapabilityGrantRecord],
+        now: TimestampMs,
+    ) -> PolicyEvaluationDecision {
         let tool_lower = req.tool_name.trim().to_ascii_lowercase();
         let active_scopes = self.active_scopes();
         let applicable_rules: Vec<&PolicyRule> = self
@@ -83,13 +149,13 @@ impl PolicyEngine {
         };
 
         // 1. Hard workspace boundary check for BOTH file-mutating AND file-reading tools
-        //    (CANNOT be bypassed by Allow rules; fails CLOSED on missing target or any escaping location!).
+        //    (CANNOT be bypassed by Allow rules OR capability grants; fails CLOSED on missing target or any escaping location!).
         let mut normalized_rel_targets: Vec<String> = Vec::new();
         if is_file_write || is_file_read {
             let candidate_paths = collect_file_targets(req);
             if candidate_paths.is_empty() {
                 let kind_label = if is_file_write { "write" } else { "read" };
-                return PolicyEvaluationOutcome {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                     effect: PolicyEffect::Deny,
                     matched_rule_id: None,
                     reason: format!(
@@ -97,7 +163,7 @@ impl PolicyEngine {
                         req.tool_name
                     ),
                     scope: format!("session:{}", self.ctx.session_id),
-                };
+                });
             }
 
             for raw_target in &candidate_paths {
@@ -111,12 +177,12 @@ impl PolicyEngine {
                         }
                     }
                     Err(reason) => {
-                        return PolicyEvaluationOutcome {
+                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                             effect: PolicyEffect::Deny,
                             matched_rule_id: None,
                             reason,
                             scope: format!("project:{}", self.ctx.project_id),
-                        };
+                        });
                     }
                 }
             }
@@ -137,74 +203,121 @@ impl PolicyEngine {
             rule_match_targets.push(raw);
         }
 
-        // 2. Explicit `Deny` rules ALWAYS take precedence over `Allow` rules.
+        // 2. Explicit `Deny` rules ALWAYS take precedence over `Allow` rules and `CapabilityGrants`.
         if let Some(deny_rule) = applicable_rules.iter().find(|r| {
             r.effect == PolicyEffect::Deny && rule_matches_any(r, &tool_lower, &rule_match_targets)
         }) {
-            return PolicyEvaluationOutcome {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Deny,
                 matched_rule_id: Some(deny_rule.rule_id),
                 reason: format!("denied by explicit policy rule: {}", deny_rule.reason),
                 scope: deny_rule.scope.clone(),
-            };
+            });
         }
 
         // 3. Enforce agent `WorkspaceWritePolicy` on file-mutating tools.
         if is_file_write {
             match &self.ctx.workspace_write_policy {
                 WorkspaceWritePolicy::DenyAll => {
-                    return PolicyEvaluationOutcome {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Deny,
                         matched_rule_id: None,
                         reason: String::from("denied by agent workspace_write_policy=deny_all"),
                         scope: format!("agent:{}", self.ctx.agent_id),
-                    };
+                    });
                 }
                 WorkspaceWritePolicy::AllowPaths { allowed_prefixes } => {
                     if let Some(disallowed) = normalized_rel_targets
                         .iter()
                         .find(|rel| !matches_any_prefix(rel, allowed_prefixes))
                     {
-                        return PolicyEvaluationOutcome {
+                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                             effect: PolicyEffect::Deny,
                             matched_rule_id: None,
                             reason: format!(
                                 "denied by workspace_write_policy=allow_paths: `{disallowed}` is outside permitted prefixes"
                             ),
                             scope: format!("agent:{}", self.ctx.agent_id),
-                        };
+                        });
                     }
                     let joined_rel = normalized_rel_targets.join(", ");
-                    return PolicyEvaluationOutcome {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Allow,
                         matched_rule_id: None,
                         reason: format!(
                             "allowed by workspace_write_policy=allow_paths for `{joined_rel}`"
                         ),
                         scope: format!("agent:{}", self.ctx.agent_id),
-                    };
+                    });
                 }
                 WorkspaceWritePolicy::AllowWorkspace => {
                     let joined_rel = normalized_rel_targets.join(", ");
-                    return PolicyEvaluationOutcome {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Allow,
                         matched_rule_id: None,
                         reason: format!(
                             "allowed by workspace_write_policy=allow_workspace within project root (`{joined_rel}`)"
                         ),
                         scope: format!("agent:{}", self.ctx.agent_id),
-                    };
+                    });
                 }
                 WorkspaceWritePolicy::AskBeforeWrite => {
-                    // Requires an explicit Allow rule below; otherwise fails closed!
+                    // Explicit Allow policy rule still applies when configured.
+                    if let Some(allow_rule) = applicable_rules.iter().find(|r| {
+                        r.effect == PolicyEffect::Allow
+                            && rule_matches_any(r, &tool_lower, &rule_match_targets)
+                    }) {
+                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                            effect: PolicyEffect::Allow,
+                            matched_rule_id: Some(allow_rule.rule_id),
+                            reason: format!(
+                                "allowed by explicit policy rule: {}",
+                                allow_rule.reason
+                            ),
+                            scope: allow_rule.scope.clone(),
+                        });
+                    }
+                    // Check active revocable CapabilityGrants (non-revoked, non-expired, remaining uses).
+                    if let Some(grant) = self.find_matching_grant(
+                        active_grants,
+                        now,
+                        &tool_lower,
+                        true,
+                        &normalized_rel_targets,
+                    ) {
+                        let joined_rel = normalized_rel_targets.join(", ");
+                        return PolicyEvaluationDecision::AllowedByGrant {
+                            grant_id: grant.grant_id,
+                            outcome: PolicyEvaluationOutcome {
+                                effect: PolicyEffect::Allow,
+                                matched_rule_id: None,
+                                reason: format!(
+                                    "allowed by active capability grant {} ({}) for `{joined_rel}`",
+                                    grant.grant_id, grant.reason
+                                ),
+                                scope: grant.scope.clone(),
+                            },
+                        };
+                    }
+                    // Otherwise require interactive owner approval outside the model!
+                    let target_summary = normalized_rel_targets.join(", ");
+                    return PolicyEvaluationDecision::NeedsInteractiveApproval {
+                        normalized_targets: normalized_rel_targets,
+                        target_summary: target_summary.clone(),
+                        scope: format!("project:{}", self.ctx.project_id),
+                        reason: format!(
+                            "workspace_write_policy=ask_before_write requires owner approval to run `{}` on `{target_summary}`",
+                            req.tool_name
+                        ),
+                    };
                 }
                 _ => {
-                    return PolicyEvaluationOutcome {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Deny,
                         matched_rule_id: None,
                         reason: String::from("denied: unrecognized workspace_write_policy"),
                         scope: format!("agent:{}", self.ctx.agent_id),
-                    };
+                    });
                 }
             }
         }
@@ -212,14 +325,14 @@ impl PolicyEngine {
         // 4. Scoped `dennett-memory-mcp` tools: enforce agent's `allowed_memory_scopes` (defense-in-depth).
         if let Some(mem_op) = memory_mcp_op {
             if self.ctx.allowed_memory_scopes.is_empty() {
-                return PolicyEvaluationOutcome {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                     effect: PolicyEffect::Deny,
                     matched_rule_id: None,
                     reason: String::from(
                         "denied memory MCP tool: agent has no allowed_memory_scopes configured",
                     ),
                     scope: format!("agent:{}", self.ctx.agent_id),
-                };
+                });
             }
 
             let requires_explicit_scope = matches!(
@@ -232,7 +345,7 @@ impl PolicyEngine {
                     let Some(requested_scope) =
                         scope_val.as_str().map(str::trim).filter(|s| !s.is_empty())
                     else {
-                        return PolicyEvaluationOutcome {
+                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                             effect: PolicyEffect::Deny,
                             matched_rule_id: None,
                             reason: format!(
@@ -240,7 +353,7 @@ impl PolicyEngine {
                                 req.tool_name
                             ),
                             scope: format!("agent:{}", self.ctx.agent_id),
-                        };
+                        });
                     };
                     let allowed = self
                         .ctx
@@ -248,7 +361,7 @@ impl PolicyEngine {
                         .iter()
                         .any(|s| s.as_str() == requested_scope);
                     if !allowed {
-                        return PolicyEvaluationOutcome {
+                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                             effect: PolicyEffect::Deny,
                             matched_rule_id: None,
                             reason: format!(
@@ -256,11 +369,11 @@ impl PolicyEngine {
                                 req.tool_name
                             ),
                             scope: format!("agent:{}", self.ctx.agent_id),
-                        };
+                        });
                     }
                 }
                 None if requires_explicit_scope => {
-                    return PolicyEvaluationOutcome {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Deny,
                         matched_rule_id: None,
                         reason: format!(
@@ -268,45 +381,45 @@ impl PolicyEngine {
                             req.tool_name
                         ),
                         scope: format!("agent:{}", self.ctx.agent_id),
-                    };
+                    });
                 }
                 None => {}
             }
 
-            return PolicyEvaluationOutcome {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Allow,
                 matched_rule_id: None,
                 reason: format!("allowed scoped Dennett memory MCP tool `{}`", req.tool_name),
                 scope: format!("agent:{}", self.ctx.agent_id),
-            };
+            });
         }
 
         // 5. Explicit `Allow` rules matching active scopes.
         if let Some(allow_rule) = applicable_rules.iter().find(|r| {
             r.effect == PolicyEffect::Allow && rule_matches_any(r, &tool_lower, &rule_match_targets)
         }) {
-            return PolicyEvaluationOutcome {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Allow,
                 matched_rule_id: Some(allow_rule.rule_id),
                 reason: format!("allowed by explicit policy rule: {}", allow_rule.reason),
                 scope: allow_rule.scope.clone(),
-            };
+            });
         }
 
         // 6. Read-only file inspection strictly inside the project workspace root
         //    (all targets already verified non-empty & in-workspace in Step 1, and Deny-checked in Step 2).
         if is_file_read {
             let joined_rel = normalized_rel_targets.join(", ");
-            return PolicyEvaluationOutcome {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                 effect: PolicyEffect::Allow,
                 matched_rule_id: None,
                 reason: format!("allowed read-only workspace inspection of `{joined_rel}`"),
                 scope: format!("project:{}", self.ctx.project_id),
-            };
+            });
         }
 
-        // 7. Default-DENY for unknown or dangerous tools (shell, run_command, network, ask_before_write without rule).
-        PolicyEvaluationOutcome {
+        // 7. Default-DENY for unknown or dangerous tools (shell, run_command, network).
+        PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
             effect: PolicyEffect::Deny,
             matched_rule_id: None,
             reason: format!(
@@ -314,7 +427,44 @@ impl PolicyEngine {
                 req.tool_name
             ),
             scope: format!("session:{}", self.ctx.session_id),
-        }
+        })
+    }
+
+    fn find_matching_grant<'a>(
+        &self,
+        grants: &'a [CapabilityGrantRecord],
+        now: TimestampMs,
+        tool_lower: &str,
+        is_file_write: bool,
+        normalized_rel_targets: &[String],
+    ) -> Option<&'a CapabilityGrantRecord> {
+        grants.iter().find(|grant| {
+            if !grant.is_active_at(now) {
+                return false;
+            }
+            if grant.project_id != self.ctx.project_id {
+                return false;
+            }
+            if grant.agent_id.is_some_and(|a| a != self.ctx.agent_id) {
+                return false;
+            }
+            if grant.session_id.is_some_and(|s| s != self.ctx.session_id) {
+                return false;
+            }
+            if grant.task_id.is_some_and(|t| Some(t) != self.ctx.task_id) {
+                return false;
+            }
+            if !grant_matches_tool(&grant.tool_pattern, tool_lower, is_file_write) {
+                return false;
+            }
+            if grant.target_prefixes.is_empty() {
+                return true;
+            }
+            !normalized_rel_targets.is_empty()
+                && normalized_rel_targets
+                    .iter()
+                    .all(|rel| matches_any_prefix(rel, &grant.target_prefixes))
+        })
     }
 
     fn active_scopes(&self) -> [String; 4] {
@@ -325,6 +475,26 @@ impl PolicyEngine {
             String::from("global"),
         ]
     }
+}
+
+/// Returns `true` when `pattern` permits `tool_lower` without escalating write grants to shell tools.
+#[must_use]
+pub fn grant_matches_tool(pattern: &str, tool_lower: &str, is_file_write: bool) -> bool {
+    let norm = pattern.trim().to_ascii_lowercase();
+    if norm == "workspace_write" {
+        return is_file_write;
+    }
+    if let Some(prefix) = norm.strip_suffix('*') {
+        !prefix.is_empty() && tool_lower.starts_with(prefix)
+    } else {
+        tool_lower == norm
+    }
+}
+
+/// Returns `true` when `tool_name` / `tool_kind` classifies as a workspace file-mutating tool.
+#[must_use]
+pub fn is_workspace_write_tool(tool_name: &str, tool_kind: &str) -> bool {
+    is_write_tool(&tool_name.trim().to_ascii_lowercase(), tool_kind)
 }
 
 /// Recording [`PolicyEvaluator`] adapter used during a single Head turn so every external
@@ -356,31 +526,36 @@ impl RecordingPolicyEvaluator {
 }
 
 impl PolicyEvaluator for RecordingPolicyEvaluator {
-    fn evaluate(&self, req: &PolicyEvaluationRequest) -> PolicyEvaluationOutcome {
-        let outcome = self.engine.evaluate_request(req);
-        let extra: Vec<&str> = self.secrets_to_redact.iter().map(String::as_str).collect();
-        let safe_target = req.target.as_deref().map(|t| redact_secrets(t, &extra));
-        let safe_reason = redact_secrets(&outcome.reason, &extra);
+    fn evaluate<'a>(
+        &'a self,
+        req: &'a PolicyEvaluationRequest,
+    ) -> BoxFuture<'a, PolicyEvaluationOutcome> {
+        Box::pin(async move {
+            let outcome = self.engine.evaluate_request(req);
+            let extra: Vec<&str> = self.secrets_to_redact.iter().map(String::as_str).collect();
+            let safe_target = req.target.as_deref().map(|t| redact_secrets(t, &extra));
+            let safe_reason = redact_secrets(&outcome.reason, &extra);
 
-        let record = PermissionDecisionRecord {
-            decision_id: PermissionDecisionId::new(),
-            session_id: req.session_id,
-            run_id: Some(req.run_id),
-            tool_call_id: req.tool_call_id.clone(),
-            tool_name: req.tool_name.clone(),
-            target_pattern: safe_target,
-            scope: outcome.scope.clone(),
-            effect: outcome.effect,
-            matched_rule_id: outcome.matched_rule_id,
-            reason: safe_reason,
-            evaluated_outside_model: true,
-            correlation_id: self.correlation_id.clone(),
-            created_at: TimestampMs::now(),
-        };
-        if let Ok(mut guard) = self.decisions.lock() {
-            guard.push(record);
-        }
-        outcome
+            let record = PermissionDecisionRecord {
+                decision_id: PermissionDecisionId::new(),
+                session_id: req.session_id,
+                run_id: Some(req.run_id),
+                tool_call_id: req.tool_call_id.clone(),
+                tool_name: req.tool_name.clone(),
+                target_pattern: safe_target,
+                scope: outcome.scope.clone(),
+                effect: outcome.effect,
+                matched_rule_id: outcome.matched_rule_id,
+                reason: safe_reason,
+                evaluated_outside_model: true,
+                correlation_id: self.correlation_id.clone(),
+                created_at: TimestampMs::now(),
+            };
+            if let Ok(mut guard) = self.decisions.lock() {
+                guard.push(record);
+            }
+            outcome
+        })
     }
 }
 
@@ -821,6 +996,7 @@ mod tests {
             project_id: ProjectId::new(),
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
+            task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AllowPaths {
                 allowed_prefixes: vec![String::from("docs/")],
@@ -881,6 +1057,7 @@ mod tests {
             project_id: ProjectId::new(),
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
+            task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             allowed_memory_scopes: BTreeSet::new(),
@@ -917,6 +1094,7 @@ mod tests {
             project_id: ProjectId::new(),
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
+            task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
@@ -1014,6 +1192,7 @@ mod tests {
             project_id: ProjectId::new(),
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
+            task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
             allowed_memory_scopes: BTreeSet::new(),
@@ -1068,6 +1247,98 @@ mod tests {
             resolve_within_workspace(&ws, "./docs/./readme.md").expect("clean rel"),
             "docs/readme.md"
         );
+
+        let _ = fs::remove_dir_all(&ws);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn ask_before_write_evaluates_active_revoked_expired_grants_and_blocks_workspace_escape() {
+        let ws = temp_workspace("grants");
+        let outside = temp_workspace("grants-outside");
+        let project_id = ProjectId::new();
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        let now = TimestampMs::from_millis(1_760_000_000_000);
+
+        let engine = PolicyEngine::new(PolicyContext {
+            project_id,
+            agent_id,
+            session_id,
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            allowed_memory_scopes: BTreeSet::new(),
+            rules: vec![],
+        });
+
+        let ok_write = make_req("write_file", "edit", Some("notes/out.md"));
+        // 1. Without grant -> NeedsInteractiveApproval.
+        assert!(matches!(
+            engine.evaluate_with_grants(&ok_write, &[], now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
+
+        // 2. Active grant allows within project workspace.
+        let active_grant = CapabilityGrantRecord {
+            grant_id: CapabilityGrantId::new(),
+            scope: format!("project:{project_id}"),
+            project_id,
+            agent_id: None,
+            session_id: None,
+            task_id: None,
+            tool_pattern: String::from("workspace_write"),
+            target_prefixes: vec![],
+            max_uses: Some(2),
+            uses_consumed: 0,
+            reason: String::from("approved project writes"),
+            expires_at: Some(TimestampMs::from_millis(now.as_millis() + 60_000)),
+            revoked_at: None,
+            revoked_reason: None,
+            created_at: now,
+        };
+        assert!(matches!(
+            engine.evaluate_with_grants(&ok_write, std::slice::from_ref(&active_grant), now),
+            PolicyEvaluationDecision::AllowedByGrant { grant_id, .. } if grant_id == active_grant.grant_id
+        ));
+
+        // 3. Even with wide active grant, workspace escape is IMMEDIATELY Denied before grant check!
+        let escape_write = make_req(
+            "write_file",
+            "edit",
+            Some(&outside.join("escape.txt").to_string_lossy()),
+        );
+        assert!(matches!(
+            engine.evaluate_with_grants(&escape_write, std::slice::from_ref(&active_grant), now),
+            PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Deny,
+                ..
+            })
+        ));
+
+        // 4. Revoked grant MUST NOT authorize writes!
+        let mut revoked_grant = active_grant.clone();
+        revoked_grant.revoked_at = Some(now);
+        assert!(matches!(
+            engine.evaluate_with_grants(&ok_write, &[revoked_grant], now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
+
+        // 5. Expired grant MUST NOT authorize writes!
+        let mut expired_grant = active_grant.clone();
+        expired_grant.expires_at = Some(now);
+        assert!(matches!(
+            engine.evaluate_with_grants(&ok_write, &[expired_grant], now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
+
+        // 6. Exhausted max_uses grant MUST NOT authorize writes!
+        let mut exhausted_grant = active_grant;
+        exhausted_grant.uses_consumed = 2;
+        assert!(matches!(
+            engine.evaluate_with_grants(&ok_write, &[exhausted_grant], now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
 
         let _ = fs::remove_dir_all(&ws);
         let _ = fs::remove_dir_all(&outside);

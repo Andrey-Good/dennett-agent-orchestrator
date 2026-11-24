@@ -35,20 +35,21 @@ const SKIPPED_DIR_NAMES: [&str; 6] = [
     ".next",
 ];
 
+#[cfg(windows)]
+fn is_windows_reparse_point(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+}
+
+#[cfg(not(windows))]
+const fn is_windows_reparse_point(_meta: &fs::Metadata) -> bool {
+    false
+}
+
 /// Returns `true` when `meta` is a symlink OR (on Windows) an NTFS reparse point / junction.
 #[must_use]
 pub fn is_symlink_or_reparse_point(meta: &fs::Metadata) -> bool {
-    if meta.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-            return true;
-        }
-    }
-    false
+    meta.file_type().is_symlink() || is_windows_reparse_point(meta)
 }
 
 /// Returns `true` if a raw filesystem path contains NUL bytes, UNC shares, or Windows device prefixes.
@@ -67,19 +68,25 @@ pub fn is_unsafe_raw_workspace_path(raw: &str) -> bool {
         || trimmed.starts_with("//")
 }
 
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(raw: String) -> String {
+    if let Some(stripped) = raw.strip_prefix(r"\\?\")
+        && !stripped.to_ascii_uppercase().starts_with("UNC\\")
+    {
+        return stripped.to_owned();
+    }
+    raw
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(raw: String) -> String {
+    raw
+}
+
 /// Strips the Windows `\\?\` verbatim prefix for clean UI display when safe (never UNC).
 #[must_use]
 pub fn clean_display_path(path: &Path) -> String {
-    let raw = path.to_string_lossy().into_owned();
-    #[cfg(windows)]
-    {
-        if let Some(stripped) = raw.strip_prefix(r"\\?\")
-            && !stripped.to_ascii_uppercase().starts_with("UNC\\")
-        {
-            return stripped.to_owned();
-        }
-    }
-    raw
+    strip_windows_verbatim_prefix(path.to_string_lossy().into_owned())
 }
 
 /// Validates and canonicalizes a candidate project workspace root directory for safe binding

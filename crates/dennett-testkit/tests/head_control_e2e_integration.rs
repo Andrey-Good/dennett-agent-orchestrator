@@ -472,6 +472,8 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
                 thinking_level: None,
                 allowed_memory_scopes: BTreeSet::from([scope.clone()]),
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
             None,
         )
@@ -496,6 +498,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
             &SendMessageRequest {
                 content: String::from("Baseline persisted message before outage"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -544,6 +547,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
                 &SendMessageRequest {
                     content: String::from("[SIM:SLOW:15000]"),
                     timeout_ms: Some(20_000),
+                    client_message_id: None,
                 },
                 None,
             )
@@ -781,6 +785,8 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
                 workspace_write_policy: WorkspaceWritePolicy::AllowPaths {
                     allowed_prefixes: vec![String::from("docs/")],
                 },
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
             None,
         )
@@ -807,6 +813,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: String::from("[SIM:TOOL:write_file:docs/allowed.txt|hello_v05]"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             Some(&cid_allow),
         )
@@ -833,6 +840,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: String::from("[SIM:TOOL:write_file:src/forbidden.txt|nope]"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             Some(&cid_deny_prefix),
         )
@@ -872,6 +880,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: String::from("[SIM:TOOL:write_file:../escaped_file.txt|evil]"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -891,6 +900,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: String::from("[SIM:TOOL:run_command:rm -rf /]"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -909,6 +919,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
                     "[SIM:TOOL:run_command:powershell -c whoami # dennett-memory memory_search]",
                 ),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -945,6 +956,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: format!("[SIM:TOOL:read_file:{}]", secret_file.display()),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -962,6 +974,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: String::from("[SIM:TOOL:read_file:]"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -979,6 +992,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: String::from("[SIM:TOOL:memory_write_note:]"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -999,6 +1013,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
             &SendMessageRequest {
                 content: format!("[SIM:ERROR:upstream crash GEMINI_API_KEY={fake_secret}]"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             Some(&cid_err),
         )
@@ -1092,6 +1107,8 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 thinking_level: Some(ThinkingLevel::Low),
                 allowed_memory_scopes: BTreeSet::from([scope.clone()]),
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
             None,
         )
@@ -1128,6 +1145,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
             &SendMessageRequest {
                 content: String::from("FACT_ALPHA_ONLY_991"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -1139,6 +1157,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
             &SendMessageRequest {
                 content: String::from("FACT_BETA_ONLY_773"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -1161,6 +1180,8 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 thinking_level: Some(ThinkingLevel::High),
                 allowed_memory_scopes: BTreeSet::from([scope]),
                 workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
             None,
         )
@@ -1192,6 +1213,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
             &SendMessageRequest {
                 content: String::from("Check updated model"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -1218,6 +1240,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
             &SendMessageRequest {
                 content: String::from("After restart follow-up"),
                 timeout_ms: None,
+                client_message_id: None,
             },
             None,
         )
@@ -1249,17 +1272,17 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     let auth_cfg = make_memory_auth(&scope, mem_token);
 
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
-    // Start Head once (applies migrations v1..v3), shut down, start again (must be idempotent!).
+    // Start Head once (applies migrations v1..v4), shut down, start again (must be idempotent!).
     let head1 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c1 = HeadClient::new(&head1.base_url).expect("client1");
     let h1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(h1.schema_version, Some(3));
+    assert_eq!(h1.schema_version, Some(4));
     head1.shutdown().await;
 
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c2 = HeadClient::new(&head2.base_url).expect("client2");
     let h2 = c2.healthz(None).await.expect("health2");
-    assert_eq!(h2.schema_version, Some(3));
+    assert_eq!(h2.schema_version, Some(4));
 
     // Verify PostgreSQL append-only triggers reject UPDATE/DELETE on audit_events
     // and migration v3 installed the unique artifact revision constraint!
@@ -1447,6 +1470,8 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
                 thinking_level: Some(ThinkingLevel::High),
                 allowed_memory_scopes: BTreeSet::from([project.memory_scope.clone()]),
                 workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+                default_budget: None,
+                attached_skills: Vec::new(),
             },
             None,
         )
@@ -1471,6 +1496,7 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
             &SendMessageRequest {
                 content: String::from("## План рефакторинга фронтенда\nПодробности"),
                 timeout_ms: Some(15_000),
+                client_message_id: None,
             },
             None,
         )
@@ -1736,6 +1762,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
                     mime_type: String::from("text/markdown"),
                     content: Some(format!("revision body {idx}")),
                     relative_path: None,
+                    completeness_status: dennett_contracts::ArtifactCompleteness::Final,
                 },
                 None,
             )
@@ -1757,6 +1784,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
                 mime_type: String::from("text/markdown"),
                 content: None,
                 relative_path: Some(String::from("README.md")),
+                completeness_status: dennett_contracts::ArtifactCompleteness::Final,
             },
             None,
         )
@@ -1774,6 +1802,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
                 mime_type: String::from("text/plain"),
                 content: None,
                 relative_path: Some(String::from("src")),
+                completeness_status: dennett_contracts::ArtifactCompleteness::Final,
             },
             None,
         )

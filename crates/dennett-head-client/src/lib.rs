@@ -8,15 +8,25 @@ use std::time::Duration;
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    AgentConfigHistoryResponse, AgentId, AgentRecord, ApiErrorResponse, ArtifactRecord,
-    CancelRunResponse, CommitMemoryNoteRequest, CommitMemoryNoteResponse, CorrelationId,
-    CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest, CreateProjectRequest,
-    CreateSessionRequest, DennettError, DiagnosticsResponse, FlushOutboxResponse, HeadHealth,
-    HeadMemorySearchRequest, HeadMemorySearchResponse, ListAgentsResponse, ListArtifactsResponse,
-    ListOutboxResponse, ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
-    ListSessionsResponse, PolicyRule, ProjectId, ProjectRecord, RuntimeCatalogResponse,
-    SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
-    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest,
+    AgentConfigHistoryResponse, AgentId, AgentRecord, ApiErrorResponse, ArtifactId,
+    ArtifactLifecycleRequest, ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse,
+    CancelTaskResponse, CapabilityGrantId, CapabilityGrantRecord, CommitMemoryNoteRequest,
+    CommitMemoryNoteResponse, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
+    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
+    DennettError, DiagnosticsResponse, DispatchEffectRequest, DispatchEffectResponse,
+    EffectClaimId, EventStreamResponse, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
+    HeadMemorySearchResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
+    ListArtifactsResponse, ListCapabilityGrantsResponse, ListEffectsResponse, ListInboxResponse,
+    ListOutboxResponse, ListPermissionRequestsResponse, ListPolicyRulesResponse,
+    ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse, ListTasksResponse,
+    PermissionRequestId, PolicyRule, ProjectId, ProjectLifecycleResponse, ProjectRecord,
+    RebindProjectRequest, ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest,
+    ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
+    ResolvePermissionResponse, RevokeGrantRequest, RuntimeCatalogResponse, SchedulerTickRequest,
+    SchedulerTickResponse, SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest,
+    SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord, StateSnapshotResponse,
+    TaskDetailResponse, TaskId, TaskRecord, TaskSignalRequest, TaskSignalResponse,
+    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
@@ -537,6 +547,604 @@ impl HeadClient {
             .await
     }
 
+    /// Calls `GET /v1/projects?include_archived=...` (Contract C).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_projects_with_options(
+        &self,
+        include_archived: bool,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListProjectsResponse, DennettError> {
+        let path = if include_archived {
+            "/v1/projects?include_archived=true"
+        } else {
+            "/v1/projects"
+        };
+        self.request_no_body(Method::GET, path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/projects/{project_id}/rebind` (Contract C).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn rebind_project(
+        &self,
+        project_id: ProjectId,
+        req: &RebindProjectRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectLifecycleResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/projects/{project_id}/rebind"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/projects/{project_id}/detach-workspace` (Contract C).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn detach_project_workspace(
+        &self,
+        project_id: ProjectId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectLifecycleResponse, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/projects/{project_id}/detach-workspace"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/projects/{project_id}/archive` (Contract C).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn archive_project(
+        &self,
+        project_id: ProjectId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectLifecycleResponse, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/projects/{project_id}/archive"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/projects/{project_id}/unarchive` (Contract C).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn unarchive_project(
+        &self,
+        project_id: ProjectId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectLifecycleResponse, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/projects/{project_id}/unarchive"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/projects/{project_id}/remove` (Contract C — never deletes user workspace files).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn remove_project(
+        &self,
+        project_id: ProjectId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectLifecycleResponse, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/projects/{project_id}/remove"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/projects/{project_id}?confirm=...` (Contract C — never deletes user workspace files).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_project(
+        &self,
+        project_id: ProjectId,
+        confirm: bool,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectLifecycleResponse, DennettError> {
+        let path = format!("/v1/projects/{project_id}?confirm={confirm}");
+        self.request_no_body(Method::DELETE, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/sessions/{session_id}/artifacts/{artifact_id_or_name}/revisions`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_artifact_revisions(
+        &self,
+        session_id: SessionId,
+        artifact_id_or_name: &str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListArtifactsResponse, DennettError> {
+        let encoded = encode_path_segment(artifact_id_or_name);
+        self.request_no_body(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/artifacts/{encoded}/revisions"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/sessions/{session_id}/artifacts/{artifact_id}/lifecycle` (Contract D).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn apply_artifact_lifecycle(
+        &self,
+        session_id: SessionId,
+        artifact_id: ArtifactId,
+        req: &ArtifactLifecycleRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ArtifactLifecycleResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/artifacts/{artifact_id}/lifecycle"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/state/snapshot` (`REPEATABLE READ` consistent state + `snapshot_cursor`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_state_snapshot(
+        &self,
+        project_id: Option<ProjectId>,
+        include_archived: bool,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<StateSnapshotResponse, DennettError> {
+        let mut params: Vec<String> = Vec::new();
+        if let Some(pid) = project_id {
+            params.push(format!("project_id={pid}"));
+        }
+        if include_archived {
+            params.push(String::from("include_archived=true"));
+        }
+        let path = build_query_path("/v1/state/snapshot", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/events?after_cursor=...` for gapless cursor tailing (`V15`/`V18`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head (including `409 Conflict` on epoch/retention
+    /// resync) or transport failure.
+    pub async fn get_events(
+        &self,
+        after_cursor: i64,
+        expected_epoch: Option<i64>,
+        project_id: Option<ProjectId>,
+        limit: Option<u32>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<EventStreamResponse, DennettError> {
+        let mut params = vec![format!("after_cursor={after_cursor}")];
+        if let Some(ep) = expected_epoch {
+            params.push(format!("epoch={ep}"));
+        }
+        if let Some(pid) = project_id {
+            params.push(format!("project_id={pid}"));
+        }
+        if let Some(lim) = limit {
+            params.push(format!("limit={lim}"));
+        }
+        let path = build_query_path("/v1/events", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/tasks`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn create_task(
+        &self,
+        req: &CreateTaskRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskRecord, DennettError> {
+        self.request_json(Method::POST, "/v1/tasks", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/tasks`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_tasks(
+        &self,
+        project_id: Option<ProjectId>,
+        status: Option<&str>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListTasksResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(pid) = project_id {
+            params.push(format!("project_id={pid}"));
+        }
+        if let Some(st) = status.map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("status={}", encode_query_component(st)));
+        }
+        let path = build_query_path("/v1/tasks", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/tasks/{task_id}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_task_detail(
+        &self,
+        task_id: TaskId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskDetailResponse, DennettError> {
+        self.request_no_body(Method::GET, &format!("/v1/tasks/{task_id}"), correlation_id)
+            .await
+    }
+
+    /// Calls `PATCH /v1/tasks/{task_id}` (bumps `generation` on goal/schedule change, fencing old runs).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_task(
+        &self,
+        task_id: TaskId,
+        req: &UpdateTaskRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskRecord, DennettError> {
+        self.request_json(
+            Method::PATCH,
+            &format!("/v1/tasks/{task_id}"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/tasks/{task_id}/signals` (idempotent by `(task_id, idempotency_key)`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn send_task_signal(
+        &self,
+        task_id: TaskId,
+        req: &TaskSignalRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskSignalResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/tasks/{task_id}/signals"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/tasks/{task_id}/reply` (answers native clarification and resumes task).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn reply_to_task(
+        &self,
+        task_id: TaskId,
+        req: &ReplyTaskRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskRecord, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/tasks/{task_id}/reply"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/tasks/{task_id}/cancel` (targeted `Stop` for one task only).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn cancel_task(
+        &self,
+        task_id: TaskId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<CancelTaskResponse, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/tasks/{task_id}/cancel"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/tasks/scheduler/tick` (available strictly under `ProfileMode::TestIsolated`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn scheduler_tick(
+        &self,
+        req: &SchedulerTickRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SchedulerTickResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            "/v1/tasks/scheduler/tick",
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/inbox`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_inbox_cards(
+        &self,
+        status: Option<&str>,
+        project_id: Option<ProjectId>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListInboxResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(st) = status.map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("status={}", encode_query_component(st)));
+        }
+        if let Some(pid) = project_id {
+            params.push(format!("project_id={pid}"));
+        }
+        let path = build_query_path("/v1/inbox", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/inbox/{card_id}/resolve`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn resolve_inbox_card(
+        &self,
+        card_id: InboxCardId,
+        req: &ResolveInboxCardRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ResolveInboxCardResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/inbox/{card_id}/resolve"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/permissions/requests`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_permission_requests(
+        &self,
+        status: Option<&str>,
+        session_id: Option<SessionId>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListPermissionRequestsResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(st) = status.map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("status={}", encode_query_component(st)));
+        }
+        if let Some(sid) = session_id {
+            params.push(format!("session_id={sid}"));
+        }
+        let path = build_query_path("/v1/permissions/requests", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/permissions/requests/{request_id}/resolve`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn resolve_permission_request(
+        &self,
+        request_id: PermissionRequestId,
+        req: &ResolvePermissionRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ResolvePermissionResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/permissions/requests/{request_id}/resolve"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/grants`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_capability_grants(
+        &self,
+        project_id: Option<ProjectId>,
+        include_revoked: bool,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListCapabilityGrantsResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(pid) = project_id {
+            params.push(format!("project_id={pid}"));
+        }
+        if include_revoked {
+            params.push(String::from("include_revoked=true"));
+        }
+        let path = build_query_path("/v1/grants", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/grants/{grant_id}/revoke`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn revoke_capability_grant(
+        &self,
+        grant_id: CapabilityGrantId,
+        req: &RevokeGrantRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<CapabilityGrantRecord, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/grants/{grant_id}/revoke"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/agents/{recipient_agent_id}/messages` (plain-text inter-agent coordination).
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn send_agent_message(
+        &self,
+        recipient_agent_id: AgentId,
+        req: &SendAgentMessageRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SendAgentMessageResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/agents/{recipient_agent_id}/messages"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/agents/{recipient_agent_id}/messages`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_agent_messages(
+        &self,
+        recipient_agent_id: AgentId,
+        undelivered_only: bool,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListAgentMessagesResponse, DennettError> {
+        let path = if undelivered_only {
+            format!("/v1/agents/{recipient_agent_id}/messages?undelivered_only=true")
+        } else {
+            format!("/v1/agents/{recipient_agent_id}/messages")
+        };
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/effects/dispatch`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn dispatch_effect(
+        &self,
+        req: &DispatchEffectRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<DispatchEffectResponse, DennettError> {
+        self.request_json(Method::POST, "/v1/effects/dispatch", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/effects`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_effects(
+        &self,
+        task_id: Option<TaskId>,
+        session_id: Option<SessionId>,
+        status: Option<&str>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListEffectsResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(tid) = task_id {
+            params.push(format!("task_id={tid}"));
+        }
+        if let Some(sid) = session_id {
+            params.push(format!("session_id={sid}"));
+        }
+        if let Some(st) = status.map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("status={}", encode_query_component(st)));
+        }
+        let path = build_query_path("/v1/effects", &params);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/effects/{effect_id}/reconcile`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn reconcile_effect(
+        &self,
+        effect_id: EffectClaimId,
+        req: &ReconcileEffectRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ReconcileEffectResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/effects/{effect_id}/reconcile"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
     async fn request_no_body<Resp: DeserializeOwned>(
         &self,
         method: Method,
@@ -574,6 +1182,27 @@ impl HeadClient {
             .map_err(|err| map_transport_error(&err))?;
         decode_response_with_limit(resp, MAX_RESPONSE_BODY_BYTES).await
     }
+}
+
+fn build_query_path(base: &str, params: &[String]) -> String {
+    if params.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base}?{}", params.join("&"))
+    }
+}
+
+fn encode_path_segment(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            use core::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 fn encode_query_component(input: &str) -> String {
