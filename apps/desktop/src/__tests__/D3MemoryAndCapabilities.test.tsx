@@ -1158,4 +1158,60 @@ describe("Phase D3 Desktop UI — Memory Fabric, Providers/Secrets/Capabilities 
     const alertBlock = desktopCss.match(/\.memory-alert\s*\{[^}]*\}/)?.[0] ?? "";
     expect(alertBlock).not.toContain("justify-content: space-between");
   });
+
+  it("19. D3-UI-07: renders and corrects tagless MemoryNote when Rust serde omits empty `tags` field", async () => {
+    const user = userEvent.setup({ delay: null });
+    const fx = makeBaseFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.projectA],
+      agents: [fx.agent],
+      sessions: [fx.session],
+      notesByScope: { [fx.projectA.memory_scope]: [fx.noteAlpha] },
+    });
+    // Simulate Rust `#[serde(default, skip_serializing_if = "Vec::is_empty")]` omitting `tags` on the wire.
+    const origGetOverview = bridge.getMemoryOverview.bind(bridge);
+    bridge.getMemoryOverview = async (scope) => {
+      const ov = await origGetOverview(scope);
+      return {
+        ...ov,
+        notes: ov.notes.map((n) => {
+          const clone = { ...n };
+          if (!clone.tags || clone.tags.length === 0) {
+            delete clone.tags;
+          }
+          return clone;
+        }),
+      };
+    };
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await user.click(await screen.findByTestId("rail-nav-memory"));
+
+    // Create a tagless note (empty tags input) and confirm MemoryCard renders cleanly without crashing.
+    await user.click(await screen.findByTestId("memory-toggle-create-note"));
+    await user.type(screen.getByLabelText("Заголовок заметки"), "Заметка без тегов");
+    await user.type(
+      screen.getByLabelText("Текст заметки"),
+      "Контент заметки, у которой Rust опускает пустое поле tags.",
+    );
+    await user.click(screen.getByRole("button", { name: "Сохранить заметку" }));
+
+    const titleEl = await screen.findByText("Заметка без тегов");
+    expect(titleEl).toBeInTheDocument();
+
+    // Also correct the tagless note cleanly without undefined `tags` error.
+    const noteCard = titleEl.closest("[data-testid^='memory-note-']") as HTMLElement;
+    expect(noteCard).not.toBeNull();
+    const noteId = noteCard.getAttribute("data-testid")!.replace("memory-note-", "");
+    await user.click(screen.getByTestId(`memory-note-correct-btn-${noteId}`));
+    const correctForm = await screen.findByTestId(`memory-note-correct-form-${noteId}`);
+    const bodyBox = within(correctForm).getByLabelText("Новый текст заметки");
+    await user.clear(bodyBox);
+    await user.type(bodyBox, "Обновлённый текст без тегов");
+    await user.type(within(correctForm).getByLabelText("Причина коррекции"), "Проверка регрессии D3-UI-07");
+    await user.click(within(correctForm).getByRole("button", { name: /Сохранить ревизию 2/i }));
+
+    expect(await screen.findByText("Обновлённый текст без тегов")).toBeInTheDocument();
+  });
 });

@@ -659,7 +659,7 @@ export function MemoryCard() {
         expected_revision: note.current_revision ?? note.revision ?? 1,
         title: correctTitle.trim(),
         body: correctBody.trim(),
-        tags: note.tags,
+        tags: note.tags ?? [],
         rationale: correctRationale.trim(),
         idempotency_key: makeIdempotencyKey("ui-correct"),
       });
@@ -1570,7 +1570,7 @@ export function MemoryCard() {
                               <div className="d2-item-card__top">
                                 <div className="d2-item-card__badges">
                                   <span className="d2-meta-chip d2-meta-chip--gen">rev {rev}</span>
-                                  {note.tags.map((tag) => (
+                                  {(note.tags ?? []).map((tag) => (
                                     <span key={tag} className="d2-meta-chip">
                                       #{tag}
                                     </span>

@@ -543,7 +543,7 @@ export class MockDesktopBridge implements DesktopBridge {
               revision: note.current_revision ?? note.revision ?? 1,
               title: note.title,
               body: note.body,
-              tags: [...note.tags],
+              tags: [...(note.tags ?? [])],
               rationale: note.rationale ?? null,
               event_id: note.last_event_id ?? this.nextUuid("97000000"),
               recorded_by: note.recorded_by ?? "owner",
@@ -2426,7 +2426,7 @@ export class MockDesktopBridge implements DesktopBridge {
         !q ||
         note.title.toLowerCase().includes(q) ||
         note.body.toLowerCase().includes(q) ||
-        note.tags.some((t) => t.toLowerCase().includes(q)) ||
+        (note.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
         (note.topic_key?.toLowerCase().includes(q) ?? false);
       if (currentMatches) {
         matchedNotes.push(note);
@@ -3093,7 +3093,7 @@ export class MockDesktopBridge implements DesktopBridge {
           revision: 1,
           title: note.title,
           body: note.body,
-          tags: [...note.tags],
+          tags: [...(note.tags ?? [])],
           rationale: null,
           event_id: eventId,
           recorded_by: "owner",
@@ -3224,7 +3224,7 @@ export class MockDesktopBridge implements DesktopBridge {
       current_revision_id: revId,
       title: request.title.trim(),
       body: request.body.trim(),
-      tags: [...(request.tags ?? existing.tags)],
+      tags: [...(request.tags ?? existing.tags ?? [])],
       rationale: request.rationale.trim(),
       last_event_id: eventId,
       updated_at: now,
@@ -3241,7 +3241,7 @@ export class MockDesktopBridge implements DesktopBridge {
         revision: nextRev,
         title: updated.title,
         body: updated.body,
-        tags: [...updated.tags],
+        tags: [...(updated.tags ?? [])],
         rationale: updated.rationale ?? null,
         event_id: eventId,
         recorded_by: "owner",
@@ -3268,7 +3268,7 @@ export class MockDesktopBridge implements DesktopBridge {
         revision: note.current_revision ?? note.revision ?? 1,
         title: note.title,
         body: note.body,
-        tags: [...note.tags],
+        tags: [...(note.tags ?? [])],
         rationale: note.rationale ?? null,
         event_id: note.last_event_id ?? this.nextUuid("97000000"),
         recorded_by: note.recorded_by ?? "owner",
@@ -3646,7 +3646,7 @@ export class MockDesktopBridge implements DesktopBridge {
           revision: 1,
           title: note.title,
           body: note.body,
-          tags: [...note.tags],
+          tags: [...(note.tags ?? [])],
           rationale: "Внешний недоверенный импорт",
           event_id: evId,
           recorded_by: "import",

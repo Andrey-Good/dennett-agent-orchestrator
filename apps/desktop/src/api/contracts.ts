@@ -748,7 +748,7 @@ export interface MemoryNote {
   current_revision_id?: string;
   title: string;
   body: string;
-  tags: string[];
+  tags?: string[];
   rationale?: string | null;
   last_event_id?: string;
   recorded_by?: string;
@@ -769,7 +769,7 @@ export interface NoteRevision {
   revision: number;
   title: string;
   body: string;
-  tags: string[];
+  tags?: string[];
   rationale?: string | null;
   event_id: string;
   recorded_by: string;
