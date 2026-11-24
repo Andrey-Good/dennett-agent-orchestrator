@@ -22,8 +22,9 @@ use dennett_contracts::{
     CapabilityPossession, CapabilityProjectBinding, CapabilityRecord, CapabilityScopeKind,
     CapabilitySpec, CapabilityTrust, CompatibilityStatus, CorrelationId, CreateCapabilityRequest,
     DeleteCapabilityResponse, DennettError, DiscoverCapabilitiesRequest,
-    DiscoverCapabilitiesResponse, ListCapabilitiesResponse, MAX_CAPABILITY_LIST_ITEMS,
-    MAX_CAPABILITY_MARKDOWN_BYTES, PluginMcpServerEntry, ProjectId,
+    DiscoverCapabilitiesResponse, ListCapabilitiesResponse, MAX_CAPABILITY_DESCRIPTION_BYTES,
+    MAX_CAPABILITY_LIST_ITEMS, MAX_CAPABILITY_MARKDOWN_BYTES, MAX_CAPABILITY_NAME_LEN,
+    MAX_CAPABILITY_VERSION_LEN, PluginMcpServerEntry, ProjectId,
     SetProjectCapabilityBindingRequest, Sha256Hex, TimestampMs, UpdateCapabilityRequest,
 };
 use dennett_runtime_antigravity::{ActiveSkillPayload, RuntimeMcpEnvEntry, RuntimeMcpServerSpec};
@@ -35,7 +36,7 @@ use uuid::Uuid;
 use crate::events::{ControlEventAppend, append_control_event_in_tx};
 use crate::migrations::sha256_hex;
 use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService};
-use crate::store::{append_audit_event, fetch_project, map_pg_err};
+use crate::store::{append_audit_event, fetch_project, map_pg_err, truncate_utf8};
 use crate::workspace_files::{clean_display_path, is_symlink_or_reparse_point};
 
 const CAPABILITY_SELECT_COLS: &str = "
@@ -543,6 +544,103 @@ impl HeadService {
         correlation_id: &CorrelationId,
     ) -> Result<CapabilityRecord, DennettError> {
         req.validate()?;
+
+        let mut display_name = req.display_name.trim().to_owned();
+        let mut description = req.description.trim().to_owned();
+        let mut version = req.version.trim().to_owned();
+        let mut trust_state = req.trust_state;
+        let mut spec = req.spec.clone();
+        let mut source_path = req.source_path.as_deref().map(|s| s.trim().to_owned());
+
+        // D3-UI-02: When `source_path` is provided for a Skill or Plugin, inspect the folder
+        // strictly read-only on disk rather than accepting client-side placeholders.
+        if let Some(ref raw_path) = source_path {
+            let folder_path = Path::new(raw_path);
+            let folder_basename = folder_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned());
+            let name_not_overridden =
+                is_default_display_name(&display_name, req.slug.trim(), folder_basename.as_deref());
+
+            match &spec {
+                CapabilitySpec::Skill { .. } => {
+                    let inspected = inspect_skill_folder_readonly(folder_path)?;
+                    spec = CapabilitySpec::Skill {
+                        skill_markdown: inspected.markdown,
+                        has_scripts: inspected.has_scripts,
+                        entry_files: inspected.entry_files,
+                    };
+                    if let Some(front_desc) = inspected.description
+                        && !front_desc.is_empty()
+                    {
+                        truncate_utf8(&front_desc, MAX_CAPABILITY_DESCRIPTION_BYTES)
+                            .clone_into(&mut description);
+                    }
+                    if name_not_overridden
+                        && let Some(front_name) = inspected.display_name
+                        && !front_name.is_empty()
+                    {
+                        truncate_utf8(&front_name, MAX_CAPABILITY_NAME_LEN)
+                            .clone_into(&mut display_name);
+                    }
+                    if version == "1.0.0"
+                        && let Some(front_ver) = inspected.version
+                        && !front_ver.is_empty()
+                    {
+                        truncate_utf8(&front_ver, MAX_CAPABILITY_VERSION_LEN)
+                            .clone_into(&mut version);
+                    }
+                    if inspected.has_scripts && trust_state != CapabilityTrust::Revoked {
+                        trust_state = CapabilityTrust::Restricted;
+                    }
+                    source_path = Some(clean_display_path(folder_path));
+                    spec.validate()?;
+                }
+                CapabilitySpec::Plugin {
+                    enabled_components, ..
+                } => {
+                    let inspected = inspect_plugin_folder_readonly(folder_path)?;
+                    let has_secret_slots = inspected
+                        .mcp_servers
+                        .iter()
+                        .any(|s| !s.secret_slots.is_empty());
+                    spec = CapabilitySpec::Plugin {
+                        manifest_version: inspected.manifest_version,
+                        skills: inspected.skills,
+                        mcp_servers: inspected.mcp_servers,
+                        has_hooks: inspected.has_hooks,
+                        enabled_components: enabled_components.clone(),
+                    };
+                    if let Some(desc) = inspected.description
+                        && !desc.is_empty()
+                    {
+                        truncate_utf8(&desc, MAX_CAPABILITY_DESCRIPTION_BYTES)
+                            .clone_into(&mut description);
+                    }
+                    if name_not_overridden
+                        && let Some(name) = inspected.display_name
+                        && !name.is_empty()
+                    {
+                        truncate_utf8(&name, MAX_CAPABILITY_NAME_LEN).clone_into(&mut display_name);
+                    }
+                    if version == "1.0.0"
+                        && let Some(ver) = inspected.version
+                        && !ver.is_empty()
+                    {
+                        truncate_utf8(&ver, MAX_CAPABILITY_VERSION_LEN).clone_into(&mut version);
+                    }
+                    if (inspected.has_hooks || has_secret_slots || inspected.has_scripts)
+                        && trust_state != CapabilityTrust::Revoked
+                    {
+                        trust_state = CapabilityTrust::Restricted;
+                    }
+                    source_path = Some(clean_display_path(folder_path));
+                    spec.validate()?;
+                }
+                _ => {}
+            }
+        }
+
         let _ = self.ensure_migrated().await?;
 
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
@@ -556,12 +654,15 @@ impl HeadService {
         }
 
         let cap_id = CapabilityId::new();
-        let content_sha256 = compute_capability_sha256(&req.version, &req.spec);
-        let spec_json = serde_json::to_value(&req.spec).map_err(|err| DennettError::Internal {
+        let content_sha256 = compute_capability_sha256(&version, &spec);
+        let spec_json = serde_json::to_value(&spec).map_err(|err| DennettError::Internal {
             detail: format!("failed serializing capability spec: {err}"),
         })?;
         let possession = match req.activation_state {
-            CapabilityActivation::Active | CapabilityActivation::Pinned => {
+            CapabilityActivation::Active | CapabilityActivation::Pinned
+                if trust_state != CapabilityTrust::Restricted
+                    && trust_state != CapabilityTrust::Revoked =>
+            {
                 CapabilityPossession::Connected
             }
             _ if req.scope_kind == CapabilityScopeKind::CandidateUnattached => {
@@ -590,18 +691,18 @@ impl HeadService {
                 &[
                     &cap_id.as_uuid(),
                     &req.slug.trim(),
-                    &req.spec.kind().as_str(),
-                    &req.display_name.trim(),
-                    &req.description.trim(),
-                    &req.version.trim(),
+                    &spec.kind().as_str(),
+                    &display_name.as_str(),
+                    &description.as_str(),
+                    &version.as_str(),
                     &req.origin_kind.as_str(),
                     &req.ownership.as_str(),
                     &req.scope_kind.as_str(),
                     &req.project_id.map(ProjectId::as_uuid),
                     &possession.as_str(),
-                    &req.trust_state.as_str(),
+                    &trust_state.as_str(),
                     &req.activation_state.as_str(),
-                    &req.source_path.as_deref(),
+                    &source_path.as_deref(),
                     &content_sha256.as_str(),
                     &spec_json,
                 ],
@@ -1553,6 +1654,120 @@ fn scan_skills_dir_readonly(
     }
 }
 
+fn is_default_display_name(current: &str, slug: &str, folder_basename: Option<&str>) -> bool {
+    let trimmed = current.trim();
+    trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case(slug)
+        || folder_basename.is_some_and(|base| trimmed.eq_ignore_ascii_case(base))
+}
+
+#[derive(Debug, Clone)]
+struct InspectedSkillFolder {
+    markdown: String,
+    display_name: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    has_scripts: bool,
+    entry_files: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct InspectedPluginFolder {
+    slug_hint: Option<String>,
+    display_name: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    manifest_version: String,
+    skills: Vec<String>,
+    mcp_servers: Vec<PluginMcpServerEntry>,
+    has_hooks: bool,
+    has_scripts: bool,
+}
+
+fn inspect_skill_folder_readonly(dir: &Path) -> Result<InspectedSkillFolder, DennettError> {
+    let dir_meta = fs::symlink_metadata(dir).map_err(|_| DennettError::InvalidInput {
+        field: String::from("source_path"),
+        reason: format!(
+            "skill folder `{}` does not exist or is not readable",
+            clean_display_path(dir)
+        ),
+    })?;
+    if is_symlink_or_reparse_point(&dir_meta) {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: String::from("skill folder cannot be a symlink or junction"),
+        });
+    }
+    if !dir_meta.is_dir() {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: String::from("selected skill path must be a directory containing SKILL.md"),
+        });
+    }
+
+    let skill_md_path = dir.join("SKILL.md");
+    let md_meta = fs::symlink_metadata(&skill_md_path).map_err(|_| DennettError::InvalidInput {
+        field: String::from("source_path"),
+        reason: format!(
+            "skill folder `{}` does not contain a readable SKILL.md file",
+            clean_display_path(dir)
+        ),
+    })?;
+    if is_symlink_or_reparse_point(&md_meta) || !md_meta.is_file() {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: String::from("SKILL.md must be a regular non-symlink file"),
+        });
+    }
+    if md_meta.len() > MAX_CAPABILITY_MARKDOWN_BYTES as u64 {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: format!(
+                "SKILL.md exceeds maximum size of {MAX_CAPABILITY_MARKDOWN_BYTES} bytes"
+            ),
+        });
+    }
+    let markdown =
+        fs::read_to_string(&skill_md_path).map_err(|err| DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: format!("failed reading SKILL.md as UTF-8: {err}"),
+        })?;
+    if markdown.trim().is_empty() {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: String::from("SKILL.md cannot be empty"),
+        });
+    }
+
+    let (display_name, description, version) = parse_skill_frontmatter(&markdown);
+    let (has_scripts, entry_files) = inspect_skill_bundle_readonly(dir);
+    Ok(InspectedSkillFolder {
+        markdown,
+        display_name,
+        description,
+        version,
+        has_scripts,
+        entry_files,
+    })
+}
+
+fn is_executable_script_name(name: &str) -> bool {
+    Path::new(name).extension().is_some_and(|ext| {
+        ext.eq_ignore_ascii_case("sh")
+            || ext.eq_ignore_ascii_case("ps1")
+            || ext.eq_ignore_ascii_case("bat")
+            || ext.eq_ignore_ascii_case("cmd")
+            || ext.eq_ignore_ascii_case("py")
+            || ext.eq_ignore_ascii_case("js")
+            || ext.eq_ignore_ascii_case("mjs")
+            || ext.eq_ignore_ascii_case("cjs")
+            || ext.eq_ignore_ascii_case("ts")
+            || ext.eq_ignore_ascii_case("rb")
+            || ext.eq_ignore_ascii_case("pl")
+            || ext.eq_ignore_ascii_case("exe")
+    })
+}
+
 fn inspect_skill_bundle_readonly(skill_dir: &Path) -> (bool, Vec<String>) {
     let mut has_scripts = false;
     let mut files = Vec::new();
@@ -1568,18 +1783,28 @@ fn inspect_skill_bundle_readonly(skill_dir: &Path) -> (bool, Vec<String>) {
         if is_symlink_or_reparse_point(&meta) {
             continue;
         }
-        if meta.is_dir() && name.eq_ignore_ascii_case("scripts") {
-            has_scripts = true;
-        }
-        if Path::new(&name).extension().is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("sh")
-                || ext.eq_ignore_ascii_case("ps1")
-                || ext.eq_ignore_ascii_case("bat")
-                || ext.eq_ignore_ascii_case("cmd")
-                || ext.eq_ignore_ascii_case("py")
-                || ext.eq_ignore_ascii_case("js")
-                || ext.eq_ignore_ascii_case("ts")
-        }) {
+        if meta.is_dir() {
+            if name.eq_ignore_ascii_case("scripts") {
+                has_scripts = true;
+            }
+            if !name.starts_with('.')
+                && let Ok(sub_entries) = fs::read_dir(&path)
+            {
+                for sub in sub_entries.flatten().take(MAX_CAPABILITY_LIST_ITEMS) {
+                    let sub_path = sub.path();
+                    let Ok(sub_meta) = fs::symlink_metadata(&sub_path) else {
+                        continue;
+                    };
+                    if is_symlink_or_reparse_point(&sub_meta) || !sub_meta.is_file() {
+                        continue;
+                    }
+                    let sub_name = sub.file_name().to_string_lossy().into_owned();
+                    if is_executable_script_name(&sub_name) {
+                        has_scripts = true;
+                    }
+                }
+            }
+        } else if is_executable_script_name(&name) {
             has_scripts = true;
         }
         if files.len() < MAX_CAPABILITY_LIST_ITEMS {
@@ -1590,36 +1815,10 @@ fn inspect_skill_bundle_readonly(skill_dir: &Path) -> (bool, Vec<String>) {
     (has_scripts, files)
 }
 
-fn scan_mcp_json_readonly(
-    file_path: &Path,
-    origin_kind: CapabilityOrigin,
-    ownership: CapabilityOwnership,
-    scope_kind: CapabilityScopeKind,
-    project_id: Option<ProjectId>,
-    out: &mut Vec<DiscoveredCandidate>,
-    warnings: &mut Vec<String>,
-) {
-    let Ok(meta) = fs::symlink_metadata(file_path) else {
-        return;
-    };
-    if is_symlink_or_reparse_point(&meta) || !meta.is_file() || meta.len() > 512 * 1024 {
-        return;
-    }
-    let Ok(raw) = fs::read_to_string(file_path) else {
-        return;
-    };
-    let Ok(parsed) = serde_json::from_str::<JsonValue>(&raw) else {
-        warnings.push(format!(
-            "could not parse MCP JSON `{}`",
-            clean_display_path(file_path)
-        ));
-        return;
-    };
-
-    let Some(servers) = parsed.get("mcpServers").and_then(JsonValue::as_object) else {
-        return;
-    };
-
+fn parse_mcp_servers_map(
+    servers: &serde_json::Map<String, JsonValue>,
+) -> Vec<(String, PluginMcpServerEntry)> {
+    let mut out = Vec::new();
     for (raw_name, cfg) in servers {
         let Some(command) = cfg
             .get("command")
@@ -1676,11 +1875,55 @@ fn scan_mcp_json_readonly(
                 }
             }
         }
+        let entry = PluginMcpServerEntry {
+            name: raw_name.clone(),
+            command: command.to_owned(),
+            args,
+            env_vars,
+            secret_slots,
+        };
+        if entry.validate().is_ok() {
+            out.push((raw_name.clone(), entry));
+        }
+    }
+    out
+}
 
-        let slug = sanitize_discovered_slug(raw_name);
+fn scan_mcp_json_readonly(
+    file_path: &Path,
+    origin_kind: CapabilityOrigin,
+    ownership: CapabilityOwnership,
+    scope_kind: CapabilityScopeKind,
+    project_id: Option<ProjectId>,
+    out: &mut Vec<DiscoveredCandidate>,
+    warnings: &mut Vec<String>,
+) {
+    let Ok(meta) = fs::symlink_metadata(file_path) else {
+        return;
+    };
+    if is_symlink_or_reparse_point(&meta) || !meta.is_file() || meta.len() > 512 * 1024 {
+        return;
+    }
+    let Ok(raw) = fs::read_to_string(file_path) else {
+        return;
+    };
+    let Ok(parsed) = serde_json::from_str::<JsonValue>(&raw) else {
+        warnings.push(format!(
+            "could not parse MCP JSON `{}`",
+            clean_display_path(file_path)
+        ));
+        return;
+    };
+
+    let Some(servers) = parsed.get("mcpServers").and_then(JsonValue::as_object) else {
+        return;
+    };
+
+    for (raw_name, entry) in parse_mcp_servers_map(servers) {
+        let slug = sanitize_discovered_slug(&raw_name);
         out.push(DiscoveredCandidate {
-            slug: slug.clone(),
-            display_name: raw_name.clone(),
+            slug,
+            display_name: raw_name,
             description: format!(
                 "MCP server discovered from {}",
                 clean_display_path(file_path)
@@ -1692,19 +1935,316 @@ fn scan_mcp_json_readonly(
             project_id,
             source_path: clean_display_path(file_path),
             spec: CapabilitySpec::McpServer {
-                command: command.to_owned(),
-                args,
-                env_vars,
-                secret_slots,
+                command: entry.command,
+                args: entry.args,
+                env_vars: entry.env_vars,
+                secret_slots: entry.secret_slots,
             },
         });
     }
 }
 
+fn locate_plugin_manifest_readonly(dir: &Path) -> Result<Option<PathBuf>, DennettError> {
+    let direct_candidates = [dir.join("plugin.json"), dir.join("manifest.json")];
+    if let Ok(meta) = fs::symlink_metadata(&direct_candidates[0]) {
+        if is_symlink_or_reparse_point(&meta) || !meta.is_file() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("source_path"),
+                reason: String::from("plugin.json must be a regular non-symlink file"),
+            });
+        }
+        return Ok(Some(direct_candidates[0].clone()));
+    }
+
+    let claude_dir = dir.join(".claude-plugin");
+    if let Ok(claude_meta) = fs::symlink_metadata(&claude_dir)
+        && !is_symlink_or_reparse_point(&claude_meta)
+        && claude_meta.is_dir()
+    {
+        let claude_manifest = claude_dir.join("plugin.json");
+        if let Ok(meta) = fs::symlink_metadata(&claude_manifest) {
+            if is_symlink_or_reparse_point(&meta) || !meta.is_file() {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("source_path"),
+                    reason: String::from(
+                        ".claude-plugin/plugin.json must be a regular non-symlink file",
+                    ),
+                });
+            }
+            return Ok(Some(claude_manifest));
+        }
+    }
+
+    if let Ok(meta) = fs::symlink_metadata(&direct_candidates[1]) {
+        if is_symlink_or_reparse_point(&meta) || !meta.is_file() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("source_path"),
+                reason: String::from("manifest.json must be a regular non-symlink file"),
+            });
+        }
+        return Ok(Some(direct_candidates[1].clone()));
+    }
+
+    Ok(None)
+}
+
+fn json_value_indicates_hooks(val: &JsonValue) -> bool {
+    match val {
+        JsonValue::Null => false,
+        JsonValue::Bool(b) => *b,
+        JsonValue::Array(arr) => !arr.is_empty(),
+        JsonValue::Object(obj) => !obj.is_empty(),
+        JsonValue::String(s) => !s.trim().is_empty(),
+        JsonValue::Number(_) => true,
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
-    reason = "parses plugin manifests, nested skills/MCP/hooks descriptors, and compatibility flags strictly read-only"
+    reason = "strictly read-only inspection of plugin manifests, skills/, hooks/, and mcp.json bundles"
 )]
+fn inspect_plugin_folder_readonly(dir: &Path) -> Result<InspectedPluginFolder, DennettError> {
+    let dir_meta = fs::symlink_metadata(dir).map_err(|_| DennettError::InvalidInput {
+        field: String::from("source_path"),
+        reason: format!(
+            "plugin folder `{}` does not exist or is not readable",
+            clean_display_path(dir)
+        ),
+    })?;
+    if is_symlink_or_reparse_point(&dir_meta) {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: String::from("plugin folder cannot be a symlink or junction"),
+        });
+    }
+    if !dir_meta.is_dir() {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: String::from("selected plugin path must be a directory"),
+        });
+    }
+
+    let mut slug_hint = None;
+    let mut display_name = None;
+    let mut description = None;
+    let mut version = None;
+    let mut manifest_version = String::from("1.0");
+    let mut skill_set = BTreeSet::new();
+    let mut mcp_servers: Vec<PluginMcpServerEntry> = Vec::new();
+    let mut seen_mcp_names = BTreeSet::new();
+    let mut has_hooks = false;
+    let mut has_scripts = false;
+    let mut has_manifest = false;
+
+    if let Some(manifest_path) = locate_plugin_manifest_readonly(dir)? {
+        let meta =
+            fs::symlink_metadata(&manifest_path).map_err(|err| DennettError::InvalidInput {
+                field: String::from("source_path"),
+                reason: format!("cannot stat plugin manifest: {err}"),
+            })?;
+        if meta.len() > 512 * 1024 {
+            return Err(DennettError::InvalidInput {
+                field: String::from("source_path"),
+                reason: String::from("plugin manifest exceeds maximum size of 512 KiB"),
+            });
+        }
+        let raw = fs::read_to_string(&manifest_path).map_err(|err| DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: format!("failed reading plugin manifest as UTF-8: {err}"),
+        })?;
+        let manifest: JsonValue =
+            serde_json::from_str(&raw).map_err(|err| DennettError::InvalidInput {
+                field: String::from("source_path"),
+                reason: format!(
+                    "invalid plugin manifest JSON `{}`: {err}",
+                    clean_display_path(&manifest_path)
+                ),
+            })?;
+        if !manifest.is_object() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("source_path"),
+                reason: String::from("plugin manifest root must be a JSON object"),
+            });
+        }
+        has_manifest = true;
+
+        slug_hint = manifest
+            .get("slug")
+            .or_else(|| manifest.get("name"))
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(sanitize_discovered_slug);
+        display_name = manifest
+            .get("display_name")
+            .or_else(|| manifest.get("name"))
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        description = manifest
+            .get("description")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        version = manifest
+            .get("version")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        if let Some(mv) = manifest
+            .get("manifest_version")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            mv.clone_into(&mut manifest_version);
+        }
+        if let Some(arr) = manifest.get("skills").and_then(JsonValue::as_array) {
+            for v in arr.iter().take(MAX_CAPABILITY_LIST_ITEMS) {
+                if let Some(s) = v.as_str() {
+                    skill_set.insert(sanitize_discovered_slug(s));
+                }
+            }
+        }
+        if manifest
+            .get("has_hooks")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+            || manifest
+                .get("hooks")
+                .is_some_and(json_value_indicates_hooks)
+        {
+            has_hooks = true;
+        }
+        if let Some(arr) = manifest.get("mcp_servers").and_then(JsonValue::as_array) {
+            for item in arr.iter().take(MAX_CAPABILITY_LIST_ITEMS) {
+                if let Ok(entry_spec) = serde_json::from_value::<PluginMcpServerEntry>(item.clone())
+                    && entry_spec.validate().is_ok()
+                    && seen_mcp_names.insert(entry_spec.name.clone())
+                {
+                    mcp_servers.push(entry_spec);
+                }
+            }
+        }
+        if let Some(servers_obj) = manifest.get("mcpServers").and_then(JsonValue::as_object) {
+            for (_, entry_spec) in parse_mcp_servers_map(servers_obj) {
+                if mcp_servers.len() < MAX_CAPABILITY_LIST_ITEMS
+                    && seen_mcp_names.insert(entry_spec.name.clone())
+                {
+                    mcp_servers.push(entry_spec);
+                }
+            }
+        }
+    }
+
+    // Inspect bundled `skills/` directory strictly read-only.
+    let skills_dir = dir.join("skills");
+    if let Ok(sm) = fs::symlink_metadata(&skills_dir)
+        && !is_symlink_or_reparse_point(&sm)
+        && sm.is_dir()
+        && let Ok(entries) = fs::read_dir(&skills_dir)
+    {
+        for entry in entries.flatten().take(MAX_CAPABILITY_LIST_ITEMS) {
+            let child = entry.path();
+            if let Ok(inspected_skill) = inspect_skill_folder_readonly(&child) {
+                let raw_name = entry.file_name().to_string_lossy().into_owned();
+                skill_set.insert(sanitize_discovered_slug(&raw_name));
+                if inspected_skill.has_scripts {
+                    has_scripts = true;
+                }
+            }
+        }
+    }
+
+    // Inspect bundled `hooks.json` or non-empty `hooks/` directory strictly read-only.
+    if let Ok(hm) = fs::symlink_metadata(dir.join("hooks.json"))
+        && !is_symlink_or_reparse_point(&hm)
+        && hm.is_file()
+    {
+        has_hooks = true;
+    }
+    let hooks_dir = dir.join("hooks");
+    if let Ok(hm) = fs::symlink_metadata(&hooks_dir)
+        && !is_symlink_or_reparse_point(&hm)
+        && hm.is_dir()
+        && let Ok(mut entries) = fs::read_dir(&hooks_dir)
+        && entries.any(|ent| {
+            ent.is_ok_and(|e| {
+                fs::symlink_metadata(e.path()).is_ok_and(|m| !is_symlink_or_reparse_point(&m))
+            })
+        })
+    {
+        has_hooks = true;
+    }
+
+    // Inspect bundled MCP JSON files (`mcp.json`, `.mcp.json`, `.dennett/mcp.json`).
+    for mcp_path in [
+        dir.join("mcp.json"),
+        dir.join(".mcp.json"),
+        dir.join(".dennett").join("mcp.json"),
+    ] {
+        let Ok(mm) = fs::symlink_metadata(&mcp_path) else {
+            continue;
+        };
+        if is_symlink_or_reparse_point(&mm) || !mm.is_file() || mm.len() > 512 * 1024 {
+            continue;
+        }
+        let raw = fs::read_to_string(&mcp_path).map_err(|err| DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: format!(
+                "failed reading plugin MCP config `{}`: {err}",
+                clean_display_path(&mcp_path)
+            ),
+        })?;
+        let parsed: JsonValue =
+            serde_json::from_str(&raw).map_err(|err| DennettError::InvalidInput {
+                field: String::from("source_path"),
+                reason: format!(
+                    "invalid plugin MCP config JSON `{}`: {err}",
+                    clean_display_path(&mcp_path)
+                ),
+            })?;
+        if let Some(servers_obj) = parsed.get("mcpServers").and_then(JsonValue::as_object) {
+            for (_, entry_spec) in parse_mcp_servers_map(servers_obj) {
+                if mcp_servers.len() < MAX_CAPABILITY_LIST_ITEMS
+                    && seen_mcp_names.insert(entry_spec.name.clone())
+                {
+                    mcp_servers.push(entry_spec);
+                }
+            }
+        }
+    }
+
+    let skills: Vec<String> = skill_set
+        .into_iter()
+        .take(MAX_CAPABILITY_LIST_ITEMS)
+        .collect();
+    if !has_manifest && skills.is_empty() && mcp_servers.is_empty() && !has_hooks {
+        return Err(DennettError::InvalidInput {
+            field: String::from("source_path"),
+            reason: format!(
+                "plugin folder `{}` does not contain a valid manifest (plugin.json, .claude-plugin/plugin.json, manifest.json) or valid skills/, hooks/, or mcp.json structure",
+                clean_display_path(dir)
+            ),
+        });
+    }
+
+    Ok(InspectedPluginFolder {
+        slug_hint,
+        display_name,
+        description,
+        version,
+        manifest_version,
+        skills,
+        mcp_servers,
+        has_hooks,
+        has_scripts,
+    })
+}
+
 fn scan_plugins_dir_readonly(
     plugins_root: &Path,
     origin_kind: CapabilityOrigin,
@@ -1732,79 +2272,30 @@ fn scan_plugins_dir_readonly(
         if is_symlink_or_reparse_point(&ent_meta) || !ent_meta.is_dir() {
             continue;
         }
-        let manifest_path = if dir.join("plugin.json").is_file() {
-            dir.join("plugin.json")
-        } else if dir.join("manifest.json").is_file() {
-            dir.join("manifest.json")
-        } else {
-            continue;
-        };
-        let Ok(raw) = fs::read_to_string(&manifest_path) else {
-            continue;
-        };
-        let Ok(manifest) = serde_json::from_str::<JsonValue>(&raw) else {
-            warnings.push(format!(
-                "could not parse plugin manifest `{}`",
-                clean_display_path(&manifest_path)
-            ));
-            continue;
+        let inspected = match inspect_plugin_folder_readonly(&dir) {
+            Ok(info) => info,
+            Err(err) => {
+                // Only warn when a manifest file existed but failed to parse; silently skip unrelated folders.
+                if dir.join("plugin.json").exists()
+                    || dir.join("manifest.json").exists()
+                    || dir.join(".claude-plugin").join("plugin.json").exists()
+                {
+                    warnings.push(format!(
+                        "could not inspect plugin `{}`: {err}",
+                        clean_display_path(&dir)
+                    ));
+                }
+                continue;
+            }
         };
 
         let raw_name = entry.file_name().to_string_lossy().into_owned();
-        let slug = sanitize_discovered_slug(
-            manifest
-                .get("slug")
-                .or_else(|| manifest.get("name"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or(&raw_name),
-        );
-        let display_name = manifest
-            .get("display_name")
-            .or_else(|| manifest.get("name"))
-            .and_then(JsonValue::as_str)
-            .unwrap_or(&raw_name)
-            .to_owned();
-        let description = manifest
-            .get("description")
-            .and_then(JsonValue::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let version = manifest
-            .get("version")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("1.0.0")
-            .to_owned();
-        let manifest_version = manifest
-            .get("manifest_version")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("1.0")
-            .to_owned();
-        let skills: Vec<String> = manifest
-            .get("skills")
-            .and_then(JsonValue::as_array)
-            .map_or_default(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(sanitize_discovered_slug))
-                    .take(MAX_CAPABILITY_LIST_ITEMS)
-                    .collect()
-            });
-        let has_hooks = manifest
-            .get("has_hooks")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false)
-            || manifest.get("hooks").is_some()
-            || dir.join("hooks.json").exists();
-
-        let mut mcp_servers = Vec::new();
-        if let Some(arr) = manifest.get("mcp_servers").and_then(JsonValue::as_array) {
-            for item in arr.iter().take(MAX_CAPABILITY_LIST_ITEMS) {
-                if let Ok(entry_spec) = serde_json::from_value::<PluginMcpServerEntry>(item.clone())
-                    && entry_spec.validate().is_ok()
-                {
-                    mcp_servers.push(entry_spec);
-                }
-            }
-        }
+        let slug = inspected
+            .slug_hint
+            .unwrap_or_else(|| sanitize_discovered_slug(&raw_name));
+        let display_name = inspected.display_name.unwrap_or(raw_name);
+        let description = inspected.description.unwrap_or_default();
+        let version = inspected.version.unwrap_or_else(|| String::from("1.0.0"));
 
         out.push(DiscoveredCandidate {
             slug,
@@ -1817,10 +2308,10 @@ fn scan_plugins_dir_readonly(
             project_id,
             source_path: clean_display_path(&dir),
             spec: CapabilitySpec::Plugin {
-                manifest_version,
-                skills,
-                mcp_servers,
-                has_hooks,
+                manifest_version: inspected.manifest_version,
+                skills: inspected.skills,
+                mcp_servers: inspected.mcp_servers,
+                has_hooks: inspected.has_hooks,
                 enabled_components: Vec::new(),
             },
         });
@@ -1847,33 +2338,232 @@ fn sanitize_discovered_slug(raw: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum YamlBlockStyle {
+    Folded,
+    Literal,
+}
+
+fn parse_yaml_block_scalar_header(raw: &str) -> Option<YamlBlockStyle> {
+    let mut chars = raw.chars();
+    let style = match chars.next()? {
+        '>' => YamlBlockStyle::Folded,
+        '|' => YamlBlockStyle::Literal,
+        _ => return None,
+    };
+    let rest = chars.as_str();
+    let (indicator, trailing) = match rest.find(|c: char| c.is_ascii_whitespace()) {
+        Some(pos) => (&rest[..pos], rest[pos..].trim_start()),
+        None => (rest, ""),
+    };
+    if !trailing.is_empty() && !trailing.starts_with('#') {
+        return None;
+    }
+    let mut seen_chomp = false;
+    let mut seen_indent = false;
+    for ch in indicator.chars() {
+        match ch {
+            '-' | '+' if !seen_chomp => seen_chomp = true,
+            '1'..='9' if !seen_indent => seen_indent = true,
+            _ => return None,
+        }
+    }
+    Some(style)
+}
+
+fn unquote_yaml_scalar(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if trimmed.starts_with('"') {
+            return inner.replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+        return inner.replace("''", "'");
+    }
+    // Strip inline `# comment` only when preceded by whitespace.
+    if let Some(pos) = trimmed.find(" #") {
+        return trimmed[..pos].trim_end().to_owned();
+    }
+    trimmed.to_owned()
+}
+
+fn collect_yaml_block_scalar(
+    lines: &[&str],
+    start_idx: usize,
+    style: YamlBlockStyle,
+) -> (Option<String>, usize) {
+    let mut i = start_idx;
+    let mut block_indent: Option<usize> = None;
+    let mut raw_lines: Vec<&str> = Vec::new();
+
+    while i < lines.len() {
+        let line = lines[i];
+        if line.trim().is_empty() {
+            raw_lines.push("");
+            i += 1;
+            continue;
+        }
+        let indent = line
+            .bytes()
+            .take_while(|b| *b == b' ' || *b == b'\t')
+            .count();
+        if indent == 0 {
+            break;
+        }
+        let base_indent = *block_indent.get_or_insert(indent);
+        if indent < base_indent {
+            break;
+        }
+        raw_lines.push(&line[base_indent..]);
+        i += 1;
+    }
+
+    while raw_lines.last().is_some_and(|l| l.is_empty()) {
+        raw_lines.pop();
+    }
+
+    let formatted = match style {
+        YamlBlockStyle::Folded => {
+            let mut out = String::new();
+            let mut prev_was_empty = false;
+            for line in raw_lines {
+                if line.is_empty() {
+                    if !out.is_empty() {
+                        prev_was_empty = true;
+                    }
+                    continue;
+                }
+                if !out.is_empty() {
+                    if prev_was_empty {
+                        out.push('\n');
+                    } else {
+                        out.push(' ');
+                    }
+                }
+                out.push_str(line.trim());
+                prev_was_empty = false;
+            }
+            out
+        }
+        YamlBlockStyle::Literal => raw_lines.join("\n").trim_end().to_owned(),
+    };
+
+    let result = if formatted.trim().is_empty() {
+        None
+    } else {
+        Some(formatted)
+    };
+    (result, i)
+}
+
 fn parse_skill_frontmatter(markdown: &str) -> (Option<String>, Option<String>, Option<String>) {
-    let trimmed = markdown.trim_start();
-    let Some(rest) = trimmed.strip_prefix("---") else {
+    let clean = markdown.trim_start_matches('\u{feff}').trim_start();
+    let mut all_lines = clean.lines();
+    if all_lines.next().map(str::trim) != Some("---") {
         return (None, None, None);
-    };
-    let Some((header, _)) = rest.split_once("\n---") else {
+    }
+
+    let mut header_lines: Vec<&str> = Vec::new();
+    let mut closed = false;
+    for line in all_lines {
+        let trimmed = line.trim();
+        if trimmed == "---" || trimmed == "..." {
+            closed = true;
+            break;
+        }
+        header_lines.push(line);
+    }
+    if !closed {
         return (None, None, None);
-    };
+    }
+
     let mut name = None;
     let mut desc = None;
     let mut version = None;
-    for line in header.lines() {
-        let Some((k, v)) = line.split_once(':') else {
+    let mut metadata_version = None;
+    let mut in_metadata = false;
+    let mut i = 0;
+
+    while i < header_lines.len() {
+        let line = header_lines[i];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            i += 1;
+            continue;
+        }
+        let indent = line
+            .bytes()
+            .take_while(|b| *b == b' ' || *b == b'\t')
+            .count();
+        let Some((raw_key, raw_val)) = line.split_once(':') else {
+            i += 1;
             continue;
         };
-        let val = v.trim().trim_matches(['"', '\'']).to_owned();
-        if val.is_empty() {
+        let key = raw_key.trim().to_ascii_lowercase();
+        let val_trimmed = raw_val.trim();
+
+        if indent > 0 {
+            if in_metadata && key == "version" && metadata_version.is_none() {
+                let parsed = unquote_yaml_scalar(val_trimmed);
+                if !parsed.is_empty() {
+                    metadata_version = Some(parsed);
+                }
+            }
+            i += 1;
             continue;
         }
-        match k.trim().to_ascii_lowercase().as_str() {
-            "name" | "title" => name = Some(val),
-            "description" => desc = Some(val),
-            "version" => version = Some(val),
-            _ => {}
+
+        in_metadata = key == "metadata" && val_trimmed.is_empty();
+
+        let (parsed_val, next_i) = if let Some(style) = parse_yaml_block_scalar_header(val_trimmed)
+        {
+            collect_yaml_block_scalar(&header_lines, i + 1, style)
+        } else if val_trimmed.is_empty() && key == "description" {
+            // Indented plain continuation block directly beneath `description:`
+            collect_yaml_block_scalar(&header_lines, i + 1, YamlBlockStyle::Folded)
+        } else {
+            let mut value = unquote_yaml_scalar(val_trimmed);
+            let mut cursor = i + 1;
+            if key == "description"
+                && !value.is_empty()
+                && !val_trimmed.starts_with('"')
+                && !val_trimmed.starts_with('\'')
+            {
+                while cursor < header_lines.len() {
+                    let cont = header_lines[cursor];
+                    let cont_indent = cont
+                        .bytes()
+                        .take_while(|b| *b == b' ' || *b == b'\t')
+                        .count();
+                    let cont_trimmed = cont.trim();
+                    if cont_indent == 0 || cont_trimmed.is_empty() || cont_trimmed.starts_with('#')
+                    {
+                        break;
+                    }
+                    value.push(' ');
+                    value.push_str(cont_trimmed);
+                    cursor += 1;
+                }
+            }
+            let opt = if value.is_empty() { None } else { Some(value) };
+            (opt, cursor)
+        };
+
+        if let Some(val) = parsed_val {
+            match key.as_str() {
+                "name" | "title" => name = Some(val),
+                "description" => desc = Some(val),
+                "version" => version = Some(val),
+                _ => {}
+            }
         }
+        i = next_i;
     }
-    (name, desc, version)
+
+    (name, desc, version.or(metadata_version))
 }
 
 #[cfg(test)]
@@ -1929,5 +2619,121 @@ mod tests {
             enabled_components: Vec::new(),
         };
         assert!(executable_surface_expanded(&plugin_v1, &plugin_v2_hooks));
+    }
+
+    #[test]
+    fn d3_ui_03_parse_skill_frontmatter_handles_yaml_block_scalars_and_crlf() {
+        let folded_strip = "---\r\nname: agent-browser\r\ndescription: >-\r\n  Browser automation via vercel-labs agent-browser:\r\n  open sites, inspect accessibility tree, and take screenshots.\r\nmetadata:\r\n  version: \"2.4.1\"\r\n---\r\n# Body\r\n";
+        let (name, desc, ver) = parse_skill_frontmatter(folded_strip);
+        assert_eq!(name.as_deref(), Some("agent-browser"));
+        assert_eq!(
+            desc.as_deref(),
+            Some(
+                "Browser automation via vercel-labs agent-browser: open sites, inspect accessibility tree, and take screenshots."
+            )
+        );
+        assert_eq!(ver.as_deref(), Some("2.4.1"));
+
+        let folded_paragraphs = "---\nname: movies-db\ndescription: >\n  First line\n  second line.\n\n  Second paragraph.\nversion: 1.2.0\n---\n";
+        let (name2, desc2, ver2) = parse_skill_frontmatter(folded_paragraphs);
+        assert_eq!(name2.as_deref(), Some("movies-db"));
+        assert_eq!(
+            desc2.as_deref(),
+            Some("First line second line.\nSecond paragraph.")
+        );
+        assert_eq!(ver2.as_deref(), Some("1.2.0"));
+
+        let literal_strip =
+            "---\nname: literal-skill\ndescription: |-\n  Line one.\n  Line two.\n---\n";
+        let (name3, desc3, _) = parse_skill_frontmatter(literal_strip);
+        assert_eq!(name3.as_deref(), Some("literal-skill"));
+        assert_eq!(desc3.as_deref(), Some("Line one.\nLine two."));
+
+        let literal_keep =
+            "---\ntitle: \"Quoted: Skill\"\ndescription: | # comment\n  Alpha\n  Beta\n---\n";
+        let (name4, desc4, _) = parse_skill_frontmatter(literal_keep);
+        assert_eq!(name4.as_deref(), Some("Quoted: Skill"));
+        assert_eq!(desc4.as_deref(), Some("Alpha\nBeta"));
+    }
+
+    #[test]
+    fn d3_ui_02_folder_inspection_reads_real_skill_and_plugin_and_rejects_empty_dirs() {
+        let root =
+            std::env::temp_dir().join(format!("dennett-cap-inspect-{}", Uuid::new_v4().simple()));
+        let empty_dir = root.join("empty-folder");
+        let skill_dir = root.join("scripted-skill");
+        let plugin_dir = root.join("claude-layout-plugin");
+        fs::create_dir_all(&empty_dir).expect("create empty dir");
+        fs::create_dir_all(skill_dir.join("scripts")).expect("create skill scripts dir");
+        fs::create_dir_all(plugin_dir.join(".claude-plugin")).expect("create claude plugin dir");
+        fs::create_dir_all(plugin_dir.join("hooks")).expect("create plugin hooks dir");
+        fs::create_dir_all(plugin_dir.join("skills").join("nested-audit"))
+            .expect("create nested skill dir");
+
+        // Empty folder must be rejected for both Skill and Plugin!
+        let skill_err =
+            inspect_skill_folder_readonly(&empty_dir).expect_err("empty skill dir must fail");
+        assert!(matches!(skill_err, DennettError::InvalidInput { .. }));
+        let plugin_err =
+            inspect_plugin_folder_readonly(&empty_dir).expect_err("empty plugin dir must fail");
+        assert!(matches!(plugin_err, DennettError::InvalidInput { .. }));
+
+        // Real skill with YAML >- description and scripts/run.py!
+        let real_md = "---\nname: Scripted Helper\ndescription: >-\n  Automates build checks\n  with a Python script.\nversion: 1.5.0\n---\n# Scripted Helper\nRun checks carefully.\n";
+        fs::write(skill_dir.join("SKILL.md"), real_md).expect("write SKILL.md");
+        fs::write(skill_dir.join("scripts").join("run.py"), "print('hi')\n").expect("write run.py");
+
+        let inspected_skill =
+            inspect_skill_folder_readonly(&skill_dir).expect("inspect valid skill");
+        assert_eq!(inspected_skill.markdown, real_md);
+        assert_eq!(
+            inspected_skill.display_name.as_deref(),
+            Some("Scripted Helper")
+        );
+        assert_eq!(
+            inspected_skill.description.as_deref(),
+            Some("Automates build checks with a Python script.")
+        );
+        assert_eq!(inspected_skill.version.as_deref(), Some("1.5.0"));
+        assert!(inspected_skill.has_scripts);
+        assert!(inspected_skill.entry_files.iter().any(|f| f == "SKILL.md"));
+        assert!(inspected_skill.entry_files.iter().any(|f| f == "scripts"));
+
+        // Real plugin with .claude-plugin/plugin.json, hooks/, skills/, and mcp.json with secret env!
+        fs::write(
+            plugin_dir.join(".claude-plugin").join("plugin.json"),
+            r#"{"name":"Audit Pack","description":"Real plugin manifest","version":"2.0.0"}"#,
+        )
+        .expect("write plugin.json");
+        fs::write(plugin_dir.join("hooks").join("pre_tool.json"), "{}").expect("write hook");
+        fs::write(
+            plugin_dir
+                .join("skills")
+                .join("nested-audit")
+                .join("SKILL.md"),
+            "# Nested Audit\nCheck invariants.\n",
+        )
+        .expect("write nested skill");
+        fs::write(
+            plugin_dir.join("mcp.json"),
+            r#"{"mcpServers":{"docs":{"command":"docs-mcp","args":["--ro"],"env":{"API_TOKEN":"raw-secret-never-copied"}}}}"#,
+        )
+        .expect("write mcp.json");
+
+        let inspected_plugin =
+            inspect_plugin_folder_readonly(&plugin_dir).expect("inspect valid plugin");
+        assert_eq!(inspected_plugin.display_name.as_deref(), Some("Audit Pack"));
+        assert_eq!(
+            inspected_plugin.description.as_deref(),
+            Some("Real plugin manifest")
+        );
+        assert_eq!(inspected_plugin.version.as_deref(), Some("2.0.0"));
+        assert!(inspected_plugin.has_hooks);
+        assert_eq!(inspected_plugin.skills, vec![String::from("nested-audit")]);
+        assert_eq!(inspected_plugin.mcp_servers.len(), 1);
+        assert_eq!(inspected_plugin.mcp_servers[0].secret_slots.len(), 1);
+        assert_eq!(inspected_plugin.mcp_servers[0].env_vars.len(), 0);
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
