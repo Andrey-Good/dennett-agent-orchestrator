@@ -392,7 +392,7 @@ impl HeadService {
                  is_default_interactive = $8,
                  is_default_background = $9,
                  enabled = $10,
-                 updated_at = now()
+                 updated_at = GREATEST(now(), updated_at + interval '1 millisecond')
              WHERE connection_id = $1
              RETURNING {CONNECTION_SELECT_COLS}"
         );
@@ -577,7 +577,7 @@ impl HeadService {
             "UPDATE provider_connections
              SET is_default_interactive = CASE WHEN $2 THEN TRUE ELSE is_default_interactive END,
                  is_default_background = CASE WHEN $3 THEN TRUE ELSE is_default_background END,
-                 updated_at = now()
+                 updated_at = GREATEST(now(), updated_at + interval '1 millisecond')
              WHERE connection_id = $1
              RETURNING {CONNECTION_SELECT_COLS}"
         );
@@ -721,8 +721,7 @@ impl HeadService {
             "UPDATE provider_connections
              SET last_health_status = $2,
                  last_health_detail = $3,
-                 last_probed_at = now(),
-                 updated_at = now()
+                 last_probed_at = now()
              WHERE connection_id = $1
              RETURNING {CONNECTION_SELECT_COLS}"
         );
@@ -854,16 +853,29 @@ impl HeadService {
 
         // 3. Default interactive provider connection from PostgreSQL.
         if let Some(default_conn) = self.fetch_default_interactive_connection().await? {
-            let is_seeded_oauth =
-                default_conn.connection_id.to_string() == "00000000-0000-4000-8000-000000000001";
-            if is_seeded_oauth
-                && self.runtime().is_simulated()
+            let is_untouched_seeded_oauth = default_conn.connection_id
+                == SEEDED_OAUTH_PERSONAL_CONNECTION_ID
+                && default_conn.created_at == default_conn.updated_at;
+            if is_untouched_seeded_oauth
                 && self.runtime().auth_profile() != RuntimeAuthProfile::OAuthPersonal
-                && self
-                    .runtime_router()
-                    .for_profile(Some(RuntimeAuthProfile::OAuthPersonal))
-                    .is_err()
             {
+                // LIVE-A01-01: When `dennett-head` was explicitly booted with a non-OAuth
+                // `--auth-profile` (e.g. `gemini-api-key`) and the migration seed row
+                // `00000000-0000-4000-8000-000000000001` has never been explicitly edited
+                // or activated by the user, honor the boot profile instead of silently
+                // switching to `oauth-personal`.
+                if !self.runtime().is_simulated()
+                    && let Some(boot_conn) = self
+                        .find_enabled_connection_by_profile(self.runtime().auth_profile())
+                        .await?
+                    && boot_conn.adapter_id == self.runtime().adapter_id()
+                {
+                    let rt = self.resolve_runtime_for_connection(&boot_conn).await?;
+                    return Ok(ResolvedTurnRuntime {
+                        runtime: rt,
+                        connection_id: Some(boot_conn.connection_id),
+                    });
+                }
                 return Ok(ResolvedTurnRuntime {
                     runtime: Arc::clone(self.runtime()),
                     connection_id: None,

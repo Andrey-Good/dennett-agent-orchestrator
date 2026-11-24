@@ -27,22 +27,26 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use dennett_contracts::{
-    ArtifactCompleteness, CapabilityActivation, CapabilityOrigin, CapabilityScopeKind,
-    CapabilitySpec, CapabilityTrust, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
-    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
-    DennettError, DiscoverCapabilitiesRequest, ForgetRequest, ForgetTargetType, IdempotencyKey,
-    MemoryScope, MemoryStatus, PolicyEffect, ProfileMode, ProviderHealthStatus, ProviderKind,
-    RuntimeAuthProfile, SendAgentMessageRequest, SendMessageRequest, SessionKind,
+    ActivateConnectionRequest, ArtifactCompleteness, CapabilityActivation, CapabilityOrigin,
+    CapabilityOwnership, CapabilityScopeKind, CapabilitySpec, CapabilityTrust,
+    ConnectionActivationRole, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
+    CreateCapabilityRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
+    CreateTaskRequest, DennettError, DiscoverCapabilitiesRequest, ForgetRequest, ForgetTargetType,
+    IdempotencyKey, MemoryScope, MemoryStatus, PolicyEffect, ProfileMode, ProviderHealthStatus,
+    ProviderKind, RuntimeAuthProfile, SendAgentMessageRequest, SendMessageRequest, SessionKind,
     SetProjectCapabilityBindingRequest, SetSecretRequest, UpdateAgentConfigRequest,
     UpdateCapabilityRequest, UpsertProviderConnectionRequest, WorkspaceWritePolicy,
 };
+use dennett_head::connections::SEEDED_OAUTH_PERSONAL_CONNECTION_ID;
 use dennett_head::{
     HEAD_STAGE_LABEL, HeadAppState, HeadService, HeadServiceExtras, LATEST_CONTROL_SCHEMA_VERSION,
     MAX_CONCURRENT_REQUESTS, SECRET_AEAD_ALGORITHM, ValidatedControlPgTarget, build_head_router,
 };
 use dennett_head_client::HeadClient;
 use dennett_memory_client::MemoryClient;
-use dennett_runtime_antigravity::SimulatedRuntime;
+use dennett_runtime_antigravity::{
+    AgentRuntimePort, AntigravityAcpRuntime, AntigravityRuntimeConfig, SimulatedRuntime,
+};
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
@@ -79,6 +83,21 @@ struct LiveHeadHarness {
 impl LiveHeadHarness {
     async fn start(
         prefix: &str,
+        memory_client: Option<MemoryClient>,
+        extras: HeadServiceExtras,
+    ) -> Self {
+        Self::start_with_runtime(
+            prefix,
+            Arc::new(SimulatedRuntime::new(RuntimeAuthProfile::OAuthPersonal)),
+            memory_client,
+            extras,
+        )
+        .await
+    }
+
+    async fn start_with_runtime(
+        prefix: &str,
+        runtime: Arc<dyn AgentRuntimePort>,
         memory_client: Option<MemoryClient>,
         mut extras: HeadServiceExtras,
     ) -> Self {
@@ -122,7 +141,7 @@ impl LiveHeadHarness {
 
         let service = HeadService::new_with_extras(
             iso_target,
-            Arc::new(SimulatedRuntime::new(RuntimeAuthProfile::OAuthPersonal)),
+            runtime,
             memory_client,
             None,
             ProfileMode::TestIsolated,
@@ -1709,9 +1728,388 @@ async fn d3_v02_memory_fabric_proxy_degrades_honestly_and_keeps_stop_unblocked()
     harness.cleanup().await;
 }
 
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies LIVE-A01-01 boot gemini-api-key fail-closed on catalog + turn, probe immutability, and explicit activate override"
+)]
+async fn live_a01_01_boot_gemini_api_key_profile_never_silently_uses_seeded_oauth() {
+    let profile_root =
+        env::temp_dir().join(format!("dennett-d3-live-a01-{}", Uuid::new_v4().simple()));
+    fs::create_dir_all(&profile_root).expect("create isolated profile root");
+
+    // Boot a NON-SIMULATED `AntigravityAcpRuntime` configured for `gemini-api-key` with NO key.
+    let live_cfg = AntigravityRuntimeConfig::gemini_api_key(profile_root.clone(), None);
+    let runtime: Arc<dyn AgentRuntimePort> = Arc::new(AntigravityAcpRuntime::new(live_cfg));
+    assert!(!runtime.is_simulated());
+    assert_eq!(runtime.auth_profile(), RuntimeAuthProfile::GeminiApiKey);
+
+    let harness = LiveHeadHarness::start_with_runtime(
+        "livea01",
+        runtime,
+        None,
+        HeadServiceExtras {
+            antigravity_profile_root: Some(profile_root.clone()),
+            gemini_api_key_env_override: Some(None),
+            ..HeadServiceExtras::default()
+        },
+    )
+    .await;
+
+    // 1. Untouched migration seed `00000000-0000-4000-8000-000000000001` MUST NOT override the
+    //    explicit boot `--auth-profile gemini-api-key` in `GET /v1/runtime/catalog`!
+    let catalog_err = harness
+        .client
+        .get_runtime_catalog(true, None)
+        .await
+        .expect_err("boot gemini-api-key without key must fail closed on catalog");
+    assert!(
+        matches!(
+            catalog_err,
+            DennettError::AuthRequired {
+                profile: RuntimeAuthProfile::GeminiApiKey,
+                ..
+            }
+        ),
+        "expected AuthRequired(GeminiApiKey) on catalog, got: {catalog_err:?}"
+    );
+
+    // 2. Interactive turn without preferred_connection_id MUST also fail closed with AuthRequired(GeminiApiKey)
+    //    and NEVER silently launch `oauth-personal`!
+    let agent = harness
+        .client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("LiveKeyBootAgent"),
+                description: String::new(),
+                system_prompt: String::from("Fail closed without key."),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::new(),
+                workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                default_budget: None,
+                attached_skills: Vec::new(),
+                preferred_connection_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("create agent");
+    let session = harness
+        .client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: agent.agent_id,
+                project_id: None,
+                title: String::from("LIVE-A01-01 canary"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("create session");
+
+    let turn_err = harness
+        .client
+        .send_message(
+            session.session_id,
+            &SendMessageRequest {
+                content: String::from("hello without key"),
+                timeout_ms: Some(5_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+        .expect_err("boot gemini-api-key without key must fail closed on send_message");
+    assert!(
+        matches!(
+            turn_err,
+            DennettError::AuthRequired {
+                profile: RuntimeAuthProfile::GeminiApiKey,
+                ..
+            }
+        ),
+        "expected AuthRequired(GeminiApiKey) on turn, got: {turn_err:?}"
+    );
+
+    // 3. Verify the migration seed row still has `created_at == updated_at`.
+    let conns = harness
+        .client
+        .list_provider_connections(None)
+        .await
+        .expect("list connections");
+    let seeded_oauth = conns
+        .connections
+        .iter()
+        .find(|c| c.connection_id == SEEDED_OAUTH_PERSONAL_CONNECTION_ID)
+        .expect("seeded oauth row present");
+    assert_eq!(seeded_oauth.created_at, seeded_oauth.updated_at);
+
+    // 4. Once the user EXPLICITLY creates & activates a live LocalHttp connection as default interactive,
+    //    `get_runtime_catalog` honors the explicit activation!
+    let (local_url, _mock_state) = spawn_mock_local_llm(None).await;
+    let local_conn = harness
+        .client
+        .create_provider_connection(
+            &UpsertProviderConnectionRequest {
+                provider_kind: ProviderKind::LocalHttp,
+                display_name: String::from("Explicit Local Override"),
+                adapter_id: None,
+                auth_profile: RuntimeAuthProfile::LocalEndpoint,
+                endpoint_url: Some(local_url),
+                secret_slot_key: None,
+                is_default_interactive: Some(false),
+                is_default_background: Some(false),
+                enabled: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("create local connection");
+    let activated = harness
+        .client
+        .activate_provider_connection(
+            local_conn.connection_id,
+            &ActivateConnectionRequest {
+                role: ConnectionActivationRole::Interactive,
+            },
+            None,
+        )
+        .await
+        .expect("explicitly activate local connection");
+    assert!(activated.is_default_interactive);
+    assert!(activated.updated_at > activated.created_at);
+
+    let catalog = harness
+        .client
+        .get_runtime_catalog(true, None)
+        .await
+        .expect("explicitly activated local connection succeeds on catalog");
+    assert_eq!(catalog.auth_profile, RuntimeAuthProfile::LocalEndpoint);
+    assert_eq!(catalog.connection_id, Some(local_conn.connection_id));
+
+    harness.cleanup().await;
+    let _ = fs::remove_dir_all(&profile_root);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end PG16 verification for D3-UI-02 folder inspection and D3-UI-03 YAML block scalar parsing"
+)]
+async fn d3_ui_02_and_03_create_capability_inspects_skill_and_plugin_folders_on_disk() {
+    let harness = LiveHeadHarness::start("capfolder", None, HeadServiceExtras::default()).await;
+
+    let folders_root = harness.temp_root.join("picker-folders");
+    let empty_dir = folders_root.join("empty-dir");
+    let skill_dir = folders_root.join("my-scripted-skill");
+    let plugin_dir = folders_root.join("my-hooked-plugin");
+    fs::create_dir_all(&empty_dir).expect("create empty dir");
+    fs::create_dir_all(skill_dir.join("scripts")).expect("create skill scripts dir");
+    fs::create_dir_all(plugin_dir.join(".claude-plugin")).expect("create plugin manifest dir");
+    fs::create_dir_all(plugin_dir.join("hooks")).expect("create plugin hooks dir");
+    fs::create_dir_all(plugin_dir.join("skills").join("code-review"))
+        .expect("create plugin nested skill dir");
+
+    let real_skill_md = "---\nname: Build Verifier\ndescription: >-\n  Runs strict build verification\n  and reports missing invariants.\nversion: 1.3.0\n---\n# Build Verifier\nAlways inspect scripts before trust.\n";
+    fs::write(skill_dir.join("SKILL.md"), real_skill_md).expect("write SKILL.md");
+    fs::write(
+        skill_dir.join("scripts").join("run.py"),
+        "print('verify')\n",
+    )
+    .expect("write scripts/run.py");
+
+    fs::write(
+        plugin_dir.join(".claude-plugin").join("plugin.json"),
+        r#"{"name":"Security Pack","description":"Plugin with hooks and MCP secret slot","version":"2.1.0"}"#,
+    )
+    .expect("write plugin.json");
+    fs::write(plugin_dir.join("hooks").join("guard.json"), "{}").expect("write hook");
+    fs::write(
+        plugin_dir
+            .join("skills")
+            .join("code-review")
+            .join("SKILL.md"),
+        "# Code Review\nVerify invariants.\n",
+    )
+    .expect("write nested skill");
+    fs::write(
+        plugin_dir.join("mcp.json"),
+        r#"{"mcpServers":{"scanner":{"command":"scan-mcp","args":["--strict"],"env":{"SCANNER_API_KEY":"never-copy-raw-secret"}}}}"#,
+    )
+    .expect("write mcp.json");
+
+    // 1. Empty folder without SKILL.md MUST fail with InvalidInput (400)!
+    let empty_skill_err = harness
+        .client
+        .create_capability(
+            &CreateCapabilityRequest {
+                slug: String::from("empty-dir"),
+                display_name: String::from("empty-dir"),
+                description: String::new(),
+                version: String::from("1.0.0"),
+                origin_kind: CapabilityOrigin::UserManual,
+                ownership: CapabilityOwnership::User,
+                scope_kind: CapabilityScopeKind::Global,
+                project_id: None,
+                trust_state: CapabilityTrust::Unreviewed,
+                activation_state: CapabilityActivation::Disabled,
+                source_path: Some(empty_dir.to_string_lossy().into_owned()),
+                spec: CapabilitySpec::Skill {
+                    skill_markdown: String::from("placeholder"),
+                    has_scripts: false,
+                    entry_files: Vec::new(),
+                },
+            },
+            None,
+        )
+        .await
+        .expect_err("empty skill folder without SKILL.md must return InvalidInput");
+    assert!(matches!(empty_skill_err, DennettError::InvalidInput { .. }));
+
+    // 2. Real skill folder with SKILL.md (`description: >-`) + `scripts/run.py`:
+    //    Head MUST replace placeholder markdown/description, detect `has_scripts = true`,
+    //    and force `trust_state = Restricted`!
+    let created_skill = harness
+        .client
+        .create_capability(
+            &CreateCapabilityRequest {
+                slug: String::from("my-scripted-skill"),
+                display_name: String::from("my-scripted-skill"),
+                description: String::from("placeholder description"),
+                version: String::from("1.0.0"),
+                origin_kind: CapabilityOrigin::UserManual,
+                ownership: CapabilityOwnership::User,
+                scope_kind: CapabilityScopeKind::Global,
+                project_id: None,
+                trust_state: CapabilityTrust::Trusted,
+                activation_state: CapabilityActivation::Active,
+                source_path: Some(skill_dir.to_string_lossy().into_owned()),
+                spec: CapabilitySpec::Skill {
+                    skill_markdown: String::from("placeholder"),
+                    has_scripts: false,
+                    entry_files: Vec::new(),
+                },
+            },
+            None,
+        )
+        .await
+        .expect("create skill from real disk folder");
+
+    assert_eq!(created_skill.display_name, "Build Verifier");
+    assert_eq!(
+        created_skill.description,
+        "Runs strict build verification and reports missing invariants."
+    );
+    assert_eq!(created_skill.version, "1.3.0");
+    assert_eq!(created_skill.trust_state, CapabilityTrust::Restricted);
+    match created_skill.spec {
+        CapabilitySpec::Skill {
+            skill_markdown,
+            has_scripts,
+            entry_files,
+            ..
+        } => {
+            assert_eq!(skill_markdown, real_skill_md);
+            assert!(has_scripts);
+            assert!(entry_files.iter().any(|f| f == "SKILL.md"));
+            assert!(entry_files.iter().any(|f| f == "scripts"));
+        }
+        other => panic!("expected Skill spec, got: {other:?}"),
+    }
+
+    // 3. Empty folder as Plugin MUST fail with InvalidInput (400)!
+    let empty_plugin_err = harness
+        .client
+        .create_capability(
+            &CreateCapabilityRequest {
+                slug: String::from("empty-plugin"),
+                display_name: String::from("empty-plugin"),
+                description: String::new(),
+                version: String::from("1.0.0"),
+                origin_kind: CapabilityOrigin::UserManual,
+                ownership: CapabilityOwnership::User,
+                scope_kind: CapabilityScopeKind::Global,
+                project_id: None,
+                trust_state: CapabilityTrust::Unreviewed,
+                activation_state: CapabilityActivation::Disabled,
+                source_path: Some(empty_dir.to_string_lossy().into_owned()),
+                spec: CapabilitySpec::Plugin {
+                    manifest_version: String::from("1.0"),
+                    skills: Vec::new(),
+                    mcp_servers: Vec::new(),
+                    has_hooks: false,
+                    enabled_components: Vec::new(),
+                },
+            },
+            None,
+        )
+        .await
+        .expect_err("empty plugin folder must return InvalidInput");
+    assert!(matches!(
+        empty_plugin_err,
+        DennettError::InvalidInput { .. }
+    ));
+
+    // 4. Real plugin folder with `.claude-plugin/plugin.json` + `hooks/` + `skills/` + `mcp.json`:
+    let created_plugin = harness
+        .client
+        .create_capability(
+            &CreateCapabilityRequest {
+                slug: String::from("my-hooked-plugin"),
+                display_name: String::from("my-hooked-plugin"),
+                description: String::new(),
+                version: String::from("1.0.0"),
+                origin_kind: CapabilityOrigin::UserManual,
+                ownership: CapabilityOwnership::User,
+                scope_kind: CapabilityScopeKind::Global,
+                project_id: None,
+                trust_state: CapabilityTrust::Trusted,
+                activation_state: CapabilityActivation::Disabled,
+                source_path: Some(plugin_dir.to_string_lossy().into_owned()),
+                spec: CapabilitySpec::Plugin {
+                    manifest_version: String::from("1.0"),
+                    skills: Vec::new(),
+                    mcp_servers: Vec::new(),
+                    has_hooks: false,
+                    enabled_components: Vec::new(),
+                },
+            },
+            None,
+        )
+        .await
+        .expect("create plugin from real disk folder");
+
+    assert_eq!(created_plugin.display_name, "Security Pack");
+    assert_eq!(
+        created_plugin.description,
+        "Plugin with hooks and MCP secret slot"
+    );
+    assert_eq!(created_plugin.version, "2.1.0");
+    assert_eq!(created_plugin.trust_state, CapabilityTrust::Restricted);
+    match created_plugin.spec {
+        CapabilitySpec::Plugin {
+            skills,
+            mcp_servers,
+            has_hooks,
+            ..
+        } => {
+            assert!(has_hooks);
+            assert_eq!(skills, vec![String::from("code-review")]);
+            assert_eq!(mcp_servers.len(), 1);
+            assert_eq!(mcp_servers[0].secret_slots.len(), 1);
+            assert_eq!(mcp_servers[0].env_vars.len(), 0);
+        }
+        other => panic!("expected Plugin spec, got: {other:?}"),
+    }
+
+    harness.cleanup().await;
+}
+
 // Keep unused-import-free helper sanity check for BTreeMap used in spec fixtures if needed.
 #[test]
 fn d3_test_file_helper_sanity() {
     let m: BTreeMap<String, String> = BTreeMap::new();
-    assert!(m.is_empty());
+    assert_eq!(m.len(), 0);
 }
