@@ -96,7 +96,10 @@ async fn migration_is_idempotent_checks_tampering_and_enforces_sql_constraints()
             .await
             .expect("count migrations")
             .get(0);
-        assert_eq!(count, 1, "idempotent migration must not duplicate migration rows");
+        assert_eq!(
+            count, LATEST_SCHEMA_VERSION,
+            "idempotent migration must not duplicate migration rows"
+        );
 
         let after = query_schema_version(&client, Some(target.raw_url()), target.parsed_password())
             .await

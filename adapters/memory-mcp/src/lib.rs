@@ -7,17 +7,22 @@
 //!   a scoped bearer token read from environment.
 //! - Enforces a strict maximum stdin line size ([`MAX_MCP_STDIN_LINE_BYTES`]) to bound memory.
 
+use std::collections::BTreeMap;
 use std::io::{self, BufRead};
 use std::str::FromStr;
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    CorrectNoteRequest, CreateNoteRequest, DennettError, EvidenceLinkInput, IdempotencyKey,
-    MemoryNoteId, MemoryScope, SearchNotesRequest,
+    AdmissionStatus, ClaimId, ConflictId, ConflictStatus, CorrectNoteRequest, CreateClaimRequest,
+    CreateDocumentRequest, CreateNoteRequest, DennettError, DocumentId, EpistemicStatus,
+    EvidenceLinkInput, ExportRequest, ForgetRequest, ForgetTargetType, IdempotencyKey,
+    ImportRequest, MemoryEventId, MemoryNoteId, MemoryScope, ResolveConflictRequest,
+    SearchNotesRequest, SupersedeClaimRequest, TimestampMs, UpdateDocumentRequest,
 };
 use dennett_memory_client::MemoryClient;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 /// Default MCP protocol version advertised when a client omits `protocolVersion`.
 pub const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -104,6 +109,42 @@ pub enum ParsedToolCall {
     WriteNote(CreateNoteRequest),
     /// Append an immutable correction revision to a note (`memory_correct_note`).
     CorrectNote(CorrectNoteRequest),
+    /// Create a structured claim (`memory_claim_create`).
+    ClaimCreate(CreateClaimRequest),
+    /// Lookup claims by scope and/or topic (`memory_claim_lookup`).
+    ClaimLookup {
+        /// Optional scope filter.
+        scope: Option<MemoryScope>,
+        /// Optional topic key filter.
+        topic_key: Option<String>,
+    },
+    /// Supersede an existing claim (`memory_claim_supersede`).
+    ClaimSupersede(SupersedeClaimRequest),
+    /// List open conflicts (`memory_conflict_list`).
+    ConflictList(Option<MemoryScope>),
+    /// Resolve an open conflict (`memory_conflict_resolve`).
+    ConflictResolve(ResolveConflictRequest),
+    /// Read a document dossier (or list dossiers when `document_id` omitted) (`memory_document_read`).
+    DocumentRead {
+        /// Optional document identifier to fetch.
+        document_id: Option<DocumentId>,
+        /// Optional scope filter when listing documents.
+        scope: Option<MemoryScope>,
+        /// When `true` and `document_id` is provided, fetch full version history.
+        include_versions: bool,
+    },
+    /// Create a version-1 dossier (`memory_document_write` without `document_id`).
+    DocumentCreate(CreateDocumentRequest),
+    /// Update an existing dossier (`memory_document_write` with `document_id`).
+    DocumentUpdate(UpdateDocumentRequest),
+    /// Forget a memory entity with search purge and audit tombstone (`memory_forget`).
+    Forget(ForgetRequest),
+    /// Export a deterministic, secret-stripped Contract J package (`memory_export`).
+    Export(ExportRequest),
+    /// Import an external package as `external_untrusted` (`memory_import`).
+    Import(ImportRequest),
+    /// Query separable search index freshness/health status (`memory_index_status`).
+    IndexStatus(Option<MemoryScope>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +156,8 @@ struct SearchArgs {
     query: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
+    #[serde(default)]
+    include_history: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,6 +178,12 @@ struct WriteNoteArgs {
     evidence_links: Vec<EvidenceLinkInput>,
     #[serde(default)]
     author_label: Option<String>,
+    #[serde(default)]
+    admission_status: Option<AdmissionStatus>,
+    #[serde(default)]
+    salience: Option<u8>,
+    #[serde(default)]
+    topic_key: Option<String>,
     #[serde(default)]
     idempotency_key: Option<String>,
 }
@@ -158,19 +207,177 @@ struct CorrectNoteArgs {
     idempotency_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaimCreateArgs {
+    scope: String,
+    topic_key: String,
+    #[serde(default)]
+    claim_key: Option<String>,
+    natural_language: String,
+    #[serde(default)]
+    epistemic_status: EpistemicStatus,
+    #[serde(default)]
+    supersedes_claim_id: Option<String>,
+    #[serde(default)]
+    valid_from: Option<TimestampMs>,
+    #[serde(default)]
+    valid_to: Option<TimestampMs>,
+    #[serde(default)]
+    source_note_id: Option<String>,
+    #[serde(default)]
+    caveats: Vec<String>,
+    #[serde(default)]
+    provenance: BTreeMap<String, String>,
+    #[serde(default)]
+    evidence_links: Vec<EvidenceLinkInput>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaimLookupArgs {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    topic_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaimSupersedeArgs {
+    claim_id: String,
+    scope: String,
+    topic_key: String,
+    #[serde(default)]
+    claim_key: Option<String>,
+    natural_language: String,
+    #[serde(default)]
+    epistemic_status: EpistemicStatus,
+    #[serde(default)]
+    valid_from: Option<TimestampMs>,
+    #[serde(default)]
+    valid_to: Option<TimestampMs>,
+    #[serde(default)]
+    source_note_id: Option<String>,
+    #[serde(default)]
+    caveats: Vec<String>,
+    #[serde(default)]
+    provenance: BTreeMap<String, String>,
+    #[serde(default)]
+    evidence_links: Vec<EvidenceLinkInput>,
+    #[serde(default)]
+    resolution_event_id: Option<String>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OptionalScopeArgs {
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConflictResolveArgs {
+    conflict_id: String,
+    scope: String,
+    resolution_note: String,
+    #[serde(default)]
+    winning_claim_id: Option<String>,
+    #[serde(default)]
+    target_status: Option<ConflictStatus>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentReadArgs {
+    #[serde(default)]
+    document_id: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    include_versions: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentWriteArgs {
+    scope: String,
+    #[serde(default)]
+    document_id: Option<String>,
+    #[serde(default)]
+    document_key: Option<String>,
+    #[serde(default)]
+    expected_version: Option<i32>,
+    title: String,
+    body: String,
+    #[serde(default)]
+    provenance_claim_ids: Vec<String>,
+    #[serde(default)]
+    provenance_note_ids: Vec<String>,
+    #[serde(default)]
+    diff_summary: Option<String>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForgetArgs {
+    scope: String,
+    target_type: ForgetTargetType,
+    target_id: String,
+    reason: String,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportArgs {
+    scope: String,
+    #[serde(default)]
+    format_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportArgs {
+    scope: String,
+    package_json: String,
+}
+
 /// Parses and validates an MCP tool name + JSON arguments object into a typed [`ParsedToolCall`].
 ///
 /// # Errors
 ///
 /// Returns `Ok(None)` if `tool_name` is unknown (so caller can emit JSON-RPC `-32601`),
 /// or `Err(DennettError::InvalidInput)` if arguments fail validation.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single validated match table covering all 16 Memory Fabric MCP tools"
+)]
 pub fn parse_tool_call(
     tool_name: &str,
     raw_args: &Value,
 ) -> Result<Option<ParsedToolCall>, DennettError> {
+    let allows_null = matches!(
+        tool_name,
+        "memory_search"
+            | "memory_claim_lookup"
+            | "memory_conflict_list"
+            | "memory_document_read"
+            | "memory_index_status"
+    );
     let args_obj = match raw_args {
         Value::Object(_) => raw_args.clone(),
-        Value::Null if tool_name == "memory_search" => json!({}),
+        Value::Null if allows_null => json!({}),
         _ => {
             return Err(DennettError::InvalidInput {
                 field: String::from("arguments"),
@@ -187,7 +394,7 @@ pub fn parse_tool_call(
                 scope,
                 query: parsed.query,
                 limit: parsed.limit,
-                include_history: false,
+                include_history: parsed.include_history,
             };
             let _ = req.validated_limit()?;
             Ok(Some(ParsedToolCall::Search(req)))
@@ -205,10 +412,7 @@ pub fn parse_tool_call(
         "memory_write_note" => {
             let parsed: WriteNoteArgs = deserialize_args(args_obj)?;
             let scope = MemoryScope::try_new(parsed.scope)?;
-            let idempotency_key = match parsed.idempotency_key {
-                Some(raw) => IdempotencyKey::try_new(raw)?,
-                None => IdempotencyKey::generate(),
-            };
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
             let req = CreateNoteRequest {
                 scope,
                 title: parsed.title,
@@ -217,9 +421,9 @@ pub fn parse_tool_call(
                 observed_at: None,
                 evidence_links: parsed.evidence_links,
                 author_label: parsed.author_label,
-                admission_status: None,
-                salience: None,
-                topic_key: None,
+                admission_status: parsed.admission_status,
+                salience: parsed.salience,
+                topic_key: parsed.topic_key,
                 idempotency_key,
             };
             req.validate()?;
@@ -229,10 +433,7 @@ pub fn parse_tool_call(
             let parsed: CorrectNoteArgs = deserialize_args(args_obj)?;
             let note_id = MemoryNoteId::from_str(&parsed.note_id)?;
             let scope = MemoryScope::try_new(parsed.scope)?;
-            let idempotency_key = match parsed.idempotency_key {
-                Some(raw) => IdempotencyKey::try_new(raw)?,
-                None => IdempotencyKey::generate(),
-            };
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
             let req = CorrectNoteRequest {
                 note_id,
                 scope,
@@ -248,7 +449,236 @@ pub fn parse_tool_call(
             req.validate()?;
             Ok(Some(ParsedToolCall::CorrectNote(req)))
         }
+        "memory_claim_create" => {
+            let parsed: ClaimCreateArgs = deserialize_args(args_obj)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            let supersedes_claim_id = parsed
+                .supersedes_claim_id
+                .as_deref()
+                .map(ClaimId::from_str)
+                .transpose()?;
+            let source_note_id = parsed
+                .source_note_id
+                .as_deref()
+                .map(MemoryNoteId::from_str)
+                .transpose()?;
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
+            let req = CreateClaimRequest {
+                scope,
+                topic_key: parsed.topic_key,
+                claim_key: parsed.claim_key,
+                natural_language: parsed.natural_language,
+                epistemic_status: parsed.epistemic_status,
+                supersedes_claim_id,
+                valid_from: parsed.valid_from,
+                valid_to: parsed.valid_to,
+                source_note_id,
+                caveats: parsed.caveats,
+                provenance: parsed.provenance,
+                evidence_links: parsed.evidence_links,
+                idempotency_key,
+            };
+            req.validate()?;
+            Ok(Some(ParsedToolCall::ClaimCreate(req)))
+        }
+        "memory_claim_lookup" => {
+            let parsed: ClaimLookupArgs = deserialize_args(args_obj)?;
+            let scope = parsed.scope.map(MemoryScope::try_new).transpose()?;
+            Ok(Some(ParsedToolCall::ClaimLookup {
+                scope,
+                topic_key: parsed.topic_key,
+            }))
+        }
+        "memory_claim_supersede" => {
+            let parsed: ClaimSupersedeArgs = deserialize_args(args_obj)?;
+            let claim_id = ClaimId::from_str(&parsed.claim_id)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            let source_note_id = parsed
+                .source_note_id
+                .as_deref()
+                .map(MemoryNoteId::from_str)
+                .transpose()?;
+            let resolution_event_id = parsed
+                .resolution_event_id
+                .as_deref()
+                .map(MemoryEventId::from_str)
+                .transpose()?;
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
+            let req = SupersedeClaimRequest {
+                claim_id,
+                scope: scope.clone(),
+                new_claim: CreateClaimRequest {
+                    scope,
+                    topic_key: parsed.topic_key,
+                    claim_key: parsed.claim_key,
+                    natural_language: parsed.natural_language,
+                    epistemic_status: parsed.epistemic_status,
+                    supersedes_claim_id: Some(claim_id),
+                    valid_from: parsed.valid_from,
+                    valid_to: parsed.valid_to,
+                    source_note_id,
+                    caveats: parsed.caveats,
+                    provenance: parsed.provenance,
+                    evidence_links: parsed.evidence_links,
+                    idempotency_key,
+                },
+                resolution_event_id,
+            };
+            req.validate()?;
+            Ok(Some(ParsedToolCall::ClaimSupersede(req)))
+        }
+        "memory_conflict_list" => {
+            let parsed: OptionalScopeArgs = deserialize_args(args_obj)?;
+            let scope = parsed.scope.map(MemoryScope::try_new).transpose()?;
+            Ok(Some(ParsedToolCall::ConflictList(scope)))
+        }
+        "memory_conflict_resolve" => {
+            let parsed: ConflictResolveArgs = deserialize_args(args_obj)?;
+            let conflict_id = ConflictId::from_str(&parsed.conflict_id)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            let winning_claim_id = parsed
+                .winning_claim_id
+                .as_deref()
+                .map(ClaimId::from_str)
+                .transpose()?;
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
+            let req = ResolveConflictRequest {
+                conflict_id,
+                scope,
+                resolution_note: parsed.resolution_note,
+                winning_claim_id,
+                target_status: parsed.target_status,
+                idempotency_key,
+            };
+            req.validate()?;
+            Ok(Some(ParsedToolCall::ConflictResolve(req)))
+        }
+        "memory_document_read" => {
+            let parsed: DocumentReadArgs = deserialize_args(args_obj)?;
+            let document_id = parsed
+                .document_id
+                .as_deref()
+                .map(DocumentId::from_str)
+                .transpose()?;
+            let scope = parsed.scope.map(MemoryScope::try_new).transpose()?;
+            Ok(Some(ParsedToolCall::DocumentRead {
+                document_id,
+                scope,
+                include_versions: parsed.include_versions,
+            }))
+        }
+        "memory_document_write" => {
+            let parsed: DocumentWriteArgs = deserialize_args(args_obj)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
+            let provenance_claim_ids: Vec<ClaimId> = parsed
+                .provenance_claim_ids
+                .iter()
+                .map(|s| ClaimId::from_str(s))
+                .collect::<Result<_, _>>()?;
+            let provenance_note_ids: Vec<MemoryNoteId> = parsed
+                .provenance_note_ids
+                .iter()
+                .map(|s| MemoryNoteId::from_str(s))
+                .collect::<Result<_, _>>()?;
+
+            if let Some(raw_doc_id) = parsed.document_id {
+                let document_id = DocumentId::from_str(&raw_doc_id)?;
+                let expected_version =
+                    parsed
+                        .expected_version
+                        .ok_or_else(|| DennettError::InvalidInput {
+                            field: String::from("expected_version"),
+                            reason: String::from(
+                                "expected_version is required when updating an existing document",
+                            ),
+                        })?;
+                let req = UpdateDocumentRequest {
+                    document_id,
+                    scope,
+                    expected_version,
+                    title: parsed.title,
+                    body: parsed.body,
+                    provenance_claim_ids,
+                    provenance_note_ids,
+                    diff_summary: parsed.diff_summary,
+                    idempotency_key,
+                };
+                req.validate()?;
+                Ok(Some(ParsedToolCall::DocumentUpdate(req)))
+            } else {
+                let document_key =
+                    parsed
+                        .document_key
+                        .ok_or_else(|| DennettError::InvalidInput {
+                            field: String::from("document_key"),
+                            reason: String::from(
+                                "document_key is required when creating a new document",
+                            ),
+                        })?;
+                let req = CreateDocumentRequest {
+                    scope,
+                    document_key,
+                    title: parsed.title,
+                    body: parsed.body,
+                    provenance_claim_ids,
+                    provenance_note_ids,
+                    idempotency_key,
+                };
+                req.validate()?;
+                Ok(Some(ParsedToolCall::DocumentCreate(req)))
+            }
+        }
+        "memory_forget" => {
+            let parsed: ForgetArgs = deserialize_args(args_obj)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            let target_id =
+                Uuid::parse_str(&parsed.target_id).map_err(|_| DennettError::InvalidInput {
+                    field: String::from("target_id"),
+                    reason: String::from("must be a valid UUID"),
+                })?;
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
+            let req = ForgetRequest {
+                scope,
+                target_type: parsed.target_type,
+                target_id,
+                reason: parsed.reason,
+                idempotency_key,
+            };
+            req.validate()?;
+            Ok(Some(ParsedToolCall::Forget(req)))
+        }
+        "memory_export" => {
+            let parsed: ExportArgs = deserialize_args(args_obj)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            Ok(Some(ParsedToolCall::Export(ExportRequest {
+                scope,
+                format_version: parsed.format_version,
+            })))
+        }
+        "memory_import" => {
+            let parsed: ImportArgs = deserialize_args(args_obj)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            let req = ImportRequest {
+                scope,
+                package_json: parsed.package_json,
+            };
+            req.validate()?;
+            Ok(Some(ParsedToolCall::Import(req)))
+        }
+        "memory_index_status" => {
+            let parsed: OptionalScopeArgs = deserialize_args(args_obj)?;
+            let scope = parsed.scope.map(MemoryScope::try_new).transpose()?;
+            Ok(Some(ParsedToolCall::IndexStatus(scope)))
+        }
         _ => Ok(None),
+    }
+}
+
+fn parse_opt_idempotency(raw: Option<String>) -> Result<IdempotencyKey, DennettError> {
+    match raw {
+        Some(s) => IdempotencyKey::try_new(s),
+        None => Ok(IdempotencyKey::generate()),
     }
 }
 
@@ -373,7 +803,30 @@ impl MemoryMcpServer {
             Err(err) => return self.tool_error_redacted(id, &err),
         };
 
-        let result_json = match parsed {
+        let result_json = self.dispatch_tool_call(parsed).await;
+
+        match result_json {
+            Ok(text) => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{
+                        "type": "text",
+                        "text": text
+                    }],
+                    "isError": false
+                }
+            }),
+            Err(err) => self.tool_error_redacted(id, &err),
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive match dispatches all 16 D1+D3 MCP memory tools through one MemoryClient boundary"
+    )]
+    async fn dispatch_tool_call(&self, parsed: ParsedToolCall) -> Result<String, DennettError> {
+        match parsed {
             ParsedToolCall::Search(req) => self
                 .client
                 .search_notes(&req, None)
@@ -399,21 +852,91 @@ impl MemoryMcpServer {
                 .correct_note(&req, None)
                 .await
                 .and_then(|resp| to_json_string(&resp)),
-        };
-
-        match result_json {
-            Ok(text) => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "content": [{
-                        "type": "text",
-                        "text": text
-                    }],
-                    "isError": false
+            ParsedToolCall::ClaimCreate(req) => self
+                .client
+                .create_claim(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::ClaimLookup { scope, topic_key } => {
+                match (scope.as_ref(), topic_key.as_deref()) {
+                    (Some(sc), Some(topic)) if !topic.trim().is_empty() => self
+                        .client
+                        .list_claims_by_topic(sc, topic, None)
+                        .await
+                        .and_then(|resp| to_json_string(&resp)),
+                    _ => self
+                        .client
+                        .list_claims(scope.as_ref(), topic_key.as_deref(), None)
+                        .await
+                        .and_then(|resp| to_json_string(&resp)),
                 }
-            }),
-            Err(err) => self.tool_error_redacted(id, &err),
+            }
+            ParsedToolCall::ClaimSupersede(req) => self
+                .client
+                .supersede_claim(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::ConflictList(scope) => self
+                .client
+                .list_open_conflicts(scope.as_ref(), None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::ConflictResolve(req) => self
+                .client
+                .resolve_conflict(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::DocumentRead {
+                document_id,
+                scope,
+                include_versions,
+            } => match document_id {
+                Some(doc_id) if include_versions => self
+                    .client
+                    .get_document_versions(doc_id, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp)),
+                Some(doc_id) => self
+                    .client
+                    .get_document(doc_id, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp)),
+                None => self
+                    .client
+                    .list_documents(scope.as_ref(), None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp)),
+            },
+            ParsedToolCall::DocumentCreate(req) => self
+                .client
+                .create_document(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::DocumentUpdate(req) => self
+                .client
+                .update_document(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::Forget(req) => self
+                .client
+                .forget(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::Export(req) => self
+                .client
+                .export_package(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::Import(req) => self
+                .client
+                .import_package(&req, None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::IndexStatus(scope) => self
+                .client
+                .get_index_status(scope.as_ref(), None)
+                .await
+                .and_then(|resp| to_json_string(&resp)),
         }
     }
 
@@ -479,8 +1002,12 @@ pub fn tool_error(id: &Value, err: &DennettError) -> Value {
     })
 }
 
-/// Returns the JSON Schema descriptors for all tools exposed by `dennett-memory-mcp`.
+/// Returns the JSON Schema descriptors for all 16 tools exposed by `dennett-memory-mcp`.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete JSON Schema manifest for all 16 Memory Fabric MCP tools"
+)]
 pub fn tool_descriptors() -> Value {
     let evidence_link_schema = json!({
         "type": "object",
@@ -506,13 +1033,14 @@ pub fn tool_descriptors() -> Value {
     json!([
         {
             "name": "memory_search",
-            "description": "Search current memory notes within authorized scopes.",
+            "description": "Search current memory notes within authorized scopes with fresh-tail overlay and live index status.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "scope": { "type": "string", "description": "Optional scope filter (must be allowed by the active credential)." },
                     "query": { "type": "string", "description": "Optional text search query over note titles, bodies, and tags." },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+                    "include_history": { "type": "boolean", "description": "Include historical revisions in query matching." }
                 }
             }
         },
@@ -540,7 +1068,7 @@ pub fn tool_descriptors() -> Value {
         },
         {
             "name": "memory_write_note",
-            "description": "Create a new revision-1 memory note with optional evidence links and idempotency key.",
+            "description": "Create a new revision-1 memory note with optional evidence links, admission status, salience, and topic key.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -550,6 +1078,9 @@ pub fn tool_descriptors() -> Value {
                     "tags": { "type": "array", "items": { "type": "string" } },
                     "evidence_links": { "type": "array", "items": evidence_link_schema.clone() },
                     "author_label": { "type": "string", "description": "Optional display label; never used for authorization." },
+                    "admission_status": { "type": "string", "enum": ["admitted", "ephemeral", "rejected"] },
+                    "salience": { "type": "integer", "minimum": 0, "maximum": 100 },
+                    "topic_key": { "type": "string" },
                     "idempotency_key": { "type": "string" }
                 },
                 "required": ["scope", "title", "body"]
@@ -568,11 +1099,176 @@ pub fn tool_descriptors() -> Value {
                     "body": { "type": "string" },
                     "rationale": { "type": "string" },
                     "tags": { "type": "array", "items": { "type": "string" } },
-                    "evidence_links": { "type": "array", "items": evidence_link_schema },
+                    "evidence_links": { "type": "array", "items": evidence_link_schema.clone() },
                     "author_label": { "type": "string", "description": "Optional display label; never used for authorization." },
                     "idempotency_key": { "type": "string" }
                 },
                 "required": ["note_id", "scope", "expected_revision", "title", "body", "rationale"]
+            }
+        },
+        {
+            "name": "memory_claim_create",
+            "description": "Create a structured claim with topic_key, optional caveats, and automatic conflict detection.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "topic_key": { "type": "string" },
+                    "claim_key": { "type": "string" },
+                    "natural_language": { "type": "string" },
+                    "epistemic_status": { "type": "string", "enum": ["observed", "asserted", "inferred", "hypothesis", "contested", "superseded", "retracted"] },
+                    "supersedes_claim_id": { "type": "string" },
+                    "valid_from": { "type": "integer" },
+                    "valid_to": { "type": "integer" },
+                    "source_note_id": { "type": "string" },
+                    "caveats": { "type": "array", "items": { "type": "string" } },
+                    "provenance": { "type": "object", "additionalProperties": { "type": "string" } },
+                    "evidence_links": { "type": "array", "items": evidence_link_schema.clone() },
+                    "idempotency_key": { "type": "string" }
+                },
+                "required": ["scope", "topic_key", "natural_language"]
+            }
+        },
+        {
+            "name": "memory_claim_lookup",
+            "description": "List structured claims filtered by authorized scope and optional topic_key.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "topic_key": { "type": "string" }
+                }
+            }
+        },
+        {
+            "name": "memory_claim_supersede",
+            "description": "Atomically supersede an active claim with a newer claim (respecting temporal and concurrency guards).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "claim_id": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "topic_key": { "type": "string" },
+                    "claim_key": { "type": "string" },
+                    "natural_language": { "type": "string" },
+                    "epistemic_status": { "type": "string", "enum": ["observed", "asserted", "inferred", "hypothesis"] },
+                    "valid_from": { "type": "integer" },
+                    "valid_to": { "type": "integer" },
+                    "source_note_id": { "type": "string" },
+                    "caveats": { "type": "array", "items": { "type": "string" } },
+                    "provenance": { "type": "object", "additionalProperties": { "type": "string" } },
+                    "evidence_links": { "type": "array", "items": evidence_link_schema },
+                    "resolution_event_id": { "type": "string" },
+                    "idempotency_key": { "type": "string" }
+                },
+                "required": ["claim_id", "scope", "topic_key", "natural_language"]
+            }
+        },
+        {
+            "name": "memory_conflict_list",
+            "description": "List open conflicts across authorized scopes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" }
+                }
+            }
+        },
+        {
+            "name": "memory_conflict_resolve",
+            "description": "Resolve or adjudicate an open memory conflict with an audit rationale and optional winning claim.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "conflict_id": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "resolution_note": { "type": "string" },
+                    "winning_claim_id": { "type": "string" },
+                    "target_status": { "type": "string", "enum": ["resolved", "accepted_ambiguity", "invalidated"] },
+                    "idempotency_key": { "type": "string" }
+                },
+                "required": ["conflict_id", "scope", "resolution_note"]
+            }
+        },
+        {
+            "name": "memory_document_read",
+            "description": "Read a human-readable dossier document (or its version history) by ID, or list dossiers in a scope.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "document_id": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "include_versions": { "type": "boolean" }
+                }
+            }
+        },
+        {
+            "name": "memory_document_write",
+            "description": "Create a new dossier document (with document_key) or update an existing one (with document_id and expected_version).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "document_id": { "type": "string" },
+                    "document_key": { "type": "string" },
+                    "expected_version": { "type": "integer", "minimum": 1 },
+                    "title": { "type": "string" },
+                    "body": { "type": "string" },
+                    "provenance_claim_ids": { "type": "array", "items": { "type": "string" } },
+                    "provenance_note_ids": { "type": "array", "items": { "type": "string" } },
+                    "diff_summary": { "type": "string" },
+                    "idempotency_key": { "type": "string" }
+                },
+                "required": ["scope", "title", "body"]
+            }
+        },
+        {
+            "name": "memory_forget",
+            "description": "Forget a memory entity (note, evidence, claim, or document) with immediate scrub, index purge, and audit tombstone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "target_type": { "type": "string", "enum": ["note", "evidence", "claim", "document"] },
+                    "target_id": { "type": "string" },
+                    "reason": { "type": "string" },
+                    "idempotency_key": { "type": "string" }
+                },
+                "required": ["scope", "target_type", "target_id", "reason"]
+            }
+        },
+        {
+            "name": "memory_export",
+            "description": "Export a deterministic, secret-stripped portable memory package for one authorized scope (Contract J).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "format_version": { "type": "string" }
+                },
+                "required": ["scope"]
+            }
+        },
+        {
+            "name": "memory_import",
+            "description": "Import a portable memory package strictly as external_untrusted data with instruction_active=false (Contract J).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "package_json": { "type": "string" }
+                },
+                "required": ["scope", "package_json"]
+            }
+        },
+        {
+            "name": "memory_index_status",
+            "description": "Query live search index health and watermark status for an authorized scope.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" }
+                }
             }
         }
     ])
@@ -610,10 +1306,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_call_validates_all_five_tools_and_rejects_bad_inputs() {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "unit test validates schema parsing and rejection paths across all 16 MCP memory tools"
+    )]
+    fn parse_tool_call_validates_all_tools_and_rejects_bad_inputs() {
         let search = parse_tool_call(
             "memory_search",
-            &json!({"scope": "project-alpha", "limit": 5}),
+            &json!({"scope": "project-alpha", "limit": 5, "include_history": true}),
         );
         assert!(matches!(search, Ok(Some(ParsedToolCall::Search(_)))));
 
@@ -638,6 +1338,105 @@ mod tests {
             }),
         );
         assert!(matches!(bad_rev, Err(DennettError::InvalidInput { .. })));
+
+        assert!(matches!(
+            parse_tool_call(
+                "memory_claim_create",
+                &json!({
+                    "scope": "project-alpha",
+                    "topic_key": "runtime",
+                    "natural_language": "Use PG16",
+                    "caveats": ["Except client cache"]
+                })
+            ),
+            Ok(Some(ParsedToolCall::ClaimCreate(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_claim_lookup",
+                &json!({"scope": "project-alpha", "topic_key": "runtime"})
+            ),
+            Ok(Some(ParsedToolCall::ClaimLookup { .. }))
+        ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_claim_supersede",
+                &json!({
+                    "claim_id": ClaimId::new().to_string(),
+                    "scope": "project-alpha",
+                    "topic_key": "runtime",
+                    "natural_language": "Use PG17"
+                })
+            ),
+            Ok(Some(ParsedToolCall::ClaimSupersede(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call("memory_conflict_list", &Value::Null),
+            Ok(Some(ParsedToolCall::ConflictList(None)))
+        ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_conflict_resolve",
+                &json!({
+                    "conflict_id": ConflictId::new().to_string(),
+                    "scope": "project-alpha",
+                    "resolution_note": "Resolved by owner"
+                })
+            ),
+            Ok(Some(ParsedToolCall::ConflictResolve(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_document_write",
+                &json!({
+                    "scope": "project-alpha",
+                    "document_key": "dossier:arch",
+                    "title": "Arch",
+                    "body": "Body"
+                })
+            ),
+            Ok(Some(ParsedToolCall::DocumentCreate(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_document_write",
+                &json!({
+                    "scope": "project-alpha",
+                    "document_id": DocumentId::new().to_string(),
+                    "expected_version": 1,
+                    "title": "Arch",
+                    "body": "Updated"
+                })
+            ),
+            Ok(Some(ParsedToolCall::DocumentUpdate(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_forget",
+                &json!({
+                    "scope": "project-alpha",
+                    "target_type": "note",
+                    "target_id": Uuid::new_v4().to_string(),
+                    "reason": "owner requested deletion"
+                })
+            ),
+            Ok(Some(ParsedToolCall::Forget(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call("memory_export", &json!({"scope": "project-alpha"})),
+            Ok(Some(ParsedToolCall::Export(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_import",
+                &json!({"scope": "project-alpha", "package_json": "{}"})
+            ),
+            Ok(Some(ParsedToolCall::Import(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call("memory_index_status", &Value::Null),
+            Ok(Some(ParsedToolCall::IndexStatus(None)))
+        ));
 
         let unknown = parse_tool_call("memory_drop_database", &json!({}));
         assert_eq!(unknown, Ok(None));
@@ -672,7 +1471,7 @@ mod tests {
             .await
             .expect("tools/list response");
         let tools = list["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 16);
 
         let unknown = server
             .handle_message(&json!({"jsonrpc": "2.0", "id": 3, "method": "does/not/exist"}))

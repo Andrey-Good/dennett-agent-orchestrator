@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
+use axum::extract::rejection::{JsonRejection, QueryRejection};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -25,21 +25,28 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use dennett_contracts::redact::{redact_secrets, sanitize_cli_arg, sanitize_pg_error};
 use dennett_contracts::{
-    ApiErrorResponse, AuthPrincipal, CorrectNoteRequest, CorrelationId, CreateNoteRequest,
-    DennettError, EvidenceId, IngestEvidenceRequest, MemoryEventId, MemoryNoteId, ProfileMode,
-    SearchNotesRequest, ServiceHealth, ServiceKind, TimestampMs,
+    ApiErrorResponse, AuthPrincipal, ClaimId, ConflictId, ConsolidationJobId, CorrectNoteRequest,
+    CorrelationId, CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
+    CreateNoteRequest, DennettError, DocumentId, EvidenceId, ExportRequest, ForgetRequest,
+    ImportRequest, IngestEvidenceRequest, MemoryEventId, MemoryNoteId, MemoryScope, ProfileMode,
+    ResolveConflictRequest, SearchNotesRequest, ServiceHealth, ServiceKind, SupersedeClaimRequest,
+    TimestampMs, TriggerIndexRebuildRequest, UpdateDocumentRequest,
 };
 use dennett_memory_core::{
     AuthVerifier, MEMORYD_STAGE_LABEL, MemoryService, StandaloneAuthVerifier, ValidatedPgTarget,
     d1_memoryd_capabilities, parse_bearer_header,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
 use tokio::time;
 
 /// Maximum incoming HTTP request body size (512 KiB, accommodating 256 KiB evidence + JSON overhead).
 const MAX_HTTP_BODY_BYTES: usize = 512 * 1024;
+/// Maximum HTTP request body size for dossier document endpoints (1 MiB, accommodating 512 KiB body + JSON).
+const MAX_DOCUMENT_HTTP_BODY_BYTES: usize = 1024 * 1024;
+/// Maximum HTTP request body size for `/v1/memory/import` (17 MiB so 8-16 MiB packages reach domain validation).
+const MAX_IMPORT_HTTP_BODY_BYTES: usize = 17 * 1024 * 1024;
 /// Maximum concurrent in-flight HTTP requests accepted simultaneously by `dennett-memoryd`.
 const MAX_CONCURRENT_REQUESTS: usize = 64;
 /// Maximum end-to-end wall time permitted for a single HTTP request handler.
@@ -453,7 +460,67 @@ fn build_router(state: AppState) -> Router {
             "/v1/memory/notes/{note_id}/corrections",
             post(handle_correct_note),
         )
-        .route("/v1/memory/events/{event_id}", get(handle_get_event));
+        .route("/v1/memory/events/{event_id}", get(handle_get_event))
+        // Phase D3 Memory Fabric endpoints
+        .route(
+            "/v1/memory/claims",
+            get(handle_list_claims).post(handle_create_claim),
+        )
+        .route(
+            "/v1/memory/claims/by-topic",
+            get(handle_list_claims_by_topic),
+        )
+        .route("/v1/memory/claims/{claim_id}", get(handle_get_claim))
+        .route(
+            "/v1/memory/claims/{claim_id}/supersede",
+            post(handle_supersede_claim),
+        )
+        .route("/v1/memory/conflicts", get(handle_list_open_conflicts))
+        .route(
+            "/v1/memory/conflicts/{conflict_id}/resolve",
+            post(handle_resolve_conflict),
+        )
+        .route(
+            "/v1/memory/documents",
+            get(handle_list_documents)
+                .post(handle_create_document)
+                .layer(DefaultBodyLimit::max(MAX_DOCUMENT_HTTP_BODY_BYTES)),
+        )
+        .route(
+            "/v1/memory/documents/{document_id}",
+            get(handle_get_document)
+                .put(handle_update_document)
+                .layer(DefaultBodyLimit::max(MAX_DOCUMENT_HTTP_BODY_BYTES)),
+        )
+        .route(
+            "/v1/memory/documents/{document_id}/versions",
+            get(handle_get_document_versions),
+        )
+        .route("/v1/memory/forget", post(handle_forget))
+        .route("/v1/memory/forget/tombstones", get(handle_list_tombstones))
+        .route("/v1/memory/export", post(handle_export_package))
+        .route(
+            "/v1/memory/import",
+            post(handle_import_package).layer(DefaultBodyLimit::max(MAX_IMPORT_HTTP_BODY_BYTES)),
+        )
+        .route("/v1/memory/index/status", get(handle_get_index_status))
+        .route(
+            "/v1/memory/index/rebuild",
+            post(handle_trigger_index_rebuild),
+        )
+        .route("/v1/memory/stats", get(handle_get_stats))
+        .route(
+            "/v1/memory/consolidation/jobs",
+            get(handle_list_consolidation_jobs).post(handle_create_consolidation_job),
+        )
+        .route(
+            "/v1/memory/consolidation/jobs/{job_id}/pause",
+            post(handle_pause_consolidation_job),
+        )
+        .route(
+            "/v1/memory/consolidation/jobs/{job_id}/resume",
+            post(handle_resume_consolidation_job),
+        );
 
     if state.profile_mode == ProfileMode::TestIsolated {
         router = router.route("/shutdown", post(handle_shutdown));
@@ -828,6 +895,604 @@ async fn handle_get_event(
 
     match svc.get_event(&principal, event_id).await {
         Ok(event) => json_with_correlation(StatusCode::OK, &event, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ScopeQuery {
+    scope: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaimsQuery {
+    scope: Option<String>,
+    topic_key: Option<String>,
+}
+
+fn parse_optional_scope(raw: Option<&str>) -> Result<Option<MemoryScope>, DennettError> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(MemoryScope::try_new)
+        .transpose()
+}
+
+fn query_rejection_response(rej: &QueryRejection, correlation_id: &CorrelationId) -> Response {
+    let err = DennettError::InvalidInput {
+        field: String::from("query"),
+        reason: redact_secrets(&rej.body_text(), &[]),
+    };
+    json_api_error(StatusCode::BAD_REQUEST, err, correlation_id)
+}
+
+async fn handle_create_claim(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateClaimRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.create_claim(&principal, &correlation_id, req).await {
+        Ok(claim) => json_with_correlation(StatusCode::CREATED, &claim, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_claim(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let claim_id = match ClaimId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_claim(&principal, claim_id).await {
+        Ok(claim) => json_with_correlation(StatusCode::OK, &claim, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_list_claims(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ClaimsQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc
+        .list_claims(&principal, scope.as_ref(), q.topic_key.as_deref())
+        .await
+    {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_list_claims_by_topic(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ClaimsQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return domain_error_response(
+                DennettError::InvalidInput {
+                    field: String::from("scope"),
+                    reason: String::from("scope query parameter is required"),
+                },
+                &correlation_id,
+            );
+        }
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+    let Some(topic_key) = q
+        .topic_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("topic_key"),
+                reason: String::from("topic_key query parameter is required"),
+            },
+            &correlation_id,
+        );
+    };
+
+    match svc
+        .list_claims_by_topic(&principal, &scope, topic_key)
+        .await
+    {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_supersede_claim(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<SupersedeClaimRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let path_id = match ClaimId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+    if req.claim_id != path_id {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("claim_id"),
+                reason: String::from("path claim_id does not match request body claim_id"),
+            },
+            &correlation_id,
+        );
+    }
+
+    match svc.supersede_claim(&principal, &correlation_id, req).await {
+        Ok(claim) => json_with_correlation(StatusCode::CREATED, &claim, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_list_open_conflicts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ScopeQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.list_open_conflicts(&principal, scope.as_ref()).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_resolve_conflict(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<ResolveConflictRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let path_id = match ConflictId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+    if req.conflict_id != path_id {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("conflict_id"),
+                reason: String::from("path conflict_id does not match request body conflict_id"),
+            },
+            &correlation_id,
+        );
+    }
+
+    match svc.resolve_conflict(&principal, &correlation_id, req).await {
+        Ok(conflict) => json_with_correlation(StatusCode::OK, &conflict, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_list_documents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ScopeQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.list_documents(&principal, scope.as_ref()).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_create_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateDocumentRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.create_document(&principal, &correlation_id, req).await {
+        Ok(doc) => json_with_correlation(StatusCode::CREATED, &doc, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let doc_id = match DocumentId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_document(&principal, doc_id).await {
+        Ok(doc) => json_with_correlation(StatusCode::OK, &doc, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_update_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<UpdateDocumentRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let path_id = match DocumentId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+    if req.document_id != path_id {
+        return domain_error_response(
+            DennettError::InvalidInput {
+                field: String::from("document_id"),
+                reason: String::from("path document_id does not match request body document_id"),
+            },
+            &correlation_id,
+        );
+    }
+
+    match svc.update_document(&principal, &correlation_id, req).await {
+        Ok(doc) => json_with_correlation(StatusCode::OK, &doc, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_document_versions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let doc_id = match DocumentId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_document_versions(&principal, doc_id).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_forget(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<ForgetRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.forget(&principal, &correlation_id, req).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_list_tombstones(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ScopeQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.list_tombstones(&principal, scope.as_ref()).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_export_package(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<ExportRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.export_package(&principal, &correlation_id, req).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_import_package(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<ImportRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.import_package(&principal, &correlation_id, req).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_index_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ScopeQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_index_status(&principal, scope.as_ref()).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_trigger_index_rebuild(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<TriggerIndexRebuildRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc.trigger_index_rebuild(&principal, req).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_get_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ScopeQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.get_stats(&principal, scope.as_ref()).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_list_consolidation_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ScopeQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc
+        .list_consolidation_jobs(&principal, scope.as_ref())
+        .await
+    {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_create_consolidation_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateConsolidationJobRequest>, JsonRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &correlation_id),
+    };
+
+    match svc
+        .create_consolidation_job(&principal, &correlation_id, req)
+        .await
+    {
+        Ok(job) => json_with_correlation(StatusCode::CREATED, &job, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_pause_consolidation_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let job_id = match ConsolidationJobId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.pause_consolidation_job(&principal, job_id).await {
+        Ok(job) => json_with_correlation(StatusCode::OK, &job, &correlation_id),
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+async fn handle_resume_consolidation_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let job_id = match ConsolidationJobId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc
+        .resume_consolidation_job(&principal, &correlation_id, job_id)
+        .await
+    {
+        Ok(job) => json_with_correlation(StatusCode::OK, &job, &correlation_id),
         Err(err) => domain_error_response(err, &correlation_id),
     }
 }

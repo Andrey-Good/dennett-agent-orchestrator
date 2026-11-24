@@ -6,8 +6,9 @@
 use std::collections::BTreeMap;
 
 use dennett_contracts::{
-    CorrectNoteRequest, CreateNoteRequest, EvidenceAnchor, EvidenceLinkInput,
-    IngestEvidenceRequest, Sha256Hex, TimestampMs,
+    CorrectNoteRequest, CreateClaimRequest, CreateDocumentRequest, CreateNoteRequest,
+    EvidenceAnchor, EvidenceLinkInput, ForgetRequest, IngestEvidenceRequest,
+    ResolveConflictRequest, Sha256Hex, SupersedeClaimRequest, TimestampMs, UpdateDocumentRequest,
 };
 use sha2::{Digest, Sha256};
 
@@ -42,13 +43,19 @@ pub fn fingerprint_ingest_evidence(req: &IngestEvidenceRequest) -> Sha256Hex {
 /// Computes a deterministic canonical fingerprint for [`CreateNoteRequest`].
 #[must_use]
 pub fn fingerprint_create_note(req: &CreateNoteRequest) -> Sha256Hex {
-    let mut hasher = CanonicalHasher::new("dennett.memory.v1.note_created");
+    let mut hasher = CanonicalHasher::new("dennett.memory.v2.note_created");
     hasher.update_str(req.scope.as_str());
     hasher.update_str(&req.title);
     hasher.update_str(&req.body);
     hasher.update_str_slice(&req.tags);
     hasher.update_opt_timestamp(req.observed_at);
     hasher.update_opt_str(req.author_label.as_deref());
+    hasher.update_opt_str(
+        req.admission_status
+            .map(dennett_contracts::AdmissionStatus::as_str),
+    );
+    hasher.update_opt_u8(req.salience);
+    hasher.update_opt_str(req.topic_key.as_deref());
     hasher.update_links(&req.evidence_links);
     hasher.finish()
 }
@@ -67,6 +74,126 @@ pub fn fingerprint_correct_note(req: &CorrectNoteRequest) -> Sha256Hex {
     hasher.update_opt_str(req.author_label.as_deref());
     hasher.update_links(&req.evidence_links);
     hasher.finish()
+}
+
+/// Computes a deterministic canonical fingerprint for [`CreateClaimRequest`].
+#[must_use]
+pub fn fingerprint_create_claim(req: &CreateClaimRequest) -> Sha256Hex {
+    let mut hasher = CanonicalHasher::new("dennett.memory.v2.claim_created");
+    hash_claim_fields(&mut hasher, req);
+    hasher.finish()
+}
+
+/// Computes a deterministic canonical fingerprint for [`SupersedeClaimRequest`].
+#[must_use]
+pub fn fingerprint_supersede_claim(req: &SupersedeClaimRequest) -> Sha256Hex {
+    let mut hasher = CanonicalHasher::new("dennett.memory.v2.claim_superseded");
+    hasher.update_bytes(req.claim_id.as_uuid().as_bytes());
+    hasher.update_str(req.scope.as_str());
+    hasher.update_opt_uuid(
+        req.resolution_event_id
+            .map(dennett_contracts::MemoryEventId::as_uuid),
+    );
+    hash_claim_fields(&mut hasher, &req.new_claim);
+    hasher.finish()
+}
+
+/// Computes a deterministic canonical fingerprint for [`ResolveConflictRequest`].
+#[must_use]
+pub fn fingerprint_resolve_conflict(req: &ResolveConflictRequest) -> Sha256Hex {
+    let mut hasher = CanonicalHasher::new("dennett.memory.v2.conflict_resolved");
+    hasher.update_bytes(req.conflict_id.as_uuid().as_bytes());
+    hasher.update_str(req.scope.as_str());
+    hasher.update_str(&req.resolution_note);
+    hasher.update_opt_uuid(
+        req.winning_claim_id
+            .map(dennett_contracts::ClaimId::as_uuid),
+    );
+    hasher.update_opt_str(
+        req.target_status
+            .map(dennett_contracts::ConflictStatus::as_str),
+    );
+    hasher.finish()
+}
+
+/// Computes a deterministic canonical fingerprint for [`CreateDocumentRequest`].
+#[must_use]
+pub fn fingerprint_create_document(req: &CreateDocumentRequest) -> Sha256Hex {
+    let mut hasher = CanonicalHasher::new("dennett.memory.v2.document_created");
+    hasher.update_str(req.scope.as_str());
+    hasher.update_str(&req.document_key);
+    hasher.update_str(&req.title);
+    hasher.update_str(&req.body);
+    hasher.update_uuids(
+        &req.provenance_claim_ids
+            .iter()
+            .map(|id| id.as_uuid())
+            .collect::<Vec<_>>(),
+    );
+    hasher.update_uuids(
+        &req.provenance_note_ids
+            .iter()
+            .map(|id| id.as_uuid())
+            .collect::<Vec<_>>(),
+    );
+    hasher.finish()
+}
+
+/// Computes a deterministic canonical fingerprint for [`UpdateDocumentRequest`].
+#[must_use]
+pub fn fingerprint_update_document(req: &UpdateDocumentRequest) -> Sha256Hex {
+    let mut hasher = CanonicalHasher::new("dennett.memory.v2.document_updated");
+    hasher.update_bytes(req.document_id.as_uuid().as_bytes());
+    hasher.update_str(req.scope.as_str());
+    hasher.update_i64(i64::from(req.expected_version));
+    hasher.update_str(&req.title);
+    hasher.update_str(&req.body);
+    hasher.update_opt_str(req.diff_summary.as_deref());
+    hasher.update_uuids(
+        &req.provenance_claim_ids
+            .iter()
+            .map(|id| id.as_uuid())
+            .collect::<Vec<_>>(),
+    );
+    hasher.update_uuids(
+        &req.provenance_note_ids
+            .iter()
+            .map(|id| id.as_uuid())
+            .collect::<Vec<_>>(),
+    );
+    hasher.finish()
+}
+
+/// Computes a deterministic canonical fingerprint for [`ForgetRequest`].
+#[must_use]
+pub fn fingerprint_forget(req: &ForgetRequest) -> Sha256Hex {
+    let mut hasher = CanonicalHasher::new("dennett.memory.v2.forgotten");
+    hasher.update_str(req.scope.as_str());
+    hasher.update_str(req.target_type.as_str());
+    hasher.update_bytes(req.target_id.as_bytes());
+    hasher.update_str(&req.reason);
+    hasher.finish()
+}
+
+fn hash_claim_fields(hasher: &mut CanonicalHasher, req: &CreateClaimRequest) {
+    hasher.update_str(req.scope.as_str());
+    hasher.update_str(&req.topic_key);
+    hasher.update_opt_str(req.claim_key.as_deref());
+    hasher.update_str(&req.natural_language);
+    hasher.update_str(req.epistemic_status.as_str());
+    hasher.update_opt_uuid(
+        req.supersedes_claim_id
+            .map(dennett_contracts::ClaimId::as_uuid),
+    );
+    hasher.update_opt_timestamp(req.valid_from);
+    hasher.update_opt_timestamp(req.valid_to);
+    hasher.update_opt_uuid(
+        req.source_note_id
+            .map(dennett_contracts::MemoryNoteId::as_uuid),
+    );
+    hasher.update_str_slice(&req.caveats);
+    hasher.update_map(&req.provenance);
+    hasher.update_links(&req.evidence_links);
 }
 
 struct CanonicalHasher {
@@ -133,6 +260,33 @@ impl CanonicalHasher {
                 self.inner.update([1_u8]);
                 self.inner.update(v.to_be_bytes());
             }
+        }
+    }
+
+    fn update_opt_u8(&mut self, opt: Option<u8>) {
+        match opt {
+            None => self.inner.update([0_u8]),
+            Some(v) => {
+                self.inner.update([1_u8, v]);
+            }
+        }
+    }
+
+    fn update_opt_uuid(&mut self, opt: Option<uuid::Uuid>) {
+        match opt {
+            None => self.inner.update([0_u8]),
+            Some(id) => {
+                self.inner.update([1_u8]);
+                self.update_bytes(id.as_bytes());
+            }
+        }
+    }
+
+    fn update_uuids(&mut self, ids: &[uuid::Uuid]) {
+        let count = u64::try_from(ids.len()).unwrap_or(u64::MAX);
+        self.inner.update(count.to_be_bytes());
+        for id in ids {
+            self.update_bytes(id.as_bytes());
         }
     }
 
