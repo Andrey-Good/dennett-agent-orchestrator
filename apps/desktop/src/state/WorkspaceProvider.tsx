@@ -161,6 +161,15 @@ function isActiveProjectRecord(project: ProjectRecord): boolean {
   return lc !== "archived" && lc !== "deleted_record";
 }
 
+function computeOpenConflictsCount(ov: MemoryOverviewResponse | null): number {
+  if (!ov || ov.memory_status !== "healthy") {
+    return 0;
+  }
+  const fromStats = ov.stats?.open_conflicts_count ?? 0;
+  const fromList = ov.conflicts.filter((c) => c.status === "open").length;
+  return Math.max(fromStats, fromList);
+}
+
 function formatReconcileVerdict(
   effectStatus: string | undefined,
   summary: string | null | undefined,
@@ -533,6 +542,7 @@ export function WorkspaceProvider({
   const [lastFlushSummary, setLastFlushSummary] = useState<string | null>(null);
   const [isUpdatingModel, setIsUpdatingModel] = useState(false);
   const [memoryOverview, setMemoryOverview] = useState<MemoryOverviewResponse | null>(null);
+  const [globalOpenMemoryConflictsCount, setGlobalOpenMemoryConflictsCount] = useState(0);
   const [isLoadingMemoryOverview, setIsLoadingMemoryOverview] = useState(false);
   const [providerConnections, setProviderConnections] = useState<ProviderConnectionRecord[]>([]);
   const [plannedProviders, setPlannedProviders] = useState<PlannedProviderInfo[]>([]);
@@ -572,6 +582,7 @@ export function WorkspaceProvider({
   const activeViewRef = useRef<WorkspaceView>("chat");
   const isSidebarOpenRef = useRef(true);
   const isRightPanelOpenRef = useRef(initialRightPanelOpen);
+  const activeProjectScopeRef = useRef<string | null>(null);
 
   // D2-ARCH-01: canonical running sessions derived from server snapshot + activeDetail + local in-flight.
   const runningSessionIds = useMemo(() => {
@@ -1004,6 +1015,7 @@ export function WorkspaceProvider({
         .getMemoryOverview(null)
         .then((ov) => {
           setMemoryOverview(ov);
+          setGlobalOpenMemoryConflictsCount(computeOpenConflictsCount(ov));
         })
         .catch(() => {});
       void bridge
@@ -1276,20 +1288,28 @@ export function WorkspaceProvider({
     await loadFilesForProject(activeProject.project_id);
   }, [activeProject, loadFilesForProject]);
 
+  activeProjectScopeRef.current = activeProject?.memory_scope ?? null;
+
   const refreshMemoryOverview = useCallback(
     async (scope?: string | null): Promise<MemoryOverviewResponse | null> => {
       if (!healthSnapshot?.connected) {
         return null;
       }
+      const normalizedScope = scope ?? null;
       setIsLoadingMemoryOverview(true);
       try {
-        const overview = await bridge.getMemoryOverview(scope ?? null);
-        setMemoryOverview(overview);
+        const overview = await bridge.getMemoryOverview(normalizedScope);
+        if (normalizedScope === null) {
+          setMemoryOverview(overview);
+          setGlobalOpenMemoryConflictsCount(computeOpenConflictsCount(overview));
+        }
         if (overview.memory_status === "healthy" && overview.stats) {
-          if (activeProject && (!scope || scope === activeProject.memory_scope)) {
-            const scopedNotes = overview.notes.filter(
-              (n) => n.scope === activeProject.memory_scope,
-            );
+          const currentProjectScope = activeProjectScopeRef.current;
+          if (
+            currentProjectScope &&
+            (!normalizedScope || normalizedScope === currentProjectScope)
+          ) {
+            const scopedNotes = overview.notes.filter((n) => n.scope === currentProjectScope);
             setActiveScopeNoteCount(scopedNotes.length);
           }
         }
@@ -1301,7 +1321,7 @@ export function WorkspaceProvider({
         setIsLoadingMemoryOverview(false);
       }
     },
-    [activeProject, bridge, healthSnapshot?.connected],
+    [bridge, healthSnapshot?.connected],
   );
 
   const refreshD3SettingsData = useCallback(async () => {
@@ -1336,39 +1356,38 @@ export function WorkspaceProvider({
     }
   }, [healthSnapshot?.connected, isSettingsOpen, refreshD3SettingsData]);
 
-  useEffect(() => {
-    if (activeView === "memory" && healthSnapshot?.connected) {
-      void refreshMemoryOverview(null);
-    }
-  }, [activeView, healthSnapshot?.connected, refreshMemoryOverview]);
-
   const refreshMemoryStats = useCallback(async () => {
     if (!healthSnapshot?.connected) {
       setActiveScopeNoteCount(null);
       return;
     }
     try {
-      const targetScope = activeProject?.memory_scope ?? null;
+      const targetScope = activeProjectScopeRef.current;
       const [searchResp, overviewResp] = await Promise.all([
         targetScope
           ? bridge.searchMemory({ scope: targetScope, limit: 100 }).catch(() => null)
           : Promise.resolve(null),
-        bridge.getMemoryOverview(targetScope).catch(() => null),
+        bridge.getMemoryOverview(null).catch(() => null),
       ]);
       if (overviewResp) {
         setMemoryOverview(overviewResp);
+        setGlobalOpenMemoryConflictsCount(computeOpenConflictsCount(overviewResp));
       }
       if (searchResp && searchResp.memory_status === "healthy") {
         setActiveScopeNoteCount(searchResp.notes.length);
       } else if (overviewResp && overviewResp.memory_status === "healthy" && overviewResp.stats) {
-        setActiveScopeNoteCount(overviewResp.stats.active_notes_count);
+        setActiveScopeNoteCount(
+          targetScope
+            ? overviewResp.notes.filter((n) => n.scope === targetScope).length
+            : overviewResp.stats.active_notes_count,
+        );
       } else {
         setActiveScopeNoteCount(null);
       }
     } catch {
       setActiveScopeNoteCount(null);
     }
-  }, [activeProject, bridge, healthSnapshot?.connected]);
+  }, [bridge, healthSnapshot?.connected]);
 
   useEffect(() => {
     if (isStatsOpen) {
@@ -2056,13 +2075,12 @@ export function WorkspaceProvider({
           .slice(0, 80) || `${kind}-${Date.now().toString(16)}`;
       setErrorBanner(null);
       try {
+        // Send real `source_path` with minimal contract-compliant placeholders;
+        // dennett-head inspects SKILL.md / plugin manifest on disk read-only and rejects invalid folders.
         const created = await bridge.createCapability({
           slug,
           display_name: displayName,
-          description:
-            kind === "plugin"
-              ? `Локальный плагин из папки ${displayName}`
-              : `Локальный навык из папки ${displayName}`,
+          description: "",
           version: "1.0.0",
           origin_kind: "user_manual",
           ownership: scopeKind === "project" ? "project" : "user",
@@ -2076,19 +2094,22 @@ export function WorkspaceProvider({
               ? {
                   kind: "plugin",
                   manifest_version: "1.0",
-                  skills: [slug],
+                  skills: [],
                   mcp_servers: [],
                   has_hooks: false,
-                  enabled_components: [slug],
+                  enabled_components: [],
                 }
               : {
                   kind: "skill",
-                  skill_markdown: `# ${displayName}\n\nЛокальный навык из папки.`,
+                  skill_markdown: "pending-source-path-inspection",
                   has_scripts: false,
-                  entry_files: ["SKILL.md"],
+                  entry_files: [],
                 },
         });
-        setCapabilities((prev) => [created, ...prev.filter((c) => c.capability_id !== created.capability_id)]);
+        setCapabilities((prev) => [
+          created,
+          ...prev.filter((c) => c.capability_id !== created.capability_id),
+        ]);
         return created;
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -3384,206 +3405,104 @@ export function WorkspaceProvider({
     [inboxCards, selectedSessionId],
   );
 
-  const openMemoryConflictsCount = useMemo(() => {
-    if (!memoryOverview || memoryOverview.memory_status !== "healthy") {
-      return 0;
-    }
-    const fromStats = memoryOverview.stats?.open_conflicts_count ?? 0;
-    const fromList = memoryOverview.conflicts.filter((c) => c.status === "open").length;
-    return Math.max(fromStats, fromList);
-  }, [memoryOverview]);
+  const dismissError = useCallback(() => setErrorBanner(null), []);
+  const dismissCancelledNotice = useCallback(() => setCancelledNotice(null), []);
+  const dismissReconcileNotice = useCallback(() => setReconcileNotice(null), []);
 
-  const value = useMemo<WorkspaceContextValue>(
+  const openMemoryConflictsCount = globalOpenMemoryConflictsCount;
+
+  const actionsValue = useMemo<WorkspaceActions>(
     () => ({
-      state: {
-        initialized,
-        isLoading,
-        isSyncedAfterConnect,
-        activeView,
-        healthSnapshot,
-        runtimeCatalog,
-        isRefreshingCatalog,
-        streamCursor,
-        projects,
-        agents,
-        sessions,
-        tasks,
-        inboxCards,
-        unresolvedInboxCount,
-        pendingPermissions,
-        activeGrants,
-        effects,
-        selectedProjectId,
-        selectedSessionId,
-        activeDetail,
-        projectFiles,
-        isLoadingFiles,
-        activeScopeNoteCount,
-        diagnostics,
-        draftsBySession,
-        queuedMessages,
-        isFlushingQueue,
-        optimisticMessagesBySession,
-        runningSessionIds,
-        cancellingSessionIds,
-        stoppingTaskIds,
-        cancelledNotice,
-        reconcileNotice,
-        errorBanner,
-        isRightPanelOpen,
-        isSidebarOpen,
-        isSettingsOpen,
-        isStatsOpen,
-        isCommandOpen,
-        commandInitialQuery,
-        folderPickerIntent,
-        searchQuery,
-        selectedArtifactId,
-        artifactRevisions,
-        isFlushingOutbox,
-        lastFlushSummary,
-        isUpdatingModel,
-        memoryOverview,
-        isLoadingMemoryOverview,
-        providerConnections,
-        plannedProviders,
-        secrets,
-        capabilities,
-        isLoadingD3Settings,
-        isRebuildingIndex,
-        isConsolidatingMemory,
-      },
-      actions: {
-        setActiveView,
-        selectProject,
-        openSessionInChat,
-        refreshAll,
-        pollEventsNow,
-        reconnectWithUrl,
-        refreshRuntimeCatalog,
-        selectSession,
-        createBlankChat,
-        createBlankChatWithDraft,
-        createStandaloneChat,
-        toggleProjectPin,
-        toggleSessionPin,
-        createFolderlessProject,
-        createProjectFromFolder,
-        requestFolderPicker,
-        closeFolderPicker,
-        submitFolderPickerPath,
-        renameProject,
-        attachProjectFolder,
-        rebindProjectFolder,
-        detachProjectWorkspace,
-        archiveProject,
-        unarchiveProject,
-        removeProject,
-        deleteProject,
-        renameSession,
-        refreshProjectFiles,
-        refreshMemoryStats,
-        updateDraft,
-        sendMessage,
-        queueOfflineMessage,
-        cancelQueuedMessage,
-        flushQueuedMessages,
-        stopActiveRun,
-        cancelSessionRun,
-        updateActiveAgentModel,
-        updateActiveAgentWritePolicy,
-        createArtifact,
-        selectArtifact,
-        applyArtifactLifecycle,
-        createTask,
-        updateTaskGoal,
-        cancelTask,
-        sendTaskSignal,
-        replyToTask,
-        resolvePermissionRequest,
-        resolveInboxCard,
-        revokeCapabilityGrant,
-        reconcileEffect,
-        flushMemoryOutbox,
-        refreshMemoryOverview,
-        refreshD3SettingsData,
-        setSecret,
-        deleteSecret,
-        createProviderConnection,
-        updateProviderConnection,
-        deleteProviderConnection,
-        probeProviderConnection,
-        activateProviderConnection,
-        updateActiveAgentConnection,
-        discoverCapabilities,
-        createCapability,
-        updateCapability,
-        rollbackCapability,
-        deleteCapability,
-        setProjectCapabilityBinding,
-        triggerMemoryIndexRebuild,
-        createMemoryConsolidationJob,
-        toggleRightPanel,
-        setRightPanelOpen,
-        toggleSidebar,
-        setSidebarOpen,
-        setSettingsOpen: setIsSettingsOpen,
-        setStatsOpen: setIsStatsOpen,
-        setCommandOpen,
-        setSearchQuery,
-        dismissError: () => setErrorBanner(null),
-        dismissCancelledNotice: () => setCancelledNotice(null),
-        dismissReconcileNotice: () => setReconcileNotice(null),
-      },
-      meta: {
-        bridge,
-        windowControls,
-        searchInputRef,
-        composerInputRef,
-        activeProject,
-        activeSession,
-        activeAgent,
-        standaloneSessions,
-        isStandaloneActiveSession,
-        selectedArtifact,
-        currentDraft,
-        queuedMessagesForActiveSession,
-        optimisticMessagesForActiveSession,
-        isRunningActiveSession,
-        isAwaitingApprovalActiveSession,
-        isCancellingActiveSession,
-        isSidebarEffectiveOpen,
-        isActiveProjectArchived,
-        activeClarificationCard,
-        activeTaskCount,
-        openMemoryConflictsCount,
-      },
+      setActiveView,
+      selectProject,
+      openSessionInChat,
+      refreshAll,
+      pollEventsNow,
+      reconnectWithUrl,
+      refreshRuntimeCatalog,
+      selectSession,
+      createBlankChat,
+      createBlankChatWithDraft,
+      createStandaloneChat,
+      toggleProjectPin,
+      toggleSessionPin,
+      createFolderlessProject,
+      createProjectFromFolder,
+      requestFolderPicker,
+      closeFolderPicker,
+      submitFolderPickerPath,
+      renameProject,
+      attachProjectFolder,
+      rebindProjectFolder,
+      detachProjectWorkspace,
+      archiveProject,
+      unarchiveProject,
+      removeProject,
+      deleteProject,
+      renameSession,
+      refreshProjectFiles,
+      refreshMemoryStats,
+      updateDraft,
+      sendMessage,
+      queueOfflineMessage,
+      cancelQueuedMessage,
+      flushQueuedMessages,
+      stopActiveRun,
+      cancelSessionRun,
+      updateActiveAgentModel,
+      updateActiveAgentWritePolicy,
+      createArtifact,
+      selectArtifact,
+      applyArtifactLifecycle,
+      createTask,
+      updateTaskGoal,
+      cancelTask,
+      sendTaskSignal,
+      replyToTask,
+      resolvePermissionRequest,
+      resolveInboxCard,
+      revokeCapabilityGrant,
+      reconcileEffect,
+      flushMemoryOutbox,
+      refreshMemoryOverview,
+      refreshD3SettingsData,
+      setSecret,
+      deleteSecret,
+      createProviderConnection,
+      updateProviderConnection,
+      deleteProviderConnection,
+      probeProviderConnection,
+      activateProviderConnection,
+      updateActiveAgentConnection,
+      discoverCapabilities,
+      createCapability,
+      updateCapability,
+      rollbackCapability,
+      deleteCapability,
+      setProjectCapabilityBinding,
+      triggerMemoryIndexRebuild,
+      createMemoryConsolidationJob,
+      toggleRightPanel,
+      setRightPanelOpen,
+      toggleSidebar,
+      setSidebarOpen,
+      setSettingsOpen: setIsSettingsOpen,
+      setStatsOpen: setIsStatsOpen,
+      setCommandOpen,
+      setSearchQuery,
+      dismissError,
+      dismissCancelledNotice,
+      dismissReconcileNotice,
     }),
     [
       activateProviderConnection,
-      activeAgent,
-      activeClarificationCard,
-      activeDetail,
-      activeGrants,
-      activeProject,
-      activeScopeNoteCount,
-      activeSession,
-      activeTaskCount,
-      activeView,
-      agents,
       applyArtifactLifecycle,
       archiveProject,
-      artifactRevisions,
       attachProjectFolder,
-      bridge,
       cancelQueuedMessage,
       cancelSessionRun,
       cancelTask,
-      cancelledNotice,
-      cancellingSessionIds,
-      capabilities,
       closeFolderPicker,
-      commandInitialQuery,
       createArtifact,
       createBlankChat,
       createBlankChatWithDraft,
@@ -3594,64 +3513,23 @@ export function WorkspaceProvider({
       createProviderConnection,
       createStandaloneChat,
       createTask,
-      currentDraft,
       deleteCapability,
       deleteProject,
       deleteProviderConnection,
       deleteSecret,
       detachProjectWorkspace,
-      diagnostics,
       discoverCapabilities,
-      draftsBySession,
-      effects,
-      errorBanner,
+      dismissCancelledNotice,
+      dismissError,
+      dismissReconcileNotice,
       flushMemoryOutbox,
       flushQueuedMessages,
-      folderPickerIntent,
-      healthSnapshot,
-      inboxCards,
-      initialized,
-      isActiveProjectArchived,
-      isAwaitingApprovalActiveSession,
-      isCancellingActiveSession,
-      isCommandOpen,
-      isConsolidatingMemory,
-      isFlushingOutbox,
-      isFlushingQueue,
-      isLoading,
-      isLoadingD3Settings,
-      isLoadingFiles,
-      isLoadingMemoryOverview,
-      isRebuildingIndex,
-      isRefreshingCatalog,
-      isRightPanelOpen,
-      isRunningActiveSession,
-      isSettingsOpen,
-      isSidebarEffectiveOpen,
-      isSidebarOpen,
-      isStandaloneActiveSession,
-      isStatsOpen,
-      isSyncedAfterConnect,
-      isUpdatingModel,
-      lastFlushSummary,
-      memoryOverview,
-      openMemoryConflictsCount,
       openSessionInChat,
-      optimisticMessagesBySession,
-      optimisticMessagesForActiveSession,
-      pendingPermissions,
-      plannedProviders,
       pollEventsNow,
       probeProviderConnection,
-      projectFiles,
-      projects,
-      providerConnections,
       queueOfflineMessage,
-      queuedMessages,
-      queuedMessagesForActiveSession,
       rebindProjectFolder,
       reconcileEffect,
-      reconcileNotice,
       reconnectWithUrl,
       refreshAll,
       refreshD3SettingsData,
@@ -3668,39 +3546,25 @@ export function WorkspaceProvider({
       resolvePermissionRequest,
       revokeCapabilityGrant,
       rollbackCapability,
-      runningSessionIds,
-      runtimeCatalog,
-      searchQuery,
-      secrets,
       selectArtifact,
       selectProject,
       selectSession,
-      selectedArtifact,
-      selectedArtifactId,
-      selectedProjectId,
-      selectedSessionId,
       sendMessage,
       sendTaskSignal,
-      sessions,
       setActiveView,
       setCommandOpen,
       setProjectCapabilityBinding,
       setRightPanelOpen,
       setSecret,
       setSidebarOpen,
-      standaloneSessions,
       stopActiveRun,
-      stoppingTaskIds,
-      streamCursor,
       submitFolderPickerPath,
-      tasks,
       toggleProjectPin,
       toggleRightPanel,
       toggleSessionPin,
       toggleSidebar,
       triggerMemoryIndexRebuild,
       unarchiveProject,
-      unresolvedInboxCount,
       updateActiveAgentConnection,
       updateActiveAgentModel,
       updateActiveAgentWritePolicy,
@@ -3708,8 +3572,182 @@ export function WorkspaceProvider({
       updateDraft,
       updateProviderConnection,
       updateTaskGoal,
+    ],
+  );
+
+  const stateValue = useMemo<WorkspaceState>(
+    () => ({
+      initialized,
+      isLoading,
+      isSyncedAfterConnect,
+      activeView,
+      healthSnapshot,
+      runtimeCatalog,
+      isRefreshingCatalog,
+      streamCursor,
+      projects,
+      agents,
+      sessions,
+      tasks,
+      inboxCards,
+      unresolvedInboxCount,
+      pendingPermissions,
+      activeGrants,
+      effects,
+      selectedProjectId,
+      selectedSessionId,
+      activeDetail,
+      projectFiles,
+      isLoadingFiles,
+      activeScopeNoteCount,
+      diagnostics,
+      draftsBySession,
+      queuedMessages,
+      isFlushingQueue,
+      optimisticMessagesBySession,
+      runningSessionIds,
+      cancellingSessionIds,
+      stoppingTaskIds,
+      cancelledNotice,
+      reconcileNotice,
+      errorBanner,
+      isRightPanelOpen,
+      isSidebarOpen,
+      isSettingsOpen,
+      isStatsOpen,
+      isCommandOpen,
+      commandInitialQuery,
+      folderPickerIntent,
+      searchQuery,
+      selectedArtifactId,
+      artifactRevisions,
+      isFlushingOutbox,
+      lastFlushSummary,
+      isUpdatingModel,
+      memoryOverview,
+      isLoadingMemoryOverview,
+      providerConnections,
+      plannedProviders,
+      secrets,
+      capabilities,
+      isLoadingD3Settings,
+      isRebuildingIndex,
+      isConsolidatingMemory,
+    }),
+    [
+      activeDetail,
+      activeGrants,
+      activeScopeNoteCount,
+      activeView,
+      agents,
+      artifactRevisions,
+      cancelledNotice,
+      cancellingSessionIds,
+      capabilities,
+      commandInitialQuery,
+      diagnostics,
+      draftsBySession,
+      effects,
+      errorBanner,
+      folderPickerIntent,
+      healthSnapshot,
+      inboxCards,
+      initialized,
+      isCommandOpen,
+      isConsolidatingMemory,
+      isFlushingOutbox,
+      isFlushingQueue,
+      isLoading,
+      isLoadingD3Settings,
+      isLoadingFiles,
+      isLoadingMemoryOverview,
+      isRebuildingIndex,
+      isRefreshingCatalog,
+      isRightPanelOpen,
+      isSettingsOpen,
+      isSidebarOpen,
+      isStatsOpen,
+      isSyncedAfterConnect,
+      isUpdatingModel,
+      lastFlushSummary,
+      memoryOverview,
+      optimisticMessagesBySession,
+      pendingPermissions,
+      plannedProviders,
+      projectFiles,
+      projects,
+      providerConnections,
+      queuedMessages,
+      reconcileNotice,
+      runningSessionIds,
+      runtimeCatalog,
+      searchQuery,
+      secrets,
+      selectedArtifactId,
+      selectedProjectId,
+      selectedSessionId,
+      sessions,
+      stoppingTaskIds,
+      streamCursor,
+      tasks,
+      unresolvedInboxCount,
+    ],
+  );
+
+  const metaValue = useMemo<WorkspaceMeta>(
+    () => ({
+      bridge,
+      windowControls,
+      searchInputRef,
+      composerInputRef,
+      activeProject,
+      activeSession,
+      activeAgent,
+      standaloneSessions,
+      isStandaloneActiveSession,
+      selectedArtifact,
+      currentDraft,
+      queuedMessagesForActiveSession,
+      optimisticMessagesForActiveSession,
+      isRunningActiveSession,
+      isAwaitingApprovalActiveSession,
+      isCancellingActiveSession,
+      isSidebarEffectiveOpen,
+      isActiveProjectArchived,
+      activeClarificationCard,
+      activeTaskCount,
+      openMemoryConflictsCount,
+    }),
+    [
+      activeAgent,
+      activeClarificationCard,
+      activeProject,
+      activeSession,
+      activeTaskCount,
+      bridge,
+      currentDraft,
+      isActiveProjectArchived,
+      isAwaitingApprovalActiveSession,
+      isCancellingActiveSession,
+      isRunningActiveSession,
+      isSidebarEffectiveOpen,
+      isStandaloneActiveSession,
+      openMemoryConflictsCount,
+      optimisticMessagesForActiveSession,
+      queuedMessagesForActiveSession,
+      selectedArtifact,
+      standaloneSessions,
       windowControls,
     ],
+  );
+
+  const value = useMemo<WorkspaceContextValue>(
+    () => ({
+      state: stateValue,
+      actions: actionsValue,
+      meta: metaValue,
+    }),
+    [actionsValue, metaValue, stateValue],
   );
 
   return <WorkspaceContext value={value}>{children}</WorkspaceContext>;

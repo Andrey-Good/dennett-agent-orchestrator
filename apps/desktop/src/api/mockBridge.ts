@@ -188,6 +188,20 @@ export interface MockBridgeSeed {
   quotaError?: ProviderQuotaError | null;
   localProbeModels?: RuntimeModelOption[];
   memorySourcesCount?: number;
+  folderCapabilitiesByPath?: Record<
+    string,
+    {
+      display_name?: string;
+      description?: string;
+      skill_markdown?: string;
+      has_scripts?: boolean;
+      entry_files?: string[];
+      manifest_version?: string;
+      skills?: string[];
+      has_hooks?: boolean;
+      error?: string;
+    }
+  >;
 }
 
 const DEFAULT_ANTIGRAVITY_MODELS: RuntimeModelOption[] = [
@@ -358,6 +372,7 @@ export class MockDesktopBridge implements DesktopBridge {
   public quotaError: ProviderQuotaError | null;
   public localProbeModels: RuntimeModelOption[];
   public memorySourcesCount: number;
+  public folderCapabilitiesByPath: NonNullable<MockBridgeSeed["folderCapabilitiesByPath"]>;
   private previousCapabilitySnapshots = new Map<string, CapabilityRecord>();
   private lastRebuildAt: number | null = null;
 
@@ -550,6 +565,7 @@ export class MockDesktopBridge implements DesktopBridge {
       ? [...seed.localProbeModels]
       : [...DEFAULT_LOCAL_HTTP_MODELS];
     this.memorySourcesCount = seed.memorySourcesCount ?? 0;
+    this.folderCapabilitiesByPath = { ...(seed.folderCapabilitiesByPath ?? {}) };
   }
 
   public emitControlEvent(
@@ -2720,25 +2736,80 @@ export class MockDesktopBridge implements DesktopBridge {
     this.calls.push({ method: "createCapability", args: request });
     this.ensureConnected();
     const now = this.nextTimestamp();
+
+    let displayName = request.display_name.trim();
+    let description = request.description ?? "";
+    let trustState = request.trust_state ?? "unreviewed";
+    let spec = request.spec;
+
+    if (request.source_path && (spec.kind === "skill" || spec.kind === "plugin")) {
+      const inspected = this.folderCapabilitiesByPath[request.source_path];
+      if (inspected?.error) {
+        throw { code: "INVALID_INPUT", message: inspected.error };
+      }
+      if (!inspected && /(?:^|[\\/])(empty|invalid)/i.test(request.source_path)) {
+        throw {
+          code: "INVALID_INPUT",
+          message:
+            spec.kind === "plugin"
+              ? "В выбранной папке не найден валидный манифест плагина (plugin.json / manifest.json)."
+              : "В выбранной папке не найден читаемый файл SKILL.md.",
+        };
+      }
+      if (inspected) {
+        if (inspected.display_name) {
+          displayName = inspected.display_name;
+        }
+        if (inspected.description !== undefined) {
+          description = inspected.description;
+        }
+        if (spec.kind === "skill") {
+          const hasScripts = Boolean(inspected.has_scripts);
+          spec = {
+            kind: "skill",
+            skill_markdown: inspected.skill_markdown ?? `# ${displayName}\n`,
+            has_scripts: hasScripts,
+            entry_files: inspected.entry_files ?? ["SKILL.md"],
+          };
+          if (hasScripts) {
+            trustState = "restricted";
+          }
+        } else {
+          const hasHooks = Boolean(inspected.has_hooks);
+          spec = {
+            kind: "plugin",
+            manifest_version: inspected.manifest_version ?? "1.0",
+            skills: inspected.skills ?? [],
+            mcp_servers: [],
+            has_hooks: hasHooks,
+            enabled_components: inspected.skills ?? [],
+          };
+          if (hasHooks) {
+            trustState = "restricted";
+          }
+        }
+      }
+    }
+
     const record: CapabilityRecord = {
       capability_id: this.nextUuid("92000000"),
       slug: request.slug.trim(),
-      kind: request.spec.kind,
-      display_name: request.display_name.trim(),
-      description: request.description ?? "",
+      kind: spec.kind,
+      display_name: displayName,
+      description,
       version: request.version.trim(),
       origin_kind: request.origin_kind ?? "user_manual",
       ownership: request.ownership ?? "user",
       scope_kind: request.scope_kind,
       project_id: request.project_id ?? null,
       possession_state: "installed",
-      trust_state: request.trust_state ?? "unreviewed",
+      trust_state: trustState,
       activation_state: request.activation_state ?? "disabled",
       compatibility_status: "compatible",
       compatibility_detail: null,
       source_path: request.source_path ?? null,
-      content_sha256: deterministicHex(JSON.stringify(request.spec), 64),
-      spec: request.spec,
+      content_sha256: deterministicHex(JSON.stringify(spec), 64),
+      spec,
       can_rollback: false,
       revision: 1,
       project_bindings: [],

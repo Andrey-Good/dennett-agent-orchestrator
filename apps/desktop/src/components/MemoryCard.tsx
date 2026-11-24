@@ -33,6 +33,7 @@ import {
   type DocumentVersion,
   type EpistemicStatus,
   type ExportResponse,
+  type ForgetPropagationStatus,
   type ForgetResponse,
   type ForgetTargetType,
   type HeadMemorySearchResponse,
@@ -42,6 +43,7 @@ import {
   type MemoryConflict,
   type MemoryDocument,
   type MemoryNote,
+  type MemoryOverviewResponse,
   type NoteHistoryResponse,
 } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
@@ -142,14 +144,44 @@ function targetTypeLabel(type: ForgetTargetType): string {
   }
 }
 
+function propagationStatusLabel(status: ForgetPropagationStatus): string {
+  switch (status) {
+    case "completed":
+      return "завершено";
+    case "pending":
+      return "ожидает";
+    case "index_cleared":
+      return "индекс очищен";
+    case "projections_cleared":
+      return "проекции очищены";
+    case "failed":
+      return "ошибка";
+  }
+}
+
+function localizeResidualBackupNotice(notice: string): string {
+  const trimmed = notice.trim();
+  if (!trimmed) {
+    return "Активные проекции и поисковый индекс очищены. Ранее созданные резервные копии БД и внешние снимки не переписываются задним числом.";
+  }
+  if (/[а-яА-ЯёЁ]/.test(trimmed)) {
+    return trimmed;
+  }
+  return "Активные проекции и поисковый индекс очищены. Ранее созданные резервные копии БД и внешние снимки не переписываются задним числом — учитывайте это при восстановлении из бэкапов.";
+}
+
 function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
 export function MemoryCard() {
   const { state, actions, meta } = useWorkspace();
+  const bridge = meta.bridge;
+  const refreshMemoryOverview = actions.refreshMemoryOverview;
+
   const [activeTab, setActiveTab] = useState<MemoryTab>("knowledge");
   const [scopeSelection, setScopeSelection] = useState<string | "all">("all");
+  const [scopedOverview, setScopedOverview] = useState<MemoryOverviewResponse | null>(null);
   const [queryInput, setQueryInput] = useState("");
   const [includeHistory, setIncludeHistory] = useState(false);
   const [searchResult, setSearchResult] = useState<HeadMemorySearchResponse | null>(null);
@@ -261,7 +293,8 @@ export function MemoryCard() {
   }, [state.projects]);
 
   const connected = Boolean(state.healthSnapshot?.connected);
-  const overview = state.memoryOverview;
+  const globalOverview = state.memoryOverview;
+  const overview = selectedMemoryScope ? (scopedOverview ?? globalOverview) : globalOverview;
   const isDegradedUnreachable =
     overview?.memory_status === "degraded_unreachable" ||
     state.healthSnapshot?.health?.memory_status === "degraded_unreachable";
@@ -270,8 +303,33 @@ export function MemoryCard() {
     if (!connected) {
       return;
     }
-    await actions.refreshMemoryOverview(selectedMemoryScope);
-  }, [actions, connected, selectedMemoryScope]);
+    if (!selectedMemoryScope) {
+      setScopedOverview(null);
+      await refreshMemoryOverview(null);
+      return;
+    }
+    const scoped = await refreshMemoryOverview(selectedMemoryScope);
+    if (scoped) {
+      setScopedOverview(scoped);
+    }
+  }, [connected, refreshMemoryOverview, selectedMemoryScope]);
+
+  const reloadAfterMutation = useCallback(async () => {
+    if (!connected) {
+      return;
+    }
+    if (selectedMemoryScope) {
+      const [scoped] = await Promise.all([
+        refreshMemoryOverview(selectedMemoryScope),
+        refreshMemoryOverview(null),
+      ]);
+      if (scoped) {
+        setScopedOverview(scoped);
+      }
+      return;
+    }
+    await refreshMemoryOverview(null);
+  }, [connected, refreshMemoryOverview, selectedMemoryScope]);
 
   useEffect(() => {
     if (connected) {
@@ -287,7 +345,7 @@ export function MemoryCard() {
       setIsSearching(true);
       setLocalError(null);
       try {
-        const resp = await meta.bridge.searchMemory({
+        const resp = await bridge.searchMemory({
           scope,
           query: q.trim() || null,
           limit: 100,
@@ -300,7 +358,7 @@ export function MemoryCard() {
         setIsSearching(false);
       }
     },
-    [connected, meta.bridge],
+    [bridge, connected],
   );
 
   // Debounced search whenever query, includeHistory, or scope changes
@@ -438,6 +496,8 @@ export function MemoryCard() {
     () => visibleDocuments.find((d) => d.document_id === selectedDocId) ?? null,
     [selectedDocId, visibleDocuments],
   );
+  const selectedDocIdValue = selectedDoc?.document_id ?? null;
+  const selectedDocVersionValue = selectedDoc?.current_version ?? null;
 
   const loadDocVersions = useCallback(
     async (docId: string) => {
@@ -445,20 +505,20 @@ export function MemoryCard() {
         return;
       }
       try {
-        const resp = await meta.bridge.getMemoryDocumentVersions(docId);
+        const resp = await bridge.getMemoryDocumentVersions(docId);
         setDocVersions(resp.versions);
       } catch {
         setDocVersions([]);
       }
     },
-    [connected, meta.bridge],
+    [bridge, connected],
   );
 
   useEffect(() => {
-    if (activeTab === "dossiers" && selectedDoc) {
-      void loadDocVersions(selectedDoc.document_id);
+    if (activeTab === "dossiers" && connected && selectedDocIdValue) {
+      void loadDocVersions(selectedDocIdValue);
     }
-  }, [activeTab, loadDocVersions, selectedDoc]);
+  }, [activeTab, connected, loadDocVersions, selectedDocIdValue, selectedDocVersionValue]);
 
   const activeDocVersionObj = useMemo(() => {
     if (!selectedDoc) {
@@ -470,9 +530,10 @@ export function MemoryCard() {
 
   const countByProjectId = useMemo(() => {
     const map = new Map<string, number>();
-    const notes = overview?.notes ?? [];
-    const claims = overview?.claims ?? [];
-    const docs = overview?.documents ?? [];
+    const source = globalOverview ?? overview;
+    const notes = source?.notes ?? [];
+    const claims = source?.claims ?? [];
+    const docs = source?.documents ?? [];
     for (const proj of activeProjects) {
       const c =
         notes.filter((n) => n.scope === proj.memory_scope).length +
@@ -481,19 +542,24 @@ export function MemoryCard() {
       map.set(proj.project_id, c);
     }
     return map;
-  }, [activeProjects, overview?.claims, overview?.documents, overview?.notes]);
+  }, [activeProjects, globalOverview, overview]);
 
   const standaloneItemsCount = useMemo(() => {
-    const notes = (overview?.notes ?? []).filter((n) => n.scope === STANDALONE_SCOPE_VALUE).length;
-    const claims = (overview?.claims ?? []).filter((c) => c.scope === STANDALONE_SCOPE_VALUE).length;
-    const docs = (overview?.documents ?? []).filter((d) => d.scope === STANDALONE_SCOPE_VALUE).length;
+    const source = globalOverview ?? overview;
+    const notes = (source?.notes ?? []).filter((n) => n.scope === STANDALONE_SCOPE_VALUE).length;
+    const claims = (source?.claims ?? []).filter((c) => c.scope === STANDALONE_SCOPE_VALUE).length;
+    const docs = (source?.documents ?? []).filter((d) => d.scope === STANDALONE_SCOPE_VALUE).length;
     return notes + claims + docs;
-  }, [overview?.claims, overview?.documents, overview?.notes]);
+  }, [globalOverview, overview]);
 
-  const totalItemsCount =
-    (overview?.notes.length ?? 0) +
-    (overview?.claims.length ?? 0) +
-    (overview?.documents.length ?? 0);
+  const totalItemsCount = useMemo(() => {
+    const source = globalOverview ?? overview;
+    return (
+      (source?.notes.length ?? 0) +
+      (source?.claims.length ?? 0) +
+      (source?.documents.length ?? 0)
+    );
+  }, [globalOverview, overview]);
 
   // Handlers
   const handleSearchSubmit = (event: FormEvent) => {
@@ -523,7 +589,7 @@ export function MemoryCard() {
       setNoteBody("");
       setNoteTags("");
       setShowCreateNote(false);
-      await reloadOverview();
+      await reloadAfterMutation();
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
     }
@@ -552,7 +618,7 @@ export function MemoryCard() {
       setClaimText("");
       setClaimCaveats("");
       setShowCreateClaim(false);
-      await reloadOverview();
+      await reloadAfterMutation();
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
     }
@@ -598,7 +664,7 @@ export function MemoryCard() {
         idempotency_key: makeIdempotencyKey("ui-correct"),
       });
       setCorrectingNoteId(null);
-      await reloadOverview();
+      await reloadAfterMutation();
       if (expandedHistoryNoteId === note.note_id) {
         const hist = await meta.bridge.getMemoryNoteHistory(note.note_id);
         setHistoryByNoteId((prev) => ({ ...prev, [note.note_id]: hist }));
@@ -635,7 +701,7 @@ export function MemoryCard() {
       setSupersedingClaimId(null);
       setSupersedeText("");
       setSupersedeCaveats("");
-      await reloadOverview();
+      await reloadAfterMutation();
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
     }
@@ -661,7 +727,7 @@ export function MemoryCard() {
         target_status: "resolved",
         idempotency_key: makeIdempotencyKey("ui-conflict"),
       });
-      await reloadOverview();
+      await reloadAfterMutation();
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
     } finally {
@@ -696,10 +762,9 @@ export function MemoryCard() {
       setDocTitle("");
       setDocBody("");
       setShowCreateDoc(false);
-      await reloadOverview();
+      await reloadAfterMutation();
       setSelectedDocId(created.document_id);
       setViewedDocVersion(created.current_version);
-      await loadDocVersions(created.document_id);
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
     }
@@ -732,8 +797,7 @@ export function MemoryCard() {
       });
       setEditingDoc(false);
       setViewedDocVersion(updated.current_version);
-      await reloadOverview();
-      await loadDocVersions(updated.document_id);
+      await reloadAfterMutation();
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
     }
@@ -755,7 +819,7 @@ export function MemoryCard() {
       });
       setLastForgetResult(resp);
       setForgetTarget(null);
-      await reloadOverview();
+      await reloadAfterMutation();
       if (queryInput.trim() || includeHistory) {
         await runSearch(queryInput, includeHistory, selectedMemoryScope);
       }
@@ -809,7 +873,7 @@ export function MemoryCard() {
         package_json: text,
       });
       setLastImport(imported);
-      await reloadOverview();
+      await reloadAfterMutation();
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
     } finally {
@@ -817,16 +881,56 @@ export function MemoryCard() {
     }
   };
 
-  const jumpToProvenance = (entityId: string) => {
+  const jumpToProvenance = (entityId: string, kind: "claim" | "note") => {
+    const allKnownClaims = [
+      ...(overview?.claims ?? []),
+      ...(globalOverview?.claims ?? []),
+    ];
+    const allKnownNotes = [
+      ...(overview?.notes ?? []),
+      ...(globalOverview?.notes ?? []),
+    ];
+
+    if (kind === "claim") {
+      const targetClaim = allKnownClaims.find((c) => c.claim_id === entityId) ?? null;
+      const isHistorical =
+        !targetClaim ||
+        targetClaim.epistemic_status === "superseded" ||
+        targetClaim.epistemic_status === "retracted";
+      if (isHistorical) {
+        setIncludeHistory(true);
+      }
+      if (selectedMemoryScope && (!targetClaim || targetClaim.scope !== selectedMemoryScope)) {
+        setScopeSelection("all");
+      }
+    } else {
+      const targetNote = allKnownNotes.find((n) => n.note_id === entityId) ?? null;
+      if (selectedMemoryScope && (!targetNote || targetNote.scope !== selectedMemoryScope)) {
+        setScopeSelection("all");
+      }
+    }
+
+    if (queryInput.trim()) {
+      setQueryInput("");
+      setSearchResult(null);
+    }
+
     setActiveTab("knowledge");
     setHighlightedId(entityId);
-    window.setTimeout(() => {
-      const el = document.getElementById(`memory-entity-${entityId}`);
+  };
+
+  useEffect(() => {
+    if (activeTab !== "knowledge" || !highlightedId) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(`memory-entity-${highlightedId}`);
       if (el && typeof el.scrollIntoView === "function") {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
       }
-    }, 50);
-  };
+    }, 30);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, highlightedId, includeHistory, visibleClaims.length, visibleNotes.length]);
 
   return (
     <main className="chat-card d2-surface-card memory-card" data-testid="memory-card">
@@ -1033,7 +1137,14 @@ export function MemoryCard() {
                   <button
                     type="button"
                     className="popover-secondary-btn"
-                    onClick={() => void actions.triggerMemoryIndexRebuild(defaultWriteScope)}
+                    onClick={() => {
+                      void actions.triggerMemoryIndexRebuild(defaultWriteScope).then(async () => {
+                        setSearchResult(null);
+                        if (selectedMemoryScope) {
+                          await reloadOverview();
+                        }
+                      });
+                    }}
                     disabled={state.isRebuildingIndex}
                     data-testid="memory-rebuild-index-btn"
                   >
@@ -1137,9 +1248,12 @@ export function MemoryCard() {
                   <Trash size={15} aria-hidden="true" />
                   <div className="memory-alert__body">
                     <strong>
-                      Запись забыта (статус: {lastForgetResult.propagation_status})
+                      Запись забыта (статус:{" "}
+                      {propagationStatusLabel(lastForgetResult.propagation_status)})
                     </strong>
-                    <span>{lastForgetResult.residual_backup_notice}</span>
+                    <span>
+                      {localizeResidualBackupNotice(lastForgetResult.residual_backup_notice)}
+                    </span>
                   </div>
                   <button
                     type="button"
@@ -2023,7 +2137,7 @@ export function MemoryCard() {
                                   key={cid}
                                   type="button"
                                   className="d2-link-btn"
-                                  onClick={() => jumpToProvenance(cid)}
+                                  onClick={() => jumpToProvenance(cid, "claim")}
                                   data-testid={`dossier-prov-claim-${cid}`}
                                 >
                                   claim:{cid.slice(0, 8)}
@@ -2034,7 +2148,7 @@ export function MemoryCard() {
                                   key={nid}
                                   type="button"
                                   className="d2-link-btn"
-                                  onClick={() => jumpToProvenance(nid)}
+                                  onClick={() => jumpToProvenance(nid, "note")}
                                   data-testid={`dossier-prov-note-${nid}`}
                                 >
                                   note:{nid.slice(0, 8)}
@@ -2069,9 +2183,11 @@ export function MemoryCard() {
                             {targetTypeLabel(t.target_type)} {t.target_id.slice(0, 8)} ·{" "}
                             {t.reason}
                           </strong>
-                          <small>{t.residual_backup_notice}</small>
+                          <small>{localizeResidualBackupNotice(t.residual_backup_notice)}</small>
                         </div>
-                        <span className="d2-meta-chip">{t.propagation_status}</span>
+                        <span className="d2-meta-chip">
+                          {propagationStatusLabel(t.propagation_status)}
+                        </span>
                       </div>
                     ))}
                   </div>
