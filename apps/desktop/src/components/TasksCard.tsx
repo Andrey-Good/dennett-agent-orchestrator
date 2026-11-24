@@ -1,57 +1,36 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowsClockwise,
   ArrowSquareOut,
   Broadcast,
-  CaretDown,
-  Check,
   Clock,
-  Coin,
   ListChecks,
   PencilSimple,
-  PaperPlaneTilt,
+  Plus,
   Question,
+  ShieldCheck,
   Stop,
 } from "@phosphor-icons/react";
 
-import type {
-  BudgetExceedPolicy,
-  TaskBudget,
-  TaskRecord,
-  TaskSchedule,
-  TaskStatus,
-} from "../api/contracts";
+import type { EffectClaimRecord, TaskRecord, TaskStatus } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
+import {
+  cleanPlainText,
+  formatDecisionReasonRu,
+  formatHumanCountdown,
+  formatScheduleSummaryRu,
+} from "../utils/formatters";
+import { ProjectScopeFilter } from "./ProjectScopeFilter";
 import { StatusBanners } from "./StatusBanners";
 
-type SchedulePreset = "now" | "in_10s" | "in_5m" | "in_1h" | "daily" | "signal";
-type BudgetPreset = "standard" | "turns_3" | "turns_10" | "wall_60";
-type TaskPopover = "schedule" | "budget" | null;
 type TaskFilter = "all" | "active" | "done";
 
-function detectLocalTimezone(): string {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (tz && /^[A-Za-z0-9/_+-]+$/.test(tz)) {
-      return tz;
-    }
-  } catch {
-    // Fallback to UTC.
-  }
-  return "UTC";
-}
+export const CREATE_EVENT_DRAFT_PREFIX = "Создай событие: мне необходимо ";
 
-function formatCountdown(targetMs: number, nowMs: number): string {
-  const diffSec = Math.max(0, Math.ceil((targetMs - nowMs) / 1000));
-  const hrs = Math.floor(diffSec / 3600);
-  const mins = Math.floor((diffSec % 3600) / 60);
-  const secs = diffSec % 60;
-  if (hrs > 0) {
-    return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+function statusPillLabel(task: TaskRecord, nowMs: number, hasPendingApproval: boolean): string {
+  if (hasPendingApproval && task.status === "running") {
+    return "Ожидает подтверждения";
   }
-  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-}
-
-function statusPillLabel(task: TaskRecord, nowMs: number): string {
   switch (task.status) {
     case "queued":
       return "Ожидает запуска";
@@ -62,7 +41,7 @@ function statusPillLabel(task: TaskRecord, nowMs: number): string {
         task.schedule?.next_fire_at ??
         (task.schedule?.kind.kind === "once_at" ? task.schedule.kind.fire_at : null);
       if (target) {
-        return `Ожидает · ${formatCountdown(target, nowMs)}`;
+        return `Ожидает · ${formatHumanCountdown(target, nowMs)}`;
       }
       return "Ожидает";
     }
@@ -71,7 +50,7 @@ function statusPillLabel(task: TaskRecord, nowMs: number): string {
     case "waiting_clarification":
       return "Уточнение";
     case "waiting_approval":
-      return "Ждёт подтверждения";
+      return "Ожидает подтверждения";
     case "unknown_external":
       return "Неизвестно, выполнено ли";
     case "failed":
@@ -87,42 +66,42 @@ function isTerminalTaskStatus(status: TaskStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
 }
 
-function cleanPlainText(text: string): string {
-  return text.replace(/`([^`]+)`/g, "$1");
-}
-
 export function TasksCard() {
-  const { state, actions, meta } = useWorkspace();
-  const [goalDraft, setGoalDraft] = useState("");
-  const [schedulePreset, setSchedulePreset] = useState<SchedulePreset>("now");
-  const [dailyHour, setDailyHour] = useState(9);
-  const [dailyMinute, setDailyMinute] = useState(0);
-  const [signalNameDraft, setSignalNameDraft] = useState("ready");
-  const [budgetPreset, setBudgetPreset] = useState<BudgetPreset>("standard");
-  const [exceedPolicy, setExceedPolicy] = useState<BudgetExceedPolicy>("ask_approval");
-  const [openPopover, setOpenPopover] = useState<TaskPopover>(null);
+  const { state, actions } = useWorkspace();
   const [filter, setFilter] = useState<TaskFilter>("all");
+  const [projectFilter, setProjectFilter] = useState<string | "all">("all");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingGoalValue, setEditingGoalValue] = useState("");
   const [signalTaskId, setSignalTaskId] = useState<string | null>(null);
   const [signalNameInput, setSignalNameInput] = useState("");
   const [signalPayload, setSignalPayload] = useState("");
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
-  const [isCreating, setIsCreating] = useState(false);
+  const [reconcilingTaskIds, setReconcilingTaskIds] = useState<Record<string, boolean>>({});
   const [nowMs, setNowMs] = useState(() => Date.now());
 
-  const composerRef = useRef<HTMLDivElement | null>(null);
-  const localTz = useMemo(() => detectLocalTimezone(), []);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const savedScrollTopRef = useRef(0);
 
-  const activeProjectIds = useMemo(() => {
-    const ids = new Set<string>();
+  const activeProjects = useMemo(
+    () =>
+      state.projects.filter((p) => {
+        const lc = p.lifecycle_state ?? "active";
+        return lc !== "archived" && lc !== "deleted_record";
+      }),
+    [state.projects],
+  );
+
+  const activeProjectIds = useMemo(
+    () => new Set(activeProjects.map((p) => p.project_id)),
+    [activeProjects],
+  );
+
+  const projectById = useMemo(() => {
+    const map = new Map<string, string>();
     for (const p of state.projects) {
-      const lc = p.lifecycle_state ?? "active";
-      if (lc !== "archived" && lc !== "deleted_record") {
-        ids.add(p.project_id);
-      }
+      map.set(p.project_id, p.name);
     }
-    return ids;
+    return map;
   }, [state.projects]);
 
   const activeProjectTasks = useMemo(
@@ -130,7 +109,70 @@ export function TasksCard() {
     [activeProjectIds, state.tasks],
   );
 
-  // Tick every second when any waiting_timer task exists so countdowns stay live.
+  const countByProjectId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const task of activeProjectTasks) {
+      map.set(task.project_id, (map.get(task.project_id) ?? 0) + 1);
+    }
+    return map;
+  }, [activeProjectTasks]);
+
+  const scopedTasks = useMemo(
+    () =>
+      projectFilter === "all"
+        ? activeProjectTasks
+        : activeProjectTasks.filter((t) => t.project_id === projectFilter),
+    [activeProjectTasks, projectFilter],
+  );
+
+  const activeCountInScope = useMemo(
+    () => scopedTasks.filter((t) => !isTerminalTaskStatus(t.status)).length,
+    [scopedTasks],
+  );
+
+  const query = state.searchQuery.trim().toLowerCase();
+
+  const filteredTasks = useMemo(() => {
+    return scopedTasks.filter((task) => {
+      if (filter === "active" && isTerminalTaskStatus(task.status)) {
+        return false;
+      }
+      if (filter === "done" && !isTerminalTaskStatus(task.status)) {
+        return false;
+      }
+      if (query) {
+        const projName = (projectById.get(task.project_id) ?? "").toLowerCase();
+        return (
+          task.title.toLowerCase().includes(query) ||
+          task.goal.toLowerCase().includes(query) ||
+          projName.includes(query)
+        );
+      }
+      return true;
+    });
+  }, [filter, projectById, query, scopedTasks]);
+
+  const unknownEffectByTaskId = useMemo(() => {
+    const map = new Map<string, EffectClaimRecord>();
+    for (const ef of state.effects) {
+      if (ef.status === "unknown" && ef.task_id && !map.has(ef.task_id)) {
+        map.set(ef.task_id, ef);
+      }
+    }
+    return map;
+  }, [state.effects]);
+
+  const pendingApprovalSessions = useMemo(
+    () =>
+      new Set(
+        state.pendingPermissions
+          .filter((req) => req.status === "pending")
+          .map((req) => req.session_id),
+      ),
+    [state.pendingPermissions],
+  );
+
+  // Live 1s countdown tick whenever any waiting_timer task exists.
   const hasWaitingTimer = useMemo(
     () => activeProjectTasks.some((t) => t.status === "waiting_timer"),
     [activeProjectTasks],
@@ -143,157 +185,18 @@ export function TasksCard() {
     return () => window.clearInterval(id);
   }, [hasWaitingTimer]);
 
-  // Capture-phase Escape dismisses schedule/budget popovers without side effects.
-  useEffect(() => {
-    if (!openPopover) {
-      return;
+  // Preserve scroll position across live refreshes.
+  useLayoutEffect(() => {
+    if (scrollRef.current && savedScrollTopRef.current > 0) {
+      scrollRef.current.scrollTop = savedScrollTopRef.current;
     }
-    const onMouseDown = (event: MouseEvent) => {
-      if (composerRef.current && !composerRef.current.contains(event.target as Node)) {
-        setOpenPopover(null);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpenPopover(null);
-      }
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => {
-      document.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-    };
-  }, [openPopover]);
-
-  const projectById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const p of state.projects) {
-      map.set(p.project_id, p.name);
-    }
-    return map;
-  }, [state.projects]);
-
-  const filteredTasks = useMemo(() => {
-    return activeProjectTasks.filter((task) => {
-      if (filter === "active") {
-        return !isTerminalTaskStatus(task.status);
-      }
-      if (filter === "done") {
-        return isTerminalTaskStatus(task.status);
-      }
-      return true;
-    });
-  }, [activeProjectTasks, filter]);
+  }, [filteredTasks.length]);
 
   const connected = Boolean(state.healthSnapshot?.connected);
-  const targetProject = meta.activeProject;
-  const targetAgent = meta.activeAgent;
 
-  const scheduleTriggerLabel = (() => {
-    switch (schedulePreset) {
-      case "now":
-        return "Сейчас";
-      case "in_10s":
-        return "Через 10 сек";
-      case "in_5m":
-        return "Через 5 мин";
-      case "in_1h":
-        return "Через 1 час";
-      case "daily":
-        return `Ежедневно ${String(dailyHour).padStart(2, "0")}:${String(dailyMinute).padStart(2, "0")}`;
-      case "signal":
-        return `Сигнал: ${signalNameDraft.trim() || "ready"}`;
-    }
-  })();
-
-  const budgetTriggerLabel = (() => {
-    switch (budgetPreset) {
-      case "standard":
-        return "Бюджет: стандартный";
-      case "turns_3":
-        return "До 3 ходов";
-      case "turns_10":
-        return "До 10 ходов";
-      case "wall_60":
-        return "До 60 сек";
-    }
-  })();
-
-  const handleCreateTask = async (event: FormEvent) => {
-    event.preventDefault();
-    const trimmed = goalDraft.trim();
-    if (!trimmed || !targetProject || !targetAgent || !connected || isCreating) {
-      return;
-    }
-
-    const now = Date.now();
-    let schedule: TaskSchedule | null = null;
-    let waitForSignal: string | null = null;
-
-    if (schedulePreset === "in_10s") {
-      schedule = {
-        timezone: localTz,
-        original_expression: "через 10 секунд",
-        kind: { kind: "once_at", fire_at: now + 10_000 },
-        missed_run_policy: "execute_once",
-      };
-    } else if (schedulePreset === "in_5m") {
-      schedule = {
-        timezone: localTz,
-        original_expression: "через 5 минут",
-        kind: { kind: "once_at", fire_at: now + 5 * 60_000 },
-        missed_run_policy: "execute_once",
-      };
-    } else if (schedulePreset === "in_1h") {
-      schedule = {
-        timezone: localTz,
-        original_expression: "через 1 час",
-        kind: { kind: "once_at", fire_at: now + 60 * 60_000 },
-        missed_run_policy: "execute_once",
-      };
-    } else if (schedulePreset === "daily") {
-      const hh = String(dailyHour).padStart(2, "0");
-      const mm = String(dailyMinute).padStart(2, "0");
-      schedule = {
-        timezone: localTz,
-        original_expression: `ежедневно в ${hh}:${mm} (${localTz})`,
-        kind: { kind: "daily_wall_time", hour: dailyHour, minute: dailyMinute },
-        missed_run_policy: "execute_once",
-      };
-    } else if (schedulePreset === "signal") {
-      waitForSignal = signalNameDraft.trim() || "ready";
-    }
-
-    let budget: TaskBudget | null = null;
-    if (budgetPreset === "turns_3") {
-      budget = { max_turns: 3, exceed_policy: exceedPolicy };
-    } else if (budgetPreset === "turns_10") {
-      budget = { max_turns: 10, exceed_policy: exceedPolicy };
-    } else if (budgetPreset === "wall_60") {
-      budget = { max_wall_secs: 60, exceed_policy: exceedPolicy };
-    }
-
-    setIsCreating(true);
-    setOpenPopover(null);
-    try {
-      const created = await actions.createTask({
-        project_id: targetProject.project_id,
-        agent_id: targetAgent.agent_id,
-        goal: trimmed,
-        schedule,
-        wait_for_signal: waitForSignal,
-        budget,
-        execute_immediately: schedule === null && waitForSignal === null ? true : null,
-      });
-      if (created) {
-        setGoalDraft("");
-      }
-    } finally {
-      setIsCreating(false);
-    }
+  const handleCreateEventInChat = () => {
+    const targetProjectId = projectFilter === "all" ? undefined : projectFilter;
+    void actions.createBlankChatWithDraft(targetProjectId, CREATE_EVENT_DRAFT_PREFIX);
   };
 
   const startGoalEdit = (task: TaskRecord) => {
@@ -318,6 +221,19 @@ export function TasksCard() {
     }
   };
 
+  const runReconcile = async (taskId: string, fn: () => Promise<void>) => {
+    setReconcilingTaskIds((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      await fn();
+    } finally {
+      setReconcilingTaskIds((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }
+  };
+
   return (
     <main className="chat-card d2-surface-card" data-testid="tasks-card">
       <StatusBanners />
@@ -328,26 +244,35 @@ export function TasksCard() {
           <div>
             <h1>Поручения и расписания</h1>
             <p>
-              Долговечные обязательства в PostgreSQL — переживают закрытие окна и перезапуск Head
+              Долговечные события и расписания в PostgreSQL — создавайте через диалог с агентом
             </p>
           </div>
         </div>
 
         <div className="d2-card-header__controls">
+          <ProjectScopeFilter
+            projects={activeProjects}
+            selectedProjectId={projectFilter}
+            onChange={setProjectFilter}
+            totalCount={activeProjectTasks.length}
+            countByProjectId={countByProjectId}
+            ariaLabel="Фильтр поручений по проектам"
+          />
+
           <div className="d2-segmented" role="group" aria-label="Фильтр поручений">
             <button
               type="button"
               className={filter === "all" ? "is-active" : ""}
               onClick={() => setFilter("all")}
             >
-              Все ({activeProjectTasks.length})
+              Все ({scopedTasks.length})
             </button>
             <button
               type="button"
               className={filter === "active" ? "is-active" : ""}
               onClick={() => setFilter("active")}
             >
-              Активные ({meta.activeTaskCount})
+              Активные ({activeCountInScope})
             </button>
             <button
               type="button"
@@ -357,263 +282,67 @@ export function TasksCard() {
               Завершённые
             </button>
           </div>
+
+          <button
+            type="button"
+            className="icon-button task-create-plus-btn"
+            disabled={!connected}
+            onClick={handleCreateEventInChat}
+            title="Создать событие"
+            aria-label="Создать событие"
+            data-testid="task-create-plus-btn"
+          >
+            <Plus size={16} weight="bold" />
+          </button>
         </div>
       </header>
 
-      <div className="d2-card-scroll">
+      <div
+        className="d2-card-scroll"
+        ref={scrollRef}
+        onScroll={(e) => {
+          savedScrollTopRef.current = e.currentTarget.scrollTop;
+        }}
+      >
         <div className="d2-card-inner">
-          {/* Zero-bureaucracy quick composer matching WP-M01-003 composer style */}
-          <div className="d2-task-composer-shell" ref={composerRef}>
-            {openPopover === "schedule" && (
-              <div
-                className="floating-popover d2-task-popover d2-task-popover--left"
-                role="menu"
-                aria-label="Время запуска поручения"
-                data-testid="task-schedule-popover"
-              >
-                <strong>Когда запустить</strong>
-                <p>Часовой пояс IANA: {localTz}</p>
-
-                {(
-                  [
-                    { id: "now", label: "Сейчас", desc: "Запустить в фоне немедленно" },
-                    { id: "in_10s", label: "Через 10 сек", desc: "Отложенный таймер в PostgreSQL" },
-                    { id: "in_5m", label: "Через 5 мин", desc: "Сработает даже после закрытия окна" },
-                    { id: "in_1h", label: "Через 1 час", desc: "Однократный долговечный таймер" },
-                    { id: "daily", label: "По расписанию (ежедневно)", desc: `С учётом DST (${localTz})` },
-                    { id: "signal", label: "Ждать сигнал", desc: "Проснётся по идемпотентному сигналу" },
-                  ] as Array<{ id: SchedulePreset; label: string; desc: string }>
-                ).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={schedulePreset === opt.id}
-                    className={schedulePreset === opt.id ? "is-selected" : ""}
-                    data-testid={`task-schedule-opt-${opt.id}`}
-                    onClick={() => {
-                      setSchedulePreset(opt.id);
-                      if (opt.id !== "daily" && opt.id !== "signal") {
-                        setOpenPopover(null);
-                      }
-                    }}
-                  >
-                    <span className="popover-option-copy">
-                      <strong>{opt.label}</strong>
-                      <small>{opt.desc}</small>
-                    </span>
-                    {schedulePreset === opt.id && <Check size={14} aria-hidden="true" />}
-                  </button>
-                ))}
-
-                {schedulePreset === "daily" && (
-                  <div className="d2-schedule-extra" data-testid="task-daily-config">
-                    <div className="d2-time-stepper">
-                      <span>Время ({localTz})</span>
-                      <div className="d2-time-stepper__controls">
-                        <button
-                          type="button"
-                          className="d2-step-btn"
-                          onClick={() => setDailyHour((h) => (h + 23) % 24)}
-                          aria-label="Уменьшить час"
-                        >
-                          −
-                        </button>
-                        <code>{String(dailyHour).padStart(2, "0")}</code>
-                        <button
-                          type="button"
-                          className="d2-step-btn"
-                          onClick={() => setDailyHour((h) => (h + 1) % 24)}
-                          aria-label="Увеличить час"
-                        >
-                          +
-                        </button>
-                        <span>:</span>
-                        <button
-                          type="button"
-                          className="d2-step-btn"
-                          onClick={() => setDailyMinute((m) => (m + 55) % 60)}
-                          aria-label="Уменьшить минуты"
-                        >
-                          −
-                        </button>
-                        <code>{String(dailyMinute).padStart(2, "0")}</code>
-                        <button
-                          type="button"
-                          className="d2-step-btn"
-                          onClick={() => setDailyMinute((m) => (m + 5) % 60)}
-                          aria-label="Увеличить минуты"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {schedulePreset === "signal" && (
-                  <div className="d2-schedule-extra" data-testid="task-signal-config">
-                    <input
-                      type="text"
-                      value={signalNameDraft}
-                      onChange={(e) => setSignalNameDraft(e.target.value)}
-                      placeholder="Имя сигнала, например ci_passed"
-                      aria-label="Имя ожидаемого сигнала"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {openPopover === "budget" && (
-              <div
-                className="floating-popover d2-task-popover d2-task-popover--budget"
-                role="menu"
-                aria-label="Лимит бюджета поручения"
-                data-testid="task-budget-popover"
-              >
-                <strong>Внешний бюджет</strong>
-                <p>Проверяется в Head вне контекста модели.</p>
-                {(
-                  [
-                    { id: "standard", label: "Стандартный", desc: "Без жёсткого отсечения ходов" },
-                    { id: "turns_3", label: "До 3 ходов", desc: "Короткое ограниченное поручение" },
-                    { id: "turns_10", label: "До 10 ходов", desc: "Среднее автономное поручение" },
-                    { id: "wall_60", label: "До 60 сек", desc: "Ограничение по времени работы" },
-                  ] as Array<{ id: BudgetPreset; label: string; desc: string }>
-                ).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={budgetPreset === opt.id}
-                    className={budgetPreset === opt.id ? "is-selected" : ""}
-                    data-testid={`task-budget-opt-${opt.id}`}
-                    onClick={() => setBudgetPreset(opt.id)}
-                  >
-                    <span className="popover-option-copy">
-                      <strong>{opt.label}</strong>
-                      <small>{opt.desc}</small>
-                    </span>
-                    {budgetPreset === opt.id && <Check size={14} aria-hidden="true" />}
-                  </button>
-                ))}
-
-                {budgetPreset !== "standard" && (
-                  <div className="d2-schedule-extra">
-                    <div className="d2-segmented d2-segmented--full">
-                      <button
-                        type="button"
-                        className={exceedPolicy === "ask_approval" ? "is-active" : ""}
-                        onClick={() => setExceedPolicy("ask_approval")}
-                      >
-                        Спросить меня
-                      </button>
-                      <button
-                        type="button"
-                        className={exceedPolicy === "fail" ? "is-active" : ""}
-                        onClick={() => setExceedPolicy("fail")}
-                      >
-                        Остановить
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <form
-              className="composer d2-task-composer"
-              onSubmit={(e) => void handleCreateTask(e)}
-              data-testid="task-quick-composer"
-            >
-              <input
-                type="text"
-                className="d2-task-composer__input"
-                value={goalDraft}
-                onChange={(e) => setGoalDraft(e.target.value)}
-                placeholder={
-                  targetProject
-                    ? `Поставить поручение в проекте «${targetProject.name}»…`
-                    : "Сначала выберите или создайте проект…"
-                }
-                aria-label="Цель нового поручения"
-                data-testid="task-goal-input"
-                disabled={!connected || !targetProject || !targetAgent}
-              />
-
-              <div className="composer-toolbar">
-                <div className="composer-tools">
-                  <button
-                    type="button"
-                    className="composer-setting"
-                    aria-expanded={openPopover === "schedule"}
-                    aria-haspopup="menu"
-                    data-testid="task-schedule-trigger"
-                    onClick={() =>
-                      setOpenPopover((prev) => (prev === "schedule" ? null : "schedule"))
-                    }
-                  >
-                    <Clock size={14} aria-hidden="true" />
-                    <span>{scheduleTriggerLabel}</span>
-                    <CaretDown size={11} aria-hidden="true" />
-                  </button>
-
-                  <button
-                    type="button"
-                    className="composer-setting"
-                    aria-expanded={openPopover === "budget"}
-                    aria-haspopup="menu"
-                    data-testid="task-budget-trigger"
-                    onClick={() =>
-                      setOpenPopover((prev) => (prev === "budget" ? null : "budget"))
-                    }
-                  >
-                    <Coin size={14} aria-hidden="true" />
-                    <span>{budgetTriggerLabel}</span>
-                    <CaretDown size={11} aria-hidden="true" />
-                  </button>
-                </div>
-
-                <div className="composer-send">
-                  <button
-                    type="submit"
-                    className="popover-primary-btn"
-                    disabled={
-                      !connected ||
-                      !targetProject ||
-                      !targetAgent ||
-                      !goalDraft.trim() ||
-                      isCreating
-                    }
-                    data-testid="task-create-submit"
-                  >
-                    <PaperPlaneTilt size={13} aria-hidden="true" />
-                    {isCreating ? "Создание…" : "Поставить поручение"}
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-
           {filteredTasks.length === 0 ? (
             <div className="d2-empty-box" data-testid="tasks-empty-state">
               <ListChecks size={26} weight="light" aria-hidden="true" />
               <p>
-                Поручений пока нет. Поставьте задачу выше — мгновенную, по таймеру или по ожиданию
-                сигнала.
+                {query
+                  ? `По запросу «${state.searchQuery}» поручений не найдено.`
+                  : "Поручений пока нет. Нажмите «+» или опишите расписание агенту в чате — он настроит событие автоматически."}
               </p>
+              {!query && (
+                <button
+                  type="button"
+                  className="popover-secondary-btn"
+                  disabled={!connected}
+                  data-testid="task-empty-create-btn"
+                  onClick={handleCreateEventInChat}
+                >
+                  <Plus size={14} weight="bold" aria-hidden="true" />
+                  Создать событие в чате
+                </button>
+              )}
             </div>
           ) : (
             <div className="d2-card-list" data-testid="tasks-list">
               {filteredTasks.map((task) => {
                 const isEditing = editingTaskId === task.task_id;
                 const isStopping = state.stoppingTaskIds.includes(task.task_id);
+                const isReconciling = Boolean(reconcilingTaskIds[task.task_id]);
                 const isTerminal = isTerminalTaskStatus(task.status);
                 const canStop = !isTerminal;
                 const goalMatchesTitle = task.title.trim() === task.goal.trim();
                 const projectName = projectById.get(task.project_id) ?? "Проект";
                 const replyDraft = replyDrafts[task.task_id] ?? "";
+                const linkedUnknownEffect = unknownEffectByTaskId.get(task.task_id);
+                const hasPendingApproval = pendingApprovalSessions.has(task.session_id);
+                const effectivePillStatus =
+                  hasPendingApproval && task.status === "running"
+                    ? "waiting_approval"
+                    : task.status;
 
                 return (
                   <article
@@ -626,13 +355,16 @@ export function TasksCard() {
                     <div className="d2-item-card__top">
                       <div className="d2-item-card__badges">
                         <span
-                          className={`d2-pill d2-pill--status-${task.status}`}
-                          data-testid={`task-status-pill-${task.status}`}
+                          className={`d2-pill d2-pill--status-${effectivePillStatus}`}
+                          data-testid={`task-status-pill-${effectivePillStatus}`}
                         >
                           {task.status === "unknown_external" && (
                             <Question size={12} weight="bold" aria-hidden="true" />
                           )}
-                          {statusPillLabel(task, nowMs)}
+                          {effectivePillStatus === "waiting_approval" && (
+                            <ShieldCheck size={12} aria-hidden="true" />
+                          )}
+                          {statusPillLabel(task, nowMs, hasPendingApproval)}
                         </span>
                         <span className="d2-meta-chip">{projectName}</span>
                         {task.generation > 1 && (
@@ -644,9 +376,12 @@ export function TasksCard() {
                           </span>
                         )}
                         {task.schedule && (
-                          <span className="d2-meta-chip">
+                          <span className="d2-meta-chip" data-testid={`task-schedule-chip-${task.task_id}`}>
                             <Clock size={11} aria-hidden="true" />
-                            {task.schedule.original_expression ?? task.schedule.timezone}
+                            {task.schedule.original_expression &&
+                            /[А-Яа-яЁё]/.test(task.schedule.original_expression)
+                              ? cleanPlainText(task.schedule.original_expression)
+                              : formatScheduleSummaryRu(task.schedule.kind, task.schedule.timezone)}
                           </span>
                         )}
                       </div>
@@ -758,18 +493,72 @@ export function TasksCard() {
                     {task.status === "failed" && (task.error_summary || task.error_code) && (
                       <div className="d2-task-error">
                         <strong>{task.error_code ?? "ERROR"}:</strong>{" "}
-                        {cleanPlainText(task.error_summary ?? "Поручение завершилось с ошибкой.")}
+                        {formatDecisionReasonRu(task.error_summary) ||
+                          "Поручение завершилось с ошибкой."}
                       </div>
                     )}
 
+                    {/* D2-UX-04 & D2-UX-05: Direct UNKNOWN reconcile actions right on task card */}
                     {task.status === "unknown_external" && (
                       <div className="d2-item-card__actions">
+                        {linkedUnknownEffect && (
+                          <>
+                            <button
+                              type="button"
+                              className="popover-primary-btn"
+                              disabled={isReconciling}
+                              data-testid={`task-reconcile-auto-${task.task_id}`}
+                              onClick={() =>
+                                void runReconcile(task.task_id, () =>
+                                  actions.reconcileEffect(linkedUnknownEffect.effect_id, null),
+                                )
+                              }
+                            >
+                              <ArrowsClockwise size={13} aria-hidden="true" />
+                              Проверить у сервиса
+                            </button>
+                            <button
+                              type="button"
+                              className="popover-secondary-btn"
+                              disabled={isReconciling}
+                              data-testid={`task-reconcile-confirmed-${task.task_id}`}
+                              onClick={() =>
+                                void runReconcile(task.task_id, () =>
+                                  actions.reconcileEffect(
+                                    linkedUnknownEffect.effect_id,
+                                    "mark_confirmed",
+                                    "Подтверждено в разделе Поручения",
+                                  ),
+                                )
+                              }
+                            >
+                              Подтвердить выполнение
+                            </button>
+                            <button
+                              type="button"
+                              className="d2-danger-btn"
+                              disabled={isReconciling}
+                              data-testid={`task-reconcile-not-executed-${task.task_id}`}
+                              onClick={() =>
+                                void runReconcile(task.task_id, () =>
+                                  actions.reconcileEffect(
+                                    linkedUnknownEffect.effect_id,
+                                    "mark_not_executed",
+                                    "Отмечено невыполненным в разделе Поручения",
+                                  ),
+                                )
+                              }
+                            >
+                              Отметить невыполненным
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           className="popover-secondary-btn"
                           onClick={() => actions.setActiveView("inbox")}
                         >
-                          Перейти к сверке во Входящих
+                          Открыть во Входящих
                         </button>
                       </div>
                     )}
@@ -875,19 +664,38 @@ export function TasksCard() {
                             </button>
                           </form>
                         ) : (
-                          <button
-                            type="button"
-                            className="popover-secondary-btn"
-                            data-testid={`task-signal-open-${task.task_id}`}
-                            onClick={() => {
-                              setSignalTaskId(task.task_id);
-                              setSignalNameInput(task.expected_signal_name ?? "ready");
-                              setSignalPayload("");
-                            }}
-                          >
-                            <Broadcast size={13} aria-hidden="true" />
-                            Подать сигнал…
-                          </button>
+                          <div className="d2-item-card__actions">
+                            {task.expected_signal_name && (
+                              <button
+                                type="button"
+                                className="popover-primary-btn"
+                                data-testid={`task-signal-quick-send-${task.task_id}`}
+                                onClick={() =>
+                                  void actions.sendTaskSignal(
+                                    task.task_id,
+                                    task.expected_signal_name!,
+                                    "",
+                                  )
+                                }
+                              >
+                                <Broadcast size={13} aria-hidden="true" />
+                                Отправить сигнал «{task.expected_signal_name}»
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="popover-secondary-btn"
+                              data-testid={`task-signal-open-${task.task_id}`}
+                              onClick={() => {
+                                setSignalTaskId(task.task_id);
+                                setSignalNameInput(task.expected_signal_name ?? "ready");
+                                setSignalPayload("");
+                              }}
+                            >
+                              <Broadcast size={13} aria-hidden="true" />
+                              {task.expected_signal_name ? "+ данные" : "Подать сигнал…"}
+                            </button>
+                          </div>
                         )}
                       </div>
                     )}

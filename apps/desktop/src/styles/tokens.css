@@ -25,6 +25,7 @@
   --shell-backdrop: radial-gradient(120% 90% at 12% 8%, #1d1f24 0%, #121316 52%, #0d0e10 100%);
   --chat-card-bg: rgba(22, 22, 24, 0.72);
   --chat-card-border: rgba(255, 255, 255, 0.12);
+  --workspace-card-bg: rgba(34, 34, 37, 0.78);
   --raised-bg: rgba(45, 45, 45, 0.56);
   --chat-active-bg: rgba(255, 255, 255, 0.14);
   --popover-bg: #1e1e20;
@@ -48,12 +49,23 @@
   --radius-row: 11px;
 }
 
-/* Native Windows 11 Mica shell: roots remain transparent with exact WP-M01-003 density tints. */
+/* Native Windows 11 Mica shell: roots remain transparent with calibrated surface densities. */
 html.native-shell {
   --shell-backdrop: transparent;
   --chat-card-bg: rgba(24, 24, 24, 0.36);
   --chat-card-border: rgba(255, 255, 255, 0.12);
-  --raised-bg: rgba(45, 45, 45, 0.24);
+  --workspace-card-bg: rgba(38, 38, 38, 0.50);
+  --raised-bg: rgba(45, 45, 45, 0.34);
+  --chat-active-bg: rgba(255, 255, 255, 0.14);
+}
+
+/* D2-UX-01: Solid dark fallback when native Mica is unavailable (Win10/Linux/unsupported GPU). */
+html.native-shell.native-mica-unavailable {
+  --shell-backdrop: #111215;
+  --chat-card-bg: #18191d;
+  --chat-card-border: rgba(255, 255, 255, 0.12);
+  --workspace-card-bg: #1e1f24;
+  --raised-bg: #26272c;
   --chat-active-bg: rgba(255, 255, 255, 0.14);
 }
 
@@ -61,6 +73,19 @@ html.browser-mica-preview {
   --shell-backdrop: radial-gradient(120% 90% at 12% 8%, #1d1f24 0%, #121316 52%, #0d0e10 100%);
   --chat-card-bg: rgba(22, 22, 24, 0.72);
   --chat-card-border: rgba(255, 255, 255, 0.12);
+  --workspace-card-bg: rgba(34, 34, 37, 0.78);
   --raised-bg: rgba(45, 45, 45, 0.56);
   --chat-active-bg: rgba(255, 255, 255, 0.14);
+}
+
+/* D2-UX-01: Respect OS reduced transparency preference with crisp opaque dark surfaces. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  html.native-shell,
+  html.browser-mica-preview {
+    --shell-backdrop: #111215;
+    --chat-card-bg: #18191d;
+    --workspace-card-bg: #1e1f24;
+    --raised-bg: #26272c;
+  }
 }

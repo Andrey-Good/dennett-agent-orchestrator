@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowsClockwise,
   ArrowSquareOut,
@@ -24,6 +24,8 @@ import type {
   TaskRecord,
 } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { cleanPlainText, formatDecisionReasonRu } from "../utils/formatters";
+import { ProjectScopeFilter } from "./ProjectScopeFilter";
 import { StatusBanners } from "./StatusBanners";
 
 function formatTime(timestampMs: number): string {
@@ -33,29 +35,19 @@ function formatTime(timestampMs: number): string {
   });
 }
 
-function cleanPlainText(text: string): string {
-  return text.replace(/`([^`]+)`/g, "$1");
-}
-
 function formatInboxDetail(card: InboxCardRecord): string | null {
   if (card.kind === "unknown_effect") {
     // Dedicated warning box below already renders the explanation and metadata without duplication.
     return null;
   }
-  const trimmed = cleanPlainText(card.detail.trim());
-  if (!trimmed) {
-    return null;
-  }
-  if (
-    card.kind === "permission_approval" &&
-    /workspace_write_policy\s*=\s*ask_before_write/i.test(trimmed)
-  ) {
-    return "Включён режим «Спрашивать запись» — подтвердите или отклоните действие перед изменением файлов.";
-  }
-  return trimmed;
+  const formatted = formatDecisionReasonRu(card.detail);
+  return formatted || null;
 }
 
-function taskStatusLabel(status: TaskRecord["status"]): string {
+function taskStatusLabel(status: TaskRecord["status"], hasPendingApproval: boolean): string {
+  if (hasPendingApproval && status === "running") {
+    return "Ожидает подтверждения";
+  }
   switch (status) {
     case "queued":
       return "В очереди";
@@ -68,7 +60,7 @@ function taskStatusLabel(status: TaskRecord["status"]): string {
     case "waiting_clarification":
       return "Уточнение";
     case "waiting_approval":
-      return "Ждёт подтверждения";
+      return "Ожидает подтверждения";
     case "unknown_external":
       return "Неизвестно, выполнено ли";
     case "failed":
@@ -80,13 +72,39 @@ function taskStatusLabel(status: TaskRecord["status"]): string {
   }
 }
 
+function isSnippetLong(snippet: string): boolean {
+  return snippet.length > 320 || snippet.split(/\r?\n/).length > 6;
+}
+
+function truncateSnippet(snippet: string): string {
+  const lines = snippet.split(/\r?\n/);
+  const sliced = lines.slice(0, 6).join("\n");
+  return sliced.length > 320 ? `${sliced.slice(0, 320)}…` : sliced;
+}
+
 export function InboxRadarCard() {
-  const { state, actions, meta } = useWorkspace();
-  const [scopeFilter, setScopeFilter] = useState<"all" | "active_project">("all");
+  const { state, actions } = useWorkspace();
+  const [projectFilter, setProjectFilter] = useState<string | "all">("all");
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [expandedSnippets, setExpandedSnippets] = useState<Record<string, boolean>>({});
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
 
-  const activeProjectId = meta.activeProject?.project_id ?? null;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const savedScrollTopRef = useRef(0);
+
+  const activeProjects = useMemo(
+    () =>
+      state.projects.filter((p) => {
+        const lc = p.lifecycle_state ?? "active";
+        return lc !== "archived" && lc !== "deleted_record";
+      }),
+    [state.projects],
+  );
+
+  const activeProjectIds = useMemo(
+    () => new Set(activeProjects.map((p) => p.project_id)),
+    [activeProjects],
+  );
 
   const projectById = useMemo(() => {
     const map = new Map<string, string>();
@@ -112,6 +130,16 @@ export function InboxRadarCard() {
     return map;
   }, [state.pendingPermissions]);
 
+  const pendingApprovalSessions = useMemo(
+    () =>
+      new Set(
+        state.pendingPermissions
+          .filter((req) => req.status === "pending")
+          .map((req) => req.session_id),
+      ),
+    [state.pendingPermissions],
+  );
+
   const effectById = useMemo(() => {
     const map = new Map<string, EffectClaimRecord>();
     for (const ef of state.effects) {
@@ -120,58 +148,75 @@ export function InboxRadarCard() {
     return map;
   }, [state.effects]);
 
-  const activeProjectIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const p of state.projects) {
-      const lc = p.lifecycle_state ?? "active";
-      if (lc !== "archived" && lc !== "deleted_record") {
-        ids.add(p.project_id);
-      }
+  const allOpenCards = useMemo(
+    () =>
+      state.inboxCards.filter(
+        (card) => card.status === "open" && activeProjectIds.has(card.project_id),
+      ),
+    [activeProjectIds, state.inboxCards],
+  );
+
+  const countByProjectId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const card of allOpenCards) {
+      map.set(card.project_id, (map.get(card.project_id) ?? 0) + 1);
     }
-    return ids;
-  }, [state.projects]);
+    return map;
+  }, [allOpenCards]);
 
-  const openCards = useMemo(() => {
-    return state.inboxCards
-      .filter((card) => card.status === "open" && activeProjectIds.has(card.project_id))
-      .filter((card) =>
-        scopeFilter === "active_project" && activeProjectId
-          ? card.project_id === activeProjectId
-          : true,
-      );
-  }, [activeProjectId, activeProjectIds, scopeFilter, state.inboxCards]);
+  const query = state.searchQuery.trim().toLowerCase();
 
-  const failedTasks = useMemo(() => {
-    return state.tasks
-      .filter((t) => t.status === "failed" && activeProjectIds.has(t.project_id))
-      .filter((t) =>
-        scopeFilter === "active_project" && activeProjectId
-          ? t.project_id === activeProjectId
-          : true,
-      );
-  }, [activeProjectId, activeProjectIds, scopeFilter, state.tasks]);
+  const matchesScopeAndQuery = (projectId: string, haystack: string): boolean => {
+    if (projectFilter !== "all" && projectId !== projectFilter) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    const projName = (projectById.get(projectId) ?? "").toLowerCase();
+    return haystack.toLowerCase().includes(query) || projName.includes(query);
+  };
 
-  const radarTasks = useMemo(() => {
-    return state.tasks
-      .filter(
-        (t) =>
-          activeProjectIds.has(t.project_id) &&
-          [
-            "queued",
-            "running",
-            "waiting_timer",
-            "waiting_signal",
-            "waiting_clarification",
-            "waiting_approval",
-            "unknown_external",
-          ].includes(t.status),
-      )
-      .filter((t) =>
-        scopeFilter === "active_project" && activeProjectId
-          ? t.project_id === activeProjectId
-          : true,
-      );
-  }, [activeProjectId, activeProjectIds, scopeFilter, state.tasks]);
+  const openCards = useMemo(
+    () =>
+      allOpenCards.filter((card) =>
+        matchesScopeAndQuery(card.project_id, `${card.subject} ${card.detail}`),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allOpenCards, projectById, projectFilter, query],
+  );
+
+  const failedTasks = useMemo(
+    () =>
+      state.tasks
+        .filter((t) => t.status === "failed" && activeProjectIds.has(t.project_id))
+        .filter((t) =>
+          matchesScopeAndQuery(t.project_id, `${t.title} ${t.error_summary ?? ""}`),
+        ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeProjectIds, projectById, projectFilter, query, state.tasks],
+  );
+
+  const radarTasks = useMemo(
+    () =>
+      state.tasks
+        .filter(
+          (t) =>
+            activeProjectIds.has(t.project_id) &&
+            [
+              "queued",
+              "running",
+              "waiting_timer",
+              "waiting_signal",
+              "waiting_clarification",
+              "waiting_approval",
+              "unknown_external",
+            ].includes(t.status),
+        )
+        .filter((t) => matchesScopeAndQuery(t.project_id, `${t.title} ${t.wait_detail ?? ""}`)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeProjectIds, projectById, projectFilter, query, state.tasks],
+  );
 
   const radarRunningSessions = useMemo(() => {
     const taskRunningSessionIds = new Set(
@@ -181,29 +226,33 @@ export function InboxRadarCard() {
     return state.sessions
       .filter((s) => runningSet.has(s.session_id) && activeProjectIds.has(s.project_id))
       .filter((s) => !taskRunningSessionIds.has(s.session_id))
-      .filter((s) =>
-        scopeFilter === "active_project" && activeProjectId
-          ? s.project_id === activeProjectId
-          : true,
-      );
+      .filter((s) => matchesScopeAndQuery(s.project_id, s.title));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    activeProjectId,
     activeProjectIds,
+    projectById,
+    projectFilter,
+    query,
     radarTasks,
-    scopeFilter,
     state.runningSessionIds,
     state.sessions,
   ]);
 
-  const visibleGrants = useMemo(() => {
-    return state.activeGrants
-      .filter((g) => !g.revoked_at && activeProjectIds.has(g.project_id))
-      .filter((g) =>
-        scopeFilter === "active_project" && activeProjectId
-          ? g.project_id === activeProjectId
-          : true,
-      );
-  }, [activeProjectId, activeProjectIds, scopeFilter, state.activeGrants]);
+  const visibleGrants = useMemo(
+    () =>
+      state.activeGrants
+        .filter((g) => !g.revoked_at && activeProjectIds.has(g.project_id))
+        .filter((g) => matchesScopeAndQuery(g.project_id, `${g.tool_pattern} ${g.reason}`)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeProjectIds, projectById, projectFilter, query, state.activeGrants],
+  );
+
+  // Preserve scroll position on live snapshot refreshes.
+  useLayoutEffect(() => {
+    if (scrollRef.current && savedScrollTopRef.current > 0) {
+      scrollRef.current.scrollTop = savedScrollTopRef.current;
+    }
+  }, [openCards.length, radarTasks.length, radarRunningSessions.length]);
 
   const runBusy = async (id: string, fn: () => Promise<void>) => {
     setBusyIds((prev) => ({ ...prev, [id]: true }));
@@ -227,8 +276,11 @@ export function InboxRadarCard() {
       : undefined;
     const linkedEffect = card.effect_id ? effectById.get(card.effect_id) : undefined;
     const draft = replyDrafts[card.card_id] ?? "";
-
     const isUnknown = card.kind === "unknown_effect";
+
+    const snippet = linkedPerm?.preview_snippet?.trim() ?? "";
+    const snippetExpandable = snippet.length > 0 && isSnippetLong(snippet);
+    const snippetExpanded = Boolean(expandedSnippets[card.card_id]);
 
     return (
       <article
@@ -313,6 +365,31 @@ export function InboxRadarCard() {
                   : linkedPerm.target_summary}
               </code>
             </div>
+            {snippet && (
+              <div
+                className="d2-preview-snippet"
+                data-testid={`permission-preview-snippet-${linkedPerm.request_id}`}
+              >
+                <div className="d2-preview-snippet__head">
+                  <span>Предпросмотр изменений</span>
+                  {snippetExpandable && (
+                    <button
+                      type="button"
+                      className="popover-action-link"
+                      onClick={() =>
+                        setExpandedSnippets((prev) => ({
+                          ...prev,
+                          [card.card_id]: !prev[card.card_id],
+                        }))
+                      }
+                    >
+                      {snippetExpanded ? "Свернуть" : "Показать полностью"}
+                    </button>
+                  )}
+                </div>
+                <pre>{snippetExpanded || !snippetExpandable ? snippet : truncateSnippet(snippet)}</pre>
+              </div>
+            )}
           </div>
         )}
 
@@ -599,7 +676,7 @@ export function InboxRadarCard() {
           </strong>
           <small>
             {projectName} · использовано: {grant.uses_consumed}
-            {grant.max_uses ? ` / ${grant.max_uses}` : ""} · {grant.reason}
+            {grant.max_uses ? ` / ${grant.max_uses}` : ""} · {formatDecisionReasonRu(grant.reason)}
           </small>
         </div>
         <button
@@ -628,24 +705,14 @@ export function InboxRadarCard() {
         </div>
 
         <div className="d2-card-header__controls">
-          {meta.activeProject && (
-            <div className="d2-segmented" role="group" aria-label="Фильтр по проекту">
-              <button
-                type="button"
-                className={scopeFilter === "all" ? "is-active" : ""}
-                onClick={() => setScopeFilter("all")}
-              >
-                Все проекты
-              </button>
-              <button
-                type="button"
-                className={scopeFilter === "active_project" ? "is-active" : ""}
-                onClick={() => setScopeFilter("active_project")}
-              >
-                {meta.activeProject.name}
-              </button>
-            </div>
-          )}
+          <ProjectScopeFilter
+            projects={activeProjects}
+            selectedProjectId={projectFilter}
+            onChange={setProjectFilter}
+            totalCount={allOpenCards.length}
+            countByProjectId={countByProjectId}
+            ariaLabel="Фильтр Входящих по проектам"
+          />
           <button
             type="button"
             className="icon-button"
@@ -658,7 +725,13 @@ export function InboxRadarCard() {
         </div>
       </header>
 
-      <div className="d2-card-scroll">
+      <div
+        className="d2-card-scroll"
+        ref={scrollRef}
+        onScroll={(e) => {
+          savedScrollTopRef.current = e.currentTarget.scrollTop;
+        }}
+      >
         <div className="d2-card-inner">
           <section className="d2-section" aria-label="Требуют решения">
             <div className="d2-section__head">
@@ -694,7 +767,11 @@ export function InboxRadarCard() {
                     <WarningCircle size={15} aria-hidden="true" />
                     <div className="d2-radar-row__copy">
                       <strong>{task.title}</strong>
-                      <small>{task.error_summary ?? task.error_code ?? "Выполнение прервано"}</small>
+                      <small>
+                        {formatDecisionReasonRu(task.error_summary) ||
+                          task.error_code ||
+                          "Выполнение прервано"}
+                      </small>
                     </div>
                     <button
                       type="button"
@@ -737,72 +814,91 @@ export function InboxRadarCard() {
               </p>
             ) : (
               <div className="d2-radar-list">
-                {radarRunningSessions.map((session) => (
-                  <div
-                    key={session.session_id}
-                    className="d2-radar-row"
-                    data-testid={`radar-running-session-${session.session_id}`}
-                  >
-                    <span className="d2-pill d2-pill--status-running">Выполняется</span>
-                    <div className="d2-radar-row__copy">
-                      <strong>{session.title}</strong>
-                      <small>
-                        {projectById.get(session.project_id) ?? "Проект"} · активный ход в чате
-                      </small>
-                    </div>
-                    <div className="d2-radar-row__actions">
-                      <button
-                        type="button"
-                        className="d2-link-btn"
-                        onClick={() => void actions.openSessionInChat(session.session_id)}
+                {radarRunningSessions.map((session) => {
+                  const awaitingApproval = pendingApprovalSessions.has(session.session_id);
+                  return (
+                    <div
+                      key={session.session_id}
+                      className="d2-radar-row"
+                      data-testid={`radar-running-session-${session.session_id}`}
+                    >
+                      <span
+                        className={`d2-pill ${
+                          awaitingApproval
+                            ? "d2-pill--status-waiting_approval"
+                            : "d2-pill--status-running"
+                        }`}
                       >
-                        Чат
-                      </button>
-                      <button
-                        type="button"
-                        className="d2-danger-btn d2-danger-btn--sm"
-                        data-testid={`radar-stop-session-${session.session_id}`}
-                        disabled={state.cancellingSessionIds.includes(session.session_id)}
-                        onClick={() => void actions.cancelSessionRun(session.session_id)}
-                      >
-                        <Stop size={11} weight="fill" aria-hidden="true" />
-                        Stop
-                      </button>
+                        {awaitingApproval ? "Ожидает подтверждения" : "Выполняется"}
+                      </span>
+                      <div className="d2-radar-row__copy">
+                        <strong title={session.title}>{session.title}</strong>
+                        <small>
+                          {projectById.get(session.project_id) ?? "Проект"} ·{" "}
+                          {awaitingApproval ? "ожидает вашего решения" : "активный ход в чате"}
+                        </small>
+                      </div>
+                      <div className="d2-radar-row__actions">
+                        <button
+                          type="button"
+                          className="d2-link-btn"
+                          onClick={() => void actions.openSessionInChat(session.session_id)}
+                        >
+                          Чат
+                        </button>
+                        <button
+                          type="button"
+                          className="d2-danger-btn d2-danger-btn--sm"
+                          data-testid={`radar-stop-session-${session.session_id}`}
+                          disabled={state.cancellingSessionIds.includes(session.session_id)}
+                          onClick={() => void actions.cancelSessionRun(session.session_id)}
+                        >
+                          <Stop size={11} weight="fill" aria-hidden="true" />
+                          Stop
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {radarTasks.map((task) => (
-                  <div key={task.task_id} className="d2-radar-row">
-                    <span className={`d2-pill d2-pill--status-${task.status}`}>
-                      {taskStatusLabel(task.status)}
-                    </span>
-                    <div className="d2-radar-row__copy">
-                      <strong>{task.title}</strong>
-                      <small>
-                        {projectById.get(task.project_id) ?? "Проект"}
-                        {task.wait_detail ? ` · ${cleanPlainText(task.wait_detail)}` : ""}
-                      </small>
+                  );
+                })}
+                {radarTasks.map((task) => {
+                  const awaitingApproval = pendingApprovalSessions.has(task.session_id);
+                  const effectiveStatus =
+                    awaitingApproval && task.status === "running"
+                      ? "waiting_approval"
+                      : task.status;
+                  return (
+                    <div key={task.task_id} className="d2-radar-row">
+                      <span className={`d2-pill d2-pill--status-${effectiveStatus}`}>
+                        {taskStatusLabel(task.status, awaitingApproval)}
+                      </span>
+                      <div className="d2-radar-row__copy">
+                        <strong title={task.title}>{task.title}</strong>
+                        <small>
+                          {projectById.get(task.project_id) ?? "Проект"}
+                          {task.wait_detail ? ` · ${cleanPlainText(task.wait_detail)}` : ""}
+                        </small>
+                      </div>
+                      <div className="d2-radar-row__actions">
+                        <button
+                          type="button"
+                          className="d2-link-btn"
+                          onClick={() => void actions.openSessionInChat(task.session_id)}
+                        >
+                          Чат
+                        </button>
+                        <button
+                          type="button"
+                          className="d2-danger-btn d2-danger-btn--sm"
+                          disabled={state.stoppingTaskIds.includes(task.task_id)}
+                          onClick={() => void actions.cancelTask(task.task_id)}
+                        >
+                          <Stop size={11} weight="fill" aria-hidden="true" />
+                          Stop
+                        </button>
+                      </div>
                     </div>
-                    <div className="d2-radar-row__actions">
-                      <button
-                        type="button"
-                        className="d2-link-btn"
-                        onClick={() => void actions.openSessionInChat(task.session_id)}
-                      >
-                        Чат
-                      </button>
-                      <button
-                        type="button"
-                        className="d2-danger-btn d2-danger-btn--sm"
-                        disabled={state.stoppingTaskIds.includes(task.task_id)}
-                        onClick={() => void actions.cancelTask(task.task_id)}
-                      >
-                        <Stop size={11} weight="fill" aria-hidden="true" />
-                        Stop
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

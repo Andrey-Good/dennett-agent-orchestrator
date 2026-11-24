@@ -347,22 +347,9 @@ describe("Dennett Desktop Phase D2 UI", () => {
     expect(within(tasksCard).getByTestId("task-status-pill-failed")).toHaveTextContent("Ошибка");
     expect(within(tasksCard).getByTestId("task-status-pill-succeeded")).toHaveTextContent("Готово");
 
-    // Create a delayed task via custom translucent schedule popover (zero <select>, Escape dismisses cleanly)
-    await user.click(screen.getByTestId("task-schedule-trigger"));
-    expect(await screen.findByTestId("task-schedule-popover")).toBeInTheDocument();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByTestId("task-schedule-popover")).not.toBeInTheDocument();
-
-    await user.click(screen.getByTestId("task-schedule-trigger"));
-    await user.click(await screen.findByTestId("task-schedule-opt-in_5m"));
-    await user.type(screen.getByTestId("task-goal-input"), "Проверить ночную сборку");
-    await user.click(screen.getByTestId("task-create-submit"));
-
-    await waitFor(() => {
-      expect(bridge.tasks.some((t) => t.goal === "Проверить ночную сборку")).toBe(true);
-    });
-    const createdTask = bridge.tasks.find((t) => t.goal === "Проверить ночную сборку")!;
-    expect(createdTask.status).toBe("waiting_timer");
+    // Create event via "+" button -> opens blank chat prefilled with "Создай событие: мне необходимо "
+    expect(screen.queryByTestId("task-schedule-trigger")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("task-goal-input")).not.toBeInTheDocument();
 
     // Inline goal edit bumps generation to v2
     await user.click(screen.getByTestId(`task-edit-goal-btn-${waitingT.task_id}`));
@@ -384,9 +371,16 @@ describe("Dennett Desktop Phase D2 UI", () => {
         "task-status-pill-cancelled",
       ),
     ).toHaveTextContent("Остановлено");
+
+    // Clicking "+" ("Создать событие") switches to Чаты with prefilled composer draft
+    await user.click(screen.getByTestId("task-create-plus-btn"));
+    const composerInput = (await screen.findByLabelText(
+      "Поле ввода сообщения",
+    )) as HTMLTextAreaElement;
+    expect(composerInput.value).toBe("Создай событие: мне необходимо ");
   });
 
-  it("persists drafts and queues offline messages with stable client_message_id, flushing exactly once upon Head reconnect", async () => {
+  it("persists drafts and queues offline messages with stable client_message_id, requiring explicit owner click to flush once upon Head reconnect", async () => {
     const user = userEvent.setup();
     const { project, agent, session } = makeD2Fixture();
     const bridge = new MockDesktopBridge({
@@ -406,7 +400,7 @@ describe("Dennett Desktop Phase D2 UI", () => {
     // Honest offline banner + queued pill appear instead of losing text
     expect(await screen.findByTestId("head-offline-inline-banner")).toBeInTheDocument();
     expect(
-      await screen.findByText("Ожидает сети — отправится один раз при восстановлении"),
+      await screen.findByText("Ожидает сети — можно отправить после восстановления связи"),
     ).toBeInTheDocument();
     expect(screen.getByText("Сообщение в офлайн-очередь")).toBeInTheDocument();
 
@@ -414,19 +408,26 @@ describe("Dennett Desktop Phase D2 UI", () => {
     const stored = window.localStorage.getItem("dennett.desktop.d2.drafts.v1");
     expect(stored).toContain("Сообщение в офлайн-очередь");
 
-    // Reconnect Head via inline Retry button -> flushes queued message ONCE with stable client_message_id!
+    // Reconnect Head via inline Retry button -> D2-BUG-06: does NOT blindly auto-flush!
     bridge.connected = true;
     await user.click(screen.getByTestId("inline-retry-head-button"));
 
+    const flushBtn = await screen.findByTestId("flush-offline-queue-btn");
     await waitFor(() => {
-      expect(
-        screen.queryByText("Ожидает сети — отправится один раз при восстановлении"),
-      ).not.toBeInTheDocument();
+      expect(flushBtn).not.toBeDisabled();
+    });
+    expect(bridge.calls.filter((c) => c.method === "sendMessage")).toHaveLength(1);
+
+    // Explicit owner click sends queued message ONCE with the exact same stable client_message_id!
+    await user.click(flushBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("flush-offline-queue-btn")).not.toBeInTheDocument();
     });
     expect(await screen.findByText(/Принято .* Сообщение в офлайн-очередь/)).toBeInTheDocument();
 
     const sendCalls = bridge.calls.filter((c) => c.method === "sendMessage");
-    // 1 failed attempt (HEAD_UNREACHABLE) + 1 successful reconnect flush, BOTH carrying the exact same client_message_id!
+    // 1 failed attempt (HEAD_UNREACHABLE) + 1 owner-confirmed reconnect flush, BOTH carrying the exact same client_message_id!
     expect(sendCalls).toHaveLength(2);
     const firstId = (sendCalls[0]!.args as { request: { client_message_id?: string } }).request
       .client_message_id;
@@ -496,14 +497,18 @@ describe("Dennett Desktop Phase D2 UI", () => {
     await screen.findByTestId("chat-card");
     expect(container.querySelectorAll("select")).toHaveLength(0);
 
-    // 1. Artifact revisions v1/v2 switcher + completeness badge + lifecycle actions
+    // 1. Artifact revisions v1/v2 switcher + completeness badge + safe Markdown preview + lifecycle actions
     const preview = await screen.findByTestId("artifact-preview");
-    expect(preview).toHaveTextContent("# Финальная версия v2");
+    expect(preview).toHaveTextContent("Финальная версия v2");
     expect(screen.getByTestId("artifact-preview-completeness")).toHaveTextContent("Финальный");
+
+    await user.click(screen.getByTestId("artifact-mode-source"));
+    expect(screen.getByTestId("artifact-preview-source")).toHaveTextContent("# Финальная версия v2");
+    await user.click(screen.getByTestId("artifact-mode-rendered"));
 
     await user.click(screen.getByTestId("artifact-revision-pill-1"));
     await waitFor(() => {
-      expect(screen.getByTestId("artifact-preview")).toHaveTextContent("# Черновик v1");
+      expect(screen.getByTestId("artifact-preview")).toHaveTextContent("Черновик v1");
     });
     expect(screen.getByTestId("artifact-preview-completeness")).toHaveTextContent("Частичный");
 
@@ -776,11 +781,12 @@ describe("Dennett Desktop Phase D2 UI", () => {
     render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
     await screen.findByTestId("chat-card");
 
-    // 1. Archived project menu flips upward (.project-action-menu--up) to avoid bottom clipping
+    // 1. Archived project menu renders via PortalPopover anchored upward (data-placement="top") to avoid bottom clipping
     await user.click(await screen.findByTestId("sidebar-archive-toggle"));
     await user.click(await screen.findByTestId(`project-menu-trigger-${archivedProject.project_id}`));
     const archivedMenu = await screen.findByTestId(`project-menu-${archivedProject.project_id}`);
-    expect(archivedMenu.className).toContain("project-action-menu--up");
+    expect(archivedMenu.parentElement).toBe(document.body);
+    expect(archivedMenu.getAttribute("data-placement")).toBe("top");
     await user.keyboard("{Escape}");
 
     // 2. CommandPalette excludes archived and deleted projects (and their sessions)
@@ -810,15 +816,16 @@ describe("Dennett Desktop Phase D2 UI", () => {
     expect(within(sameCard).getAllByText("Собрать обновлённый отчёт v2")).toHaveLength(1);
     expect(within(sameCard).queryByText("Проверить отчёт по метрикам")).not.toBeInTheDocument();
 
-    // 4. Static CSS & HTML polish guards (specificity, budget clamp, hover-only row actions, opaque rail badge, favicon)
+    // 4. Static CSS & HTML polish guards (specificity, portals, dark stop hover, scrollbars, hover-only row actions, opaque rail badge, favicon)
     const css = readFileSync(path.resolve(__dirname, "../styles/desktop.css"), "utf-8");
     const html = readFileSync(path.resolve(__dirname, "../../index.html"), "utf-8");
     expect(css).not.toContain(".artifact-preview__meta span");
     expect(css).toContain(".artifact-preview__rev");
-    expect(css).toContain("left: clamp(4px, 110px, calc(100% - 300px))");
+    expect(css).toContain(".portal-popover");
+    expect(css).toContain(".send-button.stop-button:hover:not(:disabled)");
+    expect(css).toContain("::-webkit-scrollbar-button");
     expect(css).toContain(".project-heading .row-action-btn:not(.is-menu-open)");
     expect(css).toContain("background: #2d3038;");
-    expect(css).toContain(".project-action-menu--up");
     expect(html).toContain('rel="icon"');
   });
 
@@ -924,9 +931,11 @@ describe("Dennett Desktop Phase D2 UI", () => {
     expect(screen.queryByTestId(`inbox-card-${cardA.card_id}`)).not.toBeInTheDocument();
     expect(screen.getByTestId(`inbox-card-${cardB.card_id}`)).toBeInTheDocument();
 
-    // Remove project B -> badge disappears completely (0 orphaned inbox cards!)
+    // Switch back to Чаты (since Sidebar auto-hides on Inbox/Tasks) and remove project B with confirmation -> 0 orphaned inbox cards!
+    await user.click(screen.getByTestId("rail-nav-chat"));
     await user.click(screen.getByTestId(`project-menu-trigger-${projectB.project_id}`));
     await user.click(await screen.findByTestId(`project-menu-remove-${projectB.project_id}`));
+    await user.click(await screen.findByTestId("project-delete-confirm-btn"));
     await waitFor(() => {
       expect(screen.queryByTestId("rail-inbox-badge")).not.toBeInTheDocument();
     });

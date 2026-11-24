@@ -112,6 +112,7 @@ export interface MockBridgeSeed {
   mockPickedFolder?: string | null;
   sendDelayMs?: number;
   failNextSendWith?: { code: string; message: string } | null;
+  runningSessionIds?: string[];
 }
 
 const DEFAULT_ANTIGRAVITY_MODELS: RuntimeModelOption[] = [
@@ -214,6 +215,7 @@ export class MockDesktopBridge implements DesktopBridge {
   public mockPickedFolder: string | null;
   public sendDelayMs: number;
   public failNextSendWith: { code: string; message: string } | null;
+  public seededRunningSessionIds: Set<string>;
 
   public authorityEpoch = 1;
   public retainedFromSeq = 1;
@@ -270,6 +272,7 @@ export class MockDesktopBridge implements DesktopBridge {
     this.mockPickedFolder = seed.mockPickedFolder ?? null;
     this.sendDelayMs = seed.sendDelayMs ?? 0;
     this.failNextSendWith = seed.failNextSendWith ?? null;
+    this.seededRunningSessionIds = new Set(seed.runningSessionIds ?? []);
   }
 
   public emitControlEvent(
@@ -321,7 +324,7 @@ export class MockDesktopBridge implements DesktopBridge {
     const now = Date.now();
     this.tasks = this.tasks.map((t) =>
       t.project_id === projectId &&
-      !["succeeded", "failed", "cancelled"].includes(t.status)
+      !["succeeded", "failed", "cancelled", "unknown_external"].includes(t.status)
         ? {
             ...t,
             status: "cancelled",
@@ -333,7 +336,7 @@ export class MockDesktopBridge implements DesktopBridge {
         : t,
     );
     this.inboxCards = this.inboxCards.map((c) =>
-      c.project_id === projectId && c.status === "open"
+      c.project_id === projectId && c.status === "open" && c.kind !== "unknown_effect"
         ? {
             ...c,
             status: "withdrawn",
@@ -378,7 +381,7 @@ export class MockDesktopBridge implements DesktopBridge {
       postgres_connected: true,
       postgres_role: "dennett_control_role",
       postgres_database: "dennett_control_test",
-      schema_version: 5,
+      schema_version: 6,
       memory_status: this.memoryStatus,
       memory_detail: this.memoryDetail,
       runtime_adapter_id: this.runtimeAdapterId,
@@ -642,11 +645,28 @@ export class MockDesktopBridge implements DesktopBridge {
         truncated: false,
       };
     }
+    const allEntries = this.filesByProject[projectId] ?? [];
+    if (subpath && subpath.trim().length > 0) {
+      const normalized = subpath.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+      const prefix = `${normalized}/`;
+      const children = allEntries.filter(
+        (entry) =>
+          entry.relative_path.startsWith(prefix) &&
+          !entry.relative_path.slice(prefix.length).includes("/"),
+      );
+      return {
+        project_id: projectId,
+        workspace_bound: true,
+        workspace_path: project.workspace_path,
+        entries: children,
+        truncated: false,
+      };
+    }
     return {
       project_id: projectId,
       workspace_bound: true,
       workspace_path: project.workspace_path,
-      entries: [...(this.filesByProject[projectId] ?? [])],
+      entries: [...allEntries],
       truncated: false,
     };
   }
@@ -782,6 +802,7 @@ export class MockDesktopBridge implements DesktopBridge {
       agent_id: request.agent_id,
       project_id: request.project_id,
       title: request.title,
+      session_kind: request.session_kind ?? "user_chat",
       runtime_binding: null,
       status: "active",
       created_at: now,
@@ -982,14 +1003,27 @@ export class MockDesktopBridge implements DesktopBridge {
     if (resolver) {
       resolver();
     }
+    const hadSeededRunning = this.seededRunningSessionIds.delete(sessionId);
+    const sessionRuns = this.runsBySession[sessionId] ?? [];
+    let cancelledExistingRunId: string | null = null;
+    if (sessionRuns.some((r) => r.status === "running")) {
+      this.runsBySession[sessionId] = sessionRuns.map((r) => {
+        if (r.status === "running") {
+          cancelledExistingRunId = r.run_id;
+          return { ...r, status: "cancelled", stop_reason: "cancelled", finished_at: Date.now() };
+        }
+        return r;
+      });
+    }
     const unknownEffects = this.effects.filter(
       (ef) => ef.session_id === sessionId && ef.status === "unknown",
     );
+    const didCancel = Boolean(resolver) || hadSeededRunning || cancelledExistingRunId !== null;
     return {
       session_id: sessionId,
-      run_id: resolver ? this.nextUuid("40000000") : null,
-      cancelled: Boolean(resolver),
-      status: unknownEffects.length > 0 ? "unknown_external" : resolver ? "cancelled" : null,
+      run_id: cancelledExistingRunId ?? (didCancel ? this.nextUuid("40000000") : null),
+      cancelled: didCancel,
+      status: unknownEffects.length > 0 ? "unknown_external" : didCancel ? "cancelled" : null,
       memory_status: this.memoryStatus,
       external_outcome_unknown: unknownEffects.length > 0,
       committed_effects: this.effects.filter(
@@ -1149,6 +1183,19 @@ export class MockDesktopBridge implements DesktopBridge {
         !this.isProjectDeleted(g.project_id) &&
         (!projectId || g.project_id === projectId),
     );
+    const runningSessionIds = new Set<string>(this.seededRunningSessionIds);
+    for (const sid of this.pendingCancelResolvers.keys()) {
+      runningSessionIds.add(sid);
+    }
+    for (const [sid, runs] of Object.entries(this.runsBySession)) {
+      if (runs.some((r) => r.status === "running")) {
+        runningSessionIds.add(sid);
+      }
+    }
+    const visibleRunningSessionIds = Array.from(runningSessionIds).filter((sid) => {
+      const s = this.sessions.find((item) => item.session_id === sid);
+      return !s || (!this.isProjectDeleted(s.project_id) && (!projectId || s.project_id === projectId));
+    });
     return {
       snapshot_cursor: {
         authority_epoch: this.authorityEpoch,
@@ -1162,6 +1209,7 @@ export class MockDesktopBridge implements DesktopBridge {
       inbox_cards: openInbox,
       active_grants: activeGrants,
       unresolved_inbox_count: openInbox.length,
+      running_session_ids: visibleRunningSessionIds,
     };
   }
 
@@ -1215,6 +1263,7 @@ export class MockDesktopBridge implements DesktopBridge {
         agent_id: request.agent_id,
         project_id: request.project_id,
         title: request.title?.trim() || deriveAutoTitle(request.goal) || "Поручение",
+        session_kind: "task_run",
       });
       sessionId = createdSession.session_id;
     }
@@ -1556,6 +1605,12 @@ export class MockDesktopBridge implements DesktopBridge {
       updatedTask = recResp.task ?? null;
       summary = `Сверка эффекта: ${recResp.effect.status}`;
     } else if (res.action === "stop_task" && existing.task_id) {
+      if (existing.kind === "unknown_effect") {
+        throw {
+          code: "CONFLICT",
+          message: "Карточку неизвестного внешнего эффекта нельзя закрыть остановкой — выполните сверку.",
+        };
+      }
       const stopResp = await this.cancelTask(existing.task_id);
       updatedTask = stopResp.task;
       summary = "Поручение остановлено";
@@ -1915,6 +1970,10 @@ export class MockDesktopBridge implements DesktopBridge {
       task: updatedTask,
       provider_found: nextStatus === "confirmed",
       provider_execution_count: nextStatus === "confirmed" ? 1 : 0,
+      resolution_summary:
+        nextStatus === "confirmed"
+          ? "Сверка завершена: сервис подтвердил выполнение (1 вызов, дубль не отправлялся)."
+          : "Сверка завершена: отмечено невыполненным — повтор безопасен.",
     };
   }
 

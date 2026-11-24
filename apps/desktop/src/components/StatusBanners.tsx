@@ -1,4 +1,12 @@
-import { ArrowsClockwise, CircleNotch, Stop, WarningCircle, X } from "@phosphor-icons/react";
+import {
+  ArrowsClockwise,
+  CheckCircle,
+  CircleNotch,
+  ShieldCheck,
+  Stop,
+  WarningCircle,
+  X,
+} from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
 
@@ -10,6 +18,7 @@ export function StatusBanners() {
     Boolean(state.healthSnapshot?.connected) && health?.memory_status === "degraded_unreachable";
   const pendingOutbox = health?.pending_outbox_count ?? 0;
   const isActiveRunRunning = meta.isRunningActiveSession;
+  const isAwaitingApproval = meta.isAwaitingApprovalActiveSession;
   const isCancelling = meta.isCancellingActiveSession;
 
   return (
@@ -46,17 +55,34 @@ export function StatusBanners() {
 
       {isActiveRunRunning && (
         <div
-          className="status-banner status-banner--running"
+          className={`status-banner ${
+            isAwaitingApproval && !isCancelling
+              ? "status-banner--approval"
+              : "status-banner--running"
+          }`}
           role="status"
           aria-live="polite"
           data-testid="running-control-bar"
+          data-state={
+            isCancelling
+              ? "cancelling"
+              : isAwaitingApproval
+                ? "awaiting-approval"
+                : "running"
+          }
         >
           <div className="status-banner__copy">
-            <CircleNotch size={14} className="spin" aria-hidden="true" />
+            {isAwaitingApproval && !isCancelling ? (
+              <ShieldCheck size={15} aria-hidden="true" />
+            ) : (
+              <CircleNotch size={14} className="spin" aria-hidden="true" />
+            )}
             <span>
               {isCancelling
                 ? "Отправлена команда остановки…"
-                : "Агент выполняет поручение… Вы можете остановить ход в любой момент (Esc)."}
+                : isAwaitingApproval
+                  ? "Ожидает подтверждения — агент приостановлен до вашего решения."
+                  : "Агент выполняет поручение… Вы можете остановить ход в любой момент (Esc)."}
             </span>
           </div>
           <button
@@ -69,6 +95,37 @@ export function StatusBanners() {
           >
             <Stop size={12} weight="fill" aria-hidden="true" />
             {isCancelling ? "Остановка…" : "Stop"}
+          </button>
+        </div>
+      )}
+
+      {state.reconcileNotice && (
+        <div
+          className={`status-banner ${
+            state.reconcileNotice.tone === "ok"
+              ? "status-banner--ok"
+              : state.reconcileNotice.tone === "warn"
+                ? "status-banner--warning"
+                : "status-banner--neutral"
+          }`}
+          role="status"
+          data-testid="reconcile-verdict-banner"
+        >
+          <div className="status-banner__copy">
+            {state.reconcileNotice.tone === "ok" ? (
+              <CheckCircle size={15} aria-hidden="true" />
+            ) : (
+              <WarningCircle size={15} aria-hidden="true" />
+            )}
+            <span>{state.reconcileNotice.text}</span>
+          </div>
+          <button
+            type="button"
+            className="icon-button icon-button--xs"
+            onClick={actions.dismissReconcileNotice}
+            aria-label="Скрыть вердикт сверки"
+          >
+            <X size={13} />
           </button>
         </div>
       )}

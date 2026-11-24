@@ -15,7 +15,34 @@ pub use bridge::{
     HEALTH_PROBE_TIMEOUT, HeadBridge, HeadEndpointPolicy, validate_head_url,
 };
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use commands::SharedBridge;
+use tauri::Manager;
+use tauri::window::{Color, Effect, EffectState, EffectsBuilder};
+
+/// Shared runtime flag indicating whether native Windows 11 Mica backdrop succeeded on this OS.
+#[derive(Debug)]
+pub struct MicaAvailability(AtomicBool);
+
+impl MicaAvailability {
+    /// Creates a new [`MicaAvailability`] state handle.
+    #[must_use]
+    pub const fn new(available: bool) -> Self {
+        Self(AtomicBool::new(available))
+    }
+
+    /// Returns whether native Mica backdrop is active on the main window.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Updates the detected Mica availability status.
+    pub fn set_available(&self, available: bool) {
+        self.0.store(available, Ordering::Relaxed);
+    }
+}
 
 /// Launches the native Tauri 2 desktop application window.
 ///
@@ -39,10 +66,42 @@ pub fn run() {
     };
 
     let shared = SharedBridge::new(bridge);
+    let mica_state = MicaAvailability::new(cfg!(target_os = "windows"));
 
     tauri::Builder::default()
         .manage(shared)
+        .manage(mica_state)
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let mica_ok = if cfg!(target_os = "windows") {
+                    let effects = EffectsBuilder::new()
+                        .effect(Effect::Mica)
+                        .state(EffectState::Active)
+                        .build();
+                    window.set_effects(Some(effects)).is_ok()
+                } else {
+                    false
+                };
+
+                if let Some(flag) = app.try_state::<MicaAvailability>() {
+                    flag.set_available(mica_ok);
+                }
+
+                if !mica_ok {
+                    // Solid dark fallback (#111215) on Windows 10 (< 22000) and Linux so a
+                    // transparent window never renders as a black void or corrupt backdrop.
+                    let _ = window.set_effects(None);
+                    let _ = window.set_background_color(Some(Color(17, 18, 21, 255)));
+                    let _ = window.eval(
+                        "document.documentElement.classList.add('native-mica-unavailable'); \
+                         document.documentElement.dataset.surface = 'solid-fallback';",
+                    );
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            commands::is_mica_available,
             commands::get_head_health,
             commands::set_head_url,
             commands::get_runtime_catalog,

@@ -18,5 +18,5 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false
   },
-  "include": ["src", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "devPickerGuard.ts", "vite.config.ts", "vitest.config.ts"]
 }

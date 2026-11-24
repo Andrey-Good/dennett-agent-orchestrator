@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef, useState } from "react";
 import {
   MagnifyingGlass,
   Minus,
@@ -9,6 +9,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { PortalPopover } from "./PortalPopover";
 import { StatsPopover } from "./StatsPopover";
 
 function resolveStatusLabel(
@@ -21,7 +22,7 @@ function resolveStatusLabel(
     return { text: "Head офлайн", tone: "offline" };
   }
   if (isSimulated) {
-    return { text: "Simulated", tone: "warn" };
+    return { text: "SIMULATED", tone: "warn" };
   }
   if (authProfile === "gemini-api-key") {
     return { text: "Antigravity ACP · Gemini API key", tone: "ok" };
@@ -34,7 +35,9 @@ function resolveStatusLabel(
 
 export function TitleBar() {
   const { state, actions, meta } = useWorkspace();
-  const statsAnchorRef = useRef<HTMLDivElement | null>(null);
+  const statsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [editingBreadcrumb, setEditingBreadcrumb] = useState(false);
+  const [breadcrumbTitleDraft, setBreadcrumbTitleDraft] = useState("");
 
   const health = state.healthSnapshot?.health;
   const connected = Boolean(state.healthSnapshot?.connected && health);
@@ -51,49 +54,64 @@ export function TitleBar() {
   const statusInfo = resolveStatusLabel(connected, isSimulated, tier, authProfile);
   const dotTone = !connected ? "offline" : isMemoryDegraded ? "warn" : statusInfo.tone;
 
-  useEffect(() => {
-    if (!state.isStatsOpen) {
-      return;
-    }
-    const handlePointerDown = (event: MouseEvent) => {
-      if (statsAnchorRef.current && !statsAnchorRef.current.contains(event.target as Node)) {
-        actions.setStatsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [actions, state.isStatsOpen]);
-
+  // D2-UX-01: Exclude interactive controls & search capsule; handle double-click via event.detail >= 2!
   const handleDragStart = (event: React.MouseEvent<HTMLElement>) => {
     if (event.button !== 0 || !meta.windowControls.supported) {
       return;
     }
     const target = event.target as HTMLElement | null;
-    if (target?.closest("button, input, textarea, [role='dialog']")) {
+    if (
+      target?.closest(
+        "button, input, textarea, .command-search, .stats-anchor, .window-controls, .breadcrumb-title-btn, [role='dialog'], [role='menu']",
+      )
+    ) {
+      return;
+    }
+    if (event.detail >= 2) {
+      event.preventDefault();
+      void meta.windowControls.toggleMaximize();
       return;
     }
     void meta.windowControls.startDragging();
   };
 
+  const startBreadcrumbRename = () => {
+    if (!meta.activeSession || !connected || meta.isActiveProjectArchived) {
+      return;
+    }
+    setBreadcrumbTitleDraft(meta.activeSession.title);
+    setEditingBreadcrumb(true);
+  };
+
+  const commitBreadcrumbRename = () => {
+    const sess = meta.activeSession;
+    const next = breadcrumbTitleDraft.trim();
+    setEditingBreadcrumb(false);
+    if (sess && next && next !== sess.title) {
+      void actions.renameSession(sess.session_id, next);
+    }
+  };
+
+  const searchPlaceholder =
+    state.activeView === "inbox"
+      ? "Фильтр по Входящим и Радару…"
+      : state.activeView === "tasks"
+        ? "Фильтр по поручениям…"
+        : "Поиск по чатам и проектам…";
+
   return (
     <header
       className="titlebar"
       onMouseDown={handleDragStart}
-      onDoubleClick={(e) => {
-        const target = e.target as HTMLElement | null;
-        if (meta.windowControls.supported && !target?.closest("button, input")) {
-          void meta.windowControls.toggleMaximize();
-        }
-      }}
       data-testid="desktop-titlebar"
     >
       <div className="titlebar__left">
         <button
           type="button"
-          className={`icon-button ${state.isSidebarOpen ? "is-active" : ""}`}
+          className={`icon-button ${meta.isSidebarEffectiveOpen ? "is-active" : ""}`}
           onClick={actions.toggleSidebar}
           aria-label="Переключить боковую панель проектов"
-          aria-expanded={state.isSidebarOpen}
+          aria-expanded={meta.isSidebarEffectiveOpen}
           title="Проекты и чаты (Ctrl+B)"
         >
           <SidebarSimple size={17} />
@@ -129,6 +147,7 @@ export function TitleBar() {
                     title={meta.activeProject.workspace_path ?? "Пока без папки"}
                   >
                     {meta.activeProject.name}
+                    {meta.isActiveProjectArchived ? " (архив)" : ""}
                   </span>
                 </>
               )}
@@ -137,7 +156,44 @@ export function TitleBar() {
                   <span className="breadcrumb-sep" aria-hidden="true">
                     /
                   </span>
-                  <strong>{meta.activeSession.title}</strong>
+                  {editingBreadcrumb ? (
+                    <input
+                      type="text"
+                      className="inline-rename-input breadcrumb-rename-input"
+                      value={breadcrumbTitleDraft}
+                      autoFocus
+                      aria-label="Переименовать текущий чат"
+                      data-testid="breadcrumb-rename-input"
+                      onFocus={(e) => e.currentTarget.select()}
+                      onChange={(e) => setBreadcrumbTitleDraft(e.target.value)}
+                      onBlur={commitBreadcrumbRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitBreadcrumbRename();
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setEditingBreadcrumb(false);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="breadcrumb-title-btn"
+                      onClick={startBreadcrumbRename}
+                      disabled={!connected || meta.isActiveProjectArchived}
+                      data-testid="breadcrumb-session-title"
+                      title={
+                        meta.isActiveProjectArchived
+                          ? "Архивный проект (режим чтения)"
+                          : "Нажмите, чтобы переименовать чат"
+                      }
+                    >
+                      <strong>{meta.activeSession.title}</strong>
+                    </button>
+                  )}
                 </>
               )}
             </>
@@ -146,7 +202,15 @@ export function TitleBar() {
       </div>
 
       <div className="titlebar__center">
-        <div className="command-search">
+        <div
+          className="command-search"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            if (!(e.target as HTMLElement).closest("button")) {
+              meta.searchInputRef.current?.focus();
+            }
+          }}
+        >
           <MagnifyingGlass size={14} aria-hidden="true" />
           <input
             ref={meta.searchInputRef}
@@ -155,17 +219,27 @@ export function TitleBar() {
             onChange={(e) => {
               const nextValue = e.target.value;
               actions.setSearchQuery(nextValue);
-              if (!state.isSidebarOpen && nextValue.trim().length > 0) {
+              if (
+                state.activeView === "chat" &&
+                !state.isSidebarOpen &&
+                nextValue.trim().length > 0
+              ) {
                 actions.setSidebarOpen(true);
               }
             }}
-            placeholder="Поиск по чатам и проектам…"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                actions.setCommandOpen(true, state.searchQuery);
+              }
+            }}
+            placeholder={searchPlaceholder}
             aria-label="Поиск по чатам и проектам"
           />
           <button
             type="button"
             className="command-kbd-btn"
-            onClick={() => actions.setCommandOpen(true)}
+            onClick={() => actions.setCommandOpen(true, state.searchQuery)}
             aria-label="Открыть командную палитру"
             title="Командная палитра (Ctrl+K)"
           >
@@ -175,33 +249,45 @@ export function TitleBar() {
       </div>
 
       <div className="titlebar__right">
-        <div className="stats-anchor" ref={statsAnchorRef}>
+        <div className="stats-anchor">
           <button
+            ref={statsTriggerRef}
             type="button"
-            className={`status-pill status-pill--${dotTone} ${state.isStatsOpen ? "is-open" : ""}`}
+            className={`status-pill status-pill--${dotTone} ${
+              connected && isSimulated ? "status-pill--simulated" : ""
+            } ${state.isStatsOpen ? "is-open" : ""}`}
             onClick={() => actions.setStatsOpen(!state.isStatsOpen)}
             aria-expanded={state.isStatsOpen}
             aria-haspopup="dialog"
             data-testid="system-status-pill"
-            title="Состояние системы, движка и памяти"
+            title={
+              connected && isSimulated
+                ? "Тестовый двойник (SimulatedRuntime), не живой agy acp — нажмите для деталей"
+                : "Состояние системы, движка и памяти"
+            }
           >
             <span className={`status-dot status-dot--${dotTone}`} aria-hidden="true" />
             <span className="status-pill__text" data-testid="runtime-status-pill">
-              {statusInfo.text}
+              {connected && isSimulated ? (
+                <span data-testid="simulated-runtime-badge">SIMULATED</span>
+              ) : (
+                statusInfo.text
+              )}
             </span>
           </button>
 
-          {connected && isSimulated && (
-            <span
-              className="simulated-pill"
-              data-testid="simulated-runtime-badge"
-              title="Тестовый двойник (SimulatedRuntime), не живой agy acp"
-            >
-              SIMULATED
-            </span>
-          )}
-
-          {state.isStatsOpen && <StatsPopover onClose={() => actions.setStatsOpen(false)} />}
+          <PortalPopover
+            isOpen={state.isStatsOpen}
+            anchorEl={statsTriggerRef.current}
+            onClose={() => actions.setStatsOpen(false)}
+            placement="bottom-end"
+            className="stats-popover"
+            role="dialog"
+            ariaLabel="Состояние системы и памяти"
+            testId="stats-popover"
+          >
+            <StatsPopover onClose={() => actions.setStatsOpen(false)} />
+          </PortalPopover>
         </div>
 
         <button
@@ -210,6 +296,7 @@ export function TitleBar() {
           onClick={actions.toggleRightPanel}
           aria-label="Переключить панель рабочего пространства и артефактов"
           aria-expanded={state.isRightPanelOpen}
+          data-testid="titlebar-toggle-workspace"
           title="Рабочее пространство (Ctrl+\)"
         >
           <Sidebar size={17} />

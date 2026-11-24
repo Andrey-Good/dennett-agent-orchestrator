@@ -1,10 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  ArrowCounterClockwise,
   ArrowsClockwise,
   BracketsCurly,
   FolderOpen,
   FolderPlus,
   Plugs,
+  Plus,
   WifiSlash,
 } from "@phosphor-icons/react";
 
@@ -14,7 +16,7 @@ import { MessageTimeline } from "./MessageTimeline";
 import { StatusBanners } from "./StatusBanners";
 
 export function ChatCard() {
-  const { state, actions } = useWorkspace();
+  const { state, actions, meta } = useWorkspace();
   const [urlInput, setUrlInput] = useState(
     state.healthSnapshot?.head_url ?? "http://127.0.0.1:41771",
   );
@@ -27,6 +29,12 @@ export function ChatCard() {
 
   const connected = Boolean(state.healthSnapshot?.connected);
   const hasSession = Boolean(state.selectedSessionId);
+  const hasAnyActiveProject = state.projects.some((p) => {
+    const lc = p.lifecycle_state ?? "active";
+    return lc !== "archived" && lc !== "deleted_record";
+  });
+  const selectedProject = meta.activeProject;
+  const isSelectedProjectArchived = meta.isActiveProjectArchived;
 
   const handleReconnectSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -50,8 +58,8 @@ export function ChatCard() {
               <WifiSlash size={15} aria-hidden="true" />
               <span>
                 <strong>Связь с dennett-head потеряна</strong> — вы можете продолжать писать
-                черновик или поставить сообщение в очередь; оно отправится один раз после
-                восстановления связи.
+                черновик или поставить сообщение в очередь; после восстановления связи подтвердите
+                отправку одним кликом.
               </span>
             </div>
             <button
@@ -118,6 +126,46 @@ export function ChatCard() {
               </button>
             </div>
           </form>
+        </section>
+      ) : !hasSession && selectedProject && (hasAnyActiveProject || isSelectedProjectArchived) ? (
+        <section
+          className="center-state onboarding-state"
+          data-testid="empty-project-sessions-state"
+        >
+          <div className="onboarding-state__brand">
+            <BracketsCurly size={32} weight="light" aria-hidden="true" />
+          </div>
+          <h1>{selectedProject.name}</h1>
+          {isSelectedProjectArchived ? (
+            <>
+              <p>
+                Проект находится в архиве. Доступен режим чтения истории; чтобы создать новый чат,
+                верните проект из архива.
+              </p>
+              <button
+                type="button"
+                className="popover-primary-btn"
+                onClick={() => void actions.unarchiveProject(selectedProject.project_id)}
+                data-testid="empty-project-unarchive-btn"
+              >
+                <ArrowCounterClockwise size={15} aria-hidden="true" />
+                Вернуть из архива
+              </button>
+            </>
+          ) : (
+            <>
+              <p>В этом проекте пока нет открытых чатов. Начните новый разговор с агентом.</p>
+              <button
+                type="button"
+                className="popover-primary-btn"
+                onClick={() => void actions.createBlankChat(selectedProject.project_id)}
+                data-testid="empty-project-new-chat-btn"
+              >
+                <Plus size={15} aria-hidden="true" />
+                Новый чат
+              </button>
+            </>
+          )}
         </section>
       ) : !hasSession ? (
         <section

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -19,6 +19,8 @@ import {
 
 import type { ProjectRecord, SessionRecord } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { PortalPopover } from "./PortalPopover";
+import { useModalFocusTrap } from "./useModalFocusTrap";
 
 function formatRelativeTime(timestampMs: number): string {
   const diffSec = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
@@ -40,90 +42,36 @@ function formatRelativeTime(timestampMs: number): string {
   return `${Math.floor(diffDays / 7)}н`;
 }
 
+type PendingProjectConfirm = {
+  project: ProjectRecord;
+  mode: "remove" | "delete";
+};
+
 export function Sidebar() {
-  const { state, actions } = useWorkspace();
+  const { state, actions, meta } = useWorkspace();
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
-  const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
-  const [openProjectMenuFlipUp, setOpenProjectMenuFlipUp] = useState(false);
+  const [openProjectMenu, setOpenProjectMenu] = useState<{
+    project: ProjectRecord;
+    isArchived: boolean;
+    anchorEl: HTMLElement;
+  } | null>(null);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
-  const [pendingDeleteProject, setPendingDeleteProject] = useState<ProjectRecord | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<PendingProjectConfirm | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionTitle, setEditingSessionTitle] = useState("");
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingProjectName, setEditingProjectName] = useState("");
 
-  const createMenuRef = useRef<HTMLDivElement | null>(null);
-  const projectMenuRef = useRef<HTMLDivElement | null>(null);
-  const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
+  const createTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const confirmDialogRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!createMenuOpen) {
-      return;
-    }
-    const onMouseDown = (event: MouseEvent) => {
-      if (createMenuRef.current && !createMenuRef.current.contains(event.target as Node)) {
-        setCreateMenuOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setCreateMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => {
-      document.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-    };
-  }, [createMenuOpen]);
-
-  useEffect(() => {
-    if (!openProjectMenuId) {
-      return;
-    }
-    const onMouseDown = (event: MouseEvent) => {
-      if (projectMenuRef.current && !projectMenuRef.current.contains(event.target as Node)) {
-        setOpenProjectMenuId(null);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpenProjectMenuId(null);
-      }
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => {
-      document.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-    };
-  }, [openProjectMenuId]);
-
-  useEffect(() => {
-    if (!pendingDeleteProject) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setPendingDeleteProject(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [pendingDeleteProject]);
+  useModalFocusTrap(confirmDialogRef, pendingConfirm !== null, () => setPendingConfirm(null));
 
   const query = state.searchQuery.trim().toLowerCase();
 
-  const { activeGroups, archivedProjects } = useMemo(() => {
+  const { activeGroups, archivedGroups } = useMemo(() => {
     const active: Array<{ project: ProjectRecord; sessions: SessionRecord[] }> = [];
-    const archived: ProjectRecord[] = [];
+    const archived: Array<{ project: ProjectRecord; sessions: SessionRecord[] }> = [];
 
     for (const project of state.projects) {
       const lifecycle = project.lifecycle_state ?? "active";
@@ -135,25 +83,33 @@ export function Sidebar() {
         project.name.toLowerCase().includes(query) ||
         (project.workspace_path?.toLowerCase().includes(query) ?? false);
 
+      // D2-UX-03: Hide background `task_run` sessions from user chat list unless explicitly opened!
+      const projectSessions = state.sessions.filter((session) => {
+        if (session.project_id !== project.project_id) {
+          return false;
+        }
+        const isUserChat = (session.session_kind ?? "user_chat") === "user_chat";
+        const isCurrentlyOpened = session.session_id === state.selectedSessionId;
+        if (!isUserChat && !isCurrentlyOpened) {
+          return false;
+        }
+        return !query || projectMatches || session.title.toLowerCase().includes(query);
+      });
+
       if (lifecycle === "archived") {
-        if (projectMatches) {
-          archived.push(project);
+        if (projectMatches || projectSessions.length > 0) {
+          archived.push({ project, sessions: projectSessions });
         }
         continue;
       }
 
-      const sessions = state.sessions.filter(
-        (session) =>
-          session.project_id === project.project_id &&
-          (!query || projectMatches || session.title.toLowerCase().includes(query)),
-      );
-      if (projectMatches || sessions.length > 0) {
-        active.push({ project, sessions });
+      if (projectMatches || projectSessions.length > 0) {
+        active.push({ project, sessions: projectSessions });
       }
     }
 
-    return { activeGroups: active, archivedProjects: archived };
-  }, [query, state.projects, state.sessions]);
+    return { activeGroups: active, archivedGroups: archived };
+  }, [query, state.projects, state.selectedSessionId, state.sessions]);
 
   const startSessionRename = (session: SessionRecord) => {
     setEditingProjectId(null);
@@ -171,7 +127,7 @@ export function Sidebar() {
 
   const startProjectRename = (project: ProjectRecord) => {
     setEditingSessionId(null);
-    setOpenProjectMenuId(null);
+    setOpenProjectMenu(null);
     setEditingProjectId(project.project_id);
     setEditingProjectName(project.name);
   };
@@ -187,142 +143,14 @@ export function Sidebar() {
   const isConnected = Boolean(state.healthSnapshot?.connected);
 
   const toggleProjectMenu = (
-    projectId: string,
+    project: ProjectRecord,
     isArchived: boolean,
     triggerEl: HTMLElement,
   ) => {
-    if (openProjectMenuId === projectId) {
-      setOpenProjectMenuId(null);
-      return;
-    }
-    const scrollEl = sidebarScrollRef.current;
-    if (scrollEl) {
-      const scrollRect = scrollEl.getBoundingClientRect();
-      const triggerRect = triggerEl.getBoundingClientRect();
-      if (scrollRect.height > 0) {
-        const spaceBelow = scrollRect.bottom - triggerRect.bottom;
-        const spaceAbove = triggerRect.top - scrollRect.top;
-        setOpenProjectMenuFlipUp(spaceBelow < 220 && spaceAbove > spaceBelow);
-      } else {
-        setOpenProjectMenuFlipUp(isArchived);
-      }
-    } else {
-      setOpenProjectMenuFlipUp(isArchived);
-    }
-    setOpenProjectMenuId(projectId);
-  };
-
-  const renderProjectActionMenu = (project: ProjectRecord, isArchived: boolean) => {
-    const isFolderless = !project.workspace_path;
-    return (
-      <div
-        ref={projectMenuRef}
-        className={`floating-popover project-action-menu ${
-          openProjectMenuFlipUp ? "project-action-menu--up" : ""
-        }`}
-        role="menu"
-        aria-label={`Действия с проектом ${project.name}`}
-        data-testid={`project-menu-${project.project_id}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          role="menuitem"
-          data-testid={`project-menu-rename-${project.project_id}`}
-          onClick={() => startProjectRename(project)}
-        >
-          <PencilSimple size={14} aria-hidden="true" />
-          <span>Переименовать</span>
-        </button>
-
-        <button
-          type="button"
-          role="menuitem"
-          data-testid={`project-menu-rebind-${project.project_id}`}
-          onClick={() => {
-            setOpenProjectMenuId(null);
-            void actions.requestFolderPicker({
-              mode: isFolderless ? "attach-project" : "rebind-project",
-              projectId: project.project_id,
-            });
-          }}
-        >
-          <FolderOpen size={14} aria-hidden="true" />
-          <span>{isFolderless ? "Привязать папку…" : "Перепривязать папку…"}</span>
-        </button>
-
-        {!isFolderless && (
-          <button
-            type="button"
-            role="menuitem"
-            data-testid={`project-menu-detach-${project.project_id}`}
-            onClick={() => {
-              setOpenProjectMenuId(null);
-              void actions.detachProjectWorkspace(project.project_id);
-            }}
-          >
-            <LinkBreak size={14} aria-hidden="true" />
-            <span>Отвязать папку</span>
-          </button>
-        )}
-
-        <div className="popover-divider" role="separator" />
-
-        {isArchived ? (
-          <button
-            type="button"
-            role="menuitem"
-            data-testid={`project-menu-unarchive-${project.project_id}`}
-            onClick={() => {
-              setOpenProjectMenuId(null);
-              void actions.unarchiveProject(project.project_id);
-            }}
-          >
-            <ArrowCounterClockwise size={14} aria-hidden="true" />
-            <span>Вернуть из архива</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            role="menuitem"
-            data-testid={`project-menu-archive-${project.project_id}`}
-            onClick={() => {
-              setOpenProjectMenuId(null);
-              void actions.archiveProject(project.project_id);
-            }}
-          >
-            <Archive size={14} aria-hidden="true" />
-            <span>В архив</span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          role="menuitem"
-          data-testid={`project-menu-remove-${project.project_id}`}
-          onClick={() => {
-            setOpenProjectMenuId(null);
-            void actions.removeProject(project.project_id);
-          }}
-        >
-          <EyeSlash size={14} aria-hidden="true" />
-          <span>Убрать из списка</span>
-        </button>
-
-        <button
-          type="button"
-          role="menuitem"
-          className="menu-item-danger"
-          data-testid={`project-menu-delete-${project.project_id}`}
-          onClick={() => {
-            setOpenProjectMenuId(null);
-            setPendingDeleteProject(project);
-          }}
-        >
-          <Trash size={14} aria-hidden="true" />
-          <span>Удалить проект…</span>
-        </button>
-      </div>
+    setOpenProjectMenu((prev) =>
+      prev && prev.project.project_id === project.project_id
+        ? null
+        : { project, isArchived, anchorEl: triggerEl },
     );
   };
 
@@ -332,10 +160,11 @@ export function Sidebar() {
       aria-label="Проекты и чаты"
       data-testid="desktop-sidebar"
     >
-      <div className="sidebar-heading" ref={createMenuRef}>
+      <div className="sidebar-heading">
         <span className="sidebar-title">Проекты</span>
 
         <button
+          ref={createTriggerRef}
           type="button"
           className={`icon-button new-project-trigger ${createMenuOpen ? "is-active" : ""}`}
           onClick={() => setCreateMenuOpen((prev) => !prev)}
@@ -349,50 +178,52 @@ export function Sidebar() {
           <Plus size={16} />
         </button>
 
-        {createMenuOpen && (
-          <div
-            className="floating-popover project-create-menu"
-            role="menu"
-            aria-label="Создать проект"
-            data-testid="project-create-menu"
+        <PortalPopover
+          isOpen={createMenuOpen}
+          anchorEl={createTriggerRef.current}
+          onClose={() => setCreateMenuOpen(false)}
+          placement="bottom-end"
+          className="project-create-menu"
+          role="menu"
+          ariaLabel="Создать проект"
+          testId="project-create-menu"
+        >
+          <strong>Новый проект</strong>
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="create-project-pick-folder"
+            onClick={() => {
+              setCreateMenuOpen(false);
+              void actions.requestFolderPicker({ mode: "create-project" });
+            }}
           >
-            <strong>Новый проект</strong>
-            <button
-              type="button"
-              role="menuitem"
-              data-testid="create-project-pick-folder"
-              onClick={() => {
-                setCreateMenuOpen(false);
-                void actions.requestFolderPicker({ mode: "create-project" });
-              }}
-            >
-              <FolderOpen size={18} aria-hidden="true" />
-              <span>
-                <strong>Выбрать папку…</strong>
-                <small>Открыть существующую папку или репозиторий</small>
-              </span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              data-testid="create-project-folderless"
-              onClick={() => {
-                setCreateMenuOpen(false);
-                void actions.createFolderlessProject();
-              }}
-            >
-              <FolderPlus size={18} aria-hidden="true" />
-              <span>
-                <strong>Пока без папки</strong>
-                <small>Начать чат сразу, привязать папку позже</small>
-              </span>
-            </button>
-          </div>
-        )}
+            <FolderOpen size={18} aria-hidden="true" />
+            <span>
+              <strong>Выбрать папку…</strong>
+              <small>Открыть существующую папку или репозиторий</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="create-project-folderless"
+            onClick={() => {
+              setCreateMenuOpen(false);
+              void actions.createFolderlessProject();
+            }}
+          >
+            <FolderPlus size={18} aria-hidden="true" />
+            <span>
+              <strong>Пока без папки</strong>
+              <small>Начать чат сразу, привязать папку позже</small>
+            </span>
+          </button>
+        </PortalPopover>
       </div>
 
-      <div className="sidebar-scroll" ref={sidebarScrollRef}>
-        {activeGroups.length === 0 && archivedProjects.length === 0 ? (
+      <div className="sidebar-scroll">
+        {activeGroups.length === 0 && archivedGroups.length === 0 ? (
           <div className="sidebar-empty">
             {query ? (
               <p>По запросу «{state.searchQuery}» ничего не найдено.</p>
@@ -405,7 +236,8 @@ export function Sidebar() {
             {activeGroups.map(({ project, sessions }) => {
               const isEditingProj = editingProjectId === project.project_id;
               const isFolderless = !project.workspace_path;
-              const isMenuOpen = openProjectMenuId === project.project_id;
+              const isMenuOpen = openProjectMenu?.project.project_id === project.project_id;
+              const isSelectedProject = meta.activeProject?.project_id === project.project_id;
 
               return (
                 <section
@@ -416,13 +248,22 @@ export function Sidebar() {
                   <div
                     className={`project-heading ${isEditingProj ? "is-editing" : ""} ${
                       isMenuOpen ? "has-menu-open" : ""
-                    }`}
+                    } ${isSelectedProject ? "is-selected-project" : ""}`}
                     tabIndex={0}
+                    data-testid={`project-heading-${project.project_id}`}
+                    onClick={() => {
+                      if (!isEditingProj) {
+                        actions.selectProject(project.project_id);
+                      }
+                    }}
                     onDoubleClick={() => startProjectRename(project)}
                     onKeyDown={(e) => {
                       if (e.key === "F2") {
                         e.preventDefault();
                         startProjectRename(project);
+                      } else if (e.key === "Enter" && !isEditingProj) {
+                        e.preventDefault();
+                        actions.selectProject(project.project_id);
                       }
                     }}
                   >
@@ -444,6 +285,7 @@ export function Sidebar() {
                         autoFocus
                         aria-label="Новое название проекта"
                         data-testid="inline-project-rename-input"
+                        onClick={(e) => e.stopPropagation()}
                         onFocus={(e) => {
                           e.currentTarget.scrollLeft = 0;
                           e.currentTarget.select();
@@ -512,7 +354,7 @@ export function Sidebar() {
                           title="Действия с проектом"
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleProjectMenu(project.project_id, false, e.currentTarget);
+                            toggleProjectMenu(project, false, e.currentTarget);
                           }}
                         >
                           <DotsThree size={15} weight="bold" />
@@ -533,8 +375,6 @@ export function Sidebar() {
                         </button>
                       </div>
                     )}
-
-                    {isMenuOpen && renderProjectActionMenu(project, false)}
                   </div>
 
                   <div className="nested-chats" role="list">
@@ -554,6 +394,7 @@ export function Sidebar() {
                           state.selectedSessionId === session.session_id;
                         const isRunning = state.runningSessionIds.includes(session.session_id);
                         const isEditingSess = editingSessionId === session.session_id;
+                        const isTaskRun = (session.session_kind ?? "user_chat") === "task_run";
 
                         return (
                           <div
@@ -613,6 +454,14 @@ export function Sidebar() {
                                       />
                                     )}
                                     <span className="chat-row__title">{session.title}</span>
+                                    {isTaskRun && (
+                                      <span
+                                        className="chat-row__kind-badge"
+                                        data-testid={`session-kind-badge-${session.session_id}`}
+                                      >
+                                        Фон
+                                      </span>
+                                    )}
                                   </span>
                                   <small className="chat-row__meta">
                                     {isRunning
@@ -643,7 +492,7 @@ export function Sidebar() {
               );
             })}
 
-            {archivedProjects.length > 0 && (
+            {archivedGroups.length > 0 && (
               <div className="sidebar-archive-section" data-testid="sidebar-archive-section">
                 <button
                   type="button"
@@ -658,53 +507,91 @@ export function Sidebar() {
                     <CaretRight size={12} aria-hidden="true" />
                   )}
                   <Archive size={13} aria-hidden="true" />
-                  <span>Архив ({archivedProjects.length})</span>
+                  <span>Архив ({archivedGroups.length})</span>
                 </button>
 
                 {archiveExpanded && (
                   <div className="sidebar-archive-list" data-testid="sidebar-archive-list">
-                    {archivedProjects.map((project) => {
-                      const isMenuOpen = openProjectMenuId === project.project_id;
+                    {archivedGroups.map(({ project, sessions: archivedSessions }) => {
+                      const isMenuOpen = openProjectMenu?.project.project_id === project.project_id;
+                      const isSelectedArchived =
+                        meta.activeProject?.project_id === project.project_id;
                       return (
-                        <div
-                          key={project.project_id}
-                          className={`project-heading project-heading--archived ${
-                            isMenuOpen ? "has-menu-open" : ""
-                          }`}
-                          tabIndex={0}
-                          data-testid={`archived-project-${project.project_id}`}
-                        >
-                          <Archive size={14} className="project-icon--unbound" aria-hidden="true" />
-                          <span className="project-heading__name">{project.name}</span>
-                          <div className="project-heading__actions">
-                            <button
-                              type="button"
-                              className="row-action-btn"
-                              disabled={!isConnected}
-                              data-testid={`unarchive-project-btn-${project.project_id}`}
-                              aria-label={`Вернуть проект ${project.name} из архива`}
-                              title="Вернуть из архива"
-                              onClick={() => void actions.unarchiveProject(project.project_id)}
-                            >
-                              <ArrowCounterClockwise size={13} />
-                            </button>
-                            <button
-                              type="button"
-                              className={`row-action-btn ${isMenuOpen ? "is-menu-open" : ""}`}
-                              disabled={!isConnected}
-                              aria-expanded={isMenuOpen}
-                              aria-haspopup="menu"
-                              aria-label={`Меню архивного проекта ${project.name}`}
-                              data-testid={`project-menu-trigger-${project.project_id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleProjectMenu(project.project_id, true, e.currentTarget);
-                              }}
-                            >
-                              <DotsThree size={15} weight="bold" />
-                            </button>
+                        <div key={project.project_id} className="archived-project-block">
+                          <div
+                            className={`project-heading project-heading--archived ${
+                              isMenuOpen ? "has-menu-open" : ""
+                            } ${isSelectedArchived ? "is-selected-project" : ""}`}
+                            tabIndex={0}
+                            data-testid={`archived-project-${project.project_id}`}
+                            onClick={() => actions.selectProject(project.project_id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                actions.selectProject(project.project_id);
+                              }
+                            }}
+                          >
+                            <Archive
+                              size={14}
+                              className="project-icon--unbound"
+                              aria-hidden="true"
+                            />
+                            <span className="project-heading__name">{project.name}</span>
+                            <div className="project-heading__actions">
+                              <button
+                                type="button"
+                                className="row-action-btn"
+                                disabled={!isConnected}
+                                data-testid={`unarchive-project-btn-${project.project_id}`}
+                                aria-label={`Вернуть проект ${project.name} из архива`}
+                                title="Вернуть из архива"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void actions.unarchiveProject(project.project_id);
+                                }}
+                              >
+                                <ArrowCounterClockwise size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                className={`row-action-btn ${isMenuOpen ? "is-menu-open" : ""}`}
+                                disabled={!isConnected}
+                                aria-expanded={isMenuOpen}
+                                aria-haspopup="menu"
+                                aria-label={`Меню архивного проекта ${project.name}`}
+                                data-testid={`project-menu-trigger-${project.project_id}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleProjectMenu(project, true, e.currentTarget);
+                                }}
+                              >
+                                <DotsThree size={15} weight="bold" />
+                              </button>
+                            </div>
                           </div>
-                          {isMenuOpen && renderProjectActionMenu(project, true)}
+
+                          {isSelectedArchived && archivedSessions.length > 0 && (
+                            <div className="nested-chats nested-chats--archived" role="list">
+                              {archivedSessions.map((sess) => {
+                                const isActive = state.selectedSessionId === sess.session_id;
+                                return (
+                                  <button
+                                    key={sess.session_id}
+                                    type="button"
+                                    className={`chat-row ${isActive ? "is-active" : ""}`}
+                                    data-testid={`archived-session-item-${sess.session_id}`}
+                                    onClick={() => void actions.selectSession(sess.session_id)}
+                                  >
+                                    <span className="chat-row__title-wrap">
+                                      <span className="chat-row__title">{sess.title}</span>
+                                    </span>
+                                    <small className="chat-row__meta">архив</small>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -716,32 +603,163 @@ export function Sidebar() {
         )}
       </div>
 
-      {pendingDeleteProject && (
+      {/* Portaled Project Lifecycle Menu (never clipped by sidebar-scroll) */}
+      <PortalPopover
+        isOpen={openProjectMenu !== null}
+        anchorEl={openProjectMenu?.anchorEl ?? null}
+        onClose={() => setOpenProjectMenu(null)}
+        placement={openProjectMenu?.isArchived ? "top-end" : "bottom-end"}
+        className="project-action-menu"
+        role="menu"
+        ariaLabel={
+          openProjectMenu ? `Действия с проектом ${openProjectMenu.project.name}` : "Действия с проектом"
+        }
+        testId={openProjectMenu ? `project-menu-${openProjectMenu.project.project_id}` : undefined}
+      >
+        {openProjectMenu && (() => {
+          const { project, isArchived } = openProjectMenu;
+          const isFolderless = !project.workspace_path;
+          return (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid={`project-menu-rename-${project.project_id}`}
+                onClick={() => startProjectRename(project)}
+              >
+                <PencilSimple size={14} aria-hidden="true" />
+                <span>Переименовать</span>
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                data-testid={`project-menu-rebind-${project.project_id}`}
+                onClick={() => {
+                  setOpenProjectMenu(null);
+                  void actions.requestFolderPicker({
+                    mode: isFolderless ? "attach-project" : "rebind-project",
+                    projectId: project.project_id,
+                  });
+                }}
+              >
+                <FolderOpen size={14} aria-hidden="true" />
+                <span>{isFolderless ? "Привязать папку…" : "Перепривязать папку…"}</span>
+              </button>
+
+              {!isFolderless && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid={`project-menu-detach-${project.project_id}`}
+                  onClick={() => {
+                    setOpenProjectMenu(null);
+                    void actions.detachProjectWorkspace(project.project_id);
+                  }}
+                >
+                  <LinkBreak size={14} aria-hidden="true" />
+                  <span>Отвязать папку</span>
+                </button>
+              )}
+
+              <div className="popover-divider" role="separator" />
+
+              {isArchived ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid={`project-menu-unarchive-${project.project_id}`}
+                  onClick={() => {
+                    setOpenProjectMenu(null);
+                    void actions.unarchiveProject(project.project_id);
+                  }}
+                >
+                  <ArrowCounterClockwise size={14} aria-hidden="true" />
+                  <span>Вернуть из архива</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid={`project-menu-archive-${project.project_id}`}
+                  onClick={() => {
+                    setOpenProjectMenu(null);
+                    void actions.archiveProject(project.project_id);
+                  }}
+                >
+                  <Archive size={14} aria-hidden="true" />
+                  <span>В архив</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                role="menuitem"
+                data-testid={`project-menu-remove-${project.project_id}`}
+                onClick={() => {
+                  setOpenProjectMenu(null);
+                  setPendingConfirm({ project, mode: "remove" });
+                }}
+              >
+                <EyeSlash size={14} aria-hidden="true" />
+                <span>Убрать из списка…</span>
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item-danger"
+                data-testid={`project-menu-delete-${project.project_id}`}
+                onClick={() => {
+                  setOpenProjectMenu(null);
+                  setPendingConfirm({ project, mode: "delete" });
+                }}
+              >
+                <Trash size={14} aria-hidden="true" />
+                <span>Удалить проект…</span>
+              </button>
+            </>
+          );
+        })()}
+      </PortalPopover>
+
+      {/* D2-UX-03 & D2-UX-06: Confirmation dialog with focus trap before irreversible remove/delete */}
+      {pendingConfirm && (
         <div
           className="dialog-backdrop"
-          onMouseDown={() => setPendingDeleteProject(null)}
+          onMouseDown={() => setPendingConfirm(null)}
           data-testid="project-delete-confirm-backdrop"
         >
           <div
+            ref={confirmDialogRef}
             className="floating-dialog confirm-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label="Удаление данных проекта в Dennett"
+            aria-label={
+              pendingConfirm.mode === "remove"
+                ? "Убрать проект из списка Dennett"
+                : "Удаление данных проекта в Dennett"
+            }
             data-testid="project-delete-confirm-dialog"
             onMouseDown={(e) => e.stopPropagation()}
           >
             <header className="settings-sheet__header">
               <div>
-                <h2>Удалить проект «{pendingDeleteProject.name}» из Dennett?</h2>
+                <h2>
+                  {pendingConfirm.mode === "remove"
+                    ? `Убрать проект «${pendingConfirm.project.name}» из списка?`
+                    : `Удалить проект «${pendingConfirm.project.name}» из Dennett?`}
+                </h2>
                 <p>
-                  Служебные данные проекта в Dennett будут удалены; папка с вашими файлами на диске
-                  останется полностью нетронутой.
+                  {pendingConfirm.mode === "remove"
+                    ? "Проект будет скрыт из рабочих списков Dennett, активные таймеры остановятся, но папка с вашими файлами на диске останется полностью нетронутой."
+                    : "Служебные данные проекта в Dennett будут удалены; папка с вашими файлами на диске останется полностью нетронутой."}
                 </p>
               </div>
               <button
                 type="button"
                 className="icon-button"
-                onClick={() => setPendingDeleteProject(null)}
+                onClick={() => setPendingConfirm(null)}
                 aria-label="Закрыть подтверждение"
               >
                 <X size={16} />
@@ -751,7 +769,7 @@ export function Sidebar() {
               <button
                 type="button"
                 className="popover-secondary-btn"
-                onClick={() => setPendingDeleteProject(null)}
+                onClick={() => setPendingConfirm(null)}
               >
                 Отмена
               </button>
@@ -760,13 +778,26 @@ export function Sidebar() {
                 className="d2-danger-btn"
                 data-testid="project-delete-confirm-btn"
                 onClick={() => {
-                  const id = pendingDeleteProject.project_id;
-                  setPendingDeleteProject(null);
-                  void actions.deleteProject(id);
+                  const { project, mode } = pendingConfirm;
+                  setPendingConfirm(null);
+                  if (mode === "remove") {
+                    void actions.removeProject(project.project_id);
+                  } else {
+                    void actions.deleteProject(project.project_id);
+                  }
                 }}
               >
-                <Trash size={14} aria-hidden="true" />
-                Удалить запись проекта
+                {pendingConfirm.mode === "remove" ? (
+                  <>
+                    <EyeSlash size={14} aria-hidden="true" />
+                    Убрать из списка
+                  </>
+                ) : (
+                  <>
+                    <Trash size={14} aria-hidden="true" />
+                    Удалить запись проекта
+                  </>
+                )}
               </button>
             </div>
           </div>

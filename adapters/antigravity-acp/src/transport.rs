@@ -1339,11 +1339,27 @@ pub fn parse_permission_request(params: &Value) -> AcpPermissionRequest {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let raw_input = tool_call
+    let mut raw_input = tool_call
         .get("rawInput")
         .or_else(|| tool_call.get("args"))
         .cloned()
         .unwrap_or(Value::Null);
+    if let Some(content_arr) = tool_call
+        .get("content")
+        .and_then(Value::as_array)
+        .filter(|arr| !arr.is_empty())
+    {
+        match &mut raw_input {
+            Value::Object(map) => {
+                map.entry(String::from("_acp_content"))
+                    .or_insert_with(|| Value::Array(content_arr.clone()));
+            }
+            Value::Null => {
+                raw_input = serde_json::json!({ "_acp_content": content_arr });
+            }
+            _ => {}
+        }
+    }
 
     let tool_name = tool_call
         .get("name")
@@ -2362,6 +2378,45 @@ mod tests {
                 String::from("/etc/passwd"),
                 String::from("file:///root/.ssh/id_rsa"),
             ]
+        );
+    }
+
+    #[test]
+    fn parse_permission_request_preserves_acp_diff_content_for_preview_snippet() {
+        let params = json!({
+            "toolCall": {
+                "toolCallId": "tc-write-1",
+                "kind": "edit",
+                "title": "Write notes-r2.md",
+                "rawInput": {
+                    "Path": "notes-r2.md",
+                    "Content": "# Header\nLine 2"
+                },
+                "content": [
+                    {
+                        "type": "diff",
+                        "path": "notes-r2.md",
+                        "oldText": null,
+                        "newText": "# Header\nLine 2"
+                    }
+                ]
+            },
+            "options": []
+        });
+        let parsed = parse_permission_request(&params);
+        assert_eq!(
+            parsed.raw_input.get("Content").and_then(Value::as_str),
+            Some("# Header\nLine 2")
+        );
+        let acp_content = parsed
+            .raw_input
+            .get("_acp_content")
+            .and_then(Value::as_array)
+            .expect("ACP toolCall.content preserved");
+        assert_eq!(acp_content.len(), 1);
+        assert_eq!(
+            acp_content[0].get("newText").and_then(Value::as_str),
+            Some("# Header\nLine 2")
         );
     }
 

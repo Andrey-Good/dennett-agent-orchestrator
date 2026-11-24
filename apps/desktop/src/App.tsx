@@ -29,12 +29,13 @@ export interface AppProps {
 }
 
 function DesktopShell() {
-  const { state } = useWorkspace();
+  const { state, meta } = useWorkspace();
 
   return (
     <div
-      className={state.isSidebarOpen ? "workbench" : "workbench sidebar-collapsed"}
+      className={meta.isSidebarEffectiveOpen ? "workbench" : "workbench sidebar-collapsed"}
       data-testid="desktop-app-shell"
+      data-active-view={state.activeView}
     >
       <TitleBar />
       <ActivityRail />

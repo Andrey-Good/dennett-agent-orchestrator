@@ -27,6 +27,7 @@ use dennett_contracts::{
 use tauri::State;
 use tokio::sync::RwLock;
 
+use crate::MicaAvailability;
 use crate::bridge::{BridgeError, DesktopHealthSnapshot, HeadBridge};
 
 /// Shared mutable bridge state managed by Tauri across IPC command invocations.
@@ -112,6 +113,16 @@ fn parse_optional_task_id(raw: Option<&str>) -> Result<Option<TaskId>, BridgeErr
         .filter(|s| !s.is_empty())
         .map(parse_task_id)
         .transpose()
+}
+
+/// Returns whether native Windows 11 Mica backdrop is available on this host.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command extracts managed State by value"
+)]
+pub fn is_mica_available(mica: State<'_, MicaAvailability>) -> bool {
+    mica.is_available()
 }
 
 /// Returns the current connection status, PostgreSQL/memoryd health, and runtime truth.

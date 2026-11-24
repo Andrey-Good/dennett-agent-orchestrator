@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Browsers,
   ChatsCircle,
@@ -14,6 +22,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { useModalFocusTrap } from "./useModalFocusTrap";
 
 interface PaletteItem {
   id: string;
@@ -30,17 +39,23 @@ export function CommandPalette() {
   const { state, actions } = useWorkspace();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const close = useCallback(() => {
+    actions.setCommandOpen(false);
+  }, [actions]);
+
+  useModalFocusTrap(dialogRef, state.isCommandOpen, close);
 
   useEffect(() => {
     if (state.isCommandOpen) {
-      setQuery("");
+      setQuery(state.commandInitialQuery ?? "");
       setActiveIndex(0);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [state.isCommandOpen]);
+  }, [state.commandInitialQuery, state.isCommandOpen]);
 
-  const close = () => actions.setCommandOpen(false);
   const connected = Boolean(state.healthSnapshot?.connected);
   const trimmed = query.trim().toLowerCase();
 
@@ -75,7 +90,12 @@ export function CommandPalette() {
   }, [activeProjects, trimmed]);
 
   const activeSessions = useMemo(
-    () => state.sessions.filter((s) => projectById.has(s.project_id)),
+    () =>
+      state.sessions.filter(
+        (s) =>
+          projectById.has(s.project_id) &&
+          (s.session_kind ?? "user_chat") !== "task_run",
+      ),
     [projectById, state.sessions],
   );
 
@@ -98,7 +118,7 @@ export function CommandPalette() {
     const list: PaletteItem[] = [];
 
     for (const project of matchingProjects) {
-      const firstSession = state.sessions.find((s) => s.project_id === project.project_id);
+      const firstSession = activeSessions.find((s) => s.project_id === project.project_id);
       list.push({
         id: `project:${project.project_id}`,
         section: "projects",
@@ -112,9 +132,10 @@ export function CommandPalette() {
         run: () => {
           close();
           if (firstSession) {
-            void actions.selectSession(firstSession.session_id);
+            void actions.openSessionInChat(firstSession.session_id);
           } else {
-            void actions.createBlankChat(project.project_id);
+            actions.selectProject(project.project_id);
+            actions.setActiveView("chat");
           }
         },
       });
@@ -130,7 +151,7 @@ export function CommandPalette() {
         icon: <ChatsCircle size={15} aria-hidden="true" />,
         run: () => {
           close();
-          void actions.selectSession(session.session_id);
+          void actions.openSessionInChat(session.session_id);
         },
       });
     }
@@ -222,7 +243,7 @@ export function CommandPalette() {
     }
 
     return list;
-  }, [actions, connected, matchingProjects, matchingSessions, projectById, state.sessions, trimmed]);
+  }, [actions, activeSessions, close, connected, matchingProjects, matchingSessions, projectById, trimmed]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -265,10 +286,6 @@ export function CommandPalette() {
         event.preventDefault();
         items[clampedIndex].run();
       }
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      close();
     }
   };
 
@@ -292,11 +309,13 @@ export function CommandPalette() {
       data-testid="command-palette-backdrop"
     >
       <div
+        ref={dialogRef}
         className="floating-dialog command-dialog"
         role="dialog"
         aria-modal="true"
         aria-label="Командная палитра"
         data-testid="command-palette"
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >

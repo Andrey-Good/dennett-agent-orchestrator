@@ -1,11 +1,4 @@
-import {
-  BracketsCurly,
-  Browsers,
-  ChatsCircle,
-  ListChecks,
-  Plug,
-  Tray,
-} from "@phosphor-icons/react";
+import { BracketsCurly, ChatsCircle, ListChecks, Tray } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
 import { QuotaRings } from "./QuotaRings";
@@ -36,9 +29,6 @@ export function ActivityRail() {
       actions.toggleSidebar();
     } else {
       actions.setActiveView("chat");
-      if (!state.isSidebarOpen) {
-        actions.setSidebarOpen(true);
-      }
     }
   };
 
@@ -65,9 +55,7 @@ export function ActivityRail() {
           type="button"
           className={`icon-button rail-nav-btn ${isInboxView ? "is-active" : ""}`}
           onClick={() => actions.setActiveView("inbox")}
-          aria-label={
-            openInboxCount > 0 ? `Входящие (${openInboxCount})` : "Входящие"
-          }
+          aria-label={openInboxCount > 0 ? `Входящие (${openInboxCount})` : "Входящие"}
           aria-pressed={isInboxView}
           data-testid="rail-nav-inbox"
           title="Входящие и Радар (Alt+2)"
@@ -99,28 +87,6 @@ export function ActivityRail() {
               {meta.activeTaskCount > 99 ? "99+" : meta.activeTaskCount}
             </span>
           )}
-        </button>
-
-        <button
-          type="button"
-          className={`icon-button ${state.isRightPanelOpen ? "is-active" : ""}`}
-          onClick={actions.toggleRightPanel}
-          aria-label="Рабочее пространство"
-          aria-pressed={state.isRightPanelOpen}
-          data-testid="rail-toggle-workspace"
-          title="Рабочее пространство (Ctrl+\)"
-        >
-          <Browsers size={19} weight={state.isRightPanelOpen ? "fill" : "regular"} />
-        </button>
-
-        <button
-          type="button"
-          className="icon-button rail-future"
-          disabled
-          aria-label="Интеграции и подключения (будет на D3)"
-          title="Интеграции и MCP · этап D3"
-        >
-          <Plug size={18} />
         </button>
       </div>
 

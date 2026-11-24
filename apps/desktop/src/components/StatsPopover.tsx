@@ -36,12 +36,7 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
   const policyCount = state.activeDetail?.permission_decisions.length ?? 0;
 
   return (
-    <div
-      className="floating-popover stats-popover"
-      role="dialog"
-      aria-label="Состояние системы и памяти"
-      data-testid="stats-popover"
-    >
+    <div className="stats-popover__inner">
       <div className="popover-header">
         <strong>Состояние системы и памяти</strong>
         <button

@@ -391,29 +391,109 @@ impl InteractivePolicyEvaluator {
     }
 }
 
+fn format_diff_pair(old_text: Option<&str>, new_text: &str) -> String {
+    let trimmed_new = new_text.trim();
+    if let Some(old) = old_text.map(str::trim).filter(|s| !s.is_empty()) {
+        format!("--- old\n{old}\n+++ new\n{trimmed_new}")
+    } else {
+        trimmed_new.to_owned()
+    }
+}
+
+fn extract_acp_content_array_preview(items: &[serde_json::Value]) -> Option<String> {
+    let mut parts = Vec::new();
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let item_type = obj
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if item_type == "diff" || obj.contains_key("newText") {
+            if let Some(new_text) = obj
+                .get("newText")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+            {
+                let old_text = obj.get("oldText").and_then(serde_json::Value::as_str);
+                parts.push(format_diff_pair(old_text, new_text));
+            }
+            continue;
+        }
+        if let Some(nested_text) = obj
+            .get("content")
+            .and_then(|c| c.get("text"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| obj.get("text").and_then(serde_json::Value::as_str))
+            .filter(|s| !s.trim().is_empty())
+        {
+            parts.push(nested_text.trim().to_owned());
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n---\n"))
+    }
+}
+
 fn extract_redacted_preview_snippet(
     raw_input: &serde_json::Value,
     secrets_to_redact: &[String],
 ) -> Option<String> {
     let obj = raw_input.as_object()?;
+    let finalize = |raw: &str| -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let redacted = redact_secrets_owned(trimmed, secrets_to_redact);
+        Some(truncate_utf8(&redacted, 2000).to_owned())
+    };
+
+    // 1. Direct write / patch keys (covering PascalCase agy acp & camelCase/snake_case tools)
     for key in [
+        "Content",
         "content",
         "CodeContent",
-        "ReplacementContent",
-        "new_string",
+        "FileContent",
         "new_content",
+        "newContent",
+        "newText",
         "text",
         "patch",
         "diff",
     ] {
-        if let Some(val) = obj.get(key).and_then(serde_json::Value::as_str) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                let redacted = redact_secrets_owned(trimmed, secrets_to_redact);
-                return Some(truncate_utf8(&redacted, 2000).to_owned());
+        if let Some(val) = obj.get(key).and_then(serde_json::Value::as_str)
+            && let Some(out) = finalize(val)
+        {
+            return Some(out);
+        }
+    }
+
+    // 2. Paired edit keys (Target/Replacement, TargetContent/ReplacementContent, old_string/new_string)
+    for (old_key, new_key) in [
+        ("Target", "Replacement"),
+        ("TargetContent", "ReplacementContent"),
+        ("old_string", "new_string"),
+        ("oldString", "newString"),
+        ("oldText", "newText"),
+    ] {
+        if let Some(new_val) = obj
+            .get(new_key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            let old_val = obj.get(old_key).and_then(serde_json::Value::as_str);
+            let combined = format_diff_pair(old_val, new_val);
+            if let Some(out) = finalize(&combined) {
+                return Some(out);
             }
         }
     }
+
+    // 3. Multi-chunk replacements
     if let Some(chunks) = obj
         .get("ReplacementChunks")
         .and_then(serde_json::Value::as_array)
@@ -422,19 +502,35 @@ fn extract_redacted_preview_snippet(
         for chunk in chunks {
             if let Some(repl) = chunk
                 .get("ReplacementContent")
+                .or_else(|| chunk.get("Replacement"))
                 .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.trim().is_empty())
             {
+                let old_val = chunk
+                    .get("TargetContent")
+                    .or_else(|| chunk.get("Target"))
+                    .and_then(serde_json::Value::as_str);
                 if !buf.is_empty() {
                     buf.push_str("\n---\n");
                 }
-                buf.push_str(repl);
+                buf.push_str(&format_diff_pair(old_val, repl));
             }
         }
-        if !buf.trim().is_empty() {
-            let redacted = redact_secrets_owned(&buf, secrets_to_redact);
-            return Some(truncate_utf8(&redacted, 2000).to_owned());
+        if let Some(out) = finalize(&buf) {
+            return Some(out);
         }
     }
+
+    // 4. ACP toolCall.content diff/text array fallback
+    for arr_key in ["_acp_content", "content"] {
+        if let Some(items) = obj.get(arr_key).and_then(serde_json::Value::as_array)
+            && let Some(preview) = extract_acp_content_array_preview(items)
+            && let Some(out) = finalize(&preview)
+        {
+            return Some(out);
+        }
+    }
+
     None
 }
 
@@ -2245,5 +2341,63 @@ impl HeadService {
 
         self.spawn_task_execution(task_id, updated_task.generation, correlation_id.clone());
         Ok(updated_task)
+    }
+}
+
+#[cfg(test)]
+mod preview_snippet_tests {
+    use super::extract_redacted_preview_snippet;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_agy_acp_pascal_case_content_and_redacts_secrets() {
+        let raw = json!({
+            "Path": "notes-r2.md",
+            "Content": "# R2 Notes\napi_key=super-secret-token-value\nline 3"
+        });
+        let snippet =
+            extract_redacted_preview_snippet(&raw, &[String::from("super-secret-token-value")])
+                .expect("PascalCase Content must yield preview snippet");
+        assert!(snippet.contains("# R2 Notes"));
+        assert!(!snippet.contains("super-secret-token-value"));
+        assert!(snippet.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn extracts_agy_acp_edit_target_and_replacement_pair() {
+        let raw = json!({
+            "Path": "src/lib.rs",
+            "Target": "let port = 8080;",
+            "Replacement": "let port = 41771;"
+        });
+        let snippet = extract_redacted_preview_snippet(&raw, &[])
+            .expect("Target/Replacement must yield diff snippet");
+        assert!(snippet.contains("--- old\nlet port = 8080;"));
+        assert!(snippet.contains("+++ new\nlet port = 41771;"));
+    }
+
+    #[test]
+    fn extracts_file_content_and_acp_tool_call_diff_array() {
+        let file_content = json!({ "FileContent": "hello from FileContent" });
+        assert_eq!(
+            extract_redacted_preview_snippet(&file_content, &[]).as_deref(),
+            Some("hello from FileContent")
+        );
+
+        let acp_diff = json!({
+            "Path": "notes-r2.md",
+            "_acp_content": [
+                {
+                    "type": "diff",
+                    "path": "notes-r2.md",
+                    "oldText": "before",
+                    "newText": "after secret-xyz"
+                }
+            ]
+        });
+        let snippet = extract_redacted_preview_snippet(&acp_diff, &[String::from("secret-xyz")])
+            .expect("ACP diff array must yield preview snippet");
+        assert!(snippet.contains("--- old\nbefore"));
+        assert!(snippet.contains("+++ new\nafter [REDACTED]"));
     }
 }

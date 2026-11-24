@@ -43,6 +43,7 @@ import {
   type ThinkingLevel,
   type WorkspaceWritePolicy,
 } from "../api/contracts";
+import { formatDecisionReasonRu } from "../utils/formatters";
 
 export type WorkspaceView = "chat" | "inbox" | "tasks";
 
@@ -51,7 +52,24 @@ export type FolderPickerIntent =
   | { mode: "attach-project"; projectId: string }
   | { mode: "rebind-project"; projectId: string };
 
+export interface ReconcileNotice {
+  tone: "ok" | "warn" | "neutral";
+  text: string;
+}
+
 const DRAFTS_STORAGE_KEY = "dennett.desktop.d2.drafts.v1";
+
+const TERMINAL_QUEUE_ERROR_CODES = new Set([
+  "NOT_FOUND",
+  "HTTP_404",
+  "CONFLICT",
+  "HTTP_409",
+  "PROJECT_ARCHIVED",
+  "INVALID_INPUT",
+  "HTTP_400",
+  "PERMISSION_DENIED",
+  "HTTP_403",
+]);
 
 interface PersistedDraftStore {
   draftsBySession: Record<string, string>;
@@ -104,9 +122,54 @@ function generateClientMessageId(): string {
   return `client-${Date.now()}-${rand}`;
 }
 
+function isNarrowViewport(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  if (typeof window.matchMedia === "function") {
+    return window.matchMedia("(max-width: 1100px)").matches;
+  }
+  return window.innerWidth > 0 && window.innerWidth <= 1100;
+}
+
+function isActiveProjectRecord(project: ProjectRecord): boolean {
+  const lc = project.lifecycle_state ?? "active";
+  return lc !== "archived" && lc !== "deleted_record";
+}
+
+function formatReconcileVerdict(
+  effectStatus: string | undefined,
+  summary: string | null | undefined,
+): ReconcileNotice {
+  const translated = formatDecisionReasonRu(summary);
+  if (effectStatus === "confirmed") {
+    return {
+      tone: "ok",
+      text:
+        translated && /подтвердил|выполнен/i.test(translated)
+          ? translated
+          : "Сверка завершена: сервис подтвердил выполнение — повтор не отправлялся.",
+    };
+  }
+  if (effectStatus === "failed") {
+    return {
+      tone: "warn",
+      text:
+        translated && /невыполнен|безопасен/i.test(translated)
+          ? translated
+          : "Сверка завершена: отмечено невыполненным — повтор безопасен.",
+    };
+  }
+  return {
+    tone: "neutral",
+    text: translated || "Сверка внешнего эффекта завершена.",
+  };
+}
+
 export interface WorkspaceState {
   initialized: boolean;
   isLoading: boolean;
+  isSyncedAfterConnect: boolean;
   activeView: WorkspaceView;
   healthSnapshot: DesktopHealthSnapshot | null;
   runtimeCatalog: RuntimeCatalogResponse | null;
@@ -121,6 +184,7 @@ export interface WorkspaceState {
   pendingPermissions: PermissionRequestRecord[];
   activeGrants: CapabilityGrantRecord[];
   effects: EffectClaimRecord[];
+  selectedProjectId: string | null;
   selectedSessionId: string | null;
   activeDetail: SessionDetailResponse | null;
   projectFiles: ListProjectFilesResponse | null;
@@ -135,12 +199,14 @@ export interface WorkspaceState {
   cancellingSessionIds: string[];
   stoppingTaskIds: string[];
   cancelledNotice: string | null;
+  reconcileNotice: ReconcileNotice | null;
   errorBanner: BridgeErrorPayload | null;
   isRightPanelOpen: boolean;
   isSidebarOpen: boolean;
   isSettingsOpen: boolean;
   isStatsOpen: boolean;
   isCommandOpen: boolean;
+  commandInitialQuery: string;
   folderPickerIntent: FolderPickerIntent | null;
   searchQuery: string;
   selectedArtifactId: string | null;
@@ -159,6 +225,7 @@ export interface CreateArtifactInput {
 
 export interface WorkspaceActions {
   setActiveView(view: WorkspaceView): void;
+  selectProject(projectId: string): void;
   openSessionInChat(sessionId: string): Promise<void>;
   refreshAll(): Promise<void>;
   pollEventsNow(): Promise<void>;
@@ -166,6 +233,7 @@ export interface WorkspaceActions {
   refreshRuntimeCatalog(refresh?: boolean): Promise<void>;
   selectSession(sessionId: string): Promise<void>;
   createBlankChat(projectId?: string): Promise<SessionRecord | null>;
+  createBlankChatWithDraft(projectId?: string, initialDraft?: string): Promise<SessionRecord | null>;
   createFolderlessProject(): Promise<ProjectRecord | null>;
   createProjectFromFolder(folderPath: string): Promise<ProjectRecord | null>;
   requestFolderPicker(intent: FolderPickerIntent): Promise<void>;
@@ -234,10 +302,11 @@ export interface WorkspaceActions {
   setSidebarOpen(open: boolean): void;
   setSettingsOpen(open: boolean): void;
   setStatsOpen(open: boolean): void;
-  setCommandOpen(open: boolean): void;
+  setCommandOpen(open: boolean, initialQuery?: string): void;
   setSearchQuery(query: string): void;
   dismissError(): void;
   dismissCancelledNotice(): void;
+  dismissReconcileNotice(): void;
 }
 
 export interface WorkspaceMeta {
@@ -253,7 +322,11 @@ export interface WorkspaceMeta {
   queuedMessagesForActiveSession: QueuedOfflineMessage[];
   optimisticMessagesForActiveSession: MessageRecord[];
   isRunningActiveSession: boolean;
+  isAwaitingApprovalActiveSession: boolean;
   isCancellingActiveSession: boolean;
+  isSidebarEffectiveOpen: boolean;
+  isActiveProjectArchived: boolean;
+  activeClarificationCard: InboxCardRecord | null;
   activeTaskCount: number;
 }
 
@@ -316,7 +389,8 @@ export function WorkspaceProvider({
 
   const [initialized, setInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeView, setActiveView] = useState<WorkspaceView>("chat");
+  const [isSyncedAfterConnect, setIsSyncedAfterConnect] = useState(false);
+  const [activeView, setActiveViewState] = useState<WorkspaceView>("chat");
   const [healthSnapshot, setHealthSnapshot] = useState<DesktopHealthSnapshot | null>(null);
   const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalogResponse | null>(null);
   const [isRefreshingCatalog, setIsRefreshingCatalog] = useState(false);
@@ -330,6 +404,7 @@ export function WorkspaceProvider({
   const [pendingPermissions, setPendingPermissions] = useState<PermissionRequestRecord[]>([]);
   const [activeGrants, setActiveGrants] = useState<CapabilityGrantRecord[]>([]);
   const [effects, setEffects] = useState<EffectClaimRecord[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [activeDetail, setActiveDetail] = useState<SessionDetailResponse | null>(null);
   const [projectFiles, setProjectFiles] = useState<ListProjectFilesResponse | null>(null);
@@ -346,16 +421,19 @@ export function WorkspaceProvider({
   const [optimisticMessagesBySession, setOptimisticMessagesBySession] = useState<
     Record<string, MessageRecord[]>
   >({});
-  const [runningSessionIds, setRunningSessionIds] = useState<string[]>([]);
+  const [localInFlightSessionIds, setLocalInFlightSessionIds] = useState<string[]>([]);
+  const [serverRunningSessionIds, setServerRunningSessionIds] = useState<string[]>([]);
   const [cancellingSessionIds, setCancellingSessionIds] = useState<string[]>([]);
   const [stoppingTaskIds, setStoppingTaskIds] = useState<string[]>([]);
   const [cancelledNotice, setCancelledNotice] = useState<string | null>(null);
+  const [reconcileNotice, setReconcileNotice] = useState<ReconcileNotice | null>(null);
   const [errorBanner, setErrorBanner] = useState<BridgeErrorPayload | null>(null);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(initialRightPanelOpen);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isRightPanelOpen, setIsRightPanelOpenState] = useState(initialRightPanelOpen);
+  const [isSidebarOpen, setIsSidebarOpenState] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isStatsOpen, setIsStatsOpen] = useState(false);
-  const [isCommandOpen, setIsCommandOpen] = useState(false);
+  const [isCommandOpen, setIsCommandOpenState] = useState(false);
+  const [commandInitialQuery, setCommandInitialQuery] = useState("");
   const [folderPickerIntent, setFolderPickerIntent] = useState<FolderPickerIntent | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
@@ -363,9 +441,13 @@ export function WorkspaceProvider({
   const [isFlushingOutbox, setIsFlushingOutbox] = useState(false);
   const [lastFlushSummary, setLastFlushSummary] = useState<string | null>(null);
   const [isUpdatingModel, setIsUpdatingModel] = useState(false);
+  const [isDocumentHidden, setIsDocumentHidden] = useState(
+    () => typeof document !== "undefined" && document.visibilityState === "hidden",
+  );
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const selectedProjectRef = useRef<string | null>(null);
   const selectedSessionRef = useRef<string | null>(null);
   const selectedArtifactIdRef = useRef<string | null>(null);
   const projectsRef = useRef<ProjectRecord[]>([]);
@@ -375,14 +457,35 @@ export function WorkspaceProvider({
   const streamCursorRef = useRef<StreamCursor | null>(null);
   const queuedMessagesRef = useRef<QueuedOfflineMessage[]>(initialPersisted.queuedMessages);
   const isFlushingQueueRef = useRef(false);
-  const wasConnectedRef = useRef(false);
   const pollInFlightRef = useRef(false);
+  const snapshotSeqRef = useRef(0);
+  const snapshotInFlightRef = useRef<{
+    promise: Promise<void>;
+    reloadDetail: boolean;
+    preferredSessionId?: string | null;
+  } | null>(null);
+  const inspectingArchivedProjectRef = useRef(false);
   const runningSessionIdsRef = useRef<Set<string>>(new Set());
   const cancellingSessionIdsRef = useRef<Set<string>>(new Set());
   const detailRequestSeqRef = useRef(0);
   const filesRequestSeqRef = useRef(0);
   const activeViewRef = useRef<WorkspaceView>("chat");
+  const isSidebarOpenRef = useRef(true);
+  const isRightPanelOpenRef = useRef(initialRightPanelOpen);
 
+  // D2-ARCH-01: canonical running sessions derived from server snapshot + activeDetail + local in-flight.
+  const runningSessionIds = useMemo(() => {
+    const set = new Set<string>(localInFlightSessionIds);
+    for (const sid of serverRunningSessionIds) {
+      set.add(sid);
+    }
+    if (activeDetail && activeDetail.runs.some((r) => r.status === "running")) {
+      set.add(activeDetail.session.session_id);
+    }
+    return Array.from(set);
+  }, [activeDetail, localInFlightSessionIds, serverRunningSessionIds]);
+
+  selectedProjectRef.current = selectedProjectId;
   selectedSessionRef.current = selectedSessionId;
   selectedArtifactIdRef.current = selectedArtifactId;
   projectsRef.current = projects;
@@ -393,21 +496,135 @@ export function WorkspaceProvider({
   runningSessionIdsRef.current = new Set(runningSessionIds);
   cancellingSessionIdsRef.current = new Set(cancellingSessionIds);
   activeViewRef.current = activeView;
+  isSidebarOpenRef.current = isSidebarOpen;
+  isRightPanelOpenRef.current = isRightPanelOpen;
 
   // Persist drafts and offline queue to localStorage cleanly.
   useEffect(() => {
     writePersistedDrafts({ draftsBySession, queuedMessages });
   }, [draftsBySession, queuedMessages]);
 
-  const focusComposerSoon = useCallback(() => {
+  // Track document visibility so background tabs poll calmly at 5000ms.
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const onVisibility = () => {
+      setIsDocumentHidden(document.visibilityState === "hidden");
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  // D2-UX-02: Auto-collapse a side panel below 1100px so 960x620 never overflows or breaks Composer.
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mql = window.matchMedia("(max-width: 1100px)");
+    const enforceNarrowBudget = (narrow: boolean) => {
+      if (
+        narrow &&
+        isSidebarOpenRef.current &&
+        activeViewRef.current === "chat" &&
+        isRightPanelOpenRef.current
+      ) {
+        setIsRightPanelOpenState(false);
+      }
+    };
+    enforceNarrowBudget(mql.matches);
+    const listener = (event: MediaQueryListEvent) => enforceNarrowBudget(event.matches);
+    if (typeof mql.addEventListener === "function") {
+      mql.addEventListener("change", listener);
+      return () => mql.removeEventListener("change", listener);
+    }
+    return undefined;
+  }, []);
+
+  const focusComposerSoon = useCallback((placeCursorAtEnd = false) => {
     requestAnimationFrame(() => {
-      composerInputRef.current?.focus();
+      const el = composerInputRef.current;
+      if (!el) {
+        return;
+      }
+      el.focus();
+      if (placeCursorAtEnd) {
+        const len = el.value.length;
+        try {
+          el.setSelectionRange(len, len);
+        } catch {
+          // Ignore environments without selection support.
+        }
+      }
     });
   }, []);
 
   const setSelectedSessionSync = useCallback((nextSessionId: string | null) => {
     selectedSessionRef.current = nextSessionId;
     setSelectedSessionId(nextSessionId);
+  }, []);
+
+  const setSelectedProjectSync = useCallback((nextProjectId: string | null) => {
+    selectedProjectRef.current = nextProjectId;
+    setSelectedProjectId(nextProjectId);
+  }, []);
+
+  const setActiveView = useCallback((nextView: WorkspaceView) => {
+    setActiveViewState(nextView);
+    // D2-UX-05: clear stale cancelledNotice when navigating between top-level views.
+    setCancelledNotice(null);
+  }, []);
+
+  const setSidebarOpen = useCallback((open: boolean) => {
+    setIsSidebarOpenState(open);
+    if (open && activeViewRef.current === "chat" && isNarrowViewport()) {
+      setIsRightPanelOpenState(false);
+    }
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    if (activeViewRef.current !== "chat") {
+      setActiveViewState("chat");
+      setCancelledNotice(null);
+      setIsSidebarOpenState(true);
+      if (isNarrowViewport()) {
+        setIsRightPanelOpenState(false);
+      }
+      return;
+    }
+    setIsSidebarOpenState((prev) => {
+      const next = !prev;
+      if (next && isNarrowViewport()) {
+        setIsRightPanelOpenState(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const setRightPanelOpen = useCallback((open: boolean) => {
+    setIsRightPanelOpenState(open);
+    if (open && activeViewRef.current === "chat" && isNarrowViewport()) {
+      setIsSidebarOpenState(false);
+    }
+  }, []);
+
+  const toggleRightPanel = useCallback(() => {
+    setIsRightPanelOpenState((prev) => {
+      const next = !prev;
+      if (next && activeViewRef.current === "chat" && isNarrowViewport()) {
+        setIsSidebarOpenState(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const setCommandOpen = useCallback((open: boolean, initialQuery?: string) => {
+    if (open) {
+      setCommandInitialQuery(initialQuery ?? "");
+    } else {
+      setCommandInitialQuery("");
+    }
+    setIsCommandOpenState(open);
   }, []);
 
   const loadFilesForProject = useCallback(
@@ -467,14 +684,21 @@ export function WorkspaceProvider({
           return;
         }
         setActiveDetail(detail);
-        const visibleArtifacts = detail.artifacts.filter(
-          (a) => (a.lifecycle_state ?? "active") !== "removed",
+        const visibleArtifacts = detail.artifacts.filter((a) => {
+          const lc = a.lifecycle_state ?? "active";
+          return lc !== "removed";
+        });
+        const activeOnlyArtifacts = visibleArtifacts.filter(
+          (a) => (a.lifecycle_state ?? "active") === "active",
         );
         const currentSelectedId = selectedArtifactIdRef.current;
         const stillVisible = currentSelectedId
           ? (visibleArtifacts.find((a) => a.artifact_id === currentSelectedId) ?? null)
           : null;
-        const chosenArtifact = stillVisible ?? visibleArtifacts[visibleArtifacts.length - 1] ?? null;
+        const chosenArtifact =
+          stillVisible ??
+          activeOnlyArtifacts[activeOnlyArtifacts.length - 1] ??
+          null;
         const nextArtifactId = chosenArtifact?.artifact_id ?? null;
         selectedArtifactIdRef.current = nextArtifactId;
         setSelectedArtifactId(nextArtifactId);
@@ -514,67 +738,146 @@ export function WorkspaceProvider({
     [bridge],
   );
 
+  // D2-OVER-03: Single-flight coalesced snapshot fetch with monotonic snapshotSeqRef!
   const applySnapshotCollections = useCallback(
     async (preferredSessionId?: string | null, reloadActiveDetail = false) => {
-      const [snap, permResp, effResp] = await Promise.all([
-        bridge.getStateSnapshot(null, true),
-        bridge.listPermissionRequests("pending", null).catch(() => ({ requests: [] })),
-        bridge.listEffects(null, null, null).catch(() => ({ effects: [] })),
-      ]);
+      const existing = snapshotInFlightRef.current;
+      if (
+        existing &&
+        preferredSessionId === undefined &&
+        (!reloadActiveDetail || existing.reloadDetail)
+      ) {
+        return existing.promise;
+      }
 
-      streamCursorRef.current = snap.snapshot_cursor;
-      setStreamCursor(snap.snapshot_cursor);
-      projectsRef.current = snap.projects;
-      agentsRef.current = snap.agents;
-      sessionsRef.current = snap.sessions;
-      const activeProjectIds = new Set(
-        snap.projects
-          .filter((p) => {
-            const lc = p.lifecycle_state ?? "active";
-            return lc !== "deleted_record" && lc !== "archived";
-          })
-          .map((p) => p.project_id),
-      );
-      const visibleSessions = snap.sessions.filter((s) => activeProjectIds.has(s.project_id));
+      const mySeq = ++snapshotSeqRef.current;
+      const run = (async () => {
+        const [snap, permResp, effResp] = await Promise.all([
+          bridge.getStateSnapshot(null, true),
+          bridge.listPermissionRequests("pending", null).catch(() => ({ requests: [] })),
+          bridge.listEffects(null, null, null).catch(() => ({ effects: [] })),
+        ]);
 
-      setProjects(snap.projects);
-      setAgents(snap.agents);
-      setSessions(snap.sessions);
-      setTasks(snap.tasks);
-      setInboxCards(snap.inbox_cards);
-      setUnresolvedInboxCount(
-        snap.inbox_cards.filter(
-          (c) => c.status === "open" && activeProjectIds.has(c.project_id),
-        ).length,
-      );
-      setActiveGrants(snap.active_grants);
-      setPendingPermissions(permResp.requests);
-      setEffects(effResp.effects);
+        // Reject stale responses superseded by a newer snapshot call.
+        if (mySeq !== snapshotSeqRef.current) {
+          return;
+        }
 
-      const targetSessionId =
-        preferredSessionId ??
-        (selectedSessionRef.current &&
-        visibleSessions.some((s) => s.session_id === selectedSessionRef.current)
-          ? selectedSessionRef.current
-          : (visibleSessions[0]?.session_id ?? null));
+        streamCursorRef.current = snap.snapshot_cursor;
+        setStreamCursor(snap.snapshot_cursor);
+        projectsRef.current = snap.projects;
+        agentsRef.current = snap.agents;
+        sessionsRef.current = snap.sessions;
 
-      const changedSession = targetSessionId !== selectedSessionRef.current;
-      setSelectedSessionSync(targetSessionId);
-      if (targetSessionId && (reloadActiveDetail || changedSession)) {
-        await loadSessionDetail(targetSessionId);
-      } else if (!targetSessionId) {
-        setActiveDetail(null);
-        selectedArtifactIdRef.current = null;
-        setSelectedArtifactId(null);
-        setArtifactRevisions([]);
+        const nonDeletedProjects = snap.projects.filter(
+          (p) => (p.lifecycle_state ?? "active") !== "deleted_record",
+        );
+        const activeProjectIds = new Set(
+          nonDeletedProjects.filter(isActiveProjectRecord).map((p) => p.project_id),
+        );
+        const visibleActiveSessions = snap.sessions.filter((s) => activeProjectIds.has(s.project_id));
+        const visibleUserChats = visibleActiveSessions.filter(
+          (s) => (s.session_kind ?? "user_chat") === "user_chat",
+        );
+
+        setProjects(snap.projects);
+        setAgents(snap.agents);
+        setSessions(snap.sessions);
+        setTasks(snap.tasks);
+        setInboxCards(snap.inbox_cards);
+        setUnresolvedInboxCount(
+          snap.inbox_cards.filter(
+            (c) => c.status === "open" && activeProjectIds.has(c.project_id),
+          ).length,
+        );
+        setActiveGrants(snap.active_grants);
+        setPendingPermissions(permResp.requests);
+        setEffects(effResp.effects);
+        setServerRunningSessionIds(snap.running_session_ids ?? []);
+
+        // Determine selected project/session respecting archived read-only inspection only when explicitly chosen.
+        const currentProj = selectedProjectRef.current
+          ? nonDeletedProjects.find((p) => p.project_id === selectedProjectRef.current) ?? null
+          : null;
+        const keepArchivedInspection =
+          inspectingArchivedProjectRef.current &&
+          currentProj !== null &&
+          (currentProj.lifecycle_state ?? "active") === "archived";
+
+        let targetSessionId: string | null = null;
+        if (preferredSessionId !== undefined) {
+          targetSessionId = preferredSessionId;
+        } else if (keepArchivedInspection && currentProj) {
+          const archivedSessions = snap.sessions.filter(
+            (s) => s.project_id === currentProj.project_id,
+          );
+          targetSessionId =
+            selectedSessionRef.current &&
+            archivedSessions.some((s) => s.session_id === selectedSessionRef.current)
+              ? selectedSessionRef.current
+              : (archivedSessions[0]?.session_id ?? null);
+        } else if (
+          selectedSessionRef.current &&
+          visibleActiveSessions.some((s) => s.session_id === selectedSessionRef.current)
+        ) {
+          targetSessionId = selectedSessionRef.current;
+        } else if (
+          currentProj &&
+          activeProjectIds.has(currentProj.project_id) &&
+          selectedSessionRef.current === null
+        ) {
+          // User explicitly selected an active project that has no sessions yet.
+          const projChats = visibleActiveSessions.filter(
+            (s) => s.project_id === currentProj.project_id,
+          );
+          targetSessionId = projChats[0]?.session_id ?? null;
+        } else {
+          targetSessionId =
+            visibleUserChats[0]?.session_id ?? visibleActiveSessions[0]?.session_id ?? null;
+        }
+
+        const resolvedSession = targetSessionId
+          ? snap.sessions.find((s) => s.session_id === targetSessionId) ?? null
+          : null;
+        const nextProjectId =
+          resolvedSession?.project_id ??
+          (keepArchivedInspection && currentProj ? currentProj.project_id : null) ??
+          (currentProj && activeProjectIds.has(currentProj.project_id)
+            ? currentProj.project_id
+            : null) ??
+          nonDeletedProjects.find(isActiveProjectRecord)?.project_id ??
+          null;
+
+        const changedSession = targetSessionId !== selectedSessionRef.current;
+        setSelectedProjectSync(nextProjectId);
+        setSelectedSessionSync(targetSessionId);
+        if (targetSessionId && (reloadActiveDetail || changedSession)) {
+          await loadSessionDetail(targetSessionId);
+        } else if (!targetSessionId) {
+          setActiveDetail(null);
+          selectedArtifactIdRef.current = null;
+          setSelectedArtifactId(null);
+          setArtifactRevisions([]);
+        }
+      })();
+
+      const entry = { promise: run, reloadDetail: reloadActiveDetail, preferredSessionId };
+      snapshotInFlightRef.current = entry;
+      try {
+        await run;
+      } finally {
+        if (snapshotInFlightRef.current === entry) {
+          snapshotInFlightRef.current = null;
+        }
       }
     },
-    [bridge, loadSessionDetail, setSelectedSessionSync],
+    [bridge, loadSessionDetail, setSelectedProjectSync, setSelectedSessionSync],
   );
 
   const loadConnectedState = useCallback(
     async (preferredSessionId?: string | null) => {
       await applySnapshotCollections(preferredSessionId, true);
+      setIsSyncedAfterConnect(true);
       void bridge
         .listDiagnostics(20)
         .then((diagResp) => {
@@ -600,8 +903,11 @@ export function WorkspaceProvider({
       if (snap.connected) {
         setErrorBanner(null);
         await loadConnectedState();
-      } else if (sessionsRef.current.length === 0) {
-        setActiveDetail(null);
+      } else {
+        setIsSyncedAfterConnect(false);
+        if (sessionsRef.current.length === 0) {
+          setActiveDetail(null);
+        }
       }
     } catch (err) {
       setErrorBanner(normalizeBridgeError(err));
@@ -621,49 +927,73 @@ export function WorkspaceProvider({
   );
 
   const activeProject = useMemo(() => {
-    const isActiveProject = (p: ProjectRecord) => {
-      const lc = p.lifecycle_state ?? "active";
-      return lc !== "archived" && lc !== "deleted_record";
-    };
+    if (selectedProjectId) {
+      const explicit = projects.find(
+        (p) =>
+          p.project_id === selectedProjectId &&
+          (p.lifecycle_state ?? "active") !== "deleted_record",
+      );
+      if (explicit) {
+        return explicit;
+      }
+    }
     if (activeSession) {
-      const matched = projects.find((p) => p.project_id === activeSession.project_id);
-      if (matched && isActiveProject(matched)) {
+      const matched = projects.find(
+        (p) =>
+          p.project_id === activeSession.project_id &&
+          (p.lifecycle_state ?? "active") !== "deleted_record",
+      );
+      if (matched) {
         return matched;
       }
     }
-    return projects.find(isActiveProject) ?? null;
-  }, [activeSession, projects]);
+    return projects.find(isActiveProjectRecord) ?? null;
+  }, [activeSession, projects, selectedProjectId]);
 
-  const activeAgent = useMemo(
-    () =>
-      activeSession
-        ? (agents.find((a) => a.agent_id === activeSession.agent_id) ?? null)
-        : (agents[0] ?? null),
-    [activeSession, agents],
-  );
+  const activeAgent = useMemo(() => {
+    if (activeSession) {
+      return agents.find((a) => a.agent_id === activeSession.agent_id) ?? null;
+    }
+    if (activeProject) {
+      const scoped = agents.find(
+        (a) =>
+          a.current_config.allowed_memory_scopes.length === 1 &&
+          a.current_config.allowed_memory_scopes[0] === activeProject.memory_scope,
+      );
+      if (scoped) {
+        return scoped;
+      }
+    }
+    return agents[0] ?? null;
+  }, [activeProject, activeSession, agents]);
 
+  // D2-OVER-03: Cursor advances strictly AFTER snapshot/detail commit; zero redundant permission polls when sawEvents===false.
   const pollEventsNow = useCallback(async () => {
     if (pollInFlightRef.current || !streamCursorRef.current) {
       return;
     }
     pollInFlightRef.current = true;
     try {
-      let cursor = streamCursorRef.current;
+      const startCursor = streamCursorRef.current;
+      let nextCursor = startCursor;
       let sawEvents = false;
       let shouldReloadSessionDetail = false;
       let shouldRefreshFiles = false;
       const activeSid = selectedSessionRef.current;
 
       for (let page = 0; page < 5; page += 1) {
-        const resp = await bridge.getEvents(cursor.committed_seq, cursor.authority_epoch, null, 100);
-        if (resp.next_cursor > cursor.committed_seq) {
-          cursor = {
+        const resp = await bridge.getEvents(
+          nextCursor.committed_seq,
+          nextCursor.authority_epoch,
+          null,
+          100,
+        );
+        if (resp.next_cursor > nextCursor.committed_seq) {
+          nextCursor = {
             authority_epoch: resp.authority_epoch,
             committed_seq: resp.next_cursor,
             retained_from_seq: resp.retained_from_seq,
           };
-          streamCursorRef.current = cursor;
-          setStreamCursor(cursor);
         }
         if (resp.events.length > 0) {
           sawEvents = true;
@@ -672,7 +1002,9 @@ export function WorkspaceProvider({
               (activeSid && ev.session_id === activeSid) ||
               ev.event_type.startsWith("permission.") ||
               ev.event_type.startsWith("artifact.") ||
-              ev.event_type.startsWith("effect.")
+              ev.event_type.startsWith("effect.") ||
+              ev.event_type.startsWith("run.") ||
+              ev.event_type.startsWith("inbox.")
             ) {
               shouldReloadSessionDetail = true;
             }
@@ -691,15 +1023,21 @@ export function WorkspaceProvider({
 
       if (sawEvents) {
         await applySnapshotCollections(undefined, shouldReloadSessionDetail);
+        // Only advance cursor past snapshot if the event scan moved even further and snapshot succeeded.
+        if (
+          streamCursorRef.current &&
+          streamCursorRef.current.authority_epoch === nextCursor.authority_epoch &&
+          nextCursor.committed_seq > streamCursorRef.current.committed_seq
+        ) {
+          streamCursorRef.current = nextCursor;
+          setStreamCursor(nextCursor);
+        }
         if (shouldRefreshFiles && activeProject && isRightPanelOpen) {
           void loadFilesForProject(activeProject.project_id);
         }
-      } else if (runningSessionIdsRef.current.size > 0) {
-        // Also fetch pending permissions while a live turn is in flight so inline approval banners appear immediately.
-        const permResp = await bridge.listPermissionRequests("pending", null).catch(() => null);
-        if (permResp) {
-          setPendingPermissions(permResp.requests);
-        }
+      } else if (nextCursor.committed_seq > startCursor.committed_seq) {
+        streamCursorRef.current = nextCursor;
+        setStreamCursor(nextCursor);
       }
     } catch (err) {
       const normalized = normalizeBridgeError(err);
@@ -711,6 +1049,7 @@ export function WorkspaceProvider({
           // Will retry on next tick.
         }
       } else if (normalized.code === "HEAD_UNREACHABLE") {
+        setIsSyncedAfterConnect(false);
         setHealthSnapshot((prev) =>
           prev
             ? {
@@ -735,12 +1074,7 @@ export function WorkspaceProvider({
 
   const activeTaskCount = useMemo(() => {
     const activeProjectIds = new Set(
-      projects
-        .filter((p) => {
-          const lc = p.lifecycle_state ?? "active";
-          return lc !== "archived" && lc !== "deleted_record";
-        })
-        .map((p) => p.project_id),
+      projects.filter(isActiveProjectRecord).map((p) => p.project_id),
     );
     return tasks.filter(
       (t) =>
@@ -757,17 +1091,16 @@ export function WorkspaceProvider({
     ).length;
   }, [projects, tasks]);
 
-  // Cursor-driven live sync interval (700ms when active work / approvals exist, 2500ms when idle).
+  // D2-OVER-03: Calmer adaptive cursor sync (1000ms active, 2500ms idle, 5000ms hidden tab).
   useEffect(() => {
     if (!healthSnapshot?.connected || !streamCursor) {
       return;
     }
-    const isBusy =
+    const hasActiveWork =
       runningSessionIds.length > 0 ||
       activeTaskCount > 0 ||
-      unresolvedInboxCount > 0 ||
       pendingPermissions.length > 0;
-    const intervalMs = isBusy ? 700 : 2500;
+    const intervalMs = isDocumentHidden ? 5000 : hasActiveWork ? 1000 : 2500;
     const handle = window.setInterval(() => {
       void pollEventsNow();
     }, intervalMs);
@@ -775,16 +1108,16 @@ export function WorkspaceProvider({
   }, [
     activeTaskCount,
     healthSnapshot?.connected,
+    isDocumentHidden,
     pendingPermissions.length,
     pollEventsNow,
     runningSessionIds.length,
     streamCursor,
-    unresolvedInboxCount,
   ]);
 
-  // Automatic gentle reconnect check while Head is offline after initial load.
+  // D2-OVER-03: Automatic reconnect check while Head is offline (including cold-start when sessions.length === 0!).
   useEffect(() => {
-    if (!initialized || healthSnapshot?.connected || sessions.length === 0) {
+    if (!initialized || healthSnapshot?.connected) {
       return;
     }
     const handle = window.setInterval(() => {
@@ -798,7 +1131,7 @@ export function WorkspaceProvider({
       })();
     }, 3000);
     return () => window.clearInterval(handle);
-  }, [bridge, healthSnapshot?.connected, initialized, loadConnectedState, sessions.length]);
+  }, [bridge, healthSnapshot?.connected, initialized, loadConnectedState]);
 
   // Keep right-panel workspace files in sync when active project changes or panel opens.
   useEffect(() => {
@@ -853,6 +1186,8 @@ export function WorkspaceProvider({
         setHealthSnapshot(snap);
         if (snap.connected) {
           await loadConnectedState();
+        } else {
+          setIsSyncedAfterConnect(false);
         }
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -863,14 +1198,54 @@ export function WorkspaceProvider({
     [bridge, loadConnectedState],
   );
 
+  // D2-UX-03: Independent project selection (never forces view switch; supports read-only archived inspection).
+  const selectProject = useCallback(
+    (projectId: string) => {
+      const target = projectsRef.current.find((p) => p.project_id === projectId);
+      if (!target || (target.lifecycle_state ?? "active") === "deleted_record") {
+        return;
+      }
+      const isArchived = (target.lifecycle_state ?? "active") === "archived";
+      inspectingArchivedProjectRef.current = isArchived;
+      setSelectedProjectSync(projectId);
+
+      const projectSessions = sessionsRef.current.filter((s) => s.project_id === projectId);
+      const userChats = projectSessions.filter((s) => (s.session_kind ?? "user_chat") === "user_chat");
+      const currentBelongsToProject =
+        selectedSessionRef.current &&
+        projectSessions.some((s) => s.session_id === selectedSessionRef.current);
+
+      if (!currentBelongsToProject) {
+        const nextSess = userChats[0] ?? projectSessions[0] ?? null;
+        setSelectedSessionSync(nextSess?.session_id ?? null);
+        if (nextSess) {
+          void loadSessionDetail(nextSess.session_id);
+        } else {
+          setActiveDetail(null);
+          selectedArtifactIdRef.current = null;
+          setSelectedArtifactId(null);
+          setArtifactRevisions([]);
+        }
+      }
+    },
+    [loadSessionDetail, setSelectedProjectSync, setSelectedSessionSync],
+  );
+
   const selectSession = useCallback(
     async (sessionId: string) => {
-      setActiveView("chat");
+      const targetSess = sessionsRef.current.find((s) => s.session_id === sessionId);
+      if (targetSess) {
+        const ownerProj = projectsRef.current.find((p) => p.project_id === targetSess.project_id);
+        inspectingArchivedProjectRef.current =
+          (ownerProj?.lifecycle_state ?? "active") === "archived";
+        setSelectedProjectSync(targetSess.project_id);
+      }
+      setActiveViewState("chat");
       setSelectedSessionSync(sessionId);
       setCancelledNotice(null);
       await loadSessionDetail(sessionId);
     },
-    [loadSessionDetail, setSelectedSessionSync],
+    [loadSessionDetail, setSelectedProjectSync, setSelectedSessionSync],
   );
 
   const openSessionInChat = useCallback(
@@ -880,6 +1255,7 @@ export function WorkspaceProvider({
     [selectSession],
   );
 
+  // D2-UX-05: Always sync starter/newly created agent default model with runtime catalog default_model_id!
   const ensureScopedAgent = useCallback(
     async (
       memoryScope: string,
@@ -895,14 +1271,24 @@ export function WorkspaceProvider({
         return exactMatch;
       }
 
+      let cat = catalogRef.current;
+      if (!cat) {
+        cat = await bridge.getRuntimeCatalog(false).catch(() => null);
+        if (cat) {
+          catalogRef.current = cat;
+          setRuntimeCatalog(cat);
+        }
+      }
+
+      const defaultModelId = cat?.default_model_id ?? cat?.models[0]?.model_id ?? null;
+      const defaultThinking = cat?.default_thinking_level ?? "medium";
       const label = projectName?.trim() || "Проект";
-      const cat = catalogRef.current;
       const created = await bridge.createAgent({
         name: `Агент · ${label}`.slice(0, 120),
         description: `Агент Dennett для области памяти ${memoryScope}`,
         system_prompt: DEFAULT_SYSTEM_PROMPT,
-        model_preference: cat?.default_model_id ?? null,
-        thinking_level: cat?.default_thinking_level ?? "medium",
+        model_preference: defaultModelId,
+        thinking_level: defaultThinking,
         allowed_memory_scopes: [memoryScope],
         workspace_write_policy: hasWorkspace ? { mode: "allow_workspace" } : { mode: "deny_all" },
       });
@@ -922,6 +1308,7 @@ export function WorkspaceProvider({
         workspace_path: null,
         memory_scope: null,
       });
+      inspectingArchivedProjectRef.current = false;
       projectsRef.current = [project, ...projectsRef.current];
       setProjects((prev) => [project, ...prev]);
       const agent = await ensureScopedAgent(project.memory_scope, project.name, false);
@@ -929,19 +1316,29 @@ export function WorkspaceProvider({
         agent_id: agent.agent_id,
         project_id: project.project_id,
         title: "Новый чат",
+        session_kind: "user_chat",
       });
+      sessionsRef.current = [session, ...sessionsRef.current];
       setSessions((prev) => [session, ...prev]);
-      setActiveView("chat");
+      setActiveViewState("chat");
+      setSelectedProjectSync(project.project_id);
       setSelectedSessionSync(session.session_id);
       setCancelledNotice(null);
       await loadSessionDetail(session.session_id);
-      focusComposerSoon();
+      focusComposerSoon(false);
       return project;
     } catch (err) {
       setErrorBanner(normalizeBridgeError(err));
       return null;
     }
-  }, [bridge, ensureScopedAgent, focusComposerSoon, loadSessionDetail, setSelectedSessionSync]);
+  }, [
+    bridge,
+    ensureScopedAgent,
+    focusComposerSoon,
+    loadSessionDetail,
+    setSelectedProjectSync,
+    setSelectedSessionSync,
+  ]);
 
   const createProjectFromFolder = useCallback(
     async (folderPath: string): Promise<ProjectRecord | null> => {
@@ -957,6 +1354,7 @@ export function WorkspaceProvider({
           workspace_path: trimmed,
           memory_scope: null,
         });
+        inspectingArchivedProjectRef.current = false;
         projectsRef.current = [project, ...projectsRef.current];
         setProjects((prev) => [project, ...prev]);
         const agent = await ensureScopedAgent(project.memory_scope, project.name, true);
@@ -964,14 +1362,17 @@ export function WorkspaceProvider({
           agent_id: agent.agent_id,
           project_id: project.project_id,
           title: "Новый чат",
+          session_kind: "user_chat",
         });
+        sessionsRef.current = [session, ...sessionsRef.current];
         setSessions((prev) => [session, ...prev]);
-        setActiveView("chat");
+        setActiveViewState("chat");
+        setSelectedProjectSync(project.project_id);
         setSelectedSessionSync(session.session_id);
         setCancelledNotice(null);
         await loadSessionDetail(session.session_id);
         void loadFilesForProject(project.project_id);
-        focusComposerSoon();
+        focusComposerSoon(false);
         return project;
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -984,40 +1385,58 @@ export function WorkspaceProvider({
       focusComposerSoon,
       loadFilesForProject,
       loadSessionDetail,
+      setSelectedProjectSync,
       setSelectedSessionSync,
     ],
   );
 
-  const createBlankChat = useCallback(
-    async (projectId?: string): Promise<SessionRecord | null> => {
+  // Owner Directive 1: Create blank user_chat with optional prefilled draft and cursor at end!
+  const createBlankChatWithDraft = useCallback(
+    async (projectId?: string, initialDraft?: string): Promise<SessionRecord | null> => {
       setErrorBanner(null);
-      const resolvedProjectId =
-        projectId ??
-        activeProject?.project_id ??
-        projectsRef.current.find((p) => (p.lifecycle_state ?? "active") !== "archived")?.project_id;
-      if (!resolvedProjectId) {
-        await createFolderlessProject();
+      const activeProjectsList = projectsRef.current.filter(isActiveProjectRecord);
+      const explicitValid = projectId
+        ? activeProjectsList.find((p) => p.project_id === projectId)
+        : undefined;
+      const currentValid =
+        activeProject && isActiveProjectRecord(activeProject) ? activeProject : undefined;
+      const targetProject = explicitValid ?? currentValid ?? activeProjectsList[0];
+
+      if (!targetProject) {
+        const createdProj = await createFolderlessProject();
+        const createdSid = selectedSessionRef.current;
+        if (createdProj && createdSid && initialDraft !== undefined) {
+          setDraftsBySession((prev) => ({ ...prev, [createdSid]: initialDraft }));
+          focusComposerSoon(true);
+          return sessionsRef.current.find((s) => s.session_id === createdSid) ?? null;
+        }
         return null;
       }
+
       try {
-        const project = projectsRef.current.find((p) => p.project_id === resolvedProjectId);
-        const memoryScope = project?.memory_scope ?? "project:default";
+        inspectingArchivedProjectRef.current = false;
         const agent = await ensureScopedAgent(
-          memoryScope,
-          project?.name,
-          Boolean(project?.workspace_path),
+          targetProject.memory_scope,
+          targetProject.name,
+          Boolean(targetProject.workspace_path),
         );
         const created = await bridge.createSession({
           agent_id: agent.agent_id,
-          project_id: resolvedProjectId,
+          project_id: targetProject.project_id,
           title: "Новый чат",
+          session_kind: "user_chat",
         });
+        sessionsRef.current = [created, ...sessionsRef.current];
         setSessions((prev) => [created, ...prev]);
-        setActiveView("chat");
+        if (initialDraft !== undefined) {
+          setDraftsBySession((prev) => ({ ...prev, [created.session_id]: initialDraft }));
+        }
+        setActiveViewState("chat");
+        setSelectedProjectSync(targetProject.project_id);
         setSelectedSessionSync(created.session_id);
         setCancelledNotice(null);
         await loadSessionDetail(created.session_id);
-        focusComposerSoon();
+        focusComposerSoon(initialDraft !== undefined && initialDraft.length > 0);
         return created;
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -1025,14 +1444,21 @@ export function WorkspaceProvider({
       }
     },
     [
-      activeProject?.project_id,
+      activeProject,
       bridge,
       createFolderlessProject,
       ensureScopedAgent,
       focusComposerSoon,
       loadSessionDetail,
+      setSelectedProjectSync,
       setSelectedSessionSync,
     ],
+  );
+
+  const createBlankChat = useCallback(
+    async (projectId?: string): Promise<SessionRecord | null> =>
+      createBlankChatWithDraft(projectId, undefined),
+    [createBlankChatWithDraft],
   );
 
   const upgradeFolderlessAgentIfNeeded = useCallback(
@@ -1141,6 +1567,7 @@ export function WorkspaceProvider({
     async (projectId: string) => {
       setErrorBanner(null);
       try {
+        inspectingArchivedProjectRef.current = false;
         const resp = await bridge.archiveProject(projectId);
         await applySnapshotCollections(undefined, true);
         setCancelledNotice(
@@ -1159,6 +1586,7 @@ export function WorkspaceProvider({
     async (projectId: string) => {
       setErrorBanner(null);
       try {
+        inspectingArchivedProjectRef.current = false;
         await bridge.unarchiveProject(projectId);
         await applySnapshotCollections(undefined, true);
         setCancelledNotice("Проект возвращён из архива.");
@@ -1173,6 +1601,7 @@ export function WorkspaceProvider({
     async (projectId: string) => {
       setErrorBanner(null);
       try {
+        inspectingArchivedProjectRef.current = false;
         await bridge.removeProject(projectId);
         await applySnapshotCollections(undefined, true);
         setCancelledNotice("Проект убран из списка Dennett. Ваши локальные файлы не удалялись.");
@@ -1187,6 +1616,7 @@ export function WorkspaceProvider({
     async (projectId: string) => {
       setErrorBanner(null);
       try {
+        inspectingArchivedProjectRef.current = false;
         await bridge.deleteProject(projectId, true);
         await applySnapshotCollections(undefined, true);
         setCancelledNotice(
@@ -1333,11 +1763,7 @@ export function WorkspaceProvider({
         [sessionId]: [...(prev[sessionId] ?? []), optimisticMessage],
       }));
       runningSessionIdsRef.current.add(sessionId);
-      setRunningSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
-
-      // Trigger rapid permission checks right after turn starts so interactive ask_before_write cards appear immediately.
-      const quickPollA = window.setTimeout(() => void pollEventsNow(), 180);
-      const quickPollB = window.setTimeout(() => void pollEventsNow(), 500);
+      setLocalInFlightSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
 
       const removeOptimistic = () => {
         setOptimisticMessagesBySession((prev) => {
@@ -1395,7 +1821,7 @@ export function WorkspaceProvider({
           } else if (response.run.status === "failed" && response.run.error_summary) {
             setErrorBanner({
               code: response.run.error_code ?? "RUN_FAILED",
-              message: response.run.error_summary,
+              message: formatDecisionReasonRu(response.run.error_summary),
             });
           }
           await loadSessionDetail(sessionId);
@@ -1412,35 +1838,42 @@ export function WorkspaceProvider({
         removeOptimistic();
         throw err;
       } finally {
-        window.clearTimeout(quickPollA);
-        window.clearTimeout(quickPollB);
-        runningSessionIdsRef.current.delete(sessionId);
+        setLocalInFlightSessionIds((prev) => prev.filter((id) => id !== sessionId));
         cancellingSessionIdsRef.current.delete(sessionId);
-        setRunningSessionIds((prev) => prev.filter((id) => id !== sessionId));
         setCancellingSessionIds((prev) => prev.filter((id) => id !== sessionId));
       }
     },
-    [applySnapshotCollections, bridge, loadSessionDetail, pollEventsNow],
+    [applySnapshotCollections, bridge, loadSessionDetail],
   );
 
+  // D2-BUG-06: Owner-confirmed offline queue flush (NEVER blind auto-flush!).
+  // Terminal 404/409 errors remove & skip the broken item so the queue never wedges.
   const flushQueuedMessages = useCallback(async () => {
     if (isFlushingQueueRef.current || queuedMessagesRef.current.length === 0) {
+      return;
+    }
+    if (!healthSnapshot?.connected || !isSyncedAfterConnect) {
       return;
     }
     isFlushingQueueRef.current = true;
     setIsFlushingQueue(true);
     try {
       const snapshotQueue = [...queuedMessagesRef.current];
+      let lastSkippedError: BridgeErrorPayload | null = null;
       for (const item of snapshotQueue) {
         const proj = projectsRef.current.find((p) => p.project_id === item.project_id);
-        if (proj && (proj.lifecycle_state === "archived" || proj.lifecycle_state === "deleted_record")) {
+        if (
+          proj &&
+          (proj.lifecycle_state === "archived" || proj.lifecycle_state === "deleted_record")
+        ) {
           setQueuedMessages((prev) =>
             prev.filter((q) => q.client_message_id !== item.client_message_id),
           );
-          setErrorBanner({
+          lastSkippedError = {
             code: "PROJECT_ARCHIVED",
-            message: `Отложенное сообщение не отправлено: проект «${proj.name}» в архиве или удалён.`,
-          });
+            message: `Отложенное сообщение пропущено: проект «${proj.name}» в архиве или удалён.`,
+          };
+          setErrorBanner(lastSkippedError);
           continue;
         }
         try {
@@ -1451,6 +1884,7 @@ export function WorkspaceProvider({
         } catch (err) {
           const normalized = normalizeBridgeError(err);
           if (normalized.code === "HEAD_UNREACHABLE") {
+            setIsSyncedAfterConnect(false);
             setHealthSnapshot((prev) =>
               prev
                 ? {
@@ -1463,25 +1897,30 @@ export function WorkspaceProvider({
             );
             break;
           }
+          if (TERMINAL_QUEUE_ERROR_CODES.has(normalized.code.toUpperCase())) {
+            // Terminal 404/409/400/403 -> drop broken item cleanly and continue flushing remaining items!
+            setQueuedMessages((prev) =>
+              prev.filter((q) => q.client_message_id !== item.client_message_id),
+            );
+            lastSkippedError = {
+              code: normalized.code,
+              message: `Отложенное сообщение снято с очереди (${normalized.code}): ${formatDecisionReasonRu(normalized.message)}`,
+            };
+            setErrorBanner(lastSkippedError);
+            continue;
+          }
           setErrorBanner(normalized);
           break;
         }
+      }
+      if (lastSkippedError) {
+        setErrorBanner(lastSkippedError);
       }
     } finally {
       isFlushingQueueRef.current = false;
       setIsFlushingQueue(false);
     }
-  }, [dispatchMessageToHead]);
-
-  // Auto-flush queued offline messages once when Head reconnects!
-  useEffect(() => {
-    const isNowConnected = Boolean(healthSnapshot?.connected);
-    const justReconnected = !wasConnectedRef.current && isNowConnected;
-    wasConnectedRef.current = isNowConnected;
-    if (justReconnected && queuedMessagesRef.current.length > 0) {
-      void flushQueuedMessages();
-    }
-  }, [flushQueuedMessages, healthSnapshot?.connected]);
+  }, [dispatchMessageToHead, healthSnapshot?.connected, isSyncedAfterConnect]);
 
   const sendMessage = useCallback(async () => {
     const sessionId = selectedSessionRef.current;
@@ -1499,7 +1938,6 @@ export function WorkspaceProvider({
       return;
     }
 
-    // Immediately clear draft so live turns never appear stuck.
     setDraftsBySession((prev) => ({ ...prev, [sessionId]: "" }));
     const stableClientMsgId = generateClientMessageId();
 
@@ -1508,7 +1946,7 @@ export function WorkspaceProvider({
     } catch (err) {
       const normalized = normalizeBridgeError(err);
       if (normalized.code === "HEAD_UNREACHABLE") {
-        // Head dropped mid-send -> queue idempotently with SAME client_message_id so reconnect sends at most once!
+        // Head dropped mid-send -> queue idempotently with SAME client_message_id!
         const sess = sessionsRef.current.find((s) => s.session_id === sessionId);
         setQueuedMessages((prev) => [
           ...prev,
@@ -1520,6 +1958,7 @@ export function WorkspaceProvider({
             created_at: Date.now(),
           },
         ]);
+        setIsSyncedAfterConnect(false);
         setHealthSnapshot((prev) =>
           prev
             ? {
@@ -1531,7 +1970,6 @@ export function WorkspaceProvider({
             : prev,
         );
       } else {
-        // Restore the sent prompt losslessly if the user has not typed a new draft in the meantime.
         setDraftsBySession((prev) => {
           const existing = prev[sessionId] ?? "";
           return existing.length === 0 ? { ...prev, [sessionId]: rawDraft } : prev;
@@ -1541,13 +1979,10 @@ export function WorkspaceProvider({
     }
   }, [dispatchMessageToHead, draftsBySession, healthSnapshot?.connected, queueOfflineMessage]);
 
+  // D2-ARCH-01: NEVER block cancelSessionRun behind stale local running sets!
   const cancelSessionRun = useCallback(
     async (targetSessionId: string) => {
-      if (
-        !targetSessionId ||
-        !runningSessionIdsRef.current.has(targetSessionId) ||
-        cancellingSessionIdsRef.current.has(targetSessionId)
-      ) {
+      if (!targetSessionId || cancellingSessionIdsRef.current.has(targetSessionId)) {
         return;
       }
       cancellingSessionIdsRef.current.add(targetSessionId);
@@ -1576,7 +2011,7 @@ export function WorkspaceProvider({
               }
             : prev,
         );
-        await applySnapshotCollections(undefined, false).catch(() => {});
+        await applySnapshotCollections(undefined, true).catch(() => {});
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
       } finally {
@@ -1669,14 +2104,14 @@ export function WorkspaceProvider({
         selectedArtifactIdRef.current = created.artifact_id;
         setSelectedArtifactId(created.artifact_id);
         void loadRevisionsForArtifact(sessionId, created.name);
-        setIsRightPanelOpen(true);
+        setRightPanelOpen(true);
         return created;
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
         return null;
       }
     },
-    [bridge, loadRevisionsForArtifact, loadSessionDetail],
+    [bridge, loadRevisionsForArtifact, loadSessionDetail, setRightPanelOpen],
   );
 
   const selectArtifact = useCallback(
@@ -1714,6 +2149,10 @@ export function WorkspaceProvider({
       setErrorBanner(null);
       try {
         await bridge.applyArtifactLifecycle(sessionId, artifactId, { action });
+        if (action === "delete" || action === "remove") {
+          selectedArtifactIdRef.current = null;
+          setSelectedArtifactId(null);
+        }
         await loadSessionDetail(sessionId);
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -1799,7 +2238,9 @@ export function WorkspaceProvider({
         const resp = await bridge.sendTaskSignal(taskId, {
           signal_name: signalName.trim(),
           payload_text: payloadText,
-          idempotency_key: idempotencyKey?.trim() || `ui-sig-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+          idempotency_key:
+            idempotencyKey?.trim() ||
+            `ui-sig-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
         });
         setTasks((prev) => prev.map((t) => (t.task_id === taskId ? resp.task : t)));
         await applySnapshotCollections(undefined, false).catch(() => {});
@@ -1822,7 +2263,7 @@ export function WorkspaceProvider({
       try {
         const updated = await bridge.replyToTask(taskId, { answer_text: trimmed });
         setTasks((prev) => prev.map((t) => (t.task_id === taskId ? updated : t)));
-        await applySnapshotCollections(undefined, false).catch(() => {});
+        await applySnapshotCollections(undefined, true).catch(() => {});
         return updated;
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -1859,10 +2300,15 @@ export function WorkspaceProvider({
     async (cardId: string, expectedRevision: number, resolution: InboxResolutionAction) => {
       setErrorBanner(null);
       try {
-        await bridge.resolveInboxCard(cardId, {
+        const resp = await bridge.resolveInboxCard(cardId, {
           expected_revision: expectedRevision,
           resolution,
         });
+        if (resolution.action === "reconcile_effect") {
+          setReconcileNotice(
+            formatReconcileVerdict(resp.effect?.status, resp.card.resolution_summary),
+          );
+        }
         await applySnapshotCollections(undefined, true);
         if (activeProject && isRightPanelOpen) {
           void loadFilesForProject(activeProject.project_id);
@@ -1898,10 +2344,13 @@ export function WorkspaceProvider({
     ) => {
       setErrorBanner(null);
       try {
-        await bridge.reconcileEffect(effectId, {
+        const resp = await bridge.reconcileEffect(effectId, {
           manual_resolution: manualResolution ?? null,
           reason: reason ?? null,
         });
+        setReconcileNotice(
+          formatReconcileVerdict(resp.effect.status, resp.resolution_summary),
+        );
         await applySnapshotCollections(undefined, true);
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -1958,7 +2407,7 @@ export function WorkspaceProvider({
         const lower = event.key.toLowerCase();
         if (lower === "k") {
           event.preventDefault();
-          setIsCommandOpen((prev) => !prev);
+          setCommandOpen(!isCommandOpen);
           return;
         }
         if (lower === "n") {
@@ -1970,12 +2419,12 @@ export function WorkspaceProvider({
         }
         if (lower === "b") {
           event.preventDefault();
-          setIsSidebarOpen((prev) => !prev);
+          toggleSidebar();
           return;
         }
         if (event.key === "\\") {
           event.preventDefault();
-          setIsRightPanelOpen((prev) => !prev);
+          toggleRightPanel();
           return;
         }
       }
@@ -1991,7 +2440,7 @@ export function WorkspaceProvider({
         }
         if (isCommandOpen) {
           event.preventDefault();
-          setIsCommandOpen(false);
+          setCommandOpen(false);
           return;
         }
         if (isSettingsOpen) {
@@ -2028,7 +2477,11 @@ export function WorkspaceProvider({
     isCommandOpen,
     isSettingsOpen,
     isStatsOpen,
+    setActiveView,
+    setCommandOpen,
     stopActiveRun,
+    toggleRightPanel,
+    toggleSidebar,
   ]);
 
   const selectedArtifact = useMemo(() => {
@@ -2056,14 +2509,39 @@ export function WorkspaceProvider({
   );
   const isRunningActiveSession =
     selectedSessionId !== null && runningSessionIds.includes(selectedSessionId);
+  const isAwaitingApprovalActiveSession = useMemo(
+    () =>
+      Boolean(
+        selectedSessionId &&
+          pendingPermissions.some(
+            (req) => req.session_id === selectedSessionId && req.status === "pending",
+          ),
+      ),
+    [pendingPermissions, selectedSessionId],
+  );
   const isCancellingActiveSession =
     selectedSessionId !== null && cancellingSessionIds.includes(selectedSessionId);
+  const isSidebarEffectiveOpen = isSidebarOpen && activeView === "chat";
+  const isActiveProjectArchived = (activeProject?.lifecycle_state ?? "active") === "archived";
+  const activeClarificationCard = useMemo(
+    () =>
+      selectedSessionId
+        ? (inboxCards.find(
+            (card) =>
+              card.session_id === selectedSessionId &&
+              card.status === "open" &&
+              card.kind === "clarification",
+          ) ?? null)
+        : null,
+    [inboxCards, selectedSessionId],
+  );
 
   const value = useMemo<WorkspaceContextValue>(
     () => ({
       state: {
         initialized,
         isLoading,
+        isSyncedAfterConnect,
         activeView,
         healthSnapshot,
         runtimeCatalog,
@@ -2078,6 +2556,7 @@ export function WorkspaceProvider({
         pendingPermissions,
         activeGrants,
         effects,
+        selectedProjectId,
         selectedSessionId,
         activeDetail,
         projectFiles,
@@ -2092,12 +2571,14 @@ export function WorkspaceProvider({
         cancellingSessionIds,
         stoppingTaskIds,
         cancelledNotice,
+        reconcileNotice,
         errorBanner,
         isRightPanelOpen,
         isSidebarOpen,
         isSettingsOpen,
         isStatsOpen,
         isCommandOpen,
+        commandInitialQuery,
         folderPickerIntent,
         searchQuery,
         selectedArtifactId,
@@ -2108,6 +2589,7 @@ export function WorkspaceProvider({
       },
       actions: {
         setActiveView,
+        selectProject,
         openSessionInChat,
         refreshAll,
         pollEventsNow,
@@ -2115,6 +2597,7 @@ export function WorkspaceProvider({
         refreshRuntimeCatalog,
         selectSession,
         createBlankChat,
+        createBlankChatWithDraft,
         createFolderlessProject,
         createProjectFromFolder,
         requestFolderPicker,
@@ -2153,16 +2636,17 @@ export function WorkspaceProvider({
         revokeCapabilityGrant,
         reconcileEffect,
         flushMemoryOutbox,
-        toggleRightPanel: () => setIsRightPanelOpen((prev) => !prev),
-        setRightPanelOpen: setIsRightPanelOpen,
-        toggleSidebar: () => setIsSidebarOpen((prev) => !prev),
-        setSidebarOpen: setIsSidebarOpen,
+        toggleRightPanel,
+        setRightPanelOpen,
+        toggleSidebar,
+        setSidebarOpen,
         setSettingsOpen: setIsSettingsOpen,
         setStatsOpen: setIsStatsOpen,
-        setCommandOpen: setIsCommandOpen,
+        setCommandOpen,
         setSearchQuery,
         dismissError: () => setErrorBanner(null),
         dismissCancelledNotice: () => setCancelledNotice(null),
+        dismissReconcileNotice: () => setReconcileNotice(null),
       },
       meta: {
         bridge,
@@ -2177,12 +2661,17 @@ export function WorkspaceProvider({
         queuedMessagesForActiveSession,
         optimisticMessagesForActiveSession,
         isRunningActiveSession,
+        isAwaitingApprovalActiveSession,
         isCancellingActiveSession,
+        isSidebarEffectiveOpen,
+        isActiveProjectArchived,
+        activeClarificationCard,
         activeTaskCount,
       },
     }),
     [
       activeAgent,
+      activeClarificationCard,
       activeDetail,
       activeGrants,
       activeProject,
@@ -2202,8 +2691,10 @@ export function WorkspaceProvider({
       cancelledNotice,
       cancellingSessionIds,
       closeFolderPicker,
+      commandInitialQuery,
       createArtifact,
       createBlankChat,
+      createBlankChatWithDraft,
       createFolderlessProject,
       createProjectFromFolder,
       createTask,
@@ -2220,6 +2711,8 @@ export function WorkspaceProvider({
       healthSnapshot,
       inboxCards,
       initialized,
+      isActiveProjectArchived,
+      isAwaitingApprovalActiveSession,
       isCancellingActiveSession,
       isCommandOpen,
       isFlushingOutbox,
@@ -2230,8 +2723,10 @@ export function WorkspaceProvider({
       isRightPanelOpen,
       isRunningActiveSession,
       isSettingsOpen,
+      isSidebarEffectiveOpen,
       isSidebarOpen,
       isStatsOpen,
+      isSyncedAfterConnect,
       isUpdatingModel,
       lastFlushSummary,
       openSessionInChat,
@@ -2246,6 +2741,7 @@ export function WorkspaceProvider({
       queuedMessagesForActiveSession,
       rebindProjectFolder,
       reconcileEffect,
+      reconcileNotice,
       reconnectWithUrl,
       refreshAll,
       refreshMemoryStats,
@@ -2263,18 +2759,26 @@ export function WorkspaceProvider({
       runtimeCatalog,
       searchQuery,
       selectArtifact,
+      selectProject,
       selectSession,
       selectedArtifact,
       selectedArtifactId,
+      selectedProjectId,
       selectedSessionId,
       sendMessage,
       sendTaskSignal,
       sessions,
+      setActiveView,
+      setCommandOpen,
+      setRightPanelOpen,
+      setSidebarOpen,
       stopActiveRun,
       stoppingTaskIds,
       streamCursor,
       submitFolderPickerPath,
       tasks,
+      toggleRightPanel,
+      toggleSidebar,
       unarchiveProject,
       unresolvedInboxCount,
       updateActiveAgentModel,

@@ -5,20 +5,19 @@ import type { Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+import { validateDevDirsRequest } from "./devPickerGuard";
+
 function dennettDevDirPickerPlugin(): Plugin {
   return {
     name: "dennett-dev-dir-picker",
     apply: "serve",
     configureServer(server) {
       server.middlewares.use("/__dennett_dev_dirs", (req, res) => {
-        if (req.method !== "GET") {
-          res.statusCode = 405;
-          res.end("Method Not Allowed");
-          return;
-        }
-        if (req.headers["sec-fetch-site"] === "cross-site") {
-          res.statusCode = 403;
-          res.end("Forbidden");
+        const verdict = validateDevDirsRequest(req.method, req.headers);
+        if (!verdict.ok) {
+          res.statusCode = verdict.status;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: verdict.message }));
           return;
         }
         try {

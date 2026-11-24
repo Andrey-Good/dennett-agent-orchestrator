@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowUp, Check, FolderOpen, FolderSimple, House, X } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { useModalFocusTrap } from "./useModalFocusTrap";
 
 interface DevDirsResponse {
   current: string;
@@ -19,34 +20,62 @@ export function DevFolderPickerModal() {
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const requestSeqRef = useRef(0);
+  const userEditedDraftRef = useRef(false);
+
+  useModalFocusTrap(dialogRef, Boolean(state.folderPickerIntent), actions.closeFolderPicker);
 
   const loadDirectory = useCallback(async (targetPath?: string): Promise<DevDirsResponse | null> => {
+    const seq = ++requestSeqRef.current;
+    const isInitialScan = targetPath === undefined;
+    if (!isInitialScan) {
+      userEditedDraftRef.current = false;
+    }
     setLoading(true);
     setError(null);
     try {
       const qs = targetPath ? `?path=${encodeURIComponent(targetPath)}` : "";
-      const resp = await fetch(`/__dennett_dev_dirs${qs}`);
+      const resp = await fetch(`/__dennett_dev_dirs${qs}`, {
+        headers: {
+          "X-Dennett-Dev-Picker": "1",
+        },
+      });
       const data = (await resp.json()) as DevDirsResponse;
+      if (seq !== requestSeqRef.current) {
+        return null;
+      }
       if (!resp.ok || data.error) {
         setError(data.error ?? `Не удалось открыть каталог (HTTP ${resp.status})`);
         return null;
       }
       setListing(data);
-      setPathDraft(data.current);
+      if (!isInitialScan || !userEditedDraftRef.current) {
+        setPathDraft(data.current);
+      }
       return data;
     } catch {
+      if (seq !== requestSeqRef.current) {
+        return null;
+      }
       setError("Локальный обозреватель папок доступен только в dev-режиме Vite.");
       return null;
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (state.folderPickerIntent) {
+      userEditedDraftRef.current = false;
+      setPathDraft("");
       setError(null);
       setConfirming(false);
       void loadDirectory();
+    } else {
+      requestSeqRef.current += 1;
     }
   }, [loadDirectory, state.folderPickerIntent]);
 
@@ -95,11 +124,13 @@ export function DevFolderPickerModal() {
       data-testid="dev-folder-picker-backdrop"
     >
       <div
+        ref={dialogRef}
         className="floating-dialog folder-picker-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={title}
         data-testid="dev-folder-picker-modal"
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="settings-sheet__header">
@@ -158,7 +189,10 @@ export function DevFolderPickerModal() {
             <input
               type="text"
               value={pathDraft}
-              onChange={(e) => setPathDraft(e.target.value)}
+              onChange={(e) => {
+                userEditedDraftRef.current = true;
+                setPathDraft(e.target.value);
+              }}
               aria-label="Путь к каталогу"
               placeholder="Путь к локальному каталогу…"
               data-testid="dev-folder-picker-path-input"

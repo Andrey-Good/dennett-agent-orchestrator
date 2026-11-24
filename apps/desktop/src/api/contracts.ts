@@ -5,6 +5,7 @@ export type MemoryStatus = "healthy" | "degraded_unreachable";
 export type MemoryOutboxStatus = "pending" | "delivered" | "failed";
 export type ThinkingLevel = "low" | "medium" | "high" | "xhigh";
 export type SessionStatus = "active" | "archived" | "closed";
+export type SessionKind = "user_chat" | "task_run";
 export type MessageRole = "user" | "assistant" | "system";
 export type RunStatus =
   | "running"
@@ -41,7 +42,8 @@ export type TaskStatus =
 export type ScheduleKind =
   | { kind: "once_at"; fire_at: number }
   | { kind: "interval"; interval_secs: number }
-  | { kind: "daily_wall_time"; hour: number; minute: number };
+  | { kind: "daily_wall_time"; hour: number; minute: number }
+  | { kind: "weekly_wall_time"; weekdays_mask: number; hour: number; minute: number };
 
 export type MissedRunPolicy = "execute_once" | "skip" | "ask";
 
@@ -72,6 +74,7 @@ export interface TaskUsage {
 }
 
 export type TaskTimerStatus = "pending" | "claimed" | "fired" | "paused" | "skipped" | "cancelled";
+export type TimerPauseReason = "archived_project" | "misfire_ask";
 
 export interface TaskTimerRecord {
   timer_id: string;
@@ -84,6 +87,7 @@ export interface TaskTimerRecord {
   recurrence_kind: string;
   missed_run_policy: MissedRunPolicy;
   status: TaskTimerStatus;
+  pause_reason?: TimerPauseReason | null;
   lease_owner?: string | null;
   lease_generation: number;
   lease_expires_at?: number | null;
@@ -132,6 +136,7 @@ export interface PermissionRequestRecord {
   target_summary: string;
   normalized_targets: string[];
   parameters_sha256: string;
+  preview_snippet?: string | null;
   reason: string;
   status: PermissionRequestStatus;
   issued_grant_id?: string | null;
@@ -379,6 +384,7 @@ export interface SessionRecord {
   agent_id: string;
   project_id: string;
   title: string;
+  session_kind?: SessionKind;
   runtime_binding?: RuntimeBinding | null;
   status: SessionStatus;
   created_at: number;
@@ -579,6 +585,7 @@ export interface CreateSessionRequest {
   agent_id: string;
   project_id: string;
   title: string;
+  session_kind?: SessionKind;
 }
 
 export interface UpdateSessionRequest {
@@ -696,6 +703,7 @@ export interface StateSnapshotResponse {
   inbox_cards: InboxCardRecord[];
   active_grants: CapabilityGrantRecord[];
   unresolved_inbox_count: number;
+  running_session_ids?: string[];
 }
 
 export interface EventStreamResponse {
@@ -897,6 +905,7 @@ export interface ReconcileEffectResponse {
   task?: TaskRecord | null;
   provider_found: boolean;
   provider_execution_count: number;
+  resolution_summary?: string;
 }
 
 export interface QueuedOfflineMessage {

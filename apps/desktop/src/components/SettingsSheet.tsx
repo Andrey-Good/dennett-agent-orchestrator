@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowsClockwise,
   Database,
@@ -9,6 +9,8 @@ import {
 } from "@phosphor-icons/react";
 
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { formatDecisionReasonRu } from "../utils/formatters";
+import { useModalFocusTrap } from "./useModalFocusTrap";
 
 export function SettingsSheet() {
   const { state, actions } = useWorkspace();
@@ -16,6 +18,12 @@ export function SettingsSheet() {
     state.healthSnapshot?.head_url ?? "http://127.0.0.1:41771",
   );
   const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  const closeSettings = useCallback(() => {
+    actions.setSettingsOpen(false);
+  }, [actions]);
+
+  useModalFocusTrap(dialogRef, state.isSettingsOpen, closeSettings);
 
   useEffect(() => {
     if (state.healthSnapshot?.head_url) {
@@ -68,7 +76,7 @@ export function SettingsSheet() {
   return (
     <div
       className="dialog-backdrop"
-      onMouseDown={() => actions.setSettingsOpen(false)}
+      onMouseDown={closeSettings}
       data-testid="settings-backdrop"
     >
       <div
@@ -78,6 +86,7 @@ export function SettingsSheet() {
         aria-modal="true"
         aria-label="Настройки и подключения"
         data-testid="settings-sheet"
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="settings-sheet__header">
@@ -88,7 +97,7 @@ export function SettingsSheet() {
           <button
             type="button"
             className="icon-button"
-            onClick={() => actions.setSettingsOpen(false)}
+            onClick={closeSettings}
             aria-label="Закрыть настройки"
           >
             <X size={16} />
@@ -162,6 +171,7 @@ export function SettingsSheet() {
                         {projectNames.get(grant.project_id) ?? grant.scope} · вызовов:{" "}
                         {grant.uses_consumed}
                         {grant.max_uses ? ` / ${grant.max_uses}` : ""}
+                        {grant.reason ? ` · ${formatDecisionReasonRu(grant.reason)}` : ""}
                       </small>
                     </div>
                     <button

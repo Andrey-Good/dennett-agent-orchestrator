@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
+  ArrowCounterClockwise,
   ArrowUp,
   Brain,
   CaretDown,
+  ChatCircleText,
   Check,
   Clock,
+  ListChecks,
   ShieldCheck,
   Sparkle,
   Stop,
@@ -12,6 +15,7 @@ import {
 
 import type { ThinkingLevel, WorkspaceWritePolicy } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { PortalPopover } from "./PortalPopover";
 
 type OpenComposerPopover = "access" | "model" | "thinking" | null;
 
@@ -65,18 +69,28 @@ function policyLabel(policy: WorkspaceWritePolicy | undefined, isFolderless: boo
 export function Composer() {
   const { state, actions, meta } = useWorkspace();
   const [openPopover, setOpenPopover] = useState<OpenComposerPopover>(null);
-  const shellRef = useRef<HTMLDivElement | null>(null);
+  const [submittingClarification, setSubmittingClarification] = useState(false);
+
+  const accessTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const thinkingTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const sessionId = state.selectedSessionId;
   const activeAgent = meta.activeAgent;
   const activeProject = meta.activeProject;
+  const isArchivedProject = meta.isActiveProjectArchived;
+  const isTaskRunSession = (meta.activeSession?.session_kind ?? "user_chat") === "task_run";
+  const clarificationCard = meta.activeClarificationCard;
   const isFolderless = activeProject ? !activeProject.workspace_path : false;
   const isConnected = Boolean(state.healthSnapshot?.connected);
   const isRunning = meta.isRunningActiveSession;
   const isCancelling = meta.isCancellingActiveSession;
   const hasDraft = meta.currentDraft.trim().length > 0;
-  // Allow submitting either online OR queueing offline with stable client_message_id!
-  const canSend = Boolean(sessionId) && !isRunning && hasDraft;
+
+  // Clarification reply routes through this single composer; otherwise normal send/offline queue.
+  const canSend = Boolean(sessionId) && hasDraft && (
+    clarificationCard ? isConnected && !submittingClarification : !isRunning
+  );
 
   const catalog = state.runtimeCatalog;
   const models = catalog?.models ?? [];
@@ -134,35 +148,35 @@ export function Composer() {
     el.style.height = `${nextHeight}px`;
   }, [meta.composerInputRef, meta.currentDraft, sessionId]);
 
-  useEffect(() => {
-    if (!openPopover) {
+  const submitCurrentInput = async () => {
+    if (!sessionId || !canSend) {
       return;
     }
-    const handlePointerDown = (event: MouseEvent) => {
-      if (shellRef.current && !shellRef.current.contains(event.target as Node)) {
-        setOpenPopover(null);
+    if (clarificationCard) {
+      const answerText = meta.currentDraft.trim();
+      if (!answerText) {
+        return;
       }
-    };
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpenPopover(null);
+      setSubmittingClarification(true);
+      try {
+        await actions.resolveInboxCard(clarificationCard.card_id, clarificationCard.revision, {
+          action: "clarification",
+          answer_text: answerText,
+        });
+        actions.updateDraft(sessionId, "");
+      } finally {
+        setSubmittingClarification(false);
       }
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown, { capture: true });
-    };
-  }, [openPopover]);
+      return;
+    }
+    await actions.sendMessage();
+  };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       if (canSend) {
-        void actions.sendMessage();
+        void submitCurrentInput();
       }
     } else if (event.key === "Escape" && isRunning && !openPopover && !event.defaultPrevented) {
       event.preventDefault();
@@ -197,115 +211,189 @@ export function Composer() {
     ? (thinkingLabelMap[currentThinking] ?? currentThinking)
     : "Thinking";
 
+  // D2-UX-03: Archived project is strictly read-only until unarchived.
+  if (isArchivedProject && activeProject) {
+    return (
+      <div className="composer-region">
+        <div className="composer-readonly-bar" data-testid="composer-archived-banner">
+          <span>Проект «{activeProject.name}» в архиве — просмотр истории в режиме чтения.</span>
+          <button
+            type="button"
+            className="popover-secondary-btn"
+            data-testid="composer-unarchive-project-btn"
+            onClick={() => void actions.unarchiveProject(activeProject.project_id)}
+          >
+            <ArrowCounterClockwise size={14} aria-hidden="true" />
+            Вернуть из архива
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // D2-UX-03 / D2-UX-05: Background task_run logs stay clean & read-only unless awaiting clarification.
+  if (isTaskRunSession && !clarificationCard) {
+    return (
+      <div className="composer-region">
+        <div className="composer-readonly-bar" data-testid="composer-task-run-banner">
+          <span>
+            Это журнал фонового события — управление расписанием и сигналами доступно в разделе
+            «Поручения».
+          </span>
+          <div className="composer-readonly-bar__actions">
+            {isRunning && (
+              <button
+                type="button"
+                className="d2-danger-btn d2-danger-btn--sm"
+                onClick={() => void actions.stopActiveRun()}
+                disabled={isCancelling}
+                data-testid="composer-stop-button"
+              >
+                <Stop size={12} weight="fill" aria-hidden="true" />
+                Stop
+              </button>
+            )}
+            <button
+              type="button"
+              className="popover-secondary-btn"
+              onClick={() => actions.setActiveView("tasks")}
+            >
+              <ListChecks size={14} aria-hidden="true" />
+              Открыть Поручения
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="composer-region">
-      <div className="composer-shell" ref={shellRef}>
-        {openPopover === "access" && activeAgent && !isFolderless && (
-          <div
-            className="floating-popover composer-popover popover-left"
-            role="menu"
-            aria-label="Доступ к файлам проекта"
-            data-testid="access-popover"
-          >
-            <strong>Доступ к файлам</strong>
-            <p>Политика проверяется внешним PolicyEngine до выполнения инструмента.</p>
-            {activeAgent.current_config.workspace_write_policy.mode === "allow_paths" && (
-              <p className="popover-readonly-note" data-testid="cli-write-policy-note">
-                Активна политика из CLI: <strong>Ограниченная запись (CLI)</strong>. Выберите режим
-                ниже, если хотите изменить доступ.
-              </p>
-            )}
-            {WRITE_POLICY_ITEMS.map((item) => {
-              const isSelected = activeAgent.current_config.workspace_write_policy.mode === item.mode;
-              return (
-                <button
-                  key={item.mode}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={isSelected}
-                  className={isSelected ? "is-selected" : ""}
-                  data-testid={`write-policy-option-${item.mode}`}
-                  onClick={() => {
-                    setOpenPopover(null);
-                    void actions.updateActiveAgentWritePolicy({ mode: item.mode });
-                  }}
-                >
-                  <span className="popover-option-copy">
-                    <strong>{item.label}</strong>
-                    <small>{item.description}</small>
-                  </span>
-                  {isSelected && <Check size={14} aria-hidden="true" />}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {openPopover === "model" && (
-          <div
-            className="floating-popover composer-popover popover-right popover-models"
-            role="menu"
-            aria-label="Выбор модели агента"
-            data-testid="model-popover"
-          >
-            <strong>Модель</strong>
-            <p>
-              {catalog?.is_simulated
-                ? "Динамический список моделей тестового контура."
-                : `Живой список моделей ${catalog?.tier ?? "Antigravity ACP"}.`}
-            </p>
-            <div className="popover-scroll-list">
-              {models.length === 0 ? (
-                <p className="popover-empty">Список моделей загружается…</p>
-              ) : (
-                models.map((opt) => {
-                  const isSelected = opt.model_id === (selectedModelOption?.model_id ?? currentModelId);
-                  return (
-                    <button
-                      key={opt.model_id}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={isSelected}
-                      className={isSelected ? "is-selected" : ""}
-                      data-testid={`model-option-${opt.model_id}`}
-                      onClick={() => handleSelectModel(opt.model_id)}
-                    >
-                      <span className="popover-model-name">{opt.label}</span>
-                      {isSelected && <Check size={14} aria-hidden="true" />}
-                    </button>
-                  );
-                })
+      <div className="composer-shell">
+        <PortalPopover
+          isOpen={openPopover === "access" && Boolean(activeAgent) && !isFolderless}
+          anchorEl={accessTriggerRef.current}
+          onClose={() => setOpenPopover(null)}
+          placement="top-start"
+          className="composer-popover"
+          role="menu"
+          ariaLabel="Доступ к файлам проекта"
+          testId="access-popover"
+        >
+          {activeAgent && (
+            <>
+              <strong>Доступ к файлам</strong>
+              <p>Политика проверяется внешним PolicyEngine до выполнения инструмента.</p>
+              {activeAgent.current_config.workspace_write_policy.mode === "allow_paths" && (
+                <p className="popover-readonly-note" data-testid="cli-write-policy-note">
+                  Активна политика из CLI: <strong>Ограниченная запись (CLI)</strong>. Выберите режим
+                  ниже, если хотите изменить доступ.
+                </p>
               )}
-            </div>
-          </div>
-        )}
+              {WRITE_POLICY_ITEMS.map((item) => {
+                const isSelected =
+                  activeAgent.current_config.workspace_write_policy.mode === item.mode;
+                return (
+                  <button
+                    key={item.mode}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isSelected}
+                    className={isSelected ? "is-selected" : ""}
+                    data-testid={`write-policy-option-${item.mode}`}
+                    onClick={() => {
+                      setOpenPopover(null);
+                      void actions.updateActiveAgentWritePolicy({ mode: item.mode });
+                    }}
+                  >
+                    <span className="popover-option-copy">
+                      <strong>{item.label}</strong>
+                      <small>{item.description}</small>
+                    </span>
+                    {isSelected && <Check size={14} aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </PortalPopover>
 
-        {openPopover === "thinking" && supportedThinkingLevels.length > 0 && (
-          <div
-            className="floating-popover composer-popover popover-right popover-thinking"
-            role="menu"
-            aria-label="Уровень размышления"
-            data-testid="thinking-popover"
-          >
-            <strong>Уровень размышления</strong>
-            <p>Глубина рассуждений для {selectedModelOption?.label ?? "выбранной модели"}.</p>
-            {supportedThinkingLevels.map((lvl) => {
-              const isSelected = lvl === currentThinking;
-              return (
-                <button
-                  key={lvl}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={isSelected}
-                  className={isSelected ? "is-selected" : ""}
-                  data-testid={`thinking-option-${lvl}`}
-                  onClick={() => handleSelectThinking(lvl)}
-                >
-                  <span>{thinkingLabelMap[lvl] ?? lvl}</span>
-                  {isSelected && <Check size={14} aria-hidden="true" />}
-                </button>
-              );
-            })}
+        <PortalPopover
+          isOpen={openPopover === "model"}
+          anchorEl={modelTriggerRef.current}
+          onClose={() => setOpenPopover(null)}
+          placement="top-end"
+          className="composer-popover popover-models"
+          role="menu"
+          ariaLabel="Выбор модели агента"
+          testId="model-popover"
+        >
+          <strong>Модель</strong>
+          <p>
+            {catalog?.is_simulated
+              ? "Динамический список моделей тестового контура."
+              : `Живой список моделей ${catalog?.tier ?? "Antigravity ACP"}.`}
+          </p>
+          <div className="popover-scroll-list">
+            {models.length === 0 ? (
+              <p className="popover-empty">Список моделей загружается…</p>
+            ) : (
+              models.map((opt) => {
+                const isSelected = opt.model_id === (selectedModelOption?.model_id ?? currentModelId);
+                return (
+                  <button
+                    key={opt.model_id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isSelected}
+                    className={isSelected ? "is-selected" : ""}
+                    data-testid={`model-option-${opt.model_id}`}
+                    onClick={() => handleSelectModel(opt.model_id)}
+                  >
+                    <span className="popover-model-name">{opt.label}</span>
+                    {isSelected && <Check size={14} aria-hidden="true" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </PortalPopover>
+
+        <PortalPopover
+          isOpen={openPopover === "thinking" && supportedThinkingLevels.length > 0}
+          anchorEl={thinkingTriggerRef.current}
+          onClose={() => setOpenPopover(null)}
+          placement="top-end"
+          className="composer-popover popover-thinking"
+          role="menu"
+          ariaLabel="Уровень размышления"
+          testId="thinking-popover"
+        >
+          <strong>Уровень размышления</strong>
+          <p>Глубина рассуждений для {selectedModelOption?.label ?? "выбранной модели"}.</p>
+          {supportedThinkingLevels.map((lvl) => {
+            const isSelected = lvl === currentThinking;
+            return (
+              <button
+                key={lvl}
+                type="button"
+                role="menuitemradio"
+                aria-checked={isSelected}
+                className={isSelected ? "is-selected" : ""}
+                data-testid={`thinking-option-${lvl}`}
+                onClick={() => handleSelectThinking(lvl)}
+              >
+                <span>{thinkingLabelMap[lvl] ?? lvl}</span>
+                {isSelected && <Check size={14} aria-hidden="true" />}
+              </button>
+            );
+          })}
+        </PortalPopover>
+
+        {clarificationCard && (
+          <div className="composer-clarification-hint" data-testid="composer-clarification-hint">
+            <ChatCircleText size={14} aria-hidden="true" />
+            <span>Ответ на уточняющий вопрос агента будет передан в активное поручение</span>
           </div>
         )}
 
@@ -315,11 +403,17 @@ export function Composer() {
             className="composer__input"
             rows={1}
             placeholder={
-              isConnected
-                ? "Напишите поручение агенту…"
-                : "Офлайн-черновик — нажмите Enter, чтобы поставить в очередь отправки…"
+              clarificationCard
+                ? "Ответьте на уточняющий вопрос агента…"
+                : isConnected
+                  ? "Напишите поручение агенту…"
+                  : "Офлайн-черновик — нажмите Enter, чтобы поставить в очередь отправки…"
             }
-            aria-label="Поле ввода сообщения"
+            aria-label={
+              clarificationCard
+                ? "Ответ на уточняющий вопрос агента"
+                : "Поле ввода сообщения"
+            }
             value={meta.currentDraft}
             disabled={!sessionId}
             onChange={(e) => {
@@ -334,6 +428,7 @@ export function Composer() {
             <div className="composer-tools">
               {activeAgent && (
                 <button
+                  ref={accessTriggerRef}
                   type="button"
                   className={`composer-setting ${isFolderless ? "is-static" : ""}`}
                   disabled={isFolderless || state.isUpdatingModel || !isConnected}
@@ -351,7 +446,9 @@ export function Composer() {
                   }
                 >
                   <ShieldCheck size={15} aria-hidden="true" />
-                  <span>{policyLabel(activeAgent.current_config.workspace_write_policy, isFolderless)}</span>
+                  <span>
+                    {policyLabel(activeAgent.current_config.workspace_write_policy, isFolderless)}
+                  </span>
                   {!isFolderless && <CaretDown size={11} aria-hidden="true" />}
                 </button>
               )}
@@ -361,6 +458,7 @@ export function Composer() {
               {activeAgent && (
                 <>
                   <button
+                    ref={modelTriggerRef}
                     type="button"
                     className="runtime-setting"
                     disabled={state.isUpdatingModel || !isConnected || models.length === 0}
@@ -379,6 +477,7 @@ export function Composer() {
 
                   {supportedThinkingLevels.length > 0 ? (
                     <button
+                      ref={thinkingTriggerRef}
                       type="button"
                       className="runtime-setting runtime-setting--thinking"
                       disabled={state.isUpdatingModel || !isConnected}
@@ -407,7 +506,7 @@ export function Composer() {
                 </>
               )}
 
-              {isRunning ? (
+              {isRunning && !clarificationCard ? (
                 <button
                   type="button"
                   className="send-button stop-button"
@@ -422,22 +521,26 @@ export function Composer() {
               ) : (
                 <button
                   type="button"
-                  className={`send-button ${!isConnected ? "send-button--queue" : ""}`}
-                  onClick={() => void actions.sendMessage()}
+                  className={`send-button ${!isConnected && !clarificationCard ? "send-button--queue" : ""}`}
+                  onClick={() => void submitCurrentInput()}
                   disabled={!canSend}
                   aria-label={
-                    isConnected
-                      ? "Отправить сообщение"
-                      : "Поставить сообщение в офлайн-очередь"
+                    clarificationCard
+                      ? "Отправить ответ на уточнение"
+                      : isConnected
+                        ? "Отправить сообщение"
+                        : "Поставить сообщение в офлайн-очередь"
                   }
                   data-testid="send-button"
                   title={
-                    isConnected
-                      ? "Отправить (Enter)"
-                      : "Поставить в очередь до восстановления сети (Enter)"
+                    clarificationCard
+                      ? "Ответить агенту (Enter)"
+                      : isConnected
+                        ? "Отправить (Enter)"
+                        : "Поставить в очередь до восстановления сети (Enter)"
                   }
                 >
-                  {isConnected ? (
+                  {isConnected || clarificationCard ? (
                     <ArrowUp size={15} weight="bold" />
                   ) : (
                     <Clock size={15} weight="bold" />

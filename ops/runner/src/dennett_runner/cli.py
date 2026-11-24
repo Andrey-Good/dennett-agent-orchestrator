@@ -24,7 +24,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
 MIN_INTEGRATION_TESTS = 46
-MIN_DESKTOP_FRONTEND_TESTS = 32
+MIN_DESKTOP_FRONTEND_TESTS = 41
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
@@ -1365,12 +1365,33 @@ def _check_windows_binary_unlocked(binary_path: Path, label: str) -> None:
         ) from exc
 
 
+def _resolve_catalog_default_model(head_http_url: str) -> str | None:
+    """Query live runtime catalog so starter agents default to the runtime's primary model."""
+    try:
+        opener = build_opener(ProxyHandler({}))
+        req = Request(f"{head_http_url}/v1/runtime/catalog", method="GET")
+        with opener.open(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        default_id = payload.get("default_model_id")
+        if isinstance(default_id, str) and default_id.strip():
+            return default_id.strip()
+        models = payload.get("models")
+        if isinstance(models, list) and models:
+            first_id = models[0].get("model_id")
+            if isinstance(first_id, str) and first_id.strip():
+                return first_id.strip()
+    except Exception:
+        return None
+    return None
+
+
 def _preseed_demo_d1_workspace(
     head_http_url: str,
     workspace_dir: Path,
     memory_scope: str,
 ) -> dict[str, str]:
     """Pre-seed a clean starter workspace, agent, and blank chat ready for immediate typing."""
+    default_model_id = _resolve_catalog_default_model(head_http_url)
     project = _post_loopback_json(
         head_http_url,
         "/v1/projects",
@@ -1380,25 +1401,24 @@ def _preseed_demo_d1_workspace(
             "memory_scope": memory_scope,
         },
     )
-    agent = _post_loopback_json(
-        head_http_url,
-        "/v1/agents",
-        {
-            "name": "Проектный агент",
-            "description": "Проектный агент Dennett",
-            "system_prompt": (
-                f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
-                f"`{memory_scope}` для чтения и записи проектных решений, MCP-инструменты "
-                f"`dennett-control` (`dennett_event_create`, `dennett_event_list`, "
-                f"`dennett_event_update`, `dennett_event_cancel`) для создания и управления "
-                f"расписаниями и отложенными событиями проекта, и сохраняй результаты в рабочей "
-                f"папке проекта."
-            ),
-            "thinking_level": "medium",
-            "allowed_memory_scopes": [memory_scope],
-            "workspace_write_policy": {"mode": "allow_workspace"},
-        },
-    )
+    agent_payload: dict[str, Any] = {
+        "name": "Проектный агент",
+        "description": "Проектный агент Dennett",
+        "system_prompt": (
+            f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
+            f"`{memory_scope}` для чтения и записи проектных решений, MCP-инструменты "
+            f"`dennett-control` (`dennett_event_create`, `dennett_event_list`, "
+            f"`dennett_event_update`, `dennett_event_cancel`) для создания и управления "
+            f"расписаниями и отложенными событиями проекта, и сохраняй результаты в рабочей "
+            f"папке проекта."
+        ),
+        "thinking_level": "medium",
+        "allowed_memory_scopes": [memory_scope],
+        "workspace_write_policy": {"mode": "allow_workspace"},
+    }
+    if default_model_id:
+        agent_payload["model_preference"] = default_model_id
+    agent = _post_loopback_json(head_http_url, "/v1/agents", agent_payload)
     session = _post_loopback_json(
         head_http_url,
         "/v1/sessions",
@@ -1682,6 +1702,7 @@ def _preseed_demo_d2_workspace(
     memory_scope: str,
 ) -> dict[str, str]:
     """Pre-seed a clean D2 starter workspace with interactive `ask_before_write` policy."""
+    default_model_id = _resolve_catalog_default_model(head_http_url)
     project = _post_loopback_json(
         head_http_url,
         "/v1/projects",
@@ -1691,25 +1712,24 @@ def _preseed_demo_d2_workspace(
             "memory_scope": memory_scope,
         },
     )
-    agent = _post_loopback_json(
-        head_http_url,
-        "/v1/agents",
-        {
-            "name": "Проектный агент",
-            "description": "Проектный агент Dennett (D2: интерактивные подтверждения, поручения и таймеры)",
-            "system_prompt": (
-                f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
-                f"`{memory_scope}` для чтения и записи проектных решений, MCP-инструменты "
-                f"`dennett-control` (`dennett_event_create`, `dennett_event_list`, "
-                f"`dennett_event_update`, `dennett_event_cancel`) для создания и управления "
-                f"расписаниями и отложенными событиями проекта, и сохраняй результаты в рабочей "
-                f"папке проекта."
-            ),
-            "thinking_level": "medium",
-            "allowed_memory_scopes": [memory_scope],
-            "workspace_write_policy": {"mode": "ask_before_write"},
-        },
-    )
+    agent_payload: dict[str, Any] = {
+        "name": "Проектный агент",
+        "description": "Проектный агент Dennett (D2: интерактивные подтверждения, поручения и таймеры)",
+        "system_prompt": (
+            f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
+            f"`{memory_scope}` для чтения и записи проектных решений, MCP-инструменты "
+            f"`dennett-control` (`dennett_event_create`, `dennett_event_list`, "
+            f"`dennett_event_update`, `dennett_event_cancel`) для создания и управления "
+            f"расписаниями и отложенными событиями проекта, и сохраняй результаты в рабочей "
+            f"папке проекта."
+        ),
+        "thinking_level": "medium",
+        "allowed_memory_scopes": [memory_scope],
+        "workspace_write_policy": {"mode": "ask_before_write"},
+    }
+    if default_model_id:
+        agent_payload["model_preference"] = default_model_id
+    agent = _post_loopback_json(head_http_url, "/v1/agents", agent_payload)
     session = _post_loopback_json(
         head_http_url,
         "/v1/sessions",
