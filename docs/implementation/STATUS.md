@@ -4,7 +4,7 @@
 
 ## Текущая работа
 
-Текущий этап: **D2 («Поручения, автономное ожидание и предсказуемая остановка»)**. Состояние: **Slice A (`34d67ac`) + Slice B + `H2-01`..`H2-08` (`3c2368e`) + Slice R1 backend/security/MCP hardening (`d1c2acf`, схема `control` `v6`, `dennett-control-mcp`, `D2-SEC-01/02`, `D2-ARCH-01..03`, `D2-BUG-01..05`, `D2-OVER-01/02`) + Slice R2 Desktop UI, Tauri Mica & Vite hardening (рабочая копия поверх `d1c2acf`, все 3 прямые UX-директивы владельца + `D2-SEC-03`, `D2-ARCH-01` UI, `D2-OVER-03`, `D2-BUG-06`, `D2-UX-01`..`06`) реализованы и проверены локально; ожидается финальный живой браузерный UI/UX-обход и независимая верификация R2 перед остановкой H2**. До явного принятия H2 переход к D3 не начинается.
+Текущий этап: **D2 («Поручения, автономное ожидание и предсказуемая остановка»)**. Состояние: **завершён и верифицирован полностью (`d2/durable-runs-and-stop`, схема `control` `v7`)** — включая Slice A/B, закрытие всех 21 замечаний внешнего аудита, `dennett-control-mcp`, все UX-директивы владельца, а также одиночные чаты вне проектов («Чаты» под «Проекты» с пропорцией `≤ 2/3 : ≥ 1/3` и независимыми скроллами), закрепление проектов и чатов и кнопку копирования сообщений в ленте. Пройдены живой браузерный UI/UX-обход на Carbon (с прямой сверкой с эталоном) и независимое ревью на Claude Opus 4.6 (`[]`). Ожидается финальная отмашка на старт **D3**.
 
 Запись приёмки **H0** (2026-11-23): владелец явно принял этап D0 (`d0/foundation` @ `1a40e46`, CI [#45179510052](https://github.com/Andrey-Good/dennett-agent-orchestrator/actions/runs/45179510052)) и разрешил запуск D1.
 Запись приёмки **H1** (2026-11-24): этап D1 (`d1/first-vertical-slice` @ `7496ee2`, `H1-01`..`H1-08` закрыты) принят владельцем; разрешён запуск этапа D2 на ветке `d2/durable-runs-and-stop`.
@@ -23,19 +23,20 @@
   - **`D2-SEC-03` (`apps/desktop/devPickerGuard.ts`, `vite.config.ts`, `DevFolderPickerModal.tsx`)**: отказ на non-loopback `Host`/`Origin`, обязательные `Sec-Fetch-Site: same-origin` и заголовок `X-Dennett-Dev-Picker: 1` для `/__dennett_dev_dirs`;
   - **`D2-ARCH-01` + `D2-OVER-03` + `D2-BUG-06` (`WorkspaceProvider.tsx`, `MessageTimeline.tsx`)**: серверный `running_session_ids` без локальной блокировки `cancelSessionRun`; single-flight coalescing и монотонный `snapshotSeqRef`, спокойный ритм опроса (`2500ms` idle / `1000ms` active / `5000ms` hidden), сдвиг `streamCursorRef` только после успешного применения снимка, исправленный холодный реконнект при `sessions.length === 0`, явное подтверждение владельцем отправки офлайн-очереди без слепого авто-flush с пропуском терминальных `404`/`409` без клина очереди и строгая дедупликация оптимистических пузырей по `client_message_id`;
   - **`D2-UX-01`..`06` (`src-tauri/src/lib.rs`, `commands.rs`, `PortalPopover.tsx`, `useModalFocusTrap.ts`, `ProjectScopeFilter.tsx`, `TitleBar.tsx`, `Sidebar.tsx`, `WorkspacePanel.tsx`, `Composer.tsx`, `TasksCard.tsx`, `InboxRadarCard.tsx`, `StatusBanners.tsx`, `SettingsSheet.tsx`, `CommandPalette.tsx`, `tokens.css`, `desktop.css`, `ops/runner/src/dennett_runner/cli.py`)**: проба Mica с `is_mica_available` и solid dark fallback (`native-mica-unavailable` + `prefers-reduced-transparency: reduce`), плотность `.workspace-panel` `rgba(38, 38, 38, 0.50)`, двойной клик `TitleBar` → `toggleMaximize()` и защита `.command-search` от drag, единая плашка `SIMULATED`, адаптивный `960x620` (<1100px авто-свёртывание соседней панели), единый `PortalPopover` в `document.body` со взаимным исключением и capture-phase `Escape`, тёмный `:hover` на `.send-button.stop-button`, единые тёмные скроллбары без белых кнопок, скрытие `task_run` в `Sidebar` с сохранением «Открыть чат», инспекция архивных проектов в режиме чтения, подтверждение перед `remove`/`delete` проекта и `delete` артефакта, кликабельное переименование чата в шапке, сворачиваемое дерево файлов и архив артефактов без пустой кнопки `⋯` на tombstone, `SHA-256` + Копировать + безопасный Markdown-просмотр (`skipHtml`), синхронизация стартовой модели агента с `default_model_id`, честный статус «Ожидает подтверждения» с redacted `preview_snippet`, прямая сверка `UNKNOWN` в `TasksCard` с баннером вердикта, inline-карточки `budget_exceeded`/`missed_schedule`, единственное поле ввода при `waiting_clarification`, человеческий обратный отсчёт `через Xч Yм`, сохранение позиции скролла и `useModalFocusTrap` с возвратом фокуса.
-  - `ops/runner`: порог `MIN_DESKTOP_FRONTEND_TESTS` поднят с `32` до `41`, стартовые агенты `demo-d1`/`demo-d2` синхронизируются с `default_model_id` живого каталога.
+  - `ops/runner`: пороги подняты до `MIN_DESKTOP_FRONTEND_TESTS = 45` и `MIN_INTEGRATION_TESTS = 55`, стартовые агенты `demo-d1`/`demo-d2` синхронизируются с `default_model_id` живого каталога.
+- `c76c395` + `b08e56a` + `0b3c22c` — **Одиночные чаты, пины и `Copy` (схема `v7`, параллельные `share`-ворктри + Carbon Chromium + Claude Opus 4.6 `[]`)**:
+  - forward-миграция `services/head/migrations/0007_standalone_chats_and_pins.sql` (`LATEST_CONTROL_SCHEMA_VERSION = 7`): `sessions.project_id` и `artifacts.project_id` стали `NULLABLE`, добавлены `pinned`/`pinned_at` и индексы сортировки на `projects` и `sessions`;
+  - одиночные чаты работают изолированно (`DenyAll`, отдельный scratch-каталог, скоуп памяти `chat:standalone`, без `dennett-control-mcp`), поддерживают inline-артефакты, автозаголовок и выживают при архивации/удалении проектов;
+  - в `Sidebar` реализованы две независимые скроллируемые секции («Проекты» `max-height: 66.666%` и «Чаты» `min-height: 33.334%` со своим `+`), закрепление проектов и чатов (`PushPin`), крошки `Чаты / <название>`, и кнопка копирования (`Copy`) на сообщениях пользователя и ассистента в `MessageTimeline`.
 
-## Подтверждённые проверки D2 (рабочая копия Slice R2 поверх `d1c2acf`)
+## Подтверждённые проверки D2 (`d2/durable-runs-and-stop`, схема `v7`)
 
 - **Локально на Windows 11 (2026-11-24):**
-  - `uv run --project ops/runner dennett-check all --manage-pg` — PASS:
-    - `docs`: **112** Markdown-файлов, **4286** локальных ссылок валидны;
-    - `deps`: **505** locked crates, все границы сохранены (`dennett-contracts` direct = `['serde', 'thiserror', 'uuid']`, `dennett-head` не зависит от `dennett-memory-core`, `dennett-desktop` изолирован от `Head`/`memory-core`/PG/`antigravity-acp`, 0 `claude`/`codex`/`openai`/`anthropic`);
-    - `fast`: `tsc --noEmit`, Vitest **41/41** (`DesktopApp.test.tsx` 20 + `D2DesktopFlows.test.tsx` 12 + `SliceR2Hardening.test.tsx` 9; 0 failed, 0 skipped), Vite production build (`rg "__dennett_dev_head|__dennett_dev_dirs|DevFolderPickerModal" --no-ignore apps/desktop/dist` = **0 совпадений**), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --no-deps` (`-D warnings`), `cargo test --doc`, fast nextest **139/139** (0 skipped, 0 leaky);
-    - `self-check`: **4/4** инварианта harness подтверждены;
-    - `integration --manage-pg`: **52/52** реальных PostgreSQL 16 + мультипроцессных тестов (0 skipped, 0 leaky; схема `control` `v6`, включая D1-регрессии, `head_d2_concurrency_integration`, `head_d2_durable_and_stop_integration`, `head_d2_hardening_r1_integration` и `desktop_bridge_v03_integration`).
-  - Нативная сборка Tauri 2: `cargo build -p dennett-desktop --features custom-protocol` — PASS (`target/debug/dennett-desktop.exe`, без запуска окна; 0 предупреждений).
-  - `uv run --project ops/runner dennett-check runtime-probe` (живой `agy acp 1.5.15`, `Google AI Ultra`): PASS (**4/4** живых E2E теста — `acp_live_probe` 2/2 + `head_live_agy_e2e` 2/2; реальный `~/.gemini/antigravity-cli/conversations` не тронут: `before=25 after=25`, 0 висящих контейнеров).
+  - `docs`: **112** Markdown-файлов, **4287** локальных ссылок валидны; `deps`: **505** locked crates, все границы сохранены;
+  - `fast`: `tsc --noEmit`, Vitest **45/45** (`0 failed, 0 skipped`), Vite production build (`0` dev-утечек в `dist`), `rustfmt`, `clippy -D warnings`, `rustdoc -D warnings`, doctests, fast nextest **142/142** (`0 skipped, 0 leaky`);
+  - `integration --manage-pg`: **55/55** реальных PostgreSQL 16 + мультипроцессных тестов (`0 skipped, 0 leaky`, схема `control` `v7`);
+  - Нативная сборка Tauri 2: `cargo build -p dennett-desktop --features custom-protocol` — PASS;
+  - Живой браузерный аудит на Carbon (`1280x800` и `960x620` поверх реального `agy acp 1.5.15`, `0` ошибок) и независимое ревью диффа на Claude Opus 4.6 (`[]`).
 
 ## Ограничения D2 (граница этапа)
 
@@ -48,7 +49,7 @@
 
 - D0 — основа/проверки: **принят (H0 принят владельцем 2026-11-23 на `d0/foundation` `1a40e46`)**.
 - D1 — агент (`agy acp`) + `memoryd` + реальный сохраняемый чат: **принят (H1 принят владельцем 2026-11-24 на `d1/first-vertical-slice` `7496ee2`)**.
-- D2 — длительные поручения/ожидание/отмена: **Slice R1 (`d1c2acf`) верифицирован, Slice R2 реализован и прошёл автоматические проверки на `d2/durable-runs-and-stop` (схема `v6`, Vitest 41/41, fast 139/139, integration 52/52, live runtime-probe 4/4, закрыты замечания живого ревью `R2-UI-01`..`R2-UI-07`); ожидает повторного живого браузерного UI/UX-ревью и верификации R2 перед приёмкой H2 владельцем**.
+- D2 — длительные поручения/ожидание/отмена: **завершён и верифицирован на `d2/durable-runs-and-stop` (схема `v7`: все 21 аудит-фиксы, `dennett-control-mcp`, одиночные чаты `2/3:1/3`, пины, `Copy`, Carbon live browser + Claude Opus 4.6 `[]`); готов к финальному закрытию H2 и переходу к D3**.
 - D3 — полная память и подключения: не начат; H3 не принят.
 - D4 — графика и рабочие экраны: не начат; H4 не принят.
 - D5 — устройства и полный резерв: не начат; H5 не принят.
@@ -72,4 +73,4 @@
 
 ## Открытые дефекты новой программы
 
-Открытых блокирующих дефектов D0/D1/D2 нет; все 8 дефектов аудита H1 (`H1-01`..`H1-08`), все 8 дефектов полного аудита H2 (`H2-01`..`H2-08`) и весь контур укрепления Slice R1 (`d1c2acf`) + Slice R2 (`D2-SEC-01..03`, `D2-ARCH-01..03`, `D2-BUG-01..06`, `D2-OVER-01..03`, `D2-UX-01..06` + 3 прямые UX-директивы владельца) исправлены и покрыты автоматическими тестами. Ожидается финальное живое браузерное ревью R2, независимая верификация R2 и приёмка H2 владельцем.
+Открытых блокирующих дефектов D0/D1/D2 нет; все дефекты H1, H2, внешнего аудита (21 пункт) и живого браузерного ревью одиночных чатов/пинов (`CHATS-UI-01`/`02`) закрыты и подтверждены тестами, живым браузером и ревью на Claude Opus 4.6 (`[]`).
