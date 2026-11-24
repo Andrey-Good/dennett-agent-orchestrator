@@ -863,6 +863,9 @@ pub struct TaskRecord {
     /// Optional human-readable explanation of what the task is waiting on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_detail: Option<String>,
+    /// Structured signal name expected while `status == WaitingSignal` (H2-04).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_signal_name: Option<String>,
     /// Preserved partial or final result summary (survives cancellation).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_result_summary: Option<String>,

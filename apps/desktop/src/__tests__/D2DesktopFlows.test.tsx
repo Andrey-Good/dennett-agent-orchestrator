@@ -821,4 +821,312 @@ describe("Dennett Desktop Phase D2 UI", () => {
     expect(css).toContain(".project-action-menu--up");
     expect(html).toContain('rel="icon"');
   });
+
+  it("H2-03: archiving active project switches session and hides its tasks/inbox badge, and deleting project clears all orphaned state", async () => {
+    const user = userEvent.setup();
+    const { now, project, agent, session } = makeD2Fixture();
+
+    const projectB: ProjectRecord = {
+      project_id: "10000000-0000-4000-8000-000000000602",
+      name: "Второй активный проект",
+      workspace_path: "A:/Dev/second-proj",
+      memory_scope: "project:second-proj",
+      lifecycle_state: "active",
+      archived_at: null,
+      created_at: now - 50_000,
+    };
+    const sessionB: SessionRecord = {
+      session_id: "30000000-0000-4000-8000-000000000602",
+      agent_id: agent.agent_id,
+      project_id: projectB.project_id,
+      title: "Чат второго проекта",
+      status: "active",
+      created_at: now - 40_000,
+      updated_at: now - 40_000,
+    };
+    const taskA: TaskRecord = {
+      task_id: "75000000-0000-4000-8000-000000000601",
+      project_id: project.project_id,
+      session_id: session.session_id,
+      agent_id: agent.agent_id,
+      title: "Поручение первого проекта",
+      goal: "Поручение первого проекта",
+      generation: 1,
+      status: "waiting_signal",
+      expected_signal_name: "deploy_ok",
+      wait_detail: "Ожидает сигнал deploy_ok",
+      schedule: null,
+      budget: {},
+      usage: { turns_used: 0, tokens_used: 0, wall_ms_used: 0, confidence: "provider_reported" },
+      attached_skills: [],
+      created_at: now - 10_000,
+      updated_at: now - 10_000,
+    };
+    const cardA: InboxCardRecord = {
+      card_id: "89000000-0000-4000-8000-000000000601",
+      project_id: project.project_id,
+      session_id: session.session_id,
+      task_id: taskA.task_id,
+      agent_id: agent.agent_id,
+      kind: "clarification",
+      status: "open",
+      urgency: "normal",
+      subject: "Уточнение в первом проекте",
+      detail: "Подтвердите параметры",
+      revision: 1,
+      created_at: now - 8_000,
+      updated_at: now - 8_000,
+    };
+    const cardB: InboxCardRecord = {
+      card_id: "89000000-0000-4000-8000-000000000602",
+      project_id: projectB.project_id,
+      session_id: sessionB.session_id,
+      agent_id: agent.agent_id,
+      kind: "clarification",
+      status: "open",
+      urgency: "normal",
+      subject: "Уточнение во втором проекте",
+      detail: "Укажите окружение",
+      revision: 1,
+      created_at: now - 5_000,
+      updated_at: now - 5_000,
+    };
+
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [project, projectB],
+      agents: [agent],
+      sessions: [session, sessionB],
+      tasks: [taskA],
+      inboxCards: [cardA, cardB],
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId("chat-card");
+    expect(await screen.findByTestId("rail-inbox-badge")).toHaveTextContent("2");
+
+    // Archive active project A -> selected session switches to project B, badge drops from 2 to 1!
+    await user.click(screen.getByTestId(`project-menu-trigger-${project.project_id}`));
+    await user.click(await screen.findByTestId(`project-menu-archive-${project.project_id}`));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("rail-inbox-badge")).toHaveTextContent("1");
+    });
+
+    // Tasks view must hide archived project A's task cleanly
+    await user.click(screen.getByTestId("rail-nav-tasks"));
+    await screen.findByTestId("tasks-card");
+    expect(screen.queryByTestId(`task-card-${taskA.task_id}`)).not.toBeInTheDocument();
+
+    // Inbox view must hide archived project A's card and only show project B's card
+    await user.click(screen.getByTestId("rail-nav-inbox"));
+    await screen.findByTestId("inbox-radar-card");
+    expect(screen.queryByTestId(`inbox-card-${cardA.card_id}`)).not.toBeInTheDocument();
+    expect(screen.getByTestId(`inbox-card-${cardB.card_id}`)).toBeInTheDocument();
+
+    // Remove project B -> badge disappears completely (0 orphaned inbox cards!)
+    await user.click(screen.getByTestId(`project-menu-trigger-${projectB.project_id}`));
+    await user.click(await screen.findByTestId(`project-menu-remove-${projectB.project_id}`));
+    await waitFor(() => {
+      expect(screen.queryByTestId("rail-inbox-badge")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId(`inbox-card-${cardB.card_id}`)).not.toBeInTheDocument();
+  });
+
+  it("H2-04: TasksCard pre-fills expected_signal_name and sends matching signal name cleanly", async () => {
+    const user = userEvent.setup();
+    const { now, project, agent, session } = makeD2Fixture();
+
+    const sigTask: TaskRecord = {
+      task_id: "75000000-0000-4000-8000-000000000701",
+      project_id: project.project_id,
+      session_id: session.session_id,
+      agent_id: agent.agent_id,
+      title: "Дождаться зелёного CI",
+      goal: "Выкатить релиз после сигнала ci_green",
+      generation: 1,
+      status: "waiting_signal",
+      expected_signal_name: "ci_green",
+      wait_detail: "Ожидает сигнал `ci_green`",
+      schedule: null,
+      budget: {},
+      usage: { turns_used: 0, tokens_used: 0, wall_ms_used: 0, confidence: "provider_reported" },
+      attached_skills: [],
+      created_at: now - 5_000,
+      updated_at: now - 5_000,
+    };
+
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [project],
+      agents: [agent],
+      sessions: [session],
+      tasks: [sigTask],
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId("chat-card");
+
+    await user.click(screen.getByTestId("rail-nav-tasks"));
+    const card = await screen.findByTestId(`task-card-${sigTask.task_id}`);
+    // H2-08: raw backticks stripped from plain-text wait_detail
+    expect(card).toHaveTextContent("Ожидает сигнал ci_green");
+    expect(card).not.toHaveTextContent("`ci_green`");
+
+    await user.click(screen.getByTestId(`task-signal-open-${sigTask.task_id}`));
+    const nameInput = await screen.findByTestId(`task-signal-name-input-${sigTask.task_id}`);
+    expect(nameInput).toHaveValue("ci_green");
+
+    const payloadInput = screen.getByTestId(`task-signal-payload-input-${sigTask.task_id}`);
+    await user.type(payloadInput, "build #42 passed");
+    await user.click(screen.getByTestId(`task-signal-submit-${sigTask.task_id}`));
+
+    await waitFor(() => {
+      const sigCall = bridge.calls.find((c) => c.method === "sendTaskSignal");
+      expect(sigCall).toBeTruthy();
+      expect((sigCall?.args as { request: { signal_name: string } }).request.signal_name).toBe(
+        "ci_green",
+      );
+      expect(screen.getByTestId("task-status-pill-running")).toBeInTheDocument();
+    });
+  });
+
+  it("H2-07: removing a multi-revision artifact hides all revisions and clears stale preview cleanly", async () => {
+    const user = userEvent.setup();
+    const { now, project, agent, session } = makeD2Fixture();
+
+    const rev1 = {
+      artifact_id: "70000000-0000-4000-8000-000000000801",
+      session_id: session.session_id,
+      project_id: project.project_id,
+      run_id: null,
+      name: "release-notes.md",
+      mime_type: "text/markdown",
+      revision: 1,
+      content: "Черновик v1",
+      relative_path: null,
+      sha256: "a".repeat(64),
+      completeness_status: "partial" as const,
+      lifecycle_state: "active" as const,
+      created_at: now - 20_000,
+    };
+    const rev2 = {
+      ...rev1,
+      artifact_id: "70000000-0000-4000-8000-000000000802",
+      revision: 2,
+      content: "Финальная версия v2",
+      completeness_status: "final" as const,
+      created_at: now - 10_000,
+    };
+
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [project],
+      agents: [agent],
+      sessions: [session],
+      artifactsBySession: { [session.session_id]: [rev1, rev2] },
+    });
+
+    render(
+      <App
+        bridge={bridge}
+        windowControls={createTestWindowControls()}
+        initialRightPanelOpen={true}
+      />,
+    );
+    await screen.findByTestId("chat-card");
+
+    // Latest revision v2 is auto-selected in WorkspacePanel
+    expect(await screen.findByTestId("artifact-preview")).toHaveTextContent("Финальная версия v2");
+
+    // Remove logical artifact via lifecycle menu -> BOTH revisions disappear and preview clears completely!
+    await user.click(screen.getByTestId("artifact-lifecycle-trigger"));
+    expect(await screen.findByTestId("artifact-lifecycle-menu")).toBeInTheDocument();
+    await user.click(screen.getByTestId("artifact-action-remove"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("artifact-preview")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Артефактов в этой сессии пока нет.")).toBeInTheDocument();
+  });
+
+  it("H2-08: Escape stops running chat from Inbox/Tasks views, Activity Radar shows active chat runs with Stop, and UNKNOWN cards avoid duplicate text", async () => {
+    const user = userEvent.setup();
+    const { now, project, agent, session } = makeD2Fixture();
+
+    const unknownEffect: EffectClaimRecord = {
+      effect_id: "88000000-0000-4000-8000-000000000901",
+      project_id: project.project_id,
+      session_id: session.session_id,
+      task_id: null,
+      run_id: null,
+      agent_id: agent.agent_id,
+      effect_idempotency_key: "eff-h208-1",
+      connector_id: "simulated_external",
+      operation: "send_webhook",
+      target_recipient: "ops@example.com",
+      parameters_json: "{}",
+      parameters_sha256: "d".repeat(64),
+      status: "unknown",
+      error_summary: "Lost ack",
+      correlation_id: "corr-h208-1",
+      created_at: now - 5_000,
+      updated_at: now - 5_000,
+    };
+    const unknownCard: InboxCardRecord = {
+      card_id: "89000000-0000-4000-8000-000000000901",
+      project_id: project.project_id,
+      session_id: session.session_id,
+      agent_id: agent.agent_id,
+      kind: "unknown_effect",
+      status: "open",
+      urgency: "critical",
+      subject: "Неизвестный исход `send_webhook`",
+      detail:
+        "Запрос отправлен во внешний сервис, но подтверждение потеряно. Слепой повтор заблокирован.",
+      effect_id: unknownEffect.effect_id,
+      revision: 1,
+      created_at: now - 5_000,
+      updated_at: now - 5_000,
+    };
+
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [project],
+      agents: [agent],
+      sessions: [session],
+      effects: [unknownEffect],
+      inboxCards: [unknownCard],
+      sendDelayMs: 5_000,
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    const textarea = await screen.findByLabelText("Поле ввода сообщения");
+    await user.type(textarea, "Длительный анализ в чате{Enter}");
+    expect(await screen.findByTestId("running-control-bar")).toBeInTheDocument();
+
+    // Switch to Inbox while chat run is active:
+    // 1. Unknown effect card has NO duplicate detail text and NO raw backticks!
+    await user.click(screen.getByTestId("rail-nav-inbox"));
+    const uCard = await screen.findByTestId(`inbox-card-${unknownCard.card_id}`);
+    expect(uCard).toHaveTextContent("Неизвестный исход send_webhook");
+    expect(uCard).not.toHaveTextContent("`send_webhook`");
+    expect(within(uCard).getAllByText(/подтверждение потеряно/i)).toHaveLength(1);
+
+    // 2. Activity Radar shows the active chat run with a working Stop button!
+    const radarSessionRow = await screen.findByTestId(
+      `radar-running-session-${session.session_id}`,
+    );
+    expect(radarSessionRow).toHaveTextContent("Выполняется");
+    expect(
+      within(radarSessionRow).getByTestId(`radar-stop-session-${session.session_id}`),
+    ).toBeInTheDocument();
+
+    // 3. Pressing Escape on Поручения view cancels the active chat run cleanly!
+    await user.click(screen.getByTestId("rail-nav-tasks"));
+    await screen.findByTestId("tasks-card");
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(bridge.calls.filter((c) => c.method === "cancelRun")).toHaveLength(1);
+    });
+  });
 });

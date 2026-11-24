@@ -56,6 +56,97 @@ pub struct ControlEventAppend<'a> {
     pub payload: JsonValue,
 }
 
+/// Owned pending control-journal event buffered during a SQL transaction so ALL domain writes
+/// finish before acquiring `entity:*` counters (in deterministic sorted order) and finally
+/// `control:journal` right before `tx.commit().await` (V15 deadlock-free lock hierarchy).
+#[derive(Debug, Clone)]
+pub struct PendingControlEvent {
+    /// Partition key for per-entity monotonic ordering (e.g. `"task:<uuid>"`, `"project:<uuid>"`).
+    pub entity_key: String,
+    /// Stable dotted event type name (e.g. `"task.created"`, `"permission.requested"`).
+    pub event_type: &'static str,
+    /// Optional owning project identifier for scoped filtering without leaking foreign payloads.
+    pub project_id: Option<ProjectId>,
+    /// Optional owning session identifier.
+    pub session_id: Option<SessionId>,
+    /// Optional owning task identifier.
+    pub task_id: Option<TaskId>,
+    /// Already secret-redacted JSON event payload.
+    pub payload: JsonValue,
+}
+
+/// Appends one or more [`ControlEventRecord`]s as the **final** operation before `tx.commit().await`,
+/// enforcing the V15 deadlock-free lock hierarchy:
+/// 1. All domain rows & `audit_events` are already locked/written by the caller.
+/// 2. All distinct `entity:<key>` rows in `control_stream_counters` are inserted-if-missing and
+///    locked in strict lexicographical order BEFORE acquiring `control:journal`.
+/// 3. `control_stream_counters('control:journal')` is acquired strictly last right before `COMMIT`.
+///
+/// # Errors
+///
+/// Returns [`DennettError::DatabaseUnavailable`] on PostgreSQL execution errors.
+pub async fn append_control_events_batch_in_tx<C: GenericClient>(
+    tx: &C,
+    target: &ValidatedControlPgTarget,
+    correlation_id: &CorrelationId,
+    events: &[PendingControlEvent],
+) -> Result<Vec<ControlEventRecord>, DennettError> {
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut unique_streams: Vec<String> = events
+        .iter()
+        .map(|ev| format!("entity:{}", truncate_utf8(&ev.entity_key, 160)))
+        .collect();
+    unique_streams.sort();
+    unique_streams.dedup();
+
+    for stream_id in &unique_streams {
+        tx.execute(
+            "INSERT INTO control_stream_counters (stream_id, committed_seq, authority_epoch, retained_from_seq)
+             VALUES ($1, 0, 1, 1)
+             ON CONFLICT (stream_id) DO NOTHING",
+            &[stream_id],
+        )
+        .await
+        .map_err(|err| map_pg_err(target, &err))?;
+    }
+
+    // Lock all `entity:*` counters in strict sorted order before touching `control:journal`.
+    let _ = tx
+        .query(
+            "SELECT stream_id
+             FROM control_stream_counters
+             WHERE stream_id = ANY($1)
+             ORDER BY stream_id ASC
+             FOR UPDATE",
+            &[&unique_streams],
+        )
+        .await
+        .map_err(|err| map_pg_err(target, &err))?;
+
+    let mut records = Vec::with_capacity(events.len());
+    for ev in events {
+        let rec = append_control_event_in_tx(
+            tx,
+            target,
+            ControlEventAppend {
+                entity_key: &ev.entity_key,
+                event_type: ev.event_type,
+                project_id: ev.project_id,
+                session_id: ev.session_id,
+                task_id: ev.task_id,
+                correlation_id,
+                payload: ev.payload.clone(),
+            },
+        )
+        .await?;
+        records.push(rec);
+    }
+    Ok(records)
+}
+
 /// Appends one append-only [`ControlEventRecord`] inside an open SQL transaction following the
 /// strict deadlock-free lock hierarchy (`domain row -> entity:<key> -> control:journal`).
 ///
@@ -302,6 +393,11 @@ impl HeadService {
                         TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
                  FROM sessions
                  WHERE project_id = $1
+                   AND EXISTS (
+                       SELECT 1 FROM projects p
+                       WHERE p.project_id = sessions.project_id
+                         AND p.lifecycle_state <> 'deleted_record'
+                   )
                  ORDER BY updated_at DESC",
                 &[&pid.as_uuid()],
             )
@@ -313,6 +409,11 @@ impl HeadService {
                         TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
                         TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
                  FROM sessions
+                 WHERE EXISTS (
+                     SELECT 1 FROM projects p
+                     WHERE p.project_id = sessions.project_id
+                       AND p.lifecycle_state <> 'deleted_record'
+                 )
                  ORDER BY updated_at DESC",
                 &[],
             )
@@ -329,13 +430,26 @@ impl HeadService {
             let sql = format!(
                 "SELECT {TASK_SELECT_COLS} FROM tasks
                  WHERE project_id = $1
+                   AND EXISTS (
+                       SELECT 1 FROM projects p
+                       WHERE p.project_id = tasks.project_id
+                         AND p.lifecycle_state <> 'deleted_record'
+                   )
                  ORDER BY updated_at DESC"
             );
             tx.query(&sql, &[&pid.as_uuid()])
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?
         } else {
-            let sql = format!("SELECT {TASK_SELECT_COLS} FROM tasks ORDER BY updated_at DESC");
+            let sql = format!(
+                "SELECT {TASK_SELECT_COLS} FROM tasks
+                 WHERE EXISTS (
+                     SELECT 1 FROM projects p
+                     WHERE p.project_id = tasks.project_id
+                       AND p.lifecycle_state <> 'deleted_record'
+                 )
+                 ORDER BY updated_at DESC"
+            );
             tx.query(&sql, &[])
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?
@@ -349,6 +463,11 @@ impl HeadService {
             let sql = format!(
                 "SELECT {INBOX_CARD_SELECT_COLS} FROM inbox_cards
                  WHERE status = 'open' AND project_id = $1
+                   AND EXISTS (
+                       SELECT 1 FROM projects p
+                       WHERE p.project_id = inbox_cards.project_id
+                         AND p.lifecycle_state <> 'deleted_record'
+                   )
                  ORDER BY created_at DESC"
             );
             tx.query(&sql, &[&pid.as_uuid()])
@@ -358,6 +477,11 @@ impl HeadService {
             let sql = format!(
                 "SELECT {INBOX_CARD_SELECT_COLS} FROM inbox_cards
                  WHERE status = 'open'
+                   AND EXISTS (
+                       SELECT 1 FROM projects p
+                       WHERE p.project_id = inbox_cards.project_id
+                         AND p.lifecycle_state <> 'deleted_record'
+                   )
                  ORDER BY created_at DESC"
             );
             tx.query(&sql, &[])
@@ -373,6 +497,11 @@ impl HeadService {
             let sql = format!(
                 "SELECT {CAPABILITY_GRANT_SELECT_COLS} FROM capability_grants
                  WHERE project_id = $1
+                   AND EXISTS (
+                       SELECT 1 FROM projects p
+                       WHERE p.project_id = capability_grants.project_id
+                         AND p.lifecycle_state <> 'deleted_record'
+                   )
                    AND revoked_at IS NULL
                    AND (expires_at IS NULL OR expires_at > now())
                    AND (max_uses IS NULL OR uses_consumed < max_uses)
@@ -384,7 +513,12 @@ impl HeadService {
         } else {
             let sql = format!(
                 "SELECT {CAPABILITY_GRANT_SELECT_COLS} FROM capability_grants
-                 WHERE revoked_at IS NULL
+                 WHERE EXISTS (
+                     SELECT 1 FROM projects p
+                     WHERE p.project_id = capability_grants.project_id
+                       AND p.lifecycle_state <> 'deleted_record'
+                 )
+                   AND revoked_at IS NULL
                    AND (expires_at IS NULL OR expires_at > now())
                    AND (max_uses IS NULL OR uses_consumed < max_uses)
                  ORDER BY created_at DESC"

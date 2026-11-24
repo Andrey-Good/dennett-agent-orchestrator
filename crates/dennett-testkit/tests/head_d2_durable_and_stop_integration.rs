@@ -39,16 +39,24 @@ use tokio::process::{Child, Command};
 use tokio::time;
 use uuid::Uuid;
 
+fn with_isolated_control_schema(base_url: &str, prefix: &str) -> String {
+    let short = &Uuid::new_v4().simple().to_string()[..12];
+    let schema = format!("iso_{prefix}_{short}");
+    let sep = if base_url.contains('?') { '&' } else { '?' };
+    format!("{base_url}{sep}options=-csearch_path%3D{schema}")
+}
+
 fn require_control_pg_url() -> String {
     assert_eq!(
         env::var(TEST_PROFILE_ENV).ok().as_deref(),
         Some("1"),
         "{TEST_PROFILE_ENV}=1 is required for D2 Head integration tests"
     );
-    env::var("DENNETT_TEST_CONTROL_PG_URL")
+    let ctrl = env::var("DENNETT_TEST_CONTROL_PG_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .expect("DENNETT_TEST_CONTROL_PG_URL is required")
+        .expect("DENNETT_TEST_CONTROL_PG_URL is required");
+    with_isolated_control_schema(&ctrl, "d2")
 }
 
 fn find_binary_near_current_exe(exe_name: &str) -> Option<PathBuf> {
@@ -220,7 +228,7 @@ async fn d2_timers_survive_head_restart_misfire_policies_and_concurrent_idempote
     let c1 = HeadClient::new(&head1.base_url).expect("head client 1");
     let health1 = c1.healthz(None).await.expect("health1");
     assert_eq!(health1.stage, "D2");
-    assert_eq!(health1.schema_version, Some(4));
+    assert_eq!(health1.schema_version, Some(5));
     assert!(health1.capabilities.iter().any(|c| c == "control.tasks.v1"));
 
     let proj = c1

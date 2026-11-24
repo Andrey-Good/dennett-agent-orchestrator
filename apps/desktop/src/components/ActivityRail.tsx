@@ -13,9 +13,19 @@ import { QuotaRings } from "./QuotaRings";
 export function ActivityRail() {
   const { state, actions, meta } = useWorkspace();
 
+  const activeProjectIds = new Set(
+    state.projects
+      .filter((p) => {
+        const lc = p.lifecycle_state ?? "active";
+        return lc !== "archived" && lc !== "deleted_record";
+      })
+      .map((p) => p.project_id),
+  );
   const openInboxCount = Math.max(
     state.unresolvedInboxCount,
-    state.inboxCards.filter((card) => card.status === "open").length,
+    state.inboxCards.filter(
+      (card) => card.status === "open" && activeProjectIds.has(card.project_id),
+    ).length,
   );
   const isChatView = state.activeView === "chat";
   const isInboxView = state.activeView === "inbox";

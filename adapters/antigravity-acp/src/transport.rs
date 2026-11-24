@@ -983,6 +983,18 @@ async fn handle_turn_server_message<W: AsyncWrite + Unpin>(
                             }
                         }
                         () = &mut timeout_sleep => {
+                            if !acc.cancel_sent {
+                                let _ = write_json_to(
+                                    writer,
+                                    &json!({
+                                        "jsonrpc": "2.0",
+                                        "method": "session/cancel",
+                                        "params": { "sessionId": args.provider_session_id }
+                                    }),
+                                )
+                                .await;
+                                acc.cancel_sent = true;
+                            }
                             write_json_to(
                                 writer,
                                 &json!({

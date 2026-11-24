@@ -21,8 +21,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_INTEGRATION_TESTS = 42
-MIN_DESKTOP_FRONTEND_TESTS = 28
+MIN_INTEGRATION_TESTS = 46
+MIN_DESKTOP_FRONTEND_TESTS = 32
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
@@ -1642,7 +1642,7 @@ def run_demo_d2(
         plan = {
             "mode": "demo-d2-dry-run",
             "stage": "D2",
-            "control_schema_version": 4,
+            "control_schema_version": 5,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
             "compose_file": str(compose_file),

@@ -33,7 +33,10 @@ use serde_json::json;
 use tokio::sync::{oneshot, watch};
 use tokio::time;
 
-use crate::events::{ControlEventAppend, append_control_event_in_tx};
+use crate::events::{
+    ControlEventAppend, PendingControlEvent, append_control_event_in_tx,
+    append_control_events_batch_in_tx,
+};
 use crate::migrations::sha256_hex;
 use crate::policy::{
     PolicyContext, PolicyEngine, PolicyEvaluationDecision, is_workspace_write_tool,
@@ -465,7 +468,7 @@ impl HeadService {
         let insert_res: Result<(), DennettError> = async {
             if let Some(tid) = task_id {
                 let wait_msg = truncate_utf8(
-                    &format!("Ожидает разрешения на `{tool_name}` ({target_summary})"),
+                    &format!("Ожидает разрешения на {tool_name} ({target_summary})"),
                     2000,
                 )
                 .to_owned();
@@ -513,8 +516,7 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
             let subject =
-                truncate_utf8(&format!("Разрешить `{tool_name}` ({target_summary})"), 500)
-                    .to_owned();
+                truncate_utf8(&format!("Разрешить {tool_name} ({target_summary})"), 500).to_owned();
             let detail = truncate_utf8(reason, 4000).to_owned();
             tx.execute(
                 "INSERT INTO inbox_cards (
@@ -651,6 +653,118 @@ impl HeadService {
         Ok(())
     }
 
+    /// Expires/withdraws every still-`pending` permission request and linked `open` approval inbox
+    /// card belonging to `run_id` inside the caller's PostgreSQL transaction (H2-01).
+    ///
+    /// Strictly buffers journal events into `pending_events` instead of locking `control:journal`
+    /// mid-transaction, preserving the V15 deadlock-free lock hierarchy.
+    pub(crate) async fn expire_pending_approvals_for_run_in_tx<
+        C: deadpool_postgres::GenericClient,
+    >(
+        &self,
+        tx: &C,
+        run_id: dennett_contracts::RunId,
+        inbox_status: &str,
+        summary: &str,
+        pending_events: &mut Vec<PendingControlEvent>,
+    ) -> Result<Vec<PermissionRequestId>, DennettError> {
+        let safe_summary = truncate_utf8(&self.redact(summary), 2000).to_owned();
+        let sql = format!(
+            "UPDATE permission_requests
+             SET status = 'expired',
+                 revision = revision + 1,
+                 resolved_at = now()
+             WHERE run_id = $1 AND status = 'pending'
+             RETURNING {PERMISSION_REQUEST_SELECT_COLS}"
+        );
+        let rows = tx
+            .query(&sql, &[&run_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let mut expired_ids = Vec::with_capacity(rows.len());
+        let event_type = if inbox_status == "withdrawn" {
+            "permission.withdrawn"
+        } else {
+            "permission.expired"
+        };
+        for row in &rows {
+            let perm = decode_permission_request_row(row)?;
+            tx.execute(
+                "UPDATE inbox_cards
+                 SET status = $2,
+                     resolution_summary = $3,
+                     revision = revision + 1,
+                     resolved_at = now(),
+                     updated_at = now()
+                 WHERE permission_request_id = $1 AND status = 'open'",
+                &[&perm.request_id.as_uuid(), &inbox_status, &safe_summary],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+            let entity_key = perm.task_id.map_or_else(
+                || format!("session:{}", perm.session_id),
+                |tid| format!("task:{tid}"),
+            );
+            pending_events.push(PendingControlEvent {
+                entity_key,
+                event_type,
+                project_id: Some(perm.project_id),
+                session_id: Some(perm.session_id),
+                task_id: perm.task_id,
+                payload: json!({
+                    "request_id": perm.request_id,
+                    "run_id": run_id,
+                    "reason": safe_summary,
+                }),
+            });
+            expired_ids.push(perm.request_id);
+        }
+
+        // Belt-and-suspenders: close any open `permission_approval` inbox card still tied to this run.
+        tx.execute(
+            "UPDATE inbox_cards
+             SET status = $2,
+                 resolution_summary = $3,
+                 revision = revision + 1,
+                 resolved_at = now(),
+                 updated_at = now()
+             WHERE run_id = $1
+               AND kind = 'permission_approval'
+               AND status = 'open'",
+            &[&run_id.as_uuid(), &inbox_status, &safe_summary],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        Ok(expired_ids)
+    }
+
+    pub(crate) async fn wake_expired_approval_waiters(
+        &self,
+        request_ids: &[PermissionRequestId],
+        session_id: SessionId,
+        reason: &str,
+    ) {
+        let safe_reason = truncate_utf8(&self.redact(reason), 1000).to_owned();
+        for &request_id in request_ids {
+            self.wake_approval_waiter(
+                request_id,
+                ApprovalResolutionSignal {
+                    outcome: PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Deny,
+                        matched_rule_id: None,
+                        reason: safe_reason.clone(),
+                        scope: format!("session:{session_id}"),
+                    },
+                    decision_record: None,
+                },
+            )
+            .await;
+        }
+    }
+
     /// Cancels all pending interactive permission requests for a session or task during `Stop`,
     /// immediately waking any waiting runtime turn with `Deny`.
     pub(crate) async fn cancel_pending_permissions_for_scope(
@@ -689,6 +803,7 @@ impl HeadService {
 
         let safe_reason = truncate_utf8(&self.redact(reason), 2000).to_owned();
         let mut expired = Vec::with_capacity(rows.len());
+        let mut pending_events = Vec::with_capacity(rows.len());
         for row in &rows {
             let perm = decode_permission_request_row(row)?;
             tx.execute(
@@ -708,25 +823,27 @@ impl HeadService {
                 || format!("session:{}", perm.session_id),
                 |tid| format!("task:{tid}"),
             );
-            let _ = append_control_event_in_tx(
-                &tx,
-                self.pg_target(),
-                ControlEventAppend {
-                    entity_key: &entity_key,
-                    event_type: "permission.withdrawn",
-                    project_id: Some(perm.project_id),
-                    session_id: Some(perm.session_id),
-                    task_id: perm.task_id,
-                    correlation_id,
-                    payload: json!({
-                        "request_id": perm.request_id,
-                        "reason": safe_reason,
-                    }),
-                },
-            )
-            .await?;
+            pending_events.push(PendingControlEvent {
+                entity_key,
+                event_type: "permission.withdrawn",
+                project_id: Some(perm.project_id),
+                session_id: Some(perm.session_id),
+                task_id: perm.task_id,
+                payload: json!({
+                    "request_id": perm.request_id,
+                    "reason": safe_reason,
+                }),
+            });
             expired.push(perm);
         }
+
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
 
         tx.commit()
             .await
@@ -770,7 +887,12 @@ impl HeadService {
         let sql = format!(
             "SELECT {PERMISSION_REQUEST_SELECT_COLS}
              FROM permission_requests
-             WHERE ($1::text IS NULL OR status = $1)
+             WHERE EXISTS (
+                 SELECT 1 FROM projects p
+                 WHERE p.project_id = permission_requests.project_id
+                   AND p.lifecycle_state <> 'deleted_record'
+             )
+               AND ($1::text IS NULL OR status = $1)
                AND ($2::uuid IS NULL OR session_id = $2)
              ORDER BY created_at ASC"
         );
@@ -856,6 +978,9 @@ impl HeadService {
         }
 
         // Verify the owning run/task has NOT been cancelled!
+        // For explicit `Deny`, allow idempotent dismissal even if the run already terminated (H2-01)
+        // so the user is NEVER trapped by an uncloseable approval card.
+        let wants_allow = !matches!(req.decision, PermissionResolutionDecision::Deny);
         let run_status_raw: String = tx
             .query_one(
                 "SELECT status FROM runs WHERE run_id = $1",
@@ -865,19 +990,22 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?
             .get(0);
         let run_status = RunStatus::from_str(&run_status_raw)?;
-        if run_status != RunStatus::Running {
+        if run_status != RunStatus::Running && wants_allow {
             return Err(DennettError::Conflict {
                 resource: String::from("permission_request"),
                 expected_revision: req.expected_revision,
                 actual_revision: Some(perm.revision),
                 reason: format!(
-                    "cannot resolve permission request for non-running run (status={run_status})"
+                    "cannot approve permission request for non-running run (status={run_status})"
                 ),
             });
         }
         if let Some(tid) = perm.task_id {
             let task = fetch_task(&tx, tid, self.pg_target()).await?;
-            if task.status == TaskStatus::Cancelled || self.is_task_cancel_signalled(tid).await {
+            if wants_allow
+                && (task.status == TaskStatus::Cancelled
+                    || self.is_task_cancel_signalled(tid).await)
+            {
                 return Err(DennettError::Conflict {
                     resource: String::from("permission_request"),
                     expected_revision: req.expected_revision,
@@ -894,7 +1022,6 @@ impl HeadService {
         let rules = fetch_policy_rules(&tx, self.pg_target()).await?;
 
         // Re-verify through PolicyEngine before allowing execution!
-        let wants_allow = !matches!(req.decision, PermissionResolutionDecision::Deny);
         let (effective_effect, final_status, effective_reason, effective_scope) = if wants_allow {
             let reverify_err: Option<String> = if project.lifecycle_state
                 != ProjectLifecycleState::Active
@@ -1131,16 +1258,31 @@ impl HeadService {
         .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         if let Some(tid) = perm.task_id {
-            tx.execute(
-                "UPDATE tasks
-                 SET status = 'running',
-                     wait_detail = NULL,
-                     updated_at = now()
-                 WHERE task_id = $1 AND status = 'waiting_approval'",
-                &[&tid.as_uuid()],
-            )
-            .await
-            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            if run_status == RunStatus::Running {
+                tx.execute(
+                    "UPDATE tasks
+                     SET status = 'running',
+                         wait_detail = NULL,
+                         updated_at = now()
+                     WHERE task_id = $1 AND status = 'waiting_approval'",
+                    &[&tid.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            } else {
+                tx.execute(
+                    "UPDATE tasks
+                     SET status = 'failed',
+                         wait_detail = NULL,
+                         active_run_id = NULL,
+                         finished_at = COALESCE(finished_at, now()),
+                         updated_at = now()
+                     WHERE task_id = $1 AND status = 'waiting_approval'",
+                    &[&tid.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            }
         }
 
         let _ = append_audit_event(
@@ -1229,7 +1371,12 @@ impl HeadService {
         let sql = format!(
             "SELECT {CAPABILITY_GRANT_SELECT_COLS}
              FROM capability_grants
-             WHERE ($1::uuid IS NULL OR project_id = $1)
+             WHERE EXISTS (
+                 SELECT 1 FROM projects p
+                 WHERE p.project_id = capability_grants.project_id
+                   AND p.lifecycle_state <> 'deleted_record'
+             )
+               AND ($1::uuid IS NULL OR project_id = $1)
                AND ($2::boolean OR revoked_at IS NULL)
              ORDER BY created_at DESC"
         );
@@ -1355,7 +1502,12 @@ impl HeadService {
         let sql = format!(
             "SELECT {INBOX_CARD_SELECT_COLS}
              FROM inbox_cards
-             WHERE ($1::text IS NULL OR status = $1)
+             WHERE EXISTS (
+                 SELECT 1 FROM projects p
+                 WHERE p.project_id = inbox_cards.project_id
+                   AND p.lifecycle_state <> 'deleted_record'
+             )
+               AND ($1::text IS NULL OR status = $1)
                AND ($2::uuid IS NULL OR project_id = $2)
              ORDER BY created_at DESC"
         );
@@ -1373,6 +1525,11 @@ impl HeadService {
             .query_one(
                 "SELECT COUNT(*)::bigint FROM inbox_cards
                  WHERE status = 'open'
+                   AND EXISTS (
+                       SELECT 1 FROM projects p
+                       WHERE p.project_id = inbox_cards.project_id
+                         AND p.lifecycle_state <> 'deleted_record'
+                   )
                    AND ($1::uuid IS NULL OR project_id = $1)",
                 &[&project_id.map(ProjectId::as_uuid)],
             )

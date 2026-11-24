@@ -221,7 +221,8 @@ pub(crate) const TASK_SELECT_COLS: &str = "
     usage_confidence, attached_skills, auth_profile_override,
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
-    TRUNC(EXTRACT(EPOCH FROM finished_at) * 1000)::bigint
+    TRUNC(EXTRACT(EPOCH FROM finished_at) * 1000)::bigint,
+    expected_signal_name
 ";
 
 pub(crate) const TASK_TIMER_SELECT_COLS: &str = "
@@ -882,6 +883,7 @@ pub(crate) fn decode_task_row(row: &Row) -> Result<TaskRecord, DennettError> {
         generation: row.get(7),
         status: TaskStatus::from_str(&row.get::<_, String>(8))?,
         wait_detail: row.get(9),
+        expected_signal_name: row.get(25),
         partial_result_summary: row.get(10),
         error_code: row.get(11),
         error_summary: row.get(12),

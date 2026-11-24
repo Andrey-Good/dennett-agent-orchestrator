@@ -3157,6 +3157,12 @@ html.native-shell .workbench {
   font-size: 12.5px;
 }
 
+.d2-inline-reply input.d2-signal-name-input {
+  flex: 0 1 160px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .d2-grant-row,
 .d2-radar-row {
   display: flex;

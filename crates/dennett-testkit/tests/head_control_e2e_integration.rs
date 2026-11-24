@@ -32,6 +32,13 @@ use tokio::time;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
+fn with_isolated_control_schema(base_url: &str, prefix: &str) -> String {
+    let short = &Uuid::new_v4().simple().to_string()[..12];
+    let schema = format!("iso_{prefix}_{short}");
+    let sep = if base_url.contains('?') { '&' } else { '?' };
+    format!("{base_url}{sep}options=-csearch_path%3D{schema}")
+}
+
 fn require_pg_urls() -> (String, String) {
     assert_eq!(
         env::var(TEST_PROFILE_ENV).ok().as_deref(),
@@ -46,7 +53,7 @@ fn require_pg_urls() -> (String, String) {
         .ok()
         .filter(|s| !s.trim().is_empty())
         .expect("DENNETT_TEST_CONTROL_PG_URL is required");
-    (mem, ctrl)
+    (mem, with_isolated_control_schema(&ctrl, "e2e"))
 }
 
 fn find_binary_near_current_exe(exe_name: &str) -> Option<PathBuf> {
@@ -1276,13 +1283,26 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     let head1 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c1 = HeadClient::new(&head1.base_url).expect("client1");
     let h1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(h1.schema_version, Some(4));
+    assert_eq!(h1.schema_version, Some(5));
     head1.shutdown().await;
 
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c2 = HeadClient::new(&head2.base_url).expect("client2");
     let h2 = c2.healthz(None).await.expect("health2");
-    assert_eq!(h2.schema_version, Some(4));
+    assert_eq!(h2.schema_version, Some(5));
+
+    // Seed one project inside this isolated schema so `audit_events` has a real row to guard.
+    let _proj = c2
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Migration Trigger Seed"),
+                workspace_path: None,
+                memory_scope: Some(scope),
+            },
+            None,
+        )
+        .await
+        .expect("seed audit row for append-only trigger");
 
     // Verify PostgreSQL append-only triggers reject UPDATE/DELETE on audit_events
     // and migration v3 installed the unique artifact revision constraint!

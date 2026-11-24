@@ -312,6 +312,53 @@ export class MockDesktopBridge implements DesktopBridge {
     }
   }
 
+  private isProjectDeleted(projectId: string): boolean {
+    const project = this.projects.find((p) => p.project_id === projectId);
+    return project !== undefined && (project.lifecycle_state ?? "active") === "deleted_record";
+  }
+
+  private terminateProjectWork(projectId: string, reason: string): void {
+    const now = Date.now();
+    this.tasks = this.tasks.map((t) =>
+      t.project_id === projectId &&
+      !["succeeded", "failed", "cancelled"].includes(t.status)
+        ? {
+            ...t,
+            status: "cancelled",
+            wait_detail: null,
+            active_run_id: null,
+            finished_at: t.finished_at ?? now,
+            updated_at: now,
+          }
+        : t,
+    );
+    this.inboxCards = this.inboxCards.map((c) =>
+      c.project_id === projectId && c.status === "open"
+        ? {
+            ...c,
+            status: "withdrawn",
+            resolution_summary: reason,
+            revision: c.revision + 1,
+            updated_at: now,
+            resolved_at: now,
+          }
+        : c,
+    );
+    this.permissionRequests = this.permissionRequests.map((r) =>
+      r.project_id === projectId && r.status === "pending"
+        ? { ...r, status: "expired", revision: r.revision + 1, resolved_at: now }
+        : r,
+    );
+    this.capabilityGrants = this.capabilityGrants.map((g) =>
+      g.project_id === projectId && !g.revoked_at
+        ? { ...g, revoked_at: now, revoked_reason: reason }
+        : g,
+    );
+    this.sessions = this.sessions.map((s) =>
+      s.project_id === projectId ? { ...s, status: "closed", updated_at: now } : s,
+    );
+  }
+
   public async getHeadHealth(): Promise<DesktopHealthSnapshot> {
     this.calls.push({ method: "getHeadHealth" });
     if (!this.connected) {
@@ -331,7 +378,7 @@ export class MockDesktopBridge implements DesktopBridge {
       postgres_connected: true,
       postgres_role: "dennett_control_role",
       postgres_database: "dennett_control_test",
-      schema_version: 4,
+      schema_version: 5,
       memory_status: this.memoryStatus,
       memory_detail: this.memoryDetail,
       runtime_adapter_id: this.runtimeAdapterId,
@@ -542,6 +589,7 @@ export class MockDesktopBridge implements DesktopBridge {
     if (!existing) {
       throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
     }
+    this.terminateProjectWork(projectId, "Проект убран из списка");
     const updated: ProjectRecord = {
       ...existing,
       lifecycle_state: "deleted_record",
@@ -564,6 +612,7 @@ export class MockDesktopBridge implements DesktopBridge {
     if (!existing) {
       throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
     }
+    this.terminateProjectWork(projectId, "Проект удалён из Dennett");
     const updated: ProjectRecord = {
       ...existing,
       workspace_path: null,
@@ -1048,9 +1097,17 @@ export class MockDesktopBridge implements DesktopBridge {
         updated = { ...updated, lifecycle_state: "deleted", content: null };
         break;
     }
-    this.artifactsBySession[sessionId] = list.map((a) =>
-      a.artifact_id === artifactId ? updated : a,
-    );
+    if (request.action === "remove") {
+      this.artifactsBySession[sessionId] = list.map((a) =>
+        a.name === existing.name && (a.lifecycle_state ?? "active") !== "deleted"
+          ? { ...a, lifecycle_state: "removed" }
+          : a,
+      );
+    } else {
+      this.artifactsBySession[sessionId] = list.map((a) =>
+        a.artifact_id === artifactId ? updated : a,
+      );
+    }
     this.emitControlEvent(`artifact.${request.action}`, { sessionId });
     return { artifact: updated, user_workspace_files_deleted: false };
   }
@@ -1074,17 +1131,23 @@ export class MockDesktopBridge implements DesktopBridge {
       }
       return true;
     });
-    const sessions = projectId
-      ? this.sessions.filter((s) => s.project_id === projectId)
-      : [...this.sessions];
-    const tasks = projectId
-      ? this.tasks.filter((t) => t.project_id === projectId)
-      : [...this.tasks];
+    const sessions = this.sessions.filter(
+      (s) => !this.isProjectDeleted(s.project_id) && (!projectId || s.project_id === projectId),
+    );
+    const tasks = this.tasks.filter(
+      (t) => !this.isProjectDeleted(t.project_id) && (!projectId || t.project_id === projectId),
+    );
     const openInbox = this.inboxCards.filter(
-      (c) => c.status === "open" && (!projectId || c.project_id === projectId),
+      (c) =>
+        c.status === "open" &&
+        !this.isProjectDeleted(c.project_id) &&
+        (!projectId || c.project_id === projectId),
     );
     const activeGrants = this.capabilityGrants.filter(
-      (g) => !g.revoked_at && (!projectId || g.project_id === projectId),
+      (g) =>
+        !g.revoked_at &&
+        !this.isProjectDeleted(g.project_id) &&
+        (!projectId || g.project_id === projectId),
     );
     return {
       snapshot_cursor: {
@@ -1183,8 +1246,9 @@ export class MockDesktopBridge implements DesktopBridge {
       goal: request.goal.trim(),
       generation: 1,
       status,
+      expected_signal_name: request.wait_for_signal?.trim() || null,
       wait_detail: request.wait_for_signal
-        ? `Ожидание сигнала «${request.wait_for_signal}»`
+        ? `Ожидает сигнал ${request.wait_for_signal.trim()}`
         : request.schedule
           ? request.schedule.original_expression ?? "Запланировано по таймеру"
           : null,
@@ -1219,7 +1283,10 @@ export class MockDesktopBridge implements DesktopBridge {
     this.calls.push({ method: "listTasks", args: { projectId, status } });
     this.ensureConnected();
     const list = this.tasks.filter(
-      (t) => (!projectId || t.project_id === projectId) && (!status || t.status === status),
+      (t) =>
+        !this.isProjectDeleted(t.project_id) &&
+        (!projectId || t.project_id === projectId) &&
+        (!status || t.status === status),
     );
     return { tasks: list };
   }
@@ -1251,20 +1318,55 @@ export class MockDesktopBridge implements DesktopBridge {
       throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
     }
     const bumpsGen = Boolean(request.goal || request.schedule || request.clear_schedule);
+    const now = Date.now();
+    const nextSchedule = request.clear_schedule
+      ? null
+      : request.schedule !== undefined
+        ? request.schedule
+        : existing.schedule;
+    const nextStatus =
+      request.schedule !== undefined && request.schedule !== null
+        ? "waiting_timer"
+        : existing.status === "waiting_signal" && !request.clear_schedule
+          ? "waiting_signal"
+          : existing.status;
+    const nextExpectedSignal =
+      nextStatus === "waiting_signal" ? (existing.expected_signal_name ?? null) : null;
     const updated: TaskRecord = {
       ...existing,
       title: request.title?.trim() || existing.title,
       goal: request.goal?.trim() || existing.goal,
       generation: bumpsGen ? existing.generation + 1 : existing.generation,
-      schedule: request.clear_schedule
-        ? null
-        : request.schedule !== undefined
-          ? request.schedule
-          : existing.schedule,
+      status: nextStatus,
+      expected_signal_name: nextExpectedSignal,
+      schedule: nextSchedule,
       budget: request.budget ?? existing.budget,
-      updated_at: Date.now(),
+      updated_at: now,
     };
     this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    if (bumpsGen) {
+      this.permissionRequests = this.permissionRequests.map((r) =>
+        r.task_id === taskId && r.status === "pending"
+          ? { ...r, status: "expired", revision: r.revision + 1, resolved_at: now }
+          : r,
+      );
+      this.inboxCards = this.inboxCards.map((c) =>
+        c.task_id === taskId &&
+        c.status === "open" &&
+        ["clarification", "missed_schedule", "budget_exceeded", "permission_approval"].includes(
+          c.kind,
+        )
+          ? {
+              ...c,
+              status: "superseded",
+              resolution_summary: "Заменено обновлением цели",
+              revision: c.revision + 1,
+              updated_at: now,
+              resolved_at: now,
+            }
+          : c,
+      );
+    }
     this.emitControlEvent("task.updated", { projectId: updated.project_id, taskId });
     return updated;
   }
@@ -1285,12 +1387,15 @@ export class MockDesktopBridge implements DesktopBridge {
       return { signal: dup, task: existing, deduplicated: true };
     }
     const now = Date.now();
-    const woke = existing.status === "waiting_signal";
+    const trimmedName = request.signal_name.trim();
+    const signalMatches =
+      !existing.expected_signal_name || existing.expected_signal_name === trimmedName;
+    const woke = existing.status === "waiting_signal" && signalMatches;
     const signal: TaskSignalRecord = {
       signal_id: this.nextUuid("76000000"),
       task_id: taskId,
       idempotency_key: request.idempotency_key,
-      signal_name: request.signal_name,
+      signal_name: trimmedName,
       payload_text: request.payload_text ?? "",
       payload_sha256: "b".repeat(64),
       applied_generation: existing.generation,
@@ -1300,7 +1405,13 @@ export class MockDesktopBridge implements DesktopBridge {
     };
     this.signalsByTask[taskId] = [...signals, signal];
     const updated: TaskRecord = woke
-      ? { ...existing, status: "running", wait_detail: null, updated_at: now }
+      ? {
+          ...existing,
+          status: "running",
+          expected_signal_name: null,
+          wait_detail: null,
+          updated_at: now,
+        }
       : existing;
     this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
     this.emitControlEvent("task.signal_received", { projectId: updated.project_id, taskId });
@@ -1378,6 +1489,9 @@ export class MockDesktopBridge implements DesktopBridge {
     this.calls.push({ method: "listInboxCards", args: { status, projectId } });
     this.ensureConnected();
     const filtered = this.inboxCards.filter((c) => {
+      if (this.isProjectDeleted(c.project_id)) {
+        return false;
+      }
       if (projectId && c.project_id !== projectId) {
         return false;
       }
@@ -1387,7 +1501,10 @@ export class MockDesktopBridge implements DesktopBridge {
       return true;
     });
     const unresolvedCount = this.inboxCards.filter(
-      (c) => c.status === "open" && (!projectId || c.project_id === projectId),
+      (c) =>
+        c.status === "open" &&
+        !this.isProjectDeleted(c.project_id) &&
+        (!projectId || c.project_id === projectId),
     ).length;
     return { cards: filtered, unresolved_count: unresolvedCount };
   }
@@ -1512,6 +1629,7 @@ export class MockDesktopBridge implements DesktopBridge {
     this.ensureConnected();
     const list = this.permissionRequests.filter(
       (r) =>
+        !this.isProjectDeleted(r.project_id) &&
         (!status || status === "all" || r.status === status) &&
         (!sessionId || r.session_id === sessionId),
     );
@@ -1614,7 +1732,10 @@ export class MockDesktopBridge implements DesktopBridge {
     this.calls.push({ method: "listCapabilityGrants", args: { projectId, includeRevoked } });
     this.ensureConnected();
     const list = this.capabilityGrants.filter(
-      (g) => (!projectId || g.project_id === projectId) && (includeRevoked || !g.revoked_at),
+      (g) =>
+        !this.isProjectDeleted(g.project_id) &&
+        (!projectId || g.project_id === projectId) &&
+        (includeRevoked || !g.revoked_at),
     );
     return { grants: list };
   }
@@ -1726,6 +1847,7 @@ export class MockDesktopBridge implements DesktopBridge {
     this.ensureConnected();
     const list = this.effects.filter(
       (ef) =>
+        !this.isProjectDeleted(ef.project_id) &&
         (!taskId || ef.task_id === taskId) &&
         (!sessionId || ef.session_id === sessionId) &&
         (!status || ef.status === status),
@@ -1971,7 +2093,7 @@ export function createBrowserPreviewBridge(): DesktopBridge {
           session_id: sessionId,
           role: "assistant",
           content:
-            "Демон `dennett-head` активен на схеме `v4`. Поручения, таймеры, Action Inbox и интерактивный режим «Спрашивать запись» подключены по курсору `/v1/events`.",
+            "Демон `dennett-head` активен на схеме `v5`. Поручения, таймеры, Action Inbox и интерактивный режим «Спрашивать запись» подключены по курсору `/v1/events`.",
           run_id: null,
           correlation_id: "corr-preview-1",
           created_at: now - 175_000,

@@ -538,6 +538,30 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
                 .as_ref()
                 .map(|root| root.join("sim-effects-ledger.json"))
         });
+    // H2-06 / A10 / Contract M: when serving interactive `oauth-personal` with Antigravity,
+    // also wire an isolated `gemini-api-key` background runtime in a separate profile subdirectory
+    // (strictly fail-closed with `AUTH_REQUIRED` if no API key is configured; zero fallback!).
+    let background_runtime = if opts.runtime_kind == RuntimeKind::Antigravity
+        && opts.auth_profile == RuntimeAuthProfile::OAuthPersonal
+    {
+        let bg_profile_root = opts
+            .profile_root
+            .as_ref()
+            .map(|root| root.join("bg-gemini-api-key"))
+            .or_else(|| {
+                Some(env::temp_dir().join(format!("dennett-head-acp-bg-{}", std::process::id())))
+            });
+        let (bg_rt, bg_secrets) = build_runtime(
+            RuntimeKind::Antigravity,
+            RuntimeAuthProfile::GeminiApiKey,
+            bg_profile_root,
+            opts.enable_sandbox,
+        );
+        secrets.extend(bg_secrets);
+        Some(bg_rt)
+    } else {
+        None
+    };
     let (runtime, rt_secrets) = build_runtime(
         opts.runtime_kind,
         opts.auth_profile,
@@ -559,7 +583,7 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
             HeadServiceExtras {
                 memory_hmac_signer,
                 detached_projects_root,
-                background_runtime: None,
+                background_runtime,
                 effect_port: None,
                 effects_ledger_path,
             },
@@ -568,8 +592,7 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
                 match svc.ensure_migrated().await {
                     Ok(_) => {
                         let startup_cid = CorrelationId::generate();
-                        if let Err(err) = svc.recover_stale_dispatching_effects(&startup_cid).await
-                        {
+                        if let Err(err) = svc.recover_after_startup_once(&startup_cid).await {
                             emit_stderr_error(&err);
                         }
                     }

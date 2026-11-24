@@ -272,6 +272,7 @@ export interface TaskRecord {
   generation: number;
   status: TaskStatus;
   wait_detail?: string | null;
+  expected_signal_name?: string | null;
   partial_result_summary?: string | null;
   error_code?: string | null;
   error_summary?: string | null;

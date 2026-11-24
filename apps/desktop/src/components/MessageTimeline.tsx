@@ -23,8 +23,12 @@ function formatClock(timestampMs: number): string {
   return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 }
 
+function cleanPlainText(text: string): string {
+  return text.replace(/`([^`]+)`/g, "$1");
+}
+
 function formatApprovalReason(reason: string): string | null {
-  const trimmed = reason.trim();
+  const trimmed = cleanPlainText(reason.trim());
   if (!trimmed) {
     return null;
   }
@@ -427,9 +431,9 @@ export function MessageTimeline() {
                 >
                   <div className="inline-action-card__head">
                     <ChatCircleText size={16} aria-hidden="true" />
-                    <strong>{card.subject}</strong>
+                    <strong>{cleanPlainText(card.subject)}</strong>
                   </div>
-                  <p className="inline-action-card__reason">{card.detail}</p>
+                  <p className="inline-action-card__reason">{cleanPlainText(card.detail)}</p>
                   <form
                     className="d2-inline-reply"
                     onSubmit={(e) => {

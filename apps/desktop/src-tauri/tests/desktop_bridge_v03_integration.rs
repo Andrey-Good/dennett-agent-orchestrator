@@ -30,6 +30,13 @@ use uuid::Uuid;
 
 const TEST_PROFILE_ENV: &str = "DENNETT_TEST_PROFILE";
 
+fn with_isolated_control_schema(base_url: &str, prefix: &str) -> String {
+    let short = &Uuid::new_v4().simple().to_string()[..12];
+    let schema = format!("iso_{prefix}_{short}");
+    let sep = if base_url.contains('?') { '&' } else { '?' };
+    format!("{base_url}{sep}options=-csearch_path%3D{schema}")
+}
+
 fn require_pg_urls() -> (String, String) {
     assert_eq!(
         env::var(TEST_PROFILE_ENV).ok().as_deref(),
@@ -44,7 +51,7 @@ fn require_pg_urls() -> (String, String) {
         .ok()
         .filter(|s| !s.trim().is_empty())
         .expect("DENNETT_TEST_CONTROL_PG_URL is required");
-    (mem, ctrl)
+    (mem, with_isolated_control_schema(&ctrl, "desk"))
 }
 
 fn find_binary_near_current_exe(exe_name: &str) -> Option<PathBuf> {

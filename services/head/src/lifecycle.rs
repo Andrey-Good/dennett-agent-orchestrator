@@ -14,8 +14,8 @@ use std::str::FromStr;
 use dennett_contracts::{
     ArtifactCompleteness, ArtifactId, ArtifactLifecycleAction, ArtifactLifecycleRequest,
     ArtifactLifecycleResponse, ArtifactLifecycleState, CorrelationId, DennettError,
-    ListArtifactsResponse, ProjectId, ProjectLifecycleResponse, ProjectLifecycleState,
-    RebindProjectRequest, SessionId,
+    ListArtifactsResponse, PermissionRequestId, ProjectId, ProjectLifecycleResponse,
+    ProjectLifecycleState, RebindProjectRequest, SessionId, TaskId,
 };
 use serde_json::json;
 
@@ -27,7 +27,161 @@ use crate::store::{
 };
 use crate::workspace_files::{clean_display_path, validate_safe_workspace_root};
 
+struct TerminatedProjectWork {
+    affected_timers: usize,
+    cancelled_task_ids: Vec<TaskId>,
+    session_ids: Vec<SessionId>,
+    expired_perms: Vec<(PermissionRequestId, SessionId)>,
+}
+
 impl HeadService {
+    /// Atomically cancels active/waiting tasks, timers, runs, open inbox cards, pending permission
+    /// requests, active capability grants, and active sessions for a removed/deleted project (H2-03).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "cancels timers, tasks, runs, permission requests, inbox cards, capability grants, and sessions atomically in one transaction"
+    )]
+    async fn terminate_project_work_in_tx<C: deadpool_postgres::GenericClient>(
+        &self,
+        tx: &C,
+        project_id: ProjectId,
+        reason: &str,
+    ) -> Result<TerminatedProjectWork, DennettError> {
+        let cancelled_timers = tx
+            .execute(
+                "UPDATE task_timers t
+                 SET status = 'cancelled'
+                 FROM tasks tk
+                 WHERE t.task_id = tk.task_id
+                   AND tk.project_id = $1
+                   AND t.status IN ('pending', 'claimed', 'paused')",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let affected_timers = usize::try_from(cancelled_timers).unwrap_or(0);
+
+        let task_rows = tx
+            .query(
+                "UPDATE tasks
+                 SET status = 'cancelled',
+                     active_run_id = NULL,
+                     wait_detail = NULL,
+                     expected_signal_name = NULL,
+                     finished_at = COALESCE(finished_at, now()),
+                     updated_at = now()
+                 WHERE project_id = $1
+                   AND status NOT IN ('succeeded', 'failed', 'cancelled')
+                 RETURNING task_id",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let cancelled_task_ids: Vec<TaskId> = task_rows
+            .iter()
+            .map(|r| TaskId::from_uuid(r.get(0)))
+            .collect();
+
+        tx.execute(
+            "UPDATE runs r
+             SET status = 'cancelled',
+                 stop_reason = 'project_removed_or_deleted',
+                 finished_at = now()
+             FROM sessions s
+             WHERE r.session_id = s.session_id
+               AND s.project_id = $1
+               AND r.status = 'running'",
+            &[&project_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let perm_rows = tx
+            .query(
+                "UPDATE permission_requests
+                 SET status = 'expired',
+                     revision = revision + 1,
+                     resolved_at = now()
+                 WHERE project_id = $1 AND status = 'pending'
+                 RETURNING request_id, session_id",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let expired_perms: Vec<(PermissionRequestId, SessionId)> = perm_rows
+            .iter()
+            .map(|r| {
+                (
+                    PermissionRequestId::from_uuid(r.get(0)),
+                    SessionId::from_uuid(r.get(1)),
+                )
+            })
+            .collect();
+
+        tx.execute(
+            "UPDATE inbox_cards
+             SET status = 'withdrawn',
+                 resolution_summary = $2,
+                 revision = revision + 1,
+                 resolved_at = now(),
+                 updated_at = now()
+             WHERE project_id = $1 AND status = 'open'",
+            &[&project_id.as_uuid(), &reason],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        tx.execute(
+            "UPDATE capability_grants
+             SET revoked_at = COALESCE(revoked_at, now()),
+                 revoked_reason = COALESCE(revoked_reason, $2)
+             WHERE project_id = $1 AND revoked_at IS NULL",
+            &[&project_id.as_uuid(), &reason],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let session_rows = tx
+            .query(
+                "UPDATE sessions
+                 SET status = 'closed',
+                     updated_at = now()
+                 WHERE project_id = $1
+                 RETURNING session_id",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let session_ids: Vec<SessionId> = session_rows
+            .iter()
+            .map(|r| SessionId::from_uuid(r.get(0)))
+            .collect();
+
+        Ok(TerminatedProjectWork {
+            affected_timers,
+            cancelled_task_ids,
+            session_ids,
+            expired_perms,
+        })
+    }
+
+    async fn finish_project_work_shutdown(&self, work: TerminatedProjectWork, reason: &str) {
+        for tid in work.cancelled_task_ids {
+            let _ = self.signal_task_cancel_only(tid).await;
+        }
+        for (perm_id, sid) in work.expired_perms {
+            self.wake_expired_approval_waiters(&[perm_id], sid, reason)
+                .await;
+        }
+        for sid in work.session_ids {
+            let _ = self.cancel_active_session_run(sid).await;
+            let _ = self.runtime().close_session(sid).await;
+            if let Some(bg) = self.background_runtime() {
+                let _ = bg.close_session(sid).await;
+            }
+        }
+    }
+
     /// Rebinds a project to a new canonical local workspace folder (`POST /v1/projects/{id}/rebind`,
     /// Contract C), recording old->new path provenance and closing stale live runtime processes
     /// so the next turn cleanly rehydrates on the new `cwd`.
@@ -500,19 +654,10 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_project_row(&row)?;
 
-        let cancelled_timers = tx
-            .execute(
-                "UPDATE task_timers t
-                 SET status = 'cancelled'
-                 FROM tasks tk
-                 WHERE t.task_id = tk.task_id
-                   AND tk.project_id = $1
-                   AND t.status IN ('pending', 'paused')",
-                &[&project_id.as_uuid()],
-            )
-            .await
-            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-        let affected = usize::try_from(cancelled_timers).unwrap_or(0);
+        let work = self
+            .terminate_project_work_in_tx(&tx, project_id, "Проект убран из списка Dennett")
+            .await?;
+        let affected = work.affected_timers;
 
         let _ = append_audit_event(
             &tx,
@@ -539,6 +684,7 @@ impl HeadService {
                 payload: json!({
                     "project_id": project_id,
                     "cancelled_timers": affected,
+                    "cancelled_tasks": work.cancelled_task_ids.len(),
                     "user_workspace_files_deleted": false,
                 }),
             },
@@ -548,6 +694,9 @@ impl HeadService {
         tx.commit()
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        self.finish_project_work_shutdown(work, "project removed from Dennett")
+            .await;
 
         Ok(ProjectLifecycleResponse {
             project: updated,
@@ -565,10 +714,6 @@ impl HeadService {
     ///
     /// Returns [`DennettError::InvalidInput`] if `confirm != true`, [`DennettError::NotFound`],
     /// or [`DennettError::DatabaseUnavailable`].
-    #[expect(
-        clippy::too_many_lines,
-        reason = "cancels tasks/timers, scrubs inline metadata and internal scratch dir while strictly preserving external user workspace files on disk"
-    )]
     pub async fn delete_project(
         &self,
         project_id: ProjectId,
@@ -605,41 +750,10 @@ impl HeadService {
         .await
         .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let cancelled_timers = tx
-            .execute(
-                "UPDATE task_timers t
-                 SET status = 'cancelled'
-                 FROM tasks tk
-                 WHERE t.task_id = tk.task_id
-                   AND tk.project_id = $1
-                   AND t.status IN ('pending', 'paused')",
-                &[&project_id.as_uuid()],
-            )
-            .await
-            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-        let affected = usize::try_from(cancelled_timers).unwrap_or(0);
-
-        tx.execute(
-            "UPDATE capability_grants
-             SET revoked_at = COALESCE(revoked_at, now()),
-                 revoked_reason = COALESCE(revoked_reason, 'project deleted in Dennett')
-             WHERE project_id = $1 AND revoked_at IS NULL",
-            &[&project_id.as_uuid()],
-        )
-        .await
-        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-
-        let session_rows = tx
-            .query(
-                "SELECT session_id FROM sessions WHERE project_id = $1",
-                &[&project_id.as_uuid()],
-            )
-            .await
-            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-        let session_ids: Vec<SessionId> = session_rows
-            .iter()
-            .map(|r| SessionId::from_uuid(r.get(0)))
-            .collect();
+        let work = self
+            .terminate_project_work_in_tx(&tx, project_id, "Проект удалён в Dennett")
+            .await?;
+        let affected = work.affected_timers;
 
         let sql = format!(
             "UPDATE projects
@@ -683,6 +797,7 @@ impl HeadService {
                 payload: json!({
                     "project_id": project_id,
                     "cancelled_timers": affected,
+                    "cancelled_tasks": work.cancelled_task_ids.len(),
                     "user_workspace_files_deleted": false,
                 }),
             },
@@ -693,9 +808,8 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        for sid in session_ids {
-            let _ = self.runtime().close_session(sid).await;
-        }
+        self.finish_project_work_shutdown(work, "project deleted in Dennett")
+            .await;
 
         // Clean ONLY Dennett's internal scratch directory (never the user's bound workspace folder!).
         let scratch_dir = self.detached_project_scratch_dir(project_id);
@@ -884,6 +998,23 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_artifact_row(&updated_row)?;
+
+        // H2-07: Removing from list hides all non-deleted revisions of this logical artifact name
+        // in the session so multi-revision artifacts (`v1`+`v2`) vanish cleanly as one logical item
+        // (strictly leaving external workspace files on disk untouched).
+        if req.action == ArtifactLifecycleAction::Remove {
+            tx.execute(
+                "UPDATE artifacts
+                 SET lifecycle_state = 'removed',
+                     updated_at = now()
+                 WHERE session_id = $1
+                   AND name = $2
+                   AND lifecycle_state NOT IN ('removed', 'deleted')",
+                &[&session_id.as_uuid(), &updated.name],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        }
 
         let safe_reason = req
             .reason

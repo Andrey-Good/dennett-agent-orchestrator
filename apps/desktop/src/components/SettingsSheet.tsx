@@ -47,7 +47,14 @@ export function SettingsSheet() {
     ? "SimulatedRuntime"
     : `Google Antigravity · agy acp ${catalog?.agy_version ?? "1.5+"}`;
 
-  const activeGrants = state.activeGrants.filter((g) => !g.revoked_at);
+  const activeProjectIds = new Set(
+    state.projects
+      .filter((p) => (p.lifecycle_state ?? "active") !== "deleted_record")
+      .map((p) => p.project_id),
+  );
+  const activeGrants = state.activeGrants.filter(
+    (g) => !g.revoked_at && activeProjectIds.has(g.project_id),
+  );
 
   const handleReconnect = (event: FormEvent) => {
     event.preventDefault();

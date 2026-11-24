@@ -33,8 +33,16 @@ function formatTime(timestampMs: number): string {
   });
 }
 
+function cleanPlainText(text: string): string {
+  return text.replace(/`([^`]+)`/g, "$1");
+}
+
 function formatInboxDetail(card: InboxCardRecord): string | null {
-  const trimmed = card.detail.trim();
+  if (card.kind === "unknown_effect") {
+    // Dedicated warning box below already renders the explanation and metadata without duplication.
+    return null;
+  }
+  const trimmed = cleanPlainText(card.detail.trim());
   if (!trimmed) {
     return null;
   }
@@ -112,55 +120,90 @@ export function InboxRadarCard() {
     return map;
   }, [state.effects]);
 
+  const activeProjectIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of state.projects) {
+      const lc = p.lifecycle_state ?? "active";
+      if (lc !== "archived" && lc !== "deleted_record") {
+        ids.add(p.project_id);
+      }
+    }
+    return ids;
+  }, [state.projects]);
+
   const openCards = useMemo(() => {
     return state.inboxCards
-      .filter((card) => card.status === "open")
+      .filter((card) => card.status === "open" && activeProjectIds.has(card.project_id))
       .filter((card) =>
         scopeFilter === "active_project" && activeProjectId
           ? card.project_id === activeProjectId
           : true,
       );
-  }, [activeProjectId, scopeFilter, state.inboxCards]);
+  }, [activeProjectId, activeProjectIds, scopeFilter, state.inboxCards]);
 
   const failedTasks = useMemo(() => {
     return state.tasks
-      .filter((t) => t.status === "failed")
+      .filter((t) => t.status === "failed" && activeProjectIds.has(t.project_id))
       .filter((t) =>
         scopeFilter === "active_project" && activeProjectId
           ? t.project_id === activeProjectId
           : true,
       );
-  }, [activeProjectId, scopeFilter, state.tasks]);
+  }, [activeProjectId, activeProjectIds, scopeFilter, state.tasks]);
 
   const radarTasks = useMemo(() => {
     return state.tasks
-      .filter((t) =>
-        [
-          "queued",
-          "running",
-          "waiting_timer",
-          "waiting_signal",
-          "waiting_clarification",
-          "waiting_approval",
-          "unknown_external",
-        ].includes(t.status),
+      .filter(
+        (t) =>
+          activeProjectIds.has(t.project_id) &&
+          [
+            "queued",
+            "running",
+            "waiting_timer",
+            "waiting_signal",
+            "waiting_clarification",
+            "waiting_approval",
+            "unknown_external",
+          ].includes(t.status),
       )
       .filter((t) =>
         scopeFilter === "active_project" && activeProjectId
           ? t.project_id === activeProjectId
           : true,
       );
-  }, [activeProjectId, scopeFilter, state.tasks]);
+  }, [activeProjectId, activeProjectIds, scopeFilter, state.tasks]);
+
+  const radarRunningSessions = useMemo(() => {
+    const taskRunningSessionIds = new Set(
+      radarTasks.filter((t) => t.status === "running").map((t) => t.session_id),
+    );
+    const runningSet = new Set(state.runningSessionIds);
+    return state.sessions
+      .filter((s) => runningSet.has(s.session_id) && activeProjectIds.has(s.project_id))
+      .filter((s) => !taskRunningSessionIds.has(s.session_id))
+      .filter((s) =>
+        scopeFilter === "active_project" && activeProjectId
+          ? s.project_id === activeProjectId
+          : true,
+      );
+  }, [
+    activeProjectId,
+    activeProjectIds,
+    radarTasks,
+    scopeFilter,
+    state.runningSessionIds,
+    state.sessions,
+  ]);
 
   const visibleGrants = useMemo(() => {
     return state.activeGrants
-      .filter((g) => !g.revoked_at)
+      .filter((g) => !g.revoked_at && activeProjectIds.has(g.project_id))
       .filter((g) =>
         scopeFilter === "active_project" && activeProjectId
           ? g.project_id === activeProjectId
           : true,
       );
-  }, [activeProjectId, scopeFilter, state.activeGrants]);
+  }, [activeProjectId, activeProjectIds, scopeFilter, state.activeGrants]);
 
   const runBusy = async (id: string, fn: () => Promise<void>) => {
     setBusyIds((prev) => ({ ...prev, [id]: true }));
@@ -250,7 +293,7 @@ export function InboxRadarCard() {
           </div>
         </div>
 
-        <h3 className="d2-item-card__title">{card.subject}</h3>
+        <h3 className="d2-item-card__title">{cleanPlainText(card.subject)}</h3>
         {(() => {
           const detailText = formatInboxDetail(card);
           return detailText ? <p className="d2-item-card__detail">{detailText}</p> : null;
@@ -685,13 +728,49 @@ export function InboxRadarCard() {
           <section className="d2-section" aria-label="Радар активности">
             <div className="d2-section__head">
               <h2>
-                Радар активности <span>{radarTasks.length}</span>
+                Радар активности <span>{radarTasks.length + radarRunningSessions.length}</span>
               </h2>
             </div>
-            {radarTasks.length === 0 ? (
-              <p className="d2-section-empty">Сейчас нет активных или ожидающих поручений.</p>
+            {radarTasks.length === 0 && radarRunningSessions.length === 0 ? (
+              <p className="d2-section-empty">
+                Сейчас нет активных чатов или ожидающих поручений.
+              </p>
             ) : (
               <div className="d2-radar-list">
+                {radarRunningSessions.map((session) => (
+                  <div
+                    key={session.session_id}
+                    className="d2-radar-row"
+                    data-testid={`radar-running-session-${session.session_id}`}
+                  >
+                    <span className="d2-pill d2-pill--status-running">Выполняется</span>
+                    <div className="d2-radar-row__copy">
+                      <strong>{session.title}</strong>
+                      <small>
+                        {projectById.get(session.project_id) ?? "Проект"} · активный ход в чате
+                      </small>
+                    </div>
+                    <div className="d2-radar-row__actions">
+                      <button
+                        type="button"
+                        className="d2-link-btn"
+                        onClick={() => void actions.openSessionInChat(session.session_id)}
+                      >
+                        Чат
+                      </button>
+                      <button
+                        type="button"
+                        className="d2-danger-btn d2-danger-btn--sm"
+                        data-testid={`radar-stop-session-${session.session_id}`}
+                        disabled={state.cancellingSessionIds.includes(session.session_id)}
+                        onClick={() => void actions.cancelSessionRun(session.session_id)}
+                      >
+                        <Stop size={11} weight="fill" aria-hidden="true" />
+                        Stop
+                      </button>
+                    </div>
+                  </div>
+                ))}
                 {radarTasks.map((task) => (
                   <div key={task.task_id} className="d2-radar-row">
                     <span className={`d2-pill d2-pill--status-${task.status}`}>
@@ -701,7 +780,7 @@ export function InboxRadarCard() {
                       <strong>{task.title}</strong>
                       <small>
                         {projectById.get(task.project_id) ?? "Проект"}
-                        {task.wait_detail ? ` · ${task.wait_detail}` : ""}
+                        {task.wait_detail ? ` · ${cleanPlainText(task.wait_detail)}` : ""}
                       </small>
                     </div>
                     <div className="d2-radar-row__actions">

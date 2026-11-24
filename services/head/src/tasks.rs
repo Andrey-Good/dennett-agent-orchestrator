@@ -33,7 +33,10 @@ use tokio::time;
 
 use crate::approvals::{DEFAULT_APPROVAL_WAIT_TIMEOUT, InteractivePolicyEvaluator};
 use crate::effects::SIMULATED_EXTERNAL_CONNECTOR_ID;
-use crate::events::{ControlEventAppend, append_control_event_in_tx};
+use crate::events::{
+    ControlEventAppend, PendingControlEvent, append_control_event_in_tx,
+    append_control_events_batch_in_tx,
+};
 use crate::migrations::sha256_hex;
 use crate::policy::PolicyContext;
 use crate::service::{
@@ -266,7 +269,7 @@ impl HeadService {
 
         let now = TimestampMs::now();
         let mut schedule_opt = req.schedule.clone();
-        let (initial_status, wait_detail, initial_fire_at) =
+        let (initial_status, wait_detail, expected_signal_name, initial_fire_at) =
             if let Some(ref mut sched) = schedule_opt {
                 verify_pg_timezone(&tx, &sched.timezone, self.pg_target()).await?;
                 let fire_at = compute_next_fire_at_pg(&tx, sched, now, self.pg_target()).await?;
@@ -274,16 +277,19 @@ impl HeadService {
                 (
                     TaskStatus::WaitingTimer,
                     Some(format!("Ожидает расписания ({})", sched.timezone)),
+                    None,
                     fire_at,
                 )
             } else if let Some(ref sig_name) = req.wait_for_signal {
+                let trimmed_sig = sig_name.trim().to_owned();
                 (
                     TaskStatus::WaitingSignal,
-                    Some(format!("Ожидает сигнал `{}`", sig_name.trim())),
+                    Some(format!("Ожидает сигнал {trimmed_sig}")),
+                    Some(trimmed_sig),
                     None,
                 )
             } else {
-                (TaskStatus::Queued, None, None)
+                (TaskStatus::Queued, None, None, None)
             };
 
         // Combine agent's attached skills with task-specific attached skills (deduplicated).
@@ -318,9 +324,9 @@ impl HeadService {
         let insert_sql = format!(
             "INSERT INTO tasks (
                 task_id, project_id, session_id, agent_id, parent_task_id,
-                title, goal, generation, status, wait_detail,
+                title, goal, generation, status, wait_detail, expected_signal_name,
                 schedule_json, budget_json, attached_skills, auth_profile_override
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13)
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14)
              RETURNING {TASK_SELECT_COLS}"
         );
         let task_row = tx
@@ -336,6 +342,7 @@ impl HeadService {
                     &req.goal.trim(),
                     &initial_status.as_str(),
                     &wait_detail.as_deref(),
+                    &expected_signal_name.as_deref(),
                     &schedule_json,
                     &budget_json,
                     &skills_json,
@@ -418,7 +425,12 @@ impl HeadService {
         let sql = format!(
             "SELECT {TASK_SELECT_COLS}
              FROM tasks
-             WHERE ($1::uuid IS NULL OR project_id = $1)
+             WHERE EXISTS (
+                 SELECT 1 FROM projects p
+                 WHERE p.project_id = tasks.project_id
+                   AND p.lifecycle_state <> 'deleted_record'
+             )
+               AND ($1::uuid IS NULL OR project_id = $1)
                AND ($2::text IS NULL OR status = $2)
              ORDER BY updated_at DESC"
         );
@@ -596,7 +608,9 @@ impl HeadService {
         };
 
         let mut new_timer_fire_at: Option<TimestampMs> = None;
-        let (next_status, next_wait_detail) = if goal_or_schedule_changed {
+        let mut expired_perm_ids: Vec<dennett_contracts::PermissionRequestId> = Vec::new();
+        let (next_status, next_wait_detail, next_expected_signal_name) = if goal_or_schedule_changed
+        {
             // Cancel stale timers of previous generations.
             tx.execute(
                 "UPDATE task_timers
@@ -607,7 +621,25 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-            // Supersede stale open clarification / missed_schedule cards.
+            // Expire pending interactive permission requests from superseded generation (H2-04).
+            let expired_perm_rows = tx
+                .query(
+                    "UPDATE permission_requests
+                     SET status = 'expired',
+                         revision = revision + 1,
+                         resolved_at = now()
+                     WHERE task_id = $1 AND status = 'pending'
+                     RETURNING request_id",
+                    &[&task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            expired_perm_ids = expired_perm_rows
+                .iter()
+                .map(|r| dennett_contracts::PermissionRequestId::from_uuid(r.get(0)))
+                .collect();
+
+            // Supersede stale open clarification / missed_schedule / budget_exceeded / permission_approval cards (H2-04).
             tx.execute(
                 "UPDATE inbox_cards
                  SET status = 'superseded',
@@ -617,7 +649,7 @@ impl HeadService {
                      updated_at = now()
                  WHERE task_id = $1
                    AND status = 'open'
-                   AND kind IN ('clarification', 'missed_schedule')",
+                   AND kind IN ('clarification', 'missed_schedule', 'budget_exceeded', 'permission_approval')",
                 &[&task_id.as_uuid()],
             )
             .await
@@ -631,12 +663,24 @@ impl HeadService {
                 (
                     TaskStatus::WaitingTimer,
                     Some(format!("Ожидает расписания ({})", sched.timezone)),
+                    None,
+                )
+            } else if existing.status == TaskStatus::WaitingSignal && !req.clear_schedule {
+                // Keep WaitingSignal parked on its expected signal when only goal/budget is edited (H2-04).
+                (
+                    TaskStatus::WaitingSignal,
+                    existing.wait_detail.clone(),
+                    existing.expected_signal_name.clone(),
                 )
             } else {
-                (TaskStatus::Queued, None)
+                (TaskStatus::Queued, None, None)
             }
         } else {
-            (existing.status, existing.wait_detail.clone())
+            (
+                existing.status,
+                existing.wait_detail.clone(),
+                existing.expected_signal_name.clone(),
+            )
         };
 
         let schedule_json = next_schedule
@@ -658,8 +702,9 @@ impl HeadService {
                  generation = $4,
                  status = $5,
                  wait_detail = $6,
-                 schedule_json = $7,
-                 budget_json = $8,
+                 expected_signal_name = $7,
+                 schedule_json = $8,
+                 budget_json = $9,
                  finished_at = CASE WHEN $5 IN ('queued', 'waiting_timer', 'waiting_signal') THEN NULL ELSE finished_at END,
                  updated_at = now()
              WHERE task_id = $1
@@ -675,6 +720,7 @@ impl HeadService {
                     &next_generation,
                     &next_status.as_str(),
                     &next_wait_detail.as_deref(),
+                    &next_expected_signal_name.as_deref(),
                     &schedule_json,
                     &budget_json,
                 ],
@@ -718,6 +764,23 @@ impl HeadService {
         // NOT depend on whether preemption beats the model response because `complete_task_run`
         // strictly fences on `task.generation == run_generation` (V07)!
         if goal_or_schedule_changed {
+            for perm_id in expired_perm_ids {
+                self.wake_approval_waiter(
+                    perm_id,
+                    crate::approvals::ApprovalResolutionSignal {
+                        outcome: dennett_runtime_antigravity::PolicyEvaluationOutcome {
+                            effect: dennett_contracts::PolicyEffect::Deny,
+                            matched_rule_id: None,
+                            reason: String::from(
+                                "superseded: task goal or schedule updated by owner",
+                            ),
+                            scope: format!("task:{task_id}"),
+                        },
+                        decision_record: None,
+                    },
+                )
+                .await;
+            }
             self.signal_old_task_generation_preempt(task_id, updated.generation)
                 .await;
             if updated.status == TaskStatus::Queued && req.execute_immediately.unwrap_or(true) {
@@ -813,28 +876,40 @@ impl HeadService {
             });
         }
 
+        let incoming_sig_name = req.signal_name.trim();
         let (outcome_status, should_wake, updated_task) = match task.status {
             TaskStatus::Cancelled | TaskStatus::UnknownExternal => {
                 (TaskSignalOutcome::RejectedStopped, false, task)
             }
             TaskStatus::WaitingSignal => {
-                let wake_sql = format!(
-                    "UPDATE tasks
-                     SET status = 'queued',
-                         wait_detail = NULL,
-                         updated_at = now()
-                     WHERE task_id = $1
-                     RETURNING {TASK_SELECT_COLS}"
-                );
-                let woke_row = tx
-                    .query_one(&wake_sql, &[&task_id.as_uuid()])
-                    .await
-                    .map_err(|err| map_pg_err(self.pg_target(), &err))?;
-                (
-                    TaskSignalOutcome::WokeTask,
-                    true,
-                    decode_task_row(&woke_row)?,
-                )
+                let signal_matches = task
+                    .expected_signal_name
+                    .as_deref()
+                    .map(str::trim)
+                    .is_none_or(|expected| expected == incoming_sig_name);
+                if signal_matches {
+                    let wake_sql = format!(
+                        "UPDATE tasks
+                         SET status = 'queued',
+                             wait_detail = NULL,
+                             expected_signal_name = NULL,
+                             updated_at = now()
+                         WHERE task_id = $1
+                         RETURNING {TASK_SELECT_COLS}"
+                    );
+                    let woke_row = tx
+                        .query_one(&wake_sql, &[&task_id.as_uuid()])
+                        .await
+                        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                    (
+                        TaskSignalOutcome::WokeTask,
+                        true,
+                        decode_task_row(&woke_row)?,
+                    )
+                } else {
+                    // Non-matching signal is recorded idempotently without waking WaitingSignal (H2-04).
+                    (TaskSignalOutcome::QueuedOnTask, false, task)
+                }
             }
             _ => (TaskSignalOutcome::QueuedOnTask, false, task),
         };
@@ -1121,9 +1196,10 @@ impl HeadService {
             .query(&stranded_sql, &[&task_id.as_uuid()])
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let mut pending_events = Vec::with_capacity(stranded_rows.len() + 1);
         for srow in &stranded_rows {
             let claim = decode_effect_claim_row(srow)?;
-            self.mark_unknown_effect_side_effects_in_tx(&tx, &claim, correlation_id)
+            self.mark_unknown_effect_side_effects_in_tx(&tx, &claim, &mut pending_events)
                 .await?;
         }
 
@@ -1208,24 +1284,25 @@ impl HeadService {
         )
         .await?;
 
-        let _ = append_control_event_in_tx(
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("task:{task_id}"),
+            event_type,
+            project_id: Some(updated_task.project_id),
+            session_id: Some(updated_task.session_id),
+            task_id: Some(task_id),
+            payload: json!({
+                "task_id": task_id,
+                "status": updated_task.status,
+                "external_outcome_unknown": external_outcome_unknown,
+                "committed_effects_count": committed_effects.len(),
+                "unknown_effects_count": unknown_effects.len(),
+            }),
+        });
+        let _ = append_control_events_batch_in_tx(
             &tx,
             self.pg_target(),
-            ControlEventAppend {
-                entity_key: &format!("task:{task_id}"),
-                event_type,
-                project_id: Some(updated_task.project_id),
-                session_id: Some(updated_task.session_id),
-                task_id: Some(task_id),
-                correlation_id,
-                payload: json!({
-                    "task_id": task_id,
-                    "status": updated_task.status,
-                    "external_outcome_unknown": external_outcome_unknown,
-                    "committed_effects_count": committed_effects.len(),
-                    "unknown_effects_count": unknown_effects.len(),
-                }),
-            },
+            correlation_id,
+            &pending_events,
         )
         .await?;
 
@@ -1310,6 +1387,7 @@ impl HeadService {
         let mut skipped_timers = 0_usize;
         let mut asked_timers = 0_usize;
         let mut to_spawn: Vec<(TaskId, i64)> = Vec::new();
+        let mut pending_events: Vec<PendingControlEvent> = Vec::with_capacity(claimed_timers);
 
         for row in &claimed_rows {
             let timer = decode_task_timer_row(row)?;
@@ -1379,24 +1457,18 @@ impl HeadService {
                     .await?;
                 }
 
-                let _ = append_control_event_in_tx(
-                    &tx,
-                    self.pg_target(),
-                    ControlEventAppend {
-                        entity_key: &format!("task:{}", task.task_id),
-                        event_type: "task.timer_skipped",
-                        project_id: Some(task.project_id),
-                        session_id: Some(task.session_id),
-                        task_id: Some(task.task_id),
-                        correlation_id,
-                        payload: json!({
-                            "timer_id": timer.timer_id,
-                            "overdue_ms": overdue_ms,
-                            "policy": "skip",
-                        }),
-                    },
-                )
-                .await?;
+                pending_events.push(PendingControlEvent {
+                    entity_key: format!("task:{}", task.task_id),
+                    event_type: "task.timer_skipped",
+                    project_id: Some(task.project_id),
+                    session_id: Some(task.session_id),
+                    task_id: Some(task.task_id),
+                    payload: json!({
+                        "timer_id": timer.timer_id,
+                        "overdue_ms": overdue_ms,
+                        "policy": "skip",
+                    }),
+                });
                 skipped_timers += 1;
             } else if is_misfired && timer.missed_run_policy == MissedRunPolicy::Ask {
                 tx.execute(
@@ -1424,7 +1496,7 @@ impl HeadService {
                 )
                 .to_owned();
                 let detail = format!(
-                    "Таймер поручения `{}` ({}) просрочен на {} сек. Запустить сейчас один раз или пропустить до следующего окна?",
+                    "Таймер поручения «{}» ({}) просрочен на {} сек. Запустить сейчас один раз или пропустить до следующего окна?",
                     task.title,
                     timer.timezone,
                     overdue_ms / 1_000
@@ -1447,25 +1519,19 @@ impl HeadService {
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-                let _ = append_control_event_in_tx(
-                    &tx,
-                    self.pg_target(),
-                    ControlEventAppend {
-                        entity_key: &format!("task:{}", task.task_id),
-                        event_type: "task.schedule_missed",
-                        project_id: Some(task.project_id),
-                        session_id: Some(task.session_id),
-                        task_id: Some(task.task_id),
-                        correlation_id,
-                        payload: json!({
-                            "timer_id": timer.timer_id,
-                            "card_id": card_id,
-                            "overdue_ms": overdue_ms,
-                            "policy": "ask",
-                        }),
-                    },
-                )
-                .await?;
+                pending_events.push(PendingControlEvent {
+                    entity_key: format!("task:{}", task.task_id),
+                    event_type: "task.schedule_missed",
+                    project_id: Some(task.project_id),
+                    session_id: Some(task.session_id),
+                    task_id: Some(task.task_id),
+                    payload: json!({
+                        "timer_id": timer.timer_id,
+                        "card_id": card_id,
+                        "overdue_ms": overdue_ms,
+                        "policy": "ask",
+                    }),
+                });
                 asked_timers += 1;
             } else {
                 // On-time firing OR `MissedRunPolicy::ExecuteOnce` (coalesces any downtime into 1 run!).
@@ -1522,29 +1588,57 @@ impl HeadService {
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-                let _ = append_control_event_in_tx(
-                    &tx,
-                    self.pg_target(),
-                    ControlEventAppend {
-                        entity_key: &format!("task:{}", task.task_id),
-                        event_type: "task.timer_fired",
-                        project_id: Some(task.project_id),
-                        session_id: Some(task.session_id),
-                        task_id: Some(task.task_id),
-                        correlation_id,
-                        payload: json!({
-                            "timer_id": timer.timer_id,
-                            "task_generation": task.generation,
-                            "overdue_ms": overdue_ms,
-                            "policy": timer.missed_run_policy,
-                        }),
-                    },
-                )
-                .await?;
+                pending_events.push(PendingControlEvent {
+                    entity_key: format!("task:{}", task.task_id),
+                    event_type: "task.timer_fired",
+                    project_id: Some(task.project_id),
+                    session_id: Some(task.session_id),
+                    task_id: Some(task.task_id),
+                    payload: json!({
+                        "timer_id": timer.timer_id,
+                        "task_generation": task.generation,
+                        "overdue_ms": overdue_ms,
+                        "policy": timer.missed_run_policy,
+                    }),
+                });
                 woken_tasks += 1;
                 to_spawn.push((task.task_id, task.generation));
             }
         }
+
+        // H2-02: Also pick up durable `tasks.status = 'queued'` that survived Head restart
+        // (excluding tasks already scheduled in this tick or currently active in memory).
+        let (_active_run_ids, active_task_ids) = self.active_run_and_task_ids().await;
+        let queued_rows = tx
+            .query(
+                "SELECT tk.task_id, tk.generation
+                 FROM tasks tk
+                 JOIN projects p ON p.project_id = tk.project_id
+                 WHERE tk.status = 'queued'
+                   AND p.lifecycle_state IN ('active', 'detached')
+                 ORDER BY tk.updated_at ASC
+                 LIMIT 16",
+                &[],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        for qrow in queued_rows {
+            let tid = TaskId::from_uuid(qrow.get(0));
+            let gen_num: i64 = qrow.get(1);
+            if active_task_ids.contains(&tid) || to_spawn.iter().any(|(id, _)| *id == tid) {
+                continue;
+            }
+            woken_tasks += 1;
+            to_spawn.push((tid, gen_num));
+        }
+
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
 
         tx.commit()
             .await
@@ -1563,6 +1657,329 @@ impl HeadService {
         })
     }
 
+    /// Atomic startup crash-recovery pass executed on `dennett-head` boot and scheduler startup
+    /// BEFORE the first timer tick (H2-02 / A10).
+    ///
+    /// Safely excludes any in-memory `active_runs` / `active_tasks` belonging to the live process so
+    /// repeated calls are 100% idempotent:
+    /// 1. Marks stale `dispatching` external effects as `unknown` (`UNKNOWN`, never blindly retried).
+    /// 2. Expires orphaned `pending` `permission_requests` and their `open` `permission_approval` inbox cards.
+    /// 3. Finalizes stranded `runs.status = 'running'` as `failed` (`HEAD_RESTARTED_DURING_RUN`).
+    /// 4. Transitions interrupted `running` and orphaned-approval `waiting_approval` tasks safely:
+    ///    - to `unknown_external` if any `unknown`/`prepared`/`dispatching` effect exists,
+    ///    - to `failed` (`HEAD_RESTARTED_DURING_RUN`) if a `confirmed` external effect already ran on that run,
+    ///    - to `queued` when zero external effects occurred (ready for automatic scheduler pickup!).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] on PostgreSQL failure.
+    /// Runs [`Self::recover_after_startup`] at most once per `HeadService` process lifecycle,
+    /// serialized behind `startup_recovery_lock()` so `run_serve` and `spawn_background_scheduler`
+    /// never execute duplicate concurrent recovery passes against live HTTP traffic.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] on PostgreSQL failure.
+    pub async fn recover_after_startup_once(
+        &self,
+        correlation_id: &CorrelationId,
+    ) -> Result<usize, DennettError> {
+        let mut done = self.startup_recovery_lock().lock().await;
+        if *done {
+            return Ok(0);
+        }
+        let recovered = self.recover_after_startup(correlation_id).await?;
+        *done = true;
+        Ok(recovered)
+    }
+
+    /// Atomic startup crash-recovery pass executed on `dennett-head` boot BEFORE accepting traffic
+    /// (H2-02 / A10).
+    ///
+    /// Safely excludes any in-memory `active_runs` / `active_tasks` belonging to the live process so
+    /// repeated calls are idempotent:
+    /// 1. Marks stale `dispatching` external effects as `unknown` (`UNKNOWN`, never blindly retried).
+    /// 2. Expires orphaned `pending` `permission_requests` and their `open` `permission_approval` cards.
+    /// 3. Finalizes stranded `runs.status = 'running'` as `failed` (`HEAD_RESTARTED_DURING_RUN`).
+    /// 4. Transitions interrupted `running` and orphaned-approval `waiting_approval` tasks safely
+    ///    (`unknown_external`, `failed` if confirmed effect occurred, or `queued` for scheduler pickup).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] on PostgreSQL failure.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "startup crash recovery atomically reconciles orphaned approvals, stranded runs, and interrupted tasks in one transaction"
+    )]
+    pub async fn recover_after_startup(
+        &self,
+        correlation_id: &CorrelationId,
+    ) -> Result<usize, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let stale_effects = self
+            .recover_stale_dispatching_effects(correlation_id)
+            .await?;
+        let (active_run_ids, active_task_ids) = self.active_run_and_task_ids().await;
+        let active_run_uuids: Vec<uuid::Uuid> =
+            active_run_ids.iter().map(|id| id.as_uuid()).collect();
+        let active_task_uuids: Vec<uuid::Uuid> =
+            active_task_ids.iter().map(|id| id.as_uuid()).collect();
+
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let mut pending_events: Vec<PendingControlEvent> = Vec::new();
+        let restart_perm_summary =
+            "Процесс dennett-head был перезапущен во время ожидания подтверждения";
+        let expired_perm_rows = tx
+            .query(
+                "UPDATE permission_requests
+                 SET status = 'expired',
+                     revision = revision + 1,
+                     resolved_at = now()
+                 WHERE status = 'pending'
+                   AND NOT (run_id = ANY($1))
+                 RETURNING request_id, project_id, session_id, task_id",
+                &[&active_run_uuids],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        for row in &expired_perm_rows {
+            let perm_id = dennett_contracts::PermissionRequestId::from_uuid(row.get(0));
+            let project_id = ProjectId::from_uuid(row.get(1));
+            let session_id = SessionId::from_uuid(row.get(2));
+            let task_id = row.get::<_, Option<uuid::Uuid>>(3).map(TaskId::from_uuid);
+            tx.execute(
+                "UPDATE inbox_cards
+                 SET status = 'expired',
+                     resolution_summary = $2,
+                     revision = revision + 1,
+                     resolved_at = now(),
+                     updated_at = now()
+                 WHERE permission_request_id = $1 AND status = 'open'",
+                &[&perm_id.as_uuid(), &restart_perm_summary],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+            let entity_key = task_id.map_or_else(
+                || format!("session:{session_id}"),
+                |tid| format!("task:{tid}"),
+            );
+            pending_events.push(PendingControlEvent {
+                entity_key,
+                event_type: "permission.expired",
+                project_id: Some(project_id),
+                session_id: Some(session_id),
+                task_id,
+                payload: json!({
+                    "request_id": perm_id,
+                    "reason": restart_perm_summary,
+                }),
+            });
+        }
+
+        // Belt-and-suspenders: close any open `permission_approval` inbox card from dead runs.
+        tx.execute(
+            "UPDATE inbox_cards
+             SET status = 'expired',
+                 resolution_summary = $2,
+                 revision = revision + 1,
+                 resolved_at = now(),
+                 updated_at = now()
+             WHERE kind = 'permission_approval'
+               AND status = 'open'
+               AND (run_id IS NULL OR NOT (run_id = ANY($1)))",
+            &[&active_run_uuids, &restart_perm_summary],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let stranded_runs = tx
+            .execute(
+                "UPDATE runs
+                 SET status = 'failed',
+                     error_code = 'HEAD_RESTARTED_DURING_RUN',
+                     error_summary = 'Выполнение прервано перезапуском dennett-head',
+                     finished_at = now()
+                 WHERE status = 'running'
+                   AND NOT (run_id = ANY($1))",
+                &[&active_run_uuids],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let interrupted_sql = format!(
+            "SELECT {TASK_SELECT_COLS}
+             FROM tasks
+             WHERE status IN ('running', 'waiting_approval')
+               AND NOT (task_id = ANY($1))
+             FOR UPDATE"
+        );
+        let interrupted_rows = tx
+            .query(&interrupted_sql, &[&active_task_uuids])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let mut recovered_tasks = 0_usize;
+        for row in &interrupted_rows {
+            let task = decode_task_row(row)?;
+            if task.status == TaskStatus::WaitingApproval {
+                // Keep tasks paused on durable `budget_exceeded` or `missed_schedule` inbox cards intact!
+                let has_durable_approval_card: bool = tx
+                    .query_one(
+                        "SELECT EXISTS (
+                            SELECT 1 FROM inbox_cards
+                            WHERE task_id = $1
+                              AND status = 'open'
+                              AND kind IN ('budget_exceeded', 'missed_schedule')
+                        )",
+                        &[&task.task_id.as_uuid()],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                    .get(0);
+                if has_durable_approval_card {
+                    continue;
+                }
+            }
+
+            let has_unknown_effect: bool = tx
+                .query_one(
+                    "SELECT EXISTS (
+                        SELECT 1 FROM effect_claims
+                        WHERE task_id = $1
+                          AND status IN ('unknown', 'prepared', 'dispatching')
+                    )",
+                    &[&task.task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                .get(0);
+
+            let has_confirmed_effect_on_run: bool = if let Some(rid) = task.active_run_id {
+                tx.query_one(
+                    "SELECT EXISTS (
+                        SELECT 1 FROM effect_claims
+                        WHERE task_id = $1
+                          AND run_id = $2
+                          AND status = 'confirmed'
+                    )",
+                    &[&task.task_id.as_uuid(), &rid.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                .get(0)
+            } else {
+                false
+            };
+
+            let (next_status, audit_msg) = if has_unknown_effect {
+                tx.execute(
+                    "UPDATE tasks
+                     SET status = 'unknown_external',
+                         active_run_id = NULL,
+                         wait_detail = 'Неизвестный исход внешнего действия после перезапуска dennett-head',
+                         updated_at = now()
+                     WHERE task_id = $1",
+                    &[&task.task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                (
+                    TaskStatus::UnknownExternal,
+                    "recovered interrupted task to unknown_external after Head restart",
+                )
+            } else if has_confirmed_effect_on_run {
+                tx.execute(
+                    "UPDATE tasks
+                     SET status = 'failed',
+                         active_run_id = NULL,
+                         wait_detail = NULL,
+                         error_code = 'HEAD_RESTARTED_DURING_RUN',
+                         error_summary = 'Поручение прервано перезапуском dennett-head после внешнего действия; автоматический повтор отключён',
+                         finished_at = now(),
+                         updated_at = now()
+                     WHERE task_id = $1",
+                    &[&task.task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                (
+                    TaskStatus::Failed,
+                    "marked interrupted task failed (HEAD_RESTARTED_DURING_RUN) after confirmed external effect",
+                )
+            } else {
+                tx.execute(
+                    "UPDATE tasks
+                     SET status = 'queued',
+                         active_run_id = NULL,
+                         wait_detail = NULL,
+                         error_code = NULL,
+                         error_summary = NULL,
+                         finished_at = NULL,
+                         updated_at = now()
+                     WHERE task_id = $1",
+                    &[&task.task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                (
+                    TaskStatus::Queued,
+                    "re-queued interrupted task cleanly after Head restart (zero external effects)",
+                )
+            };
+
+            let _ = append_audit_event(
+                &tx,
+                self.pg_target(),
+                correlation_id,
+                Some(task.session_id),
+                task.active_run_id,
+                "head_recovery",
+                "task_recovered_after_restart",
+                &format!("task {} -> {next_status}: {audit_msg}", task.task_id),
+            )
+            .await?;
+            pending_events.push(PendingControlEvent {
+                entity_key: format!("task:{}", task.task_id),
+                event_type: "task.recovered_after_restart",
+                project_id: Some(task.project_id),
+                session_id: Some(task.session_id),
+                task_id: Some(task.task_id),
+                payload: json!({
+                    "task_id": task.task_id,
+                    "previous_status": task.status,
+                    "status": next_status,
+                    "reason": "HEAD_RESTARTED_DURING_RUN",
+                }),
+            });
+            recovered_tasks += 1;
+        }
+
+        // Strict V15 lock hierarchy: emit all journal events in one sorted batch right before COMMIT!
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        Ok(stale_effects
+            + expired_perm_rows.len()
+            + usize::try_from(stranded_runs).unwrap_or(0)
+            + recovered_tasks)
+    }
+
     /// Spawns the background PostgreSQL timer scheduler and startup crash-recovery pass,
     /// terminating cleanly when `shutdown_rx` receives `true`.
     #[must_use]
@@ -1573,7 +1990,7 @@ impl HeadService {
         let svc = self.clone();
         tokio::spawn(async move {
             let boot_cid = CorrelationId::generate();
-            let _ = svc.recover_stale_dispatching_effects(&boot_cid).await;
+            let _ = svc.recover_after_startup_once(&boot_cid).await;
             let mut interval = time::interval(BACKGROUND_SCHEDULER_POLL_INTERVAL);
             interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
             loop {
@@ -1816,8 +2233,16 @@ impl HeadService {
 
             // 1. Pre-turn external budget check strictly outside the model (Contract G).
             if let Some(violation) = task.budget.check_before_next_turn(&task.usage) {
-                self.record_budget_exceeded_in_tx(&tx, &task, &violation, &correlation_id)
+                let mut pending_events = Vec::with_capacity(1);
+                self.record_budget_exceeded_in_tx(&tx, &task, &violation, &mut pending_events)
                     .await?;
+                let _ = append_control_events_batch_in_tx(
+                    &tx,
+                    self.pg_target(),
+                    &correlation_id,
+                    &pending_events,
+                )
+                .await?;
                 tx.commit()
                     .await
                     .map_err(|err| map_pg_err(self.pg_target(), &err))?;
@@ -2012,27 +2437,33 @@ impl HeadService {
         };
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        self.register_active_task(
-            task_id,
-            ActiveTaskHandle {
-                generation: expected_generation,
-                session_id: task.session_id,
-                run_id,
-                cancel_tx: cancel_tx.clone(),
-            },
-        )
-        .await;
-        let _task_guard = ActiveTaskGuard::new(self.active_tasks_map(), task_id, run_id);
-
-        self.register_active_session_run(
+        self.try_register_active_session_run(
             task.session_id,
             ActiveRunHandle {
                 run_id,
                 cancel_tx: cancel_tx.clone(),
             },
         )
+        .await?;
+        let mut run_guard = ActiveRunGuard::new(
+            self.clone(),
+            task.session_id,
+            run_id,
+            cancel_tx.clone(),
+            correlation_id.clone(),
+        );
+
+        self.register_active_task(
+            task_id,
+            ActiveTaskHandle {
+                generation: expected_generation,
+                session_id: task.session_id,
+                run_id,
+                cancel_tx,
+            },
+        )
         .await;
-        let _run_guard = ActiveRunGuard::new(self.active_runs_map(), task.session_id, run_id);
+        let _task_guard = ActiveTaskGuard::new(self.active_tasks_map(), task_id, run_id);
 
         let runtime = self.runtime_for_profile(task.auth_profile_override)?;
         let (effective_workspace_cwd, effective_write_policy) = match project.workspace_path {
@@ -2078,6 +2509,9 @@ impl HeadService {
                     &correlation_id,
                 )
                 .await;
+                run_guard.mark_completed();
+                self.unregister_active_session_run(task.session_id, run_id)
+                    .await;
                 return Ok(());
             }
         };
@@ -2090,6 +2524,22 @@ impl HeadService {
                 Some(run_id),
             )
             .await;
+
+        let turn_timeout = task
+            .budget
+            .max_wall_secs
+            .map_or(DEFAULT_TURN_TIMEOUT, |limit_secs| {
+                let limit_ms = limit_secs.saturating_mul(1_000);
+                let rem_ms = limit_ms.saturating_sub(task.usage.wall_ms_used).max(500);
+                Duration::from_millis(rem_ms).min(DEFAULT_TURN_TIMEOUT)
+            });
+
+        // Align interactive approval wait with turn_timeout so `await_interactive_approval`
+        // expires cleanly before `transport.rs`'s turn deadline fires (H2-01).
+        let approval_timeout = turn_timeout
+            .saturating_sub(Duration::from_secs(2))
+            .max(Duration::from_millis(250))
+            .min(DEFAULT_APPROVAL_WAIT_TIMEOUT);
 
         let policy_ctx = PolicyContext {
             project_id: project.project_id,
@@ -2108,17 +2558,8 @@ impl HeadService {
             correlation_id.clone(),
             turn_secrets,
             cancel_rx.clone(),
-            DEFAULT_APPROVAL_WAIT_TIMEOUT,
+            approval_timeout,
         );
-
-        let turn_timeout = task
-            .budget
-            .max_wall_secs
-            .map_or(DEFAULT_TURN_TIMEOUT, |limit_secs| {
-                let limit_ms = limit_secs.saturating_mul(1_000);
-                let rem_ms = limit_ms.saturating_sub(task.usage.wall_ms_used).max(500);
-                Duration::from_millis(rem_ms).min(DEFAULT_TURN_TIMEOUT)
-            });
 
         let turn_result = runtime
             .send_prompt_turn(
@@ -2151,6 +2592,9 @@ impl HeadService {
                     &correlation_id,
                 )
                 .await;
+                run_guard.mark_completed();
+                self.unregister_active_session_run(task.session_id, run_id)
+                    .await;
                 return Ok(());
             }
         };
@@ -2231,6 +2675,9 @@ impl HeadService {
                 &correlation_id,
             )
             .await?;
+        run_guard.mark_completed();
+        self.unregister_active_session_run(task.session_id, run_id)
+            .await;
 
         Ok(())
     }
@@ -2535,6 +2982,7 @@ impl HeadService {
 
         let mut updated_task_view = current_task.clone();
         updated_task_view.usage = next_usage.clone();
+        let mut pending_events: Vec<PendingControlEvent> = Vec::new();
 
         if has_unknown_effect {
             tx.execute(
@@ -2544,8 +2992,13 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         } else if let Some(violation) = current_task.budget.check_after_turn(&next_usage) {
-            self.record_budget_exceeded_in_tx(&tx, &updated_task_view, &violation, correlation_id)
-                .await?;
+            self.record_budget_exceeded_in_tx(
+                &tx,
+                &updated_task_view,
+                &violation,
+                &mut pending_events,
+            )
+            .await?;
         } else if let Some(question) = outcome.clarification_question() {
             let safe_q = truncate_utf8(&self.redact(question), 2000).to_owned();
             tx.execute(
@@ -2584,24 +3037,18 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-            let _ = append_control_event_in_tx(
-                &tx,
-                self.pg_target(),
-                ControlEventAppend {
-                    entity_key: &format!("task:{task_id}"),
-                    event_type: "task.clarification_requested",
-                    project_id: Some(current_task.project_id),
-                    session_id: Some(current_task.session_id),
-                    task_id: Some(task_id),
-                    correlation_id,
-                    payload: json!({
-                        "task_id": task_id,
-                        "card_id": card_id,
-                        "question": safe_q,
-                    }),
-                },
-            )
-            .await?;
+            pending_events.push(PendingControlEvent {
+                entity_key: format!("task:{task_id}"),
+                event_type: "task.clarification_requested",
+                project_id: Some(current_task.project_id),
+                session_id: Some(current_task.session_id),
+                task_id: Some(task_id),
+                payload: json!({
+                    "task_id": task_id,
+                    "card_id": card_id,
+                    "question": safe_q,
+                }),
+            });
         } else {
             // Check whether a recurring future timer is already armed for this task.
             let has_pending_timer: bool = tx
@@ -2633,38 +3080,64 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-            let _ = append_control_event_in_tx(
+            pending_events.push(PendingControlEvent {
+                entity_key: format!("task:{task_id}"),
+                event_type,
+                project_id: Some(current_task.project_id),
+                session_id: Some(current_task.session_id),
+                task_id: Some(task_id),
+                payload: json!({
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "generation": run_generation,
+                    "status": next_status,
+                    "turns_used": next_usage.turns_used,
+                    "tokens_used": next_usage.tokens_used,
+                }),
+            });
+        }
+
+        let expired_perms = self
+            .expire_pending_approvals_for_run_in_tx(
                 &tx,
-                self.pg_target(),
-                ControlEventAppend {
-                    entity_key: &format!("task:{task_id}"),
-                    event_type,
-                    project_id: Some(current_task.project_id),
-                    session_id: Some(current_task.session_id),
-                    task_id: Some(task_id),
-                    correlation_id,
-                    payload: json!({
-                        "task_id": task_id,
-                        "run_id": run_id,
-                        "generation": run_generation,
-                        "status": next_status,
-                        "turns_used": next_usage.turns_used,
-                        "tokens_used": next_usage.tokens_used,
-                    }),
+                run_id,
+                if final_run_status == RunStatus::Cancelled {
+                    "withdrawn"
+                } else {
+                    "expired"
                 },
+                "Ход поручения завершён",
+                &mut pending_events,
             )
             .await?;
-        }
+
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
 
         tx.commit()
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        if !expired_perms.is_empty() {
+            self.wake_expired_approval_waiters(
+                &expired_perms,
+                current_task.session_id,
+                "task run completed",
+            )
+            .await;
+        }
         Ok(final_run_status)
     }
 
     #[expect(
         clippy::too_many_arguments,
-        reason = "records failed task run safely respecting generation fencing"
+        clippy::too_many_lines,
+        reason = "records failed task run safely respecting generation fencing and expiring any pending approvals"
     )]
     async fn complete_task_run_error(
         &self,
@@ -2689,6 +3162,7 @@ impl HeadService {
         }
         let safe_err = truncate_utf8(&self.redact(&err.to_string()), 2000).to_owned();
         let wall_i64 = i64::try_from(elapsed_ms).ok();
+        let mut pending_events: Vec<PendingControlEvent> = Vec::new();
         let task_res = fetch_task(&tx, task_id, self.pg_target()).await;
         if let Ok(task) = task_res {
             if task.generation == run_generation {
@@ -2726,25 +3200,19 @@ impl HeadService {
                             ],
                         )
                         .await;
-                    let _ = append_control_event_in_tx(
-                        &tx,
-                        self.pg_target(),
-                        ControlEventAppend {
-                            entity_key: &format!("task:{task_id}"),
-                            event_type: "task.failed",
-                            project_id: Some(task.project_id),
-                            session_id: Some(task.session_id),
-                            task_id: Some(task_id),
-                            correlation_id,
-                            payload: json!({
-                                "task_id": task_id,
-                                "run_id": run_id,
-                                "error_code": err.code(),
-                                "error_summary": safe_err,
-                            }),
-                        },
-                    )
-                    .await;
+                    pending_events.push(PendingControlEvent {
+                        entity_key: format!("task:{task_id}"),
+                        event_type: "task.failed",
+                        project_id: Some(task.project_id),
+                        session_id: Some(task.session_id),
+                        task_id: Some(task_id),
+                        payload: json!({
+                            "task_id": task_id,
+                            "run_id": run_id,
+                            "error_code": err.code(),
+                            "error_summary": safe_err,
+                        }),
+                    });
                 }
             } else {
                 let _ = tx
@@ -2761,7 +3229,52 @@ impl HeadService {
                     )
                     .await;
             }
+            let expired_perms = self
+                .expire_pending_approvals_for_run_in_tx(
+                    &tx,
+                    run_id,
+                    "expired",
+                    &format!(
+                        "Ход поручения завершился ошибкой ({}): {safe_err}",
+                        err.code()
+                    ),
+                    &mut pending_events,
+                )
+                .await
+                .unwrap_or_default();
+            let _ = append_control_events_batch_in_tx(
+                &tx,
+                self.pg_target(),
+                correlation_id,
+                &pending_events,
+            )
+            .await;
+            let _ = tx.commit().await;
+            if !expired_perms.is_empty() {
+                self.wake_expired_approval_waiters(&expired_perms, task.session_id, &safe_err)
+                    .await;
+            }
+            return;
         }
+        let _ = self
+            .expire_pending_approvals_for_run_in_tx(
+                &tx,
+                run_id,
+                "expired",
+                &format!(
+                    "Ход поручения завершился ошибкой ({}): {safe_err}",
+                    err.code()
+                ),
+                &mut pending_events,
+            )
+            .await;
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await;
         let _ = tx.commit().await;
     }
 
@@ -2770,10 +3283,10 @@ impl HeadService {
         tx: &C,
         task: &TaskRecord,
         violation: &dennett_contracts::BudgetViolation,
-        correlation_id: &CorrelationId,
+        pending_events: &mut Vec<PendingControlEvent>,
     ) -> Result<(), DennettError> {
         let summary = format!(
-            "Лимит бюджета `{}` исчерпан: использовано {} из {}",
+            "Лимит бюджета «{}» исчерпан: использовано {} из {}",
             violation.dimension, violation.used, violation.limit
         );
         if task.budget.exceed_policy == BudgetExceedPolicy::Fail {
@@ -2825,26 +3338,20 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         }
 
-        let _ = append_control_event_in_tx(
-            tx,
-            self.pg_target(),
-            ControlEventAppend {
-                entity_key: &format!("task:{}", task.task_id),
-                event_type: "task.budget_exceeded",
-                project_id: Some(task.project_id),
-                session_id: Some(task.session_id),
-                task_id: Some(task.task_id),
-                correlation_id,
-                payload: json!({
-                    "task_id": task.task_id,
-                    "dimension": violation.dimension,
-                    "used": violation.used,
-                    "limit": violation.limit,
-                    "exceed_policy": task.budget.exceed_policy,
-                }),
-            },
-        )
-        .await?;
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("task:{}", task.task_id),
+            event_type: "task.budget_exceeded",
+            project_id: Some(task.project_id),
+            session_id: Some(task.session_id),
+            task_id: Some(task.task_id),
+            payload: json!({
+                "task_id": task.task_id,
+                "dimension": violation.dimension,
+                "used": violation.used,
+                "limit": violation.limit,
+                "exceed_policy": task.budget.exceed_policy,
+            }),
+        });
         Ok(())
     }
 

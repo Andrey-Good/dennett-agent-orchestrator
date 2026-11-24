@@ -28,7 +28,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use uuid::Uuid;
 
-use crate::events::{ControlEventAppend, append_control_event_in_tx};
+use crate::events::{
+    ControlEventAppend, PendingControlEvent, append_control_event_in_tx,
+    append_control_events_batch_in_tx,
+};
 use crate::migrations::sha256_hex;
 use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService};
 use crate::store::{
@@ -357,12 +360,21 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         let mut recovered = 0;
+        let mut pending_events = Vec::with_capacity(rows.len());
         for row in &rows {
             let claim = decode_effect_claim_row(row)?;
-            self.mark_unknown_effect_side_effects_in_tx(&tx, &claim, correlation_id)
+            self.mark_unknown_effect_side_effects_in_tx(&tx, &claim, &mut pending_events)
                 .await?;
             recovered += 1;
         }
+
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
 
         tx.commit()
             .await
@@ -621,35 +633,38 @@ impl HeadService {
         )
         .await?;
 
+        let mut pending_events = Vec::with_capacity(1);
         if updated_claim.status == ExternalEffectStatus::Unknown {
-            self.mark_unknown_effect_side_effects_in_tx(&tx, &updated_claim, correlation_id)
+            self.mark_unknown_effect_side_effects_in_tx(&tx, &updated_claim, &mut pending_events)
                 .await?;
         } else {
             let entity_key = updated_claim.task_id.map_or_else(
                 || format!("effect:{}", updated_claim.effect_id),
                 |tid| format!("task:{tid}"),
             );
-            let _ = append_control_event_in_tx(
-                &tx,
-                self.pg_target(),
-                ControlEventAppend {
-                    entity_key: &entity_key,
-                    event_type,
-                    project_id: Some(updated_claim.project_id),
-                    session_id: Some(updated_claim.session_id),
-                    task_id: updated_claim.task_id,
-                    correlation_id,
-                    payload: json!({
-                        "effect_id": updated_claim.effect_id,
-                        "status": updated_claim.status,
-                        "operation": updated_claim.operation,
-                        "target_recipient": updated_claim.target_recipient,
-                        "provider_operation_id": updated_claim.provider_operation_id,
-                    }),
-                },
-            )
-            .await?;
+            pending_events.push(PendingControlEvent {
+                entity_key,
+                event_type,
+                project_id: Some(updated_claim.project_id),
+                session_id: Some(updated_claim.session_id),
+                task_id: updated_claim.task_id,
+                payload: json!({
+                    "effect_id": updated_claim.effect_id,
+                    "status": updated_claim.status,
+                    "operation": updated_claim.operation,
+                    "target_recipient": updated_claim.target_recipient,
+                    "provider_operation_id": updated_claim.provider_operation_id,
+                }),
+            });
         }
+
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
 
         tx.commit()
             .await
@@ -663,22 +678,18 @@ impl HeadService {
         })
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "transitions linked task to unknown_external, creates high-urgency unknown_effect inbox card, and appends audit + control journal events atomically"
-    )]
     pub(crate) async fn mark_unknown_effect_side_effects_in_tx<
         C: deadpool_postgres::GenericClient,
     >(
         &self,
         tx: &C,
         claim: &EffectClaimRecord,
-        correlation_id: &CorrelationId,
+        pending_events: &mut Vec<PendingControlEvent>,
     ) -> Result<(), DennettError> {
         if let Some(tid) = claim.task_id {
             let wait_msg = truncate_utf8(
                 &self.redact(&format!(
-                    "Внешний эффект `{}` ({}) в статусе UNKNOWN — требуется сверка",
+                    "Внешний эффект {} ({}) в статусе UNKNOWN — требуется сверка",
                     claim.operation, claim.target_recipient
                 )),
                 2000,
@@ -731,7 +742,7 @@ impl HeadService {
             .to_owned();
             let detail = truncate_utf8(
                 &self.redact(&format!(
-                    "Запрос `{}` к `{}` (ключ `{}`) отправлен, но подтверждение потеряно. Слепой повтор заблокирован; выполните сверку у сервиса.",
+                    "Запрос {} к {} (ключ {}) отправлен, но подтверждение потеряно. Слепой повтор заблокирован; выполните сверку у сервиса.",
                     claim.operation, claim.target_recipient, claim.effect_idempotency_key
                 )),
                 4000,
@@ -762,26 +773,20 @@ impl HeadService {
             || format!("effect:{}", claim.effect_id),
             |tid| format!("task:{tid}"),
         );
-        let _ = append_control_event_in_tx(
-            tx,
-            self.pg_target(),
-            ControlEventAppend {
-                entity_key: &entity_key,
-                event_type: "effect.unknown",
-                project_id: Some(claim.project_id),
-                session_id: Some(claim.session_id),
-                task_id: claim.task_id,
-                correlation_id,
-                payload: json!({
-                    "effect_id": claim.effect_id,
-                    "effect_idempotency_key": claim.effect_idempotency_key,
-                    "operation": claim.operation,
-                    "target_recipient": claim.target_recipient,
-                    "status": "unknown",
-                }),
-            },
-        )
-        .await?;
+        pending_events.push(PendingControlEvent {
+            entity_key,
+            event_type: "effect.unknown",
+            project_id: Some(claim.project_id),
+            session_id: Some(claim.session_id),
+            task_id: claim.task_id,
+            payload: json!({
+                "effect_id": claim.effect_id,
+                "effect_idempotency_key": claim.effect_idempotency_key,
+                "operation": claim.operation,
+                "target_recipient": claim.target_recipient,
+                "status": "unknown",
+            }),
+        });
 
         Ok(())
     }
@@ -808,7 +813,12 @@ impl HeadService {
         let sql = format!(
             "SELECT {EFFECT_CLAIM_SELECT_COLS}
              FROM effect_claims
-             WHERE ($1::uuid IS NULL OR task_id = $1)
+             WHERE EXISTS (
+                 SELECT 1 FROM projects p
+                 WHERE p.project_id = effect_claims.project_id
+                   AND p.lifecycle_state <> 'deleted_record'
+             )
+               AND ($1::uuid IS NULL OR task_id = $1)
                AND ($2::uuid IS NULL OR session_id = $2)
                AND ($3::text IS NULL OR status = $3)
              ORDER BY created_at DESC"

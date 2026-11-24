@@ -124,7 +124,7 @@ export function WorkspacePanel() {
 
   const selectedRevisions = useMemo(() => {
     const sel = meta.selectedArtifact;
-    if (!sel) {
+    if (!sel || (sel.lifecycle_state ?? "active") === "removed") {
       return [];
     }
     if (
@@ -132,10 +132,10 @@ export function WorkspacePanel() {
       state.artifactRevisions[0]?.name === sel.name &&
       state.artifactRevisions[0]?.session_id === sel.session_id
     ) {
-      return state.artifactRevisions;
+      return state.artifactRevisions.filter((a) => (a.lifecycle_state ?? "active") !== "removed");
     }
     return rawArtifacts
-      .filter((a) => a.name === sel.name)
+      .filter((a) => a.name === sel.name && (a.lifecycle_state ?? "active") !== "removed")
       .sort((a, b) => a.revision - b.revision);
   }, [meta.selectedArtifact, rawArtifacts, state.artifactRevisions]);
 

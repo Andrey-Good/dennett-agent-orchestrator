@@ -87,6 +87,10 @@ function isTerminalTaskStatus(status: TaskStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
 }
 
+function cleanPlainText(text: string): string {
+  return text.replace(/`([^`]+)`/g, "$1");
+}
+
 export function TasksCard() {
   const { state, actions, meta } = useWorkspace();
   const [goalDraft, setGoalDraft] = useState("");
@@ -101,6 +105,7 @@ export function TasksCard() {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingGoalValue, setEditingGoalValue] = useState("");
   const [signalTaskId, setSignalTaskId] = useState<string | null>(null);
+  const [signalNameInput, setSignalNameInput] = useState("");
   const [signalPayload, setSignalPayload] = useState("");
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [isCreating, setIsCreating] = useState(false);
@@ -109,10 +114,26 @@ export function TasksCard() {
   const composerRef = useRef<HTMLDivElement | null>(null);
   const localTz = useMemo(() => detectLocalTimezone(), []);
 
+  const activeProjectIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of state.projects) {
+      const lc = p.lifecycle_state ?? "active";
+      if (lc !== "archived" && lc !== "deleted_record") {
+        ids.add(p.project_id);
+      }
+    }
+    return ids;
+  }, [state.projects]);
+
+  const activeProjectTasks = useMemo(
+    () => state.tasks.filter((task) => activeProjectIds.has(task.project_id)),
+    [activeProjectIds, state.tasks],
+  );
+
   // Tick every second when any waiting_timer task exists so countdowns stay live.
   const hasWaitingTimer = useMemo(
-    () => state.tasks.some((t) => t.status === "waiting_timer"),
-    [state.tasks],
+    () => activeProjectTasks.some((t) => t.status === "waiting_timer"),
+    [activeProjectTasks],
   );
   useEffect(() => {
     if (!hasWaitingTimer) {
@@ -156,7 +177,7 @@ export function TasksCard() {
   }, [state.projects]);
 
   const filteredTasks = useMemo(() => {
-    return state.tasks.filter((task) => {
+    return activeProjectTasks.filter((task) => {
       if (filter === "active") {
         return !isTerminalTaskStatus(task.status);
       }
@@ -165,7 +186,7 @@ export function TasksCard() {
       }
       return true;
     });
-  }, [filter, state.tasks]);
+  }, [activeProjectTasks, filter]);
 
   const connected = Boolean(state.healthSnapshot?.connected);
   const targetProject = meta.activeProject;
@@ -319,7 +340,7 @@ export function TasksCard() {
               className={filter === "all" ? "is-active" : ""}
               onClick={() => setFilter("all")}
             >
-              Все ({state.tasks.length})
+              Все ({activeProjectTasks.length})
             </button>
             <button
               type="button"
@@ -725,7 +746,7 @@ export function TasksCard() {
                     ) : null}
 
                     {task.wait_detail && (
-                      <p className="d2-task-note">{task.wait_detail}</p>
+                      <p className="d2-task-note">{cleanPlainText(task.wait_detail)}</p>
                     )}
 
                     {task.partial_result_summary && (
@@ -737,7 +758,7 @@ export function TasksCard() {
                     {task.status === "failed" && (task.error_summary || task.error_code) && (
                       <div className="d2-task-error">
                         <strong>{task.error_code ?? "ERROR"}:</strong>{" "}
-                        {task.error_summary ?? "Поручение завершилось с ошибкой."}
+                        {cleanPlainText(task.error_summary ?? "Поручение завершилось с ошибкой.")}
                       </div>
                     )}
 
@@ -792,22 +813,57 @@ export function TasksCard() {
                             className="d2-inline-reply"
                             onSubmit={(e) => {
                               e.preventDefault();
+                              const resolvedSignalName =
+                                signalNameInput.trim() || task.expected_signal_name || "ready";
                               void actions
-                                .sendTaskSignal(task.task_id, "ready", signalPayload.trim())
+                                .sendTaskSignal(
+                                  task.task_id,
+                                  resolvedSignalName,
+                                  signalPayload.trim(),
+                                )
                                 .then(() => {
                                   setSignalTaskId(null);
+                                  setSignalNameInput("");
                                   setSignalPayload("");
                                 });
                             }}
                           >
                             <input
                               type="text"
+                              className="d2-signal-name-input"
+                              value={signalNameInput}
+                              onChange={(e) => setSignalNameInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setSignalTaskId(null);
+                                }
+                              }}
+                              placeholder="Имя сигнала…"
+                              aria-label="Имя сигнала"
+                              data-testid={`task-signal-name-input-${task.task_id}`}
+                            />
+                            <input
+                              type="text"
                               value={signalPayload}
                               onChange={(e) => setSignalPayload(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setSignalTaskId(null);
+                                }
+                              }}
                               placeholder="Текст сигнала (необязательно)…"
                               aria-label="Данные сигнала"
+                              data-testid={`task-signal-payload-input-${task.task_id}`}
                             />
-                            <button type="submit" className="popover-primary-btn">
+                            <button
+                              type="submit"
+                              className="popover-primary-btn"
+                              data-testid={`task-signal-submit-${task.task_id}`}
+                            >
                               Отправить сигнал
                             </button>
                             <button
@@ -822,7 +878,12 @@ export function TasksCard() {
                           <button
                             type="button"
                             className="popover-secondary-btn"
-                            onClick={() => setSignalTaskId(task.task_id)}
+                            data-testid={`task-signal-open-${task.task_id}`}
+                            onClick={() => {
+                              setSignalTaskId(task.task_id);
+                              setSignalNameInput(task.expected_signal_name ?? "ready");
+                              setSignalPayload("");
+                            }}
                           >
                             <Broadcast size={13} aria-hidden="true" />
                             Подать сигнал…

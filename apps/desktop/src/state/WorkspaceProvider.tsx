@@ -188,6 +188,7 @@ export interface WorkspaceActions {
   cancelQueuedMessage(clientMessageId: string): void;
   flushQueuedMessages(): Promise<void>;
   stopActiveRun(): Promise<void>;
+  cancelSessionRun(sessionId: string): Promise<void>;
   updateActiveAgentModel(
     modelPreference: string | null,
     thinkingLevel: ThinkingLevel | null,
@@ -366,6 +367,7 @@ export function WorkspaceProvider({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedSessionRef = useRef<string | null>(null);
+  const selectedArtifactIdRef = useRef<string | null>(null);
   const projectsRef = useRef<ProjectRecord[]>([]);
   const agentsRef = useRef<AgentRecord[]>([]);
   const sessionsRef = useRef<SessionRecord[]>([]);
@@ -382,6 +384,7 @@ export function WorkspaceProvider({
   const activeViewRef = useRef<WorkspaceView>("chat");
 
   selectedSessionRef.current = selectedSessionId;
+  selectedArtifactIdRef.current = selectedArtifactId;
   projectsRef.current = projects;
   agentsRef.current = agents;
   sessionsRef.current = sessions;
@@ -439,7 +442,11 @@ export function WorkspaceProvider({
       try {
         const resp = await bridge.listArtifactRevisions(sessionId, artifactName);
         if (selectedSessionRef.current === sessionId) {
-          setArtifactRevisions(resp.artifacts);
+          setArtifactRevisions(
+            resp.artifacts
+              .filter((a) => (a.lifecycle_state ?? "active") !== "removed")
+              .sort((a, b) => a.revision - b.revision),
+          );
         }
       } catch {
         // Fallback to revisions already present in activeDetail.
@@ -463,23 +470,18 @@ export function WorkspaceProvider({
         const visibleArtifacts = detail.artifacts.filter(
           (a) => (a.lifecycle_state ?? "active") !== "removed",
         );
-        let chosenArtifact: ArtifactRecord | null = null;
-        setSelectedArtifactId((prev) => {
-          if (prev && detail.artifacts.some((a) => a.artifact_id === prev)) {
-            chosenArtifact = detail.artifacts.find((a) => a.artifact_id === prev) ?? null;
-            return prev;
-          }
-          chosenArtifact =
-            visibleArtifacts[visibleArtifacts.length - 1] ??
-            detail.artifacts[detail.artifacts.length - 1] ??
-            null;
-          return chosenArtifact?.artifact_id ?? null;
-        });
-        const targetArt = chosenArtifact as ArtifactRecord | null;
-        if (targetArt) {
+        const currentSelectedId = selectedArtifactIdRef.current;
+        const stillVisible = currentSelectedId
+          ? (visibleArtifacts.find((a) => a.artifact_id === currentSelectedId) ?? null)
+          : null;
+        const chosenArtifact = stillVisible ?? visibleArtifacts[visibleArtifacts.length - 1] ?? null;
+        const nextArtifactId = chosenArtifact?.artifact_id ?? null;
+        selectedArtifactIdRef.current = nextArtifactId;
+        setSelectedArtifactId(nextArtifactId);
+        if (chosenArtifact) {
           setArtifactRevisions(
-            detail.artifacts
-              .filter((a) => a.name === targetArt.name)
+            visibleArtifacts
+              .filter((a) => a.name === chosenArtifact.name)
               .sort((a, b) => a.revision - b.revision),
           );
         } else {
@@ -525,22 +527,29 @@ export function WorkspaceProvider({
       projectsRef.current = snap.projects;
       agentsRef.current = snap.agents;
       sessionsRef.current = snap.sessions;
+      const activeProjectIds = new Set(
+        snap.projects
+          .filter((p) => {
+            const lc = p.lifecycle_state ?? "active";
+            return lc !== "deleted_record" && lc !== "archived";
+          })
+          .map((p) => p.project_id),
+      );
+      const visibleSessions = snap.sessions.filter((s) => activeProjectIds.has(s.project_id));
+
       setProjects(snap.projects);
       setAgents(snap.agents);
       setSessions(snap.sessions);
       setTasks(snap.tasks);
       setInboxCards(snap.inbox_cards);
-      setUnresolvedInboxCount(snap.unresolved_inbox_count);
+      setUnresolvedInboxCount(
+        snap.inbox_cards.filter(
+          (c) => c.status === "open" && activeProjectIds.has(c.project_id),
+        ).length,
+      );
       setActiveGrants(snap.active_grants);
       setPendingPermissions(permResp.requests);
       setEffects(effResp.effects);
-
-      const activeProjectIds = new Set(
-        snap.projects
-          .filter((p) => (p.lifecycle_state ?? "active") !== "deleted_record")
-          .map((p) => p.project_id),
-      );
-      const visibleSessions = snap.sessions.filter((s) => activeProjectIds.has(s.project_id));
 
       const targetSessionId =
         preferredSessionId ??
@@ -555,6 +564,7 @@ export function WorkspaceProvider({
         await loadSessionDetail(targetSessionId);
       } else if (!targetSessionId) {
         setActiveDetail(null);
+        selectedArtifactIdRef.current = null;
         setSelectedArtifactId(null);
         setArtifactRevisions([]);
       }
@@ -611,12 +621,17 @@ export function WorkspaceProvider({
   );
 
   const activeProject = useMemo(() => {
+    const isActiveProject = (p: ProjectRecord) => {
+      const lc = p.lifecycle_state ?? "active";
+      return lc !== "archived" && lc !== "deleted_record";
+    };
     if (activeSession) {
-      return projects.find((p) => p.project_id === activeSession.project_id) ?? null;
+      const matched = projects.find((p) => p.project_id === activeSession.project_id);
+      if (matched && isActiveProject(matched)) {
+        return matched;
+      }
     }
-    return (
-      projects.find((p) => (p.lifecycle_state ?? "active") !== "archived") ?? projects[0] ?? null
-    );
+    return projects.find(isActiveProject) ?? null;
   }, [activeSession, projects]);
 
   const activeAgent = useMemo(
@@ -718,9 +733,18 @@ export function WorkspaceProvider({
     }
   }, [activeProject, applySnapshotCollections, bridge, isRightPanelOpen, loadFilesForProject]);
 
-  const activeTaskCount = useMemo(
-    () =>
-      tasks.filter((t) =>
+  const activeTaskCount = useMemo(() => {
+    const activeProjectIds = new Set(
+      projects
+        .filter((p) => {
+          const lc = p.lifecycle_state ?? "active";
+          return lc !== "archived" && lc !== "deleted_record";
+        })
+        .map((p) => p.project_id),
+    );
+    return tasks.filter(
+      (t) =>
+        activeProjectIds.has(t.project_id) &&
         [
           "queued",
           "running",
@@ -730,9 +754,8 @@ export function WorkspaceProvider({
           "waiting_approval",
           "unknown_external",
         ].includes(t.status),
-      ).length,
-    [tasks],
-  );
+    ).length;
+  }, [projects, tasks]);
 
   // Cursor-driven live sync interval (700ms when active work / approvals exist, 2500ms when idle).
   useEffect(() => {
@@ -1119,10 +1142,7 @@ export function WorkspaceProvider({
       setErrorBanner(null);
       try {
         const resp = await bridge.archiveProject(projectId);
-        projectsRef.current = projectsRef.current.map((p) =>
-          p.project_id === projectId ? resp.project : p,
-        );
-        setProjects((prev) => prev.map((p) => (p.project_id === projectId ? resp.project : p)));
+        await applySnapshotCollections(undefined, true);
         setCancelledNotice(
           resp.affected_timers > 0
             ? `Проект архивирован. Приостановлено таймеров: ${resp.affected_timers}. Файлы на диске не тронуты.`
@@ -1132,24 +1152,21 @@ export function WorkspaceProvider({
         setErrorBanner(normalizeBridgeError(err));
       }
     },
-    [bridge],
+    [applySnapshotCollections, bridge],
   );
 
   const unarchiveProject = useCallback(
     async (projectId: string) => {
       setErrorBanner(null);
       try {
-        const resp = await bridge.unarchiveProject(projectId);
-        projectsRef.current = projectsRef.current.map((p) =>
-          p.project_id === projectId ? resp.project : p,
-        );
-        setProjects((prev) => prev.map((p) => (p.project_id === projectId ? resp.project : p)));
+        await bridge.unarchiveProject(projectId);
+        await applySnapshotCollections(undefined, true);
         setCancelledNotice("Проект возвращён из архива.");
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
       }
     },
-    [bridge],
+    [applySnapshotCollections, bridge],
   );
 
   const removeProject = useCallback(
@@ -1524,49 +1541,59 @@ export function WorkspaceProvider({
     }
   }, [dispatchMessageToHead, draftsBySession, healthSnapshot?.connected, queueOfflineMessage]);
 
+  const cancelSessionRun = useCallback(
+    async (targetSessionId: string) => {
+      if (
+        !targetSessionId ||
+        !runningSessionIdsRef.current.has(targetSessionId) ||
+        cancellingSessionIdsRef.current.has(targetSessionId)
+      ) {
+        return;
+      }
+      cancellingSessionIdsRef.current.add(targetSessionId);
+      setCancellingSessionIds((prev) =>
+        prev.includes(targetSessionId) ? prev : [...prev, targetSessionId],
+      );
+      try {
+        const resp = await bridge.cancelRun(targetSessionId);
+        if (selectedSessionRef.current === targetSessionId) {
+          setCancelledNotice(
+            resp.external_outcome_unknown
+              ? "Остановлено локально, но внешний исход неизвестен (UNKNOWN) — проверьте во Входящих."
+              : resp.cancelled
+                ? "Запуск остановлен (Cancelled). Новые действия отменены."
+                : "Команда остановки отправлена в dennett-head.",
+          );
+        }
+        setHealthSnapshot((prev) =>
+          prev && prev.health
+            ? {
+                ...prev,
+                health: {
+                  ...prev.health,
+                  memory_status: resp.memory_status,
+                },
+              }
+            : prev,
+        );
+        await applySnapshotCollections(undefined, false).catch(() => {});
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+      } finally {
+        cancellingSessionIdsRef.current.delete(targetSessionId);
+        setCancellingSessionIds((prev) => prev.filter((id) => id !== targetSessionId));
+      }
+    },
+    [applySnapshotCollections, bridge],
+  );
+
   const stopActiveRun = useCallback(async () => {
     const targetSessionId = selectedSessionRef.current;
-    if (
-      !targetSessionId ||
-      !runningSessionIdsRef.current.has(targetSessionId) ||
-      cancellingSessionIdsRef.current.has(targetSessionId)
-    ) {
+    if (!targetSessionId) {
       return;
     }
-    cancellingSessionIdsRef.current.add(targetSessionId);
-    setCancellingSessionIds((prev) =>
-      prev.includes(targetSessionId) ? prev : [...prev, targetSessionId],
-    );
-    try {
-      const resp = await bridge.cancelRun(targetSessionId);
-      if (selectedSessionRef.current === targetSessionId) {
-        setCancelledNotice(
-          resp.external_outcome_unknown
-            ? "Остановлено локально, но внешний исход неизвестен (UNKNOWN) — проверьте во Входящих."
-            : resp.cancelled
-              ? "Запуск остановлен (Cancelled). Новые действия отменены."
-              : "Команда остановки отправлена в dennett-head.",
-        );
-      }
-      setHealthSnapshot((prev) =>
-        prev && prev.health
-          ? {
-              ...prev,
-              health: {
-                ...prev.health,
-                memory_status: resp.memory_status,
-              },
-            }
-          : prev,
-      );
-      await applySnapshotCollections(undefined, false).catch(() => {});
-    } catch (err) {
-      setErrorBanner(normalizeBridgeError(err));
-    } finally {
-      cancellingSessionIdsRef.current.delete(targetSessionId);
-      setCancellingSessionIds((prev) => prev.filter((id) => id !== targetSessionId));
-    }
-  }, [applySnapshotCollections, bridge]);
+    await cancelSessionRun(targetSessionId);
+  }, [cancelSessionRun]);
 
   const updateActiveAgentModel = useCallback(
     async (modelPreference: string | null, thinkingLevel: ThinkingLevel | null) => {
@@ -1639,6 +1666,7 @@ export function WorkspaceProvider({
           completeness_status: input.completenessStatus ?? "final",
         });
         await loadSessionDetail(sessionId);
+        selectedArtifactIdRef.current = created.artifact_id;
         setSelectedArtifactId(created.artifact_id);
         void loadRevisionsForArtifact(sessionId, created.name);
         setIsRightPanelOpen(true);
@@ -1653,6 +1681,7 @@ export function WorkspaceProvider({
 
   const selectArtifact = useCallback(
     async (artifactId: string) => {
+      selectedArtifactIdRef.current = artifactId;
       setSelectedArtifactId(artifactId);
       const sessionId = selectedSessionRef.current;
       if (!sessionId) {
@@ -1981,7 +2010,6 @@ export function WorkspaceProvider({
         }
         const activeSid = selectedSessionRef.current;
         if (
-          activeViewRef.current === "chat" &&
           activeSid &&
           runningSessionIdsRef.current.has(activeSid) &&
           !cancellingSessionIdsRef.current.has(activeSid)
@@ -2007,7 +2035,11 @@ export function WorkspaceProvider({
     if (!activeDetail || !selectedArtifactId) {
       return null;
     }
-    return activeDetail.artifacts.find((a) => a.artifact_id === selectedArtifactId) ?? null;
+    const found = activeDetail.artifacts.find((a) => a.artifact_id === selectedArtifactId) ?? null;
+    if (!found || (found.lifecycle_state ?? "active") === "removed") {
+      return null;
+    }
+    return found;
   }, [activeDetail, selectedArtifactId]);
 
   const currentDraft = selectedSessionId ? (draftsBySession[selectedSessionId] ?? "") : "";
@@ -2105,6 +2137,7 @@ export function WorkspaceProvider({
         cancelQueuedMessage,
         flushQueuedMessages,
         stopActiveRun,
+        cancelSessionRun,
         updateActiveAgentModel,
         updateActiveAgentWritePolicy,
         createArtifact,
@@ -2164,6 +2197,7 @@ export function WorkspaceProvider({
       attachProjectFolder,
       bridge,
       cancelQueuedMessage,
+      cancelSessionRun,
       cancelTask,
       cancelledNotice,
       cancellingSessionIds,

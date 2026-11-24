@@ -58,7 +58,10 @@ use crate::approvals::{
 use crate::effects::{
     ExternalEffectPort, SIMULATED_EXTERNAL_CONNECTOR_ID, SimulatedExternalConnector,
 };
-use crate::events::{ControlEventAppend, append_control_event_in_tx};
+use crate::events::{
+    ControlEventAppend, PendingControlEvent, append_control_event_in_tx,
+    append_control_events_batch_in_tx,
+};
 use crate::memory_auth::MemoryTokenSigner;
 use crate::migrations::{query_control_schema_version, run_control_migrations, sha256_hex};
 use crate::pg_target::ValidatedControlPgTarget;
@@ -186,42 +189,66 @@ pub(crate) struct ActiveRunHandle {
 }
 
 pub(crate) struct ActiveRunGuard {
-    active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
+    service: HeadService,
     session_id: SessionId,
     run_id: RunId,
+    cancel_tx: watch::Sender<bool>,
+    correlation_id: CorrelationId,
+    completed: bool,
 }
 
 impl ActiveRunGuard {
     pub(crate) fn new(
-        active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
+        service: HeadService,
         session_id: SessionId,
         run_id: RunId,
+        cancel_tx: watch::Sender<bool>,
+        correlation_id: CorrelationId,
     ) -> Self {
         Self {
-            active_runs,
+            service,
             session_id,
             run_id,
+            cancel_tx,
+            correlation_id,
+            completed: false,
         }
+    }
+
+    pub(crate) fn mark_completed(&mut self) {
+        self.completed = true;
     }
 }
 
 impl Drop for ActiveRunGuard {
     fn drop(&mut self) {
-        let map = Arc::clone(&self.active_runs);
+        let map = Arc::clone(&self.service.inner.active_runs);
         let session_id = self.session_id;
         let run_id = self.run_id;
+        let abandoned = !self.completed;
+        if abandoned {
+            let _ = self.cancel_tx.send(true);
+        }
         if let Ok(mut guard) = map.try_lock() {
             if guard.get(&session_id).is_some_and(|h| h.run_id == run_id) {
                 guard.remove(&session_id);
             }
-            return;
+        } else {
+            let map_async = Arc::clone(&map);
+            tokio::spawn(async move {
+                let mut guard = map_async.lock().await;
+                if guard.get(&session_id).is_some_and(|h| h.run_id == run_id) {
+                    guard.remove(&session_id);
+                }
+            });
         }
-        tokio::spawn(async move {
-            let mut guard = map.lock().await;
-            if guard.get(&session_id).is_some_and(|h| h.run_id == run_id) {
-                guard.remove(&session_id);
-            }
-        });
+        if abandoned {
+            let svc = self.service.clone();
+            let cid = self.correlation_id.clone();
+            tokio::spawn(async move {
+                svc.finalize_abandoned_run(session_id, run_id, &cid).await;
+            });
+        }
     }
 }
 
@@ -305,6 +332,7 @@ struct HeadServiceInner {
     pg_target: ValidatedControlPgTarget,
     pool: Pool,
     migrated_version: Mutex<Option<i64>>,
+    startup_recovery_done: Mutex<bool>,
     runtime: Arc<dyn AgentRuntimePort>,
     background_runtime: Option<Arc<dyn AgentRuntimePort>>,
     effect_port: Arc<dyn ExternalEffectPort>,
@@ -420,6 +448,7 @@ impl HeadService {
                 pg_target,
                 pool,
                 migrated_version: Mutex::new(None),
+                startup_recovery_done: Mutex::new(false),
                 runtime,
                 background_runtime: extras.background_runtime,
                 effect_port,
@@ -515,6 +544,26 @@ impl HeadService {
         }
 
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        if self.inner.profile_mode == ProfileMode::TestIsolated {
+            let sp_row = conn
+                .query_one("SHOW search_path", &[])
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            let search_path: String = sp_row.get(0);
+            let trimmed = search_path.trim().trim_matches('"');
+            if trimmed.starts_with("iso_")
+                && trimmed.len() <= 63
+                && trimmed
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            {
+                conn.batch_execute(&format!(
+                    "CREATE SCHEMA IF NOT EXISTS {trimmed}; SET search_path TO {trimmed};"
+                ))
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            }
+        }
         let version = time::timeout(
             DEFAULT_PG_OP_TIMEOUT,
             run_control_migrations(
@@ -1885,23 +1934,35 @@ impl HeadService {
             (session, agent, project, binding, history, rules)
         };
 
-        // 2. Acquire per-session active run slot (prevents two concurrent writers on one session).
+        // 2. Acquire unified per-session execution lock + active run slot (H2-05: serializes
+        //    `send_message` and `execute_task_generation` so neither can clobber `active_runs`).
+        let session_lock = self.session_exec_lock(session_id).await;
+        let _session_guard = session_lock
+            .try_lock_owned()
+            .map_err(|_| DennettError::Conflict {
+                resource: String::from("session_run"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: String::from("another run is already active in this session"),
+            })?;
+
         let run_id = RunId::new();
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        {
-            let mut active = self.inner.active_runs.lock().await;
-            if active.contains_key(&session_id) {
-                return Err(DennettError::Conflict {
-                    resource: String::from("session_run"),
-                    expected_revision: None,
-                    actual_revision: None,
-                    reason: String::from("another run is already active in this session"),
-                });
-            }
-            active.insert(session_id, ActiveRunHandle { run_id, cancel_tx });
-        }
-        let _active_guard =
-            ActiveRunGuard::new(Arc::clone(&self.inner.active_runs), session_id, run_id);
+        self.try_register_active_session_run(
+            session_id,
+            ActiveRunHandle {
+                run_id,
+                cancel_tx: cancel_tx.clone(),
+            },
+        )
+        .await?;
+        let mut active_guard = ActiveRunGuard::new(
+            self.clone(),
+            session_id,
+            run_id,
+            cancel_tx,
+            correlation_id.clone(),
+        );
 
         // Determine automatic title if this is the very first user message on an untitled chat.
         let auto_title = if !prior_history.iter().any(|m| m.role == MessageRole::User)
@@ -2071,7 +2132,11 @@ impl HeadService {
 
         let (user_message, inbox_agent_messages) = match pre_run_res {
             Ok(pair) => pair,
-            Err(replay_res) => return replay_res,
+            Err(replay_res) => {
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
+                return replay_res;
+            }
         };
 
         // 4. Probe memoryd status (never blocks or aborts the control turn when memoryd is down!).
@@ -2115,6 +2180,8 @@ impl HeadService {
             Err(err) => {
                 self.record_failed_run(session_id, run_id, &correlation_id, &err, &[])
                     .await;
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
                 return Err(err);
             }
         };
@@ -2134,6 +2201,12 @@ impl HeadService {
             allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
             rules: policy_rules,
         };
+        // Align interactive approval wait with turn_timeout so `await_interactive_approval`
+        // cleanly expires before `transport.rs`'s turn deadline fires (H2-01).
+        let approval_timeout = turn_timeout
+            .saturating_sub(Duration::from_secs(2))
+            .max(Duration::from_millis(250))
+            .min(DEFAULT_APPROVAL_WAIT_TIMEOUT);
         let (interactive_policy, decisions_buf) = InteractivePolicyEvaluator::new(
             self.clone(),
             policy_ctx,
@@ -2141,7 +2214,7 @@ impl HeadService {
             correlation_id.clone(),
             turn_secrets,
             cancel_rx.clone(),
-            DEFAULT_APPROVAL_WAIT_TIMEOUT,
+            approval_timeout,
         );
 
         let effective_prompt = if inbox_agent_messages.is_empty() {
@@ -2195,6 +2268,8 @@ impl HeadService {
                     &captured_decisions,
                 )
                 .await;
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
                 return Err(err);
             }
         };
@@ -2275,6 +2350,8 @@ impl HeadService {
                 &correlation_id,
             )
             .await?;
+        active_guard.mark_completed();
+        self.unregister_active_session_run(session_id, run_id).await;
 
         let artifacts = {
             let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
@@ -2470,9 +2547,10 @@ impl HeadService {
             .query(&dispatching_sql, &[&session_id.as_uuid()])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let mut pending_events = Vec::with_capacity(dispatching_rows.len() + 1);
         for row in &dispatching_rows {
             let eff = decode_effect_claim_row(row)?;
-            self.mark_unknown_effect_side_effects_in_tx(&tx, &eff, correlation_id)
+            self.mark_unknown_effect_side_effects_in_tx(&tx, &eff, &mut pending_events)
                 .await?;
         }
 
@@ -2513,26 +2591,6 @@ impl HeadService {
         )
         .await?;
 
-        let _ = append_control_event_in_tx(
-            &tx,
-            &self.inner.pg_target,
-            ControlEventAppend {
-                entity_key: &format!("session:{session_id}"),
-                event_type: "session.run_cancel_requested",
-                project_id: Some(session.project_id),
-                session_id: Some(session_id),
-                task_id: None,
-                correlation_id,
-                payload: json!({
-                    "session_id": session_id,
-                    "run_id": active_run_id,
-                    "cancelled": cancelled,
-                    "external_outcome_unknown": external_outcome_unknown,
-                }),
-            },
-        )
-        .await?;
-
         let status = if cancelled {
             Some(RunStatus::Cancelled)
         } else {
@@ -2541,6 +2599,27 @@ impl HeadService {
                 .last()
                 .map(|r| r.status)
         };
+
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("session:{session_id}"),
+            event_type: "session.run_cancel_requested",
+            project_id: Some(session.project_id),
+            session_id: Some(session_id),
+            task_id: None,
+            payload: json!({
+                "session_id": session_id,
+                "run_id": active_run_id,
+                "cancelled": cancelled,
+                "external_outcome_unknown": external_outcome_unknown,
+            }),
+        });
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            &pending_events,
+        )
+        .await?;
 
         tx.commit()
             .await
@@ -3328,6 +3407,21 @@ impl HeadService {
         .await
         .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
+        let mut pending_events = Vec::new();
+        let expired_perms = self
+            .expire_pending_approvals_for_run_in_tx(
+                &tx,
+                run_id,
+                if outcome.status == RunStatus::Cancelled {
+                    "withdrawn"
+                } else {
+                    "expired"
+                },
+                "Ход завершён",
+                &mut pending_events,
+            )
+            .await?;
+
         let _ = append_audit_event(
             &tx,
             &self.inner.pg_target,
@@ -3349,30 +3443,36 @@ impl HeadService {
         )
         .await?;
 
-        let _ = append_control_event_in_tx(
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("session:{session_id}"),
+            event_type: "session.message_completed",
+            project_id: Some(project_id),
+            session_id: Some(session_id),
+            task_id: None,
+            payload: json!({
+                "session_id": session_id,
+                "run_id": run_id,
+                "status": outcome.status,
+                "tokens_used": tokens_used,
+                "wall_ms": elapsed_ms,
+            }),
+        });
+        let _ = append_control_events_batch_in_tx(
             &tx,
             &self.inner.pg_target,
-            ControlEventAppend {
-                entity_key: &format!("session:{session_id}"),
-                event_type: "session.message_completed",
-                project_id: Some(project_id),
-                session_id: Some(session_id),
-                task_id: None,
-                correlation_id,
-                payload: json!({
-                    "session_id": session_id,
-                    "run_id": run_id,
-                    "status": outcome.status,
-                    "tokens_used": tokens_used,
-                    "wall_ms": elapsed_ms,
-                }),
-            },
+            correlation_id,
+            &pending_events,
         )
         .await?;
 
         tx.commit()
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        if !expired_perms.is_empty() {
+            self.wake_expired_approval_waiters(&expired_perms, session_id, "run finalized")
+                .await;
+        }
 
         let run_record = RunRecord {
             run_id,
@@ -3430,6 +3530,17 @@ impl HeadService {
                 &[&run_id.as_uuid(), &err.code(), &truncated],
             )
             .await;
+        let mut pending_events = Vec::new();
+        let expired_perms = self
+            .expire_pending_approvals_for_run_in_tx(
+                &tx,
+                run_id,
+                "expired",
+                &format!("Ход завершился ошибкой ({}): {truncated}", err.code()),
+                &mut pending_events,
+            )
+            .await
+            .unwrap_or_default();
         let _ = append_audit_event(
             &tx,
             &self.inner.pg_target,
@@ -3441,7 +3552,86 @@ impl HeadService {
             &format!("run {run_id} failed [{}]: {truncated}", err.code()),
         )
         .await;
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            &pending_events,
+        )
+        .await;
         let _ = tx.commit().await;
+        if !expired_perms.is_empty() {
+            self.wake_expired_approval_waiters(&expired_perms, session_id, &truncated)
+                .await;
+        }
+    }
+
+    /// Finalizes a run whose enclosing future was dropped (e.g. HTTP timeout or client disconnect),
+    /// ensuring PostgreSQL `runs.status = 'running'` and pending approvals are NEVER stranded (H2-01).
+    pub(crate) async fn finalize_abandoned_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        correlation_id: &CorrelationId,
+    ) {
+        let _ = self.inner.runtime.cancel_turn(session_id).await;
+        let Ok(mut conn) = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await else {
+            return;
+        };
+        let Ok(tx) = conn.transaction().await else {
+            return;
+        };
+        let updated = tx
+            .execute(
+                "UPDATE runs
+                 SET status = 'cancelled',
+                     stop_reason = 'client_disconnected_or_timeout',
+                     finished_at = now()
+                 WHERE run_id = $1 AND status = 'running'",
+                &[&run_id.as_uuid()],
+            )
+            .await
+            .unwrap_or(0);
+        let mut pending_events = Vec::new();
+        let expired_perms = self
+            .expire_pending_approvals_for_run_in_tx(
+                &tx,
+                run_id,
+                "withdrawn",
+                "Запрос был прерван или истёк тайм-аут ожидания ответа",
+                &mut pending_events,
+            )
+            .await
+            .unwrap_or_default();
+        if updated > 0 {
+            let _ = append_audit_event(
+                &tx,
+                &self.inner.pg_target,
+                correlation_id,
+                Some(session_id),
+                Some(run_id),
+                "head",
+                "run_abandoned",
+                &format!("run {run_id} abandoned (HTTP disconnect or timeout)"),
+            )
+            .await;
+        }
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            &pending_events,
+        )
+        .await;
+        let _ = tx.commit().await;
+        if !expired_perms.is_empty() {
+            self.wake_expired_approval_waiters(
+                &expired_perms,
+                session_id,
+                "abandoned due to HTTP disconnect or timeout",
+            )
+            .await;
+        }
     }
 
     fn memory_base_url(&self) -> Option<&str> {
@@ -3651,28 +3841,73 @@ impl HeadService {
         }
     }
 
-    pub(crate) fn active_tasks_map(&self) -> Arc<Mutex<HashMap<TaskId, ActiveTaskHandle>>> {
-        Arc::clone(&self.inner.active_tasks)
+    pub(crate) fn startup_recovery_lock(&self) -> &Mutex<bool> {
+        &self.inner.startup_recovery_done
     }
 
-    pub(crate) fn active_runs_map(&self) -> Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>> {
-        Arc::clone(&self.inner.active_runs)
+    pub(crate) fn active_tasks_map(&self) -> Arc<Mutex<HashMap<TaskId, ActiveTaskHandle>>> {
+        Arc::clone(&self.inner.active_tasks)
     }
 
     pub(crate) async fn register_active_task(&self, task_id: TaskId, handle: ActiveTaskHandle) {
         self.inner.active_tasks.lock().await.insert(task_id, handle);
     }
 
-    pub(crate) async fn register_active_session_run(
+    pub(crate) async fn try_register_active_session_run(
         &self,
         session_id: SessionId,
         handle: ActiveRunHandle,
-    ) {
-        self.inner
+    ) -> Result<(), DennettError> {
+        let mut active = self.inner.active_runs.lock().await;
+        if active.contains_key(&session_id) {
+            return Err(DennettError::Conflict {
+                resource: String::from("session_run"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: String::from("another run is already active in this session"),
+            });
+        }
+        active.insert(session_id, handle);
+        Ok(())
+    }
+
+    pub(crate) async fn unregister_active_session_run(&self, session_id: SessionId, run_id: RunId) {
+        let mut active = self.inner.active_runs.lock().await;
+        if active.get(&session_id).is_some_and(|h| h.run_id == run_id) {
+            active.remove(&session_id);
+        }
+    }
+
+    pub(crate) async fn cancel_active_session_run(&self, session_id: SessionId) -> Option<RunId> {
+        let active = self.inner.active_runs.lock().await;
+        active.get(&session_id).map(|h| {
+            let _ = h.cancel_tx.send(true);
+            h.run_id
+        })
+    }
+
+    pub(crate) async fn active_run_and_task_ids(&self) -> (Vec<RunId>, Vec<TaskId>) {
+        let run_ids: Vec<RunId> = self
+            .inner
             .active_runs
             .lock()
             .await
-            .insert(session_id, handle);
+            .values()
+            .map(|h| h.run_id)
+            .collect();
+        let task_ids: Vec<TaskId> = self
+            .inner
+            .active_tasks
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect();
+        (run_ids, task_ids)
+    }
+
+    pub(crate) fn background_runtime(&self) -> Option<&Arc<dyn AgentRuntimePort>> {
+        self.inner.background_runtime.as_ref()
     }
 
     pub(crate) async fn is_task_cancel_signalled(&self, task_id: TaskId) -> bool {
