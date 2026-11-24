@@ -2815,11 +2815,15 @@ impl HeadService {
             (session, agent, project, binding, history, rules)
         };
 
-        // Resolve target runtime strictly before persisting the run (fail closed without silent fallback!).
-        let resolved_runtime = self
+        // Resolve target runtime strictly without silent fallback; if resolution fails (e.g.
+        // missing GEMINI_API_KEY), we still record a durable `RunStatus::Failed` row below (A09).
+        let resolved_runtime_res = self
             .resolve_runtime_for_turn(agent.current_config.preferred_connection_id, None)
-            .await?;
-        let runtime_adapter_for_audit = resolved_runtime.runtime.adapter_id().to_owned();
+            .await;
+        let runtime_adapter_for_audit = resolved_runtime_res.as_ref().map_or_else(
+            |_| String::from("unresolved"),
+            |r| r.runtime.adapter_id().to_owned(),
+        );
 
         // 2. Acquire unified per-session execution lock + active run slot (`H2-05`).
         let session_lock = self.session_exec_lock(session_id).await;
@@ -3079,6 +3083,18 @@ impl HeadService {
                 active_guard.mark_completed();
                 self.unregister_active_session_run(session_id, run_id).await;
                 return replay_res;
+            }
+        };
+
+        let resolved_runtime = match resolved_runtime_res {
+            Ok(rt) => rt,
+            Err(err) => {
+                self.record_failed_run(session_id, run_id, &correlation_id, &err, &[])
+                    .await;
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
+                let _ = completion_tx.send(Some(Err(err.clone())));
+                return Err(err);
             }
         };
 
