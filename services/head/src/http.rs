@@ -286,7 +286,10 @@ pub fn build_head_router(state: HeadAppState) -> Router {
             post(handle_send_message),
         )
         .route("/v1/sessions/{session_id}/cancel", post(handle_cancel_run))
-        .route("/v1/sessions/{session_id}/live", get(handle_get_session_live))
+        .route(
+            "/v1/sessions/{session_id}/live",
+            get(handle_get_session_live),
+        )
         .route(
             "/v1/sessions/{session_id}/followups",
             post(handle_enqueue_followup).delete(handle_clear_followups),
@@ -299,7 +302,10 @@ pub fn build_head_router(state: HeadAppState) -> Router {
             "/v1/sessions/{session_id}/followups/{followup_id}",
             patch(handle_update_followup).delete(handle_delete_followup),
         )
-        .route("/v1/sessions/{session_id}/steer", post(handle_steer_session))
+        .route(
+            "/v1/sessions/{session_id}/steer",
+            post(handle_steer_session),
+        )
         .route(
             "/v1/sessions/{session_id}/artifacts",
             post(handle_create_artifact).get(handle_list_artifacts),
@@ -1165,7 +1171,10 @@ async fn handle_update_followup(
         Ok(j) => j,
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
-    match svc.update_followup(session_id, followup_id, req, &cid).await {
+    match svc
+        .update_followup(session_id, followup_id, req, &cid)
+        .await
+    {
         Ok(record) => json_with_correlation(StatusCode::OK, &record, &cid),
         Err(err) => domain_error_response(err, &cid),
     }

@@ -2421,8 +2421,7 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
     let ctrl_claims_json: serde_json::Value =
         serde_json::from_slice(&ctrl_claims_bytes).expect("parse dct1 claims JSON");
     assert!(
-        ctrl_claims_json.get("project_id").is_none()
-            || ctrl_claims_json["project_id"].is_null(),
+        ctrl_claims_json.get("project_id").is_none() || ctrl_claims_json["project_id"].is_null(),
         "standalone dct1 token must have no project_id claim: {ctrl_claims_json}"
     );
     let mem_mcp = starts[0]

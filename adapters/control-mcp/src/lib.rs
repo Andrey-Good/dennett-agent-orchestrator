@@ -1494,8 +1494,16 @@ mod tests {
             .as_array()
             .expect("standalone tools");
         assert_eq!(standalone_tools.len(), 2);
-        assert!(standalone_tools.iter().any(|t| t["name"] == "dennett_skill_list"));
-        assert!(standalone_tools.iter().any(|t| t["name"] == "dennett_skill_read"));
+        assert!(
+            standalone_tools
+                .iter()
+                .any(|t| t["name"] == "dennett_skill_list")
+        );
+        assert!(
+            standalone_tools
+                .iter()
+                .any(|t| t["name"] == "dennett_skill_read")
+        );
 
         let standalone_event_deny = standalone
             .handle_message(&json!({
@@ -1509,7 +1517,10 @@ mod tests {
             }))
             .await
             .expect("standalone event deny");
-        assert_eq!(standalone_event_deny["result"]["isError"], Value::Bool(true));
+        assert_eq!(
+            standalone_event_deny["result"]["isError"],
+            Value::Bool(true)
+        );
         assert!(
             standalone_event_deny["result"]["content"][0]["text"]
                 .as_str()

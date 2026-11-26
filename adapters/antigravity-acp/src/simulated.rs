@@ -1322,8 +1322,8 @@ async fn execute_sim_turn(
     if let Some(raw_ctrl) = find_directive(prompt, "[SIM:CONTROL_MCP:") {
         let (tool_name, args_json) = match raw_ctrl.split_once('|') {
             Some((name, raw_json)) => {
-                let parsed = serde_json::from_str::<Value>(raw_json.trim())
-                    .unwrap_or_else(|_| json!({}));
+                let parsed =
+                    serde_json::from_str::<Value>(raw_json.trim()).unwrap_or_else(|_| json!({}));
                 (name.trim().to_owned(), parsed)
             }
             None => (raw_ctrl.trim().to_owned(), json!({})),

@@ -549,7 +549,10 @@ async fn d3_durable_followups_crud_dedup_v03_auto_dispatch_and_idle_enqueue() {
         .expect("delete f3");
 
     // Verify `SessionDetailResponse.followups` reflects [F1, F2_edited] in FIFO order.
-    let detail_mid = client.get_session_detail(sid, None).await.expect("detail mid");
+    let detail_mid = client
+        .get_session_detail(sid, None)
+        .await
+        .expect("detail mid");
     assert_eq!(detail_mid.followups.len(), 2);
     assert_eq!(detail_mid.followups[0].followup_id, f1.followup_id);
     assert_eq!(detail_mid.followups[1].followup_id, f2.followup_id);
@@ -559,8 +562,8 @@ async fn d3_durable_followups_crud_dedup_v03_auto_dispatch_and_idle_enqueue() {
     slow_task.abort();
 
     // 4. Wait for V03 server-side auto-dispatch of F1 AND F2_edited in FIFO order!
-    let detail_done = wait_for_assistant_message_containing(&client, sid, "FOLLOWUP_TWO_EDITED", 10)
-        .await;
+    let detail_done =
+        wait_for_assistant_message_containing(&client, sid, "FOLLOWUP_TWO_EDITED", 10).await;
     let assistant_msgs: Vec<&str> = detail_done
         .messages
         .iter()
@@ -726,10 +729,16 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
 
     let cancel_resp = client.cancel_run(sid, None).await.expect("explicit stop");
     assert!(cancel_resp.cancelled);
-    let stopped_turn = slow_handle.await.expect("join slow").expect("cancelled turn");
+    let stopped_turn = slow_handle
+        .await
+        .expect("join slow")
+        .expect("cancelled turn");
     assert_eq!(stopped_turn.run.status, RunStatus::Cancelled);
 
-    let live_paused = client.get_session_live(sid, None).await.expect("live paused");
+    let live_paused = client
+        .get_session_live(sid, None)
+        .await
+        .expect("live paused");
     assert!(live_paused.active.is_none());
     assert_eq!(live_paused.followups.len(), 2);
     assert!(
@@ -757,7 +766,10 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
     assert!(q3.dispatched_run_id.is_none());
 
     // Delete Q3 so we resume [Q1, Q2], then invoke `POST /followups/resume`!
-    client.delete_followup(sid, q3.followup_id, None).await.expect("del q3");
+    client
+        .delete_followup(sid, q3.followup_id, None)
+        .await
+        .expect("del q3");
     let resume_resp = client.resume_followups(sid, None).await.expect("resume");
     let dispatched_q1 = resume_resp
         .dispatched
@@ -823,7 +835,10 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
     // Wait for F_ERR to fail and pause F_AFTER.
     let pause_deadline = time::Instant::now() + Duration::from_secs(10);
     loop {
-        let live = client.get_session_live(sid, None).await.expect("poll fail pause");
+        let live = client
+            .get_session_live(sid, None)
+            .await
+            .expect("poll fail pause");
         if live.active.is_none()
             && live
                 .followups
@@ -842,12 +857,22 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
     // Clear all remaining follow-ups via `dennettctl sessions followup clear`.
     let (code, _, stderr) = run_dennettctl(
         &head.base_url,
-        &["--json", "sessions", "followup", "clear", "--session", &sid.to_string()],
+        &[
+            "--json",
+            "sessions",
+            "followup",
+            "clear",
+            "--session",
+            &sid.to_string(),
+        ],
     )
     .await;
     assert_eq!(code, 0, "dennettctl clear failed: {stderr}");
 
-    let after_clear = client.get_session_live(sid, None).await.expect("after clear");
+    let after_clear = client
+        .get_session_live(sid, None)
+        .await
+        .expect("after clear");
     assert_eq!(after_clear.followups.len(), 0);
 
     head.shutdown().await;
@@ -947,7 +972,10 @@ async fn d3_live_steer_mid_run_without_409_preserving_queued_followups() {
             .is_some_and(|m| m.content.contains("STEERED_PLAN_B"))
     );
 
-    let orig_slow = slow_handle.await.expect("join slow").expect("orig cancelled");
+    let orig_slow = slow_handle
+        .await
+        .expect("join slow")
+        .expect("orig cancelled");
     assert_eq!(orig_slow.run.status, RunStatus::Cancelled);
 
     // Preserved queued follow-up MUST auto-dispatch after the steered run succeeded!
@@ -1264,7 +1292,10 @@ async fn d3_session_skills_delivery_mcp_scope_isolation_standalone_and_prompt_in
         )
         .await
         .expect("read shared-override A");
-    let read_override_a_text = read_override_a.assistant_message.expect("override A").content;
+    let read_override_a_text = read_override_a
+        .assistant_message
+        .expect("override A")
+        .content;
     assert!(read_override_a_text.contains("PROJECT_A_OVERRIDE_BODY"));
     assert!(!read_override_a_text.contains("GLOBAL_OVERRIDE_BODY"));
 

@@ -865,7 +865,9 @@ pub(crate) fn decode_run_row(row: &Row) -> Result<RunRecord, DennettError> {
     })
 }
 
-pub(crate) fn decode_session_followup_row(row: &Row) -> Result<SessionFollowupRecord, DennettError> {
+pub(crate) fn decode_session_followup_row(
+    row: &Row,
+) -> Result<SessionFollowupRecord, DennettError> {
     Ok(SessionFollowupRecord {
         followup_id: FollowupId::from_uuid(row.get(0)),
         session_id: SessionId::from_uuid(row.get(1)),

@@ -84,9 +84,9 @@ pub use d3::{
     PluginMcpServerEntry, ProbeConnectionResponse, ProviderConnectionId, ProviderConnectionRecord,
     ProviderHealthStatus, ProviderKind, ProviderQuotaError, ResumeFollowupsResponse,
     SecretMetadataRecord, SecretSource, SessionFollowupRecord, SessionSkillDetailResponse,
-    SessionSkillSummary, SetProjectCapabilityBindingRequest, SetSecretRequest,
-    SteerSessionRequest, UpdateCapabilityRequest, UpdateFollowupRequest,
-    UpsertProviderConnectionRequest, validate_secret_slot_key,
+    SessionSkillSummary, SetProjectCapabilityBindingRequest, SetSecretRequest, SteerSessionRequest,
+    UpdateCapabilityRequest, UpdateFollowupRequest, UpsertProviderConnectionRequest,
+    validate_secret_slot_key,
 };
 
 pub use memory::{

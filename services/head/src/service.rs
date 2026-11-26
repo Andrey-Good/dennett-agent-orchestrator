@@ -77,16 +77,15 @@ use crate::policy::{
 use crate::secrets::{SecretCipher, VaultMasterKey, default_vault_dir};
 use crate::store::{
     AGENT_JOIN_SELECT, AGENT_MESSAGE_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS,
-    ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, RUN_SELECT_COLS,
-    SESSION_FOLLOWUP_SELECT_COLS, SESSION_SELECT_COLS, append_audit_event, decode_agent_join_row,
-    decode_agent_message_row, decode_audit_event_row, decode_config_version_row,
-    decode_effect_claim_row, decode_message_row, decode_ordered_outbox_row,
-    decode_permission_decision_row, decode_policy_rule_row, decode_project_row, decode_run_row,
-    decode_runtime_binding_row, decode_session_followup_row, decode_session_row, fetch_agent,
-    fetch_all_runtime_bindings, fetch_policy_rules, fetch_project, fetch_runtime_binding,
-    fetch_session, fetch_session_artifacts, fetch_session_messages,
-    fetch_session_permission_decisions, fetch_session_runs, fetch_active_session_followups,
-    is_pg_unique_violation, map_pg_err, next_stream_seq, truncate_utf8,
+    ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, RUN_SELECT_COLS, SESSION_FOLLOWUP_SELECT_COLS,
+    SESSION_SELECT_COLS, append_audit_event, decode_agent_join_row, decode_agent_message_row,
+    decode_audit_event_row, decode_config_version_row, decode_effect_claim_row, decode_message_row,
+    decode_ordered_outbox_row, decode_permission_decision_row, decode_policy_rule_row,
+    decode_project_row, decode_run_row, decode_runtime_binding_row, decode_session_followup_row,
+    decode_session_row, fetch_active_session_followups, fetch_agent, fetch_all_runtime_bindings,
+    fetch_policy_rules, fetch_project, fetch_runtime_binding, fetch_session,
+    fetch_session_artifacts, fetch_session_messages, fetch_session_permission_decisions,
+    fetch_session_runs, is_pg_unique_violation, map_pg_err, next_stream_seq, truncate_utf8,
 };
 use crate::workspace_files::{
     clean_display_path, is_symlink_or_reparse_point, list_project_workspace_files,
@@ -3503,7 +3502,8 @@ impl HeadService {
             drop(slot_released);
 
             // V03-proof server-side auto-dispatch: survives closed Desktop UI.
-            if final_run_status == Some(RunStatus::Succeeded) && !svc.is_session_steering(session_id)
+            if final_run_status == Some(RunStatus::Succeeded)
+                && !svc.is_session_steering(session_id)
             {
                 let next_cid = CorrelationId::generate();
                 let _ = svc
@@ -4179,8 +4179,8 @@ impl HeadService {
         }
 
         let session_lock = self.session_exec_lock(session_id).await;
-        let Ok(session_guard) = time::timeout(STEER_SLOT_WAIT_TIMEOUT, session_lock.lock_owned())
-            .await
+        let Ok(session_guard) =
+            time::timeout(STEER_SLOT_WAIT_TIMEOUT, session_lock.lock_owned()).await
         else {
             return Err(DennettError::Timeout {
                 operation: String::from("steer_acquire_session_lock"),
@@ -7008,7 +7008,11 @@ impl HeadService {
         if self.is_session_steering(session_id) {
             return true;
         }
-        self.inner.active_runs.lock().await.contains_key(&session_id)
+        self.inner
+            .active_runs
+            .lock()
+            .await
+            .contains_key(&session_id)
     }
 
     pub(crate) async fn cancel_active_session_run(&self, session_id: SessionId) -> Option<RunId> {

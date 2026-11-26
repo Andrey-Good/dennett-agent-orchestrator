@@ -2109,33 +2109,34 @@ mod tests {
                 let n = socket.read(&mut buf).await.unwrap_or(0);
                 let req_str = String::from_utf8_lossy(&buf[..n]);
                 let first_line = req_str.lines().next().unwrap_or("");
-                let response =
-                    if first_line.starts_with(&format!("GET /v1/sessions/{session_id}/live ")) {
-                        json_http_response(&live_json)
-                    } else if first_line
-                        .starts_with(&format!("POST /v1/sessions/{session_id}/followups "))
-                        || first_line.starts_with(&format!(
-                            "PATCH /v1/sessions/{session_id}/followups/{followup_id} "
-                        ))
-                    {
-                        json_http_response(&followup_json)
-                    } else if first_line.starts_with(&format!(
-                        "DELETE /v1/sessions/{session_id}/followups/{followup_id} "
-                    )) || first_line
-                        .starts_with(&format!("DELETE /v1/sessions/{session_id}/followups "))
-                    {
-                        String::from(
-                            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                        )
-                    } else if first_line
-                        .starts_with(&format!("POST /v1/sessions/{session_id}/followups/resume "))
-                    {
-                        json_http_response(&resume_json)
-                    } else {
-                        String::from(
-                            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                        )
-                    };
+                let response = if first_line
+                    .starts_with(&format!("GET /v1/sessions/{session_id}/live "))
+                {
+                    json_http_response(&live_json)
+                } else if first_line
+                    .starts_with(&format!("POST /v1/sessions/{session_id}/followups "))
+                    || first_line.starts_with(&format!(
+                        "PATCH /v1/sessions/{session_id}/followups/{followup_id} "
+                    ))
+                {
+                    json_http_response(&followup_json)
+                } else if first_line.starts_with(&format!(
+                    "DELETE /v1/sessions/{session_id}/followups/{followup_id} "
+                )) || first_line
+                    .starts_with(&format!("DELETE /v1/sessions/{session_id}/followups "))
+                {
+                    String::from(
+                        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                } else if first_line
+                    .starts_with(&format!("POST /v1/sessions/{session_id}/followups/resume "))
+                {
+                    json_http_response(&resume_json)
+                } else {
+                    String::from(
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                };
                 let _ = socket.write_all(response.as_bytes()).await;
                 let _ = socket.shutdown().await;
             }

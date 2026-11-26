@@ -1292,7 +1292,9 @@ pub async fn delete_followup(
     let parsed_session = parse_session_id(&session_id)?;
     let parsed_followup = parse_followup_id(&followup_id)?;
     let bridge = state.snapshot_bridge().await;
-    bridge.delete_followup(parsed_session, parsed_followup).await
+    bridge
+        .delete_followup(parsed_session, parsed_followup)
+        .await
 }
 
 /// Clears all pending follow-up messages for a session (`DELETE /v1/sessions/{id}/followups`).

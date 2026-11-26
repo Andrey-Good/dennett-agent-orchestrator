@@ -2323,10 +2323,7 @@ mod tests {
         // File-target spoofing under `dennett_skill_read` MUST still be rejected!
         let mut spoofed = make_req("dennett_skill_read", "read", Some("/etc/passwd"));
         spoofed.raw_input = json!({ "path": "/etc/passwd" });
-        assert_eq!(
-            engine.evaluate_request(&spoofed).effect,
-            PolicyEffect::Deny
-        );
+        assert_eq!(engine.evaluate_request(&spoofed).effect, PolicyEffect::Deny);
 
         // Project-scoped events & delegation remain strictly DENIED in standalone chats!
         for project_tool in [

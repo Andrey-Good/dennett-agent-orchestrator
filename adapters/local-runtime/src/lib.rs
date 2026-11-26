@@ -784,14 +784,12 @@ impl AgentRuntimePort for LocalHttpRuntime {
                     if let Some(existing) = guard.get_mut(&req.dennett_session_id)
                         && existing.provider_session_id == *bound_prov_id
                     {
-                        let skills_for_prompt = if req
-                            .system_prompt
-                            .contains("[Dennett Active Skills Index]")
-                        {
-                            &[][..]
-                        } else {
-                            req.active_skills.as_slice()
-                        };
+                        let skills_for_prompt =
+                            if req.system_prompt.contains("[Dennett Active Skills Index]") {
+                                &[][..]
+                            } else {
+                                req.active_skills.as_slice()
+                            };
                         let effective_system = build_effective_system_prompt_with_skills(
                             &req.system_prompt,
                             skills_for_prompt,
@@ -842,10 +840,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
             }
 
             let provider_session_id = format!("local-sess-{}", Uuid::new_v4().simple());
-            let skills_for_prompt = if req
-                .system_prompt
-                .contains("[Dennett Active Skills Index]")
-            {
+            let skills_for_prompt = if req.system_prompt.contains("[Dennett Active Skills Index]") {
                 &[][..]
             } else {
                 req.active_skills.as_slice()

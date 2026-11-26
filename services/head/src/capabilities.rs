@@ -1385,7 +1385,9 @@ impl HeadService {
         claims: &ControlTokenClaims,
     ) -> Result<Vec<SessionSkillSummary>, DennettError> {
         self.verify_control_token_session_scope(claims).await?;
-        let resolved = self.resolve_session_skills_internal(claims.project_id).await?;
+        let resolved = self
+            .resolve_session_skills_internal(claims.project_id)
+            .await?;
         Ok(resolved.into_iter().map(|s| s.summary).collect())
     }
 
@@ -1421,7 +1423,9 @@ impl HeadService {
         }
         self.verify_control_token_session_scope(claims).await?;
 
-        let resolved = self.resolve_session_skills_internal(claims.project_id).await?;
+        let resolved = self
+            .resolve_session_skills_internal(claims.project_id)
+            .await?;
         if let Some(found) = resolved.into_iter().find(|s| s.summary.slug == trimmed) {
             let source_path = found.source_path.clone();
             let fallback_md = found.skill_markdown.clone();
@@ -1719,43 +1723,43 @@ fn select_session_skills_from_records(
             continue;
         }
 
-        let (scope_priority, effective_activation, effective_scope) =
-            if let Some(pid) = project_id {
-                let binding = cap
-                    .project_bindings
-                    .iter()
-                    .find(|b| b.project_id == pid)
-                    .map(|b| b.activation_state);
-                match cap.scope_kind {
-                    CapabilityScopeKind::Project => {
-                        if cap.project_id != Some(pid) {
-                            continue;
-                        }
-                        (
-                            0_u8,
-                            binding.unwrap_or(cap.activation_state),
-                            CapabilityScopeKind::Project,
-                        )
+        let (scope_priority, effective_activation, effective_scope) = if let Some(pid) = project_id
+        {
+            let binding = cap
+                .project_bindings
+                .iter()
+                .find(|b| b.project_id == pid)
+                .map(|b| b.activation_state);
+            match cap.scope_kind {
+                CapabilityScopeKind::Project => {
+                    if cap.project_id != Some(pid) {
+                        continue;
                     }
-                    CapabilityScopeKind::CandidateUnattached => {
-                        let Some(bound_state) = binding else {
-                            continue;
-                        };
-                        (1_u8, bound_state, CapabilityScopeKind::Project)
-                    }
-                    CapabilityScopeKind::Global => (
-                        2_u8,
+                    (
+                        0_u8,
                         binding.unwrap_or(cap.activation_state),
-                        CapabilityScopeKind::Global,
-                    ),
-                    _ => continue,
+                        CapabilityScopeKind::Project,
+                    )
                 }
-            } else {
-                if cap.scope_kind != CapabilityScopeKind::Global {
-                    continue;
+                CapabilityScopeKind::CandidateUnattached => {
+                    let Some(bound_state) = binding else {
+                        continue;
+                    };
+                    (1_u8, bound_state, CapabilityScopeKind::Project)
                 }
-                (2_u8, cap.activation_state, CapabilityScopeKind::Global)
-            };
+                CapabilityScopeKind::Global => (
+                    2_u8,
+                    binding.unwrap_or(cap.activation_state),
+                    CapabilityScopeKind::Global,
+                ),
+                _ => continue,
+            }
+        } else {
+            if cap.scope_kind != CapabilityScopeKind::Global {
+                continue;
+            }
+            (2_u8, cap.activation_state, CapabilityScopeKind::Global)
+        };
 
         if !matches!(
             effective_activation,
@@ -1899,7 +1903,9 @@ fn read_skill_markdown_safe(
     if md_meta.len() > MAX_CAPABILITY_MARKDOWN_BYTES as u64 {
         return Err(DennettError::InvalidInput {
             field: String::from("skill_md_content"),
-            reason: format!("SKILL.md exceeds maximum size of {MAX_CAPABILITY_MARKDOWN_BYTES} bytes"),
+            reason: format!(
+                "SKILL.md exceeds maximum size of {MAX_CAPABILITY_MARKDOWN_BYTES} bytes"
+            ),
         });
     }
 
@@ -1907,10 +1913,11 @@ fn read_skill_markdown_safe(
         scope: String::from("capabilities.session_skill"),
         reason: format!("failed canonicalizing skill directory: {err}"),
     })?;
-    let canon_file = fs::canonicalize(&skill_md_path).map_err(|err| DennettError::AccessDenied {
-        scope: String::from("capabilities.session_skill"),
-        reason: format!("failed canonicalizing SKILL.md: {err}"),
-    })?;
+    let canon_file =
+        fs::canonicalize(&skill_md_path).map_err(|err| DennettError::AccessDenied {
+            scope: String::from("capabilities.session_skill"),
+            reason: format!("failed canonicalizing SKILL.md: {err}"),
+        })?;
     if !canon_file.starts_with(&canon_dir) {
         return Err(DennettError::AccessDenied {
             scope: String::from("capabilities.session_skill"),
@@ -3181,20 +3188,23 @@ mod tests {
     }
 
     #[test]
-    fn d3_session_skills_prompt_index_and_safe_markdown_reader_enforce_bounds_and_traversal_guards() {
+    fn d3_session_skills_prompt_index_and_safe_markdown_reader_enforce_bounds_and_traversal_guards()
+    {
         let root = std::env::temp_dir().join(format!(
             "dennett-session-skill-safe-{}",
             Uuid::new_v4().simple()
         ));
         let skill_dir = root.join("ok-skill");
         fs::create_dir_all(&skill_dir).expect("create skill dir");
-        fs::write(skill_dir.join("SKILL.md"), "# Fresh Disk Skill\nAlways test.").expect("write");
-
-        let disk_body = read_skill_markdown_safe(
-            Some(skill_dir.to_string_lossy().as_ref()),
-            "# Fallback",
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "# Fresh Disk Skill\nAlways test.",
         )
-        .expect("read valid skill dir");
+        .expect("write");
+
+        let disk_body =
+            read_skill_markdown_safe(Some(skill_dir.to_string_lossy().as_ref()), "# Fallback")
+                .expect("read valid skill dir");
         assert_eq!(disk_body, "# Fresh Disk Skill\nAlways test.");
 
         let trav_err = read_skill_markdown_safe(Some("../outside"), "# Fallback")
