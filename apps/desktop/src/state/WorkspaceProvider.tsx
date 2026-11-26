@@ -151,6 +151,11 @@ export interface ReconcileNotice {
   text: string;
 }
 
+export interface ForkOriginNotice {
+  parentSessionId: string;
+  parentTitle: string;
+}
+
 const DRAFTS_STORAGE_KEY = "dennett.desktop.d2.drafts.v1";
 
 const TERMINAL_QUEUE_ERROR_CODES = new Set([
@@ -291,6 +296,7 @@ export interface WorkspaceState {
   selectedSessionId: string | null;
   activeDetail: SessionDetailResponse | null;
   projectFiles: ListProjectFilesResponse | null;
+  projectFilesError: string | null;
   isLoadingFiles: boolean;
   activeScopeNoteCount: number | null;
   diagnostics: DiagnosticsResponse | null;
@@ -303,6 +309,7 @@ export interface WorkspaceState {
   stoppingTaskIds: string[];
   cancelledNotice: string | null;
   reconcileNotice: ReconcileNotice | null;
+  forkOriginNotice: ForkOriginNotice | null;
   errorBanner: BridgeErrorPayload | null;
   isRightPanelOpen: boolean;
   isSidebarOpen: boolean;
@@ -378,7 +385,7 @@ export interface WorkspaceActions {
   ): Promise<SessionRecord | null>;
   setSessionStatus(sessionId: string, status: SessionStatus): Promise<void>;
   deleteSession(sessionId: string): Promise<boolean>;
-  refreshProjectFiles(): Promise<void>;
+  refreshProjectFiles(force?: boolean): Promise<void>;
   refreshMemoryStats(): Promise<void>;
   updateDraft(sessionId: string, value: string): void;
   insertIntoDraft(snippet: string): void;
@@ -515,6 +522,7 @@ export interface WorkspaceActions {
   dismissError(): void;
   dismissCancelledNotice(): void;
   dismissReconcileNotice(): void;
+  dismissForkOriginNotice(): void;
 }
 
 export interface WorkspaceMeta {
@@ -624,6 +632,7 @@ export function WorkspaceProvider({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [activeDetail, setActiveDetail] = useState<SessionDetailResponse | null>(null);
   const [projectFiles, setProjectFiles] = useState<ListProjectFilesResponse | null>(null);
+  const [projectFilesError, setProjectFilesError] = useState<string | null>(null);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [activeScopeNoteCount, setActiveScopeNoteCount] = useState<number | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsResponse | null>(null);
@@ -647,6 +656,7 @@ export function WorkspaceProvider({
   const [stoppingTaskIds, setStoppingTaskIds] = useState<string[]>([]);
   const [cancelledNotice, setCancelledNotice] = useState<string | null>(null);
   const [reconcileNotice, setReconcileNotice] = useState<ReconcileNotice | null>(null);
+  const [forkOriginNotice, setForkOriginNotice] = useState<ForkOriginNotice | null>(null);
   const [errorBanner, setErrorBanner] = useState<BridgeErrorPayload | null>(null);
   const [isRightPanelOpen, setIsRightPanelOpenState] = useState(initialRightPanelOpen);
   const [isSidebarOpen, setIsSidebarOpenState] = useState(true);
@@ -711,6 +721,7 @@ export function WorkspaceProvider({
   const cancellingSessionIdsRef = useRef<Set<string>>(new Set());
   const detailRequestSeqRef = useRef(0);
   const filesRequestSeqRef = useRef(0);
+  const failedFilesProjectIdRef = useRef<string | null>(null);
   const activeViewRef = useRef<WorkspaceView>("chat");
   const isSidebarOpenRef = useRef(true);
   const isRightPanelOpenRef = useRef(initialRightPanelOpen);
@@ -840,6 +851,7 @@ export function WorkspaceProvider({
     if (selectedSessionRef.current !== nextSessionId) {
       setLiveRun(null);
       setActiveFollowups([]);
+      setForkOriginNotice(null);
       wasRunningActiveSessionRef.current = false;
       localCompletedSessionRef.current = null;
     }
@@ -848,6 +860,10 @@ export function WorkspaceProvider({
   }, []);
 
   const setSelectedProjectSync = useCallback((nextProjectId: string | null) => {
+    if (selectedProjectRef.current !== nextProjectId) {
+      failedFilesProjectIdRef.current = null;
+      setProjectFilesError(null);
+    }
     selectedProjectRef.current = nextProjectId;
     setSelectedProjectId(nextProjectId);
   }, []);
@@ -911,22 +927,34 @@ export function WorkspaceProvider({
   }, []);
 
   const loadFilesForProject = useCallback(
-    async (projectId: string | null) => {
-      const seq = ++filesRequestSeqRef.current;
+    async (projectId: string | null, force = false) => {
       if (!projectId) {
+        filesRequestSeqRef.current += 1;
+        failedFilesProjectIdRef.current = null;
         setProjectFiles(null);
+        setProjectFilesError(null);
         setIsLoadingFiles(false);
         return;
       }
+      if (!force && failedFilesProjectIdRef.current === projectId) {
+        return;
+      }
+      const seq = ++filesRequestSeqRef.current;
+      failedFilesProjectIdRef.current = null;
+      setProjectFilesError(null);
       setIsLoadingFiles(true);
       try {
         const resp = await bridge.listProjectFiles(projectId);
         if (seq === filesRequestSeqRef.current) {
+          failedFilesProjectIdRef.current = null;
           setProjectFiles(resp);
+          setProjectFilesError(null);
         }
-      } catch {
+      } catch (err) {
         if (seq === filesRequestSeqRef.current) {
+          failedFilesProjectIdRef.current = projectId;
           setProjectFiles(null);
+          setProjectFilesError(normalizeBridgeError(err).message);
         }
       } finally {
         if (seq === filesRequestSeqRef.current) {
@@ -1074,7 +1102,7 @@ export function WorkspaceProvider({
           (s) => s.project_id === null || activeProjectIds.has(s.project_id),
         );
         const visibleUserChats = visibleActiveSessions.filter(
-          (s) => (s.session_kind ?? "user_chat") === "user_chat",
+          (s) => (s.session_kind ?? "user_chat") === "user_chat" && s.status !== "archived",
         );
 
         setProjects(sortedProjects);
@@ -1123,14 +1151,13 @@ export function WorkspaceProvider({
           activeProjectIds.has(currentProj.project_id) &&
           selectedSessionRef.current === null
         ) {
-          // User explicitly selected an active project that has no sessions yet.
-          const projChats = visibleActiveSessions.filter(
+          // User explicitly selected an active project that has no active user chats yet.
+          const projChats = visibleUserChats.filter(
             (s) => s.project_id === currentProj.project_id,
           );
           targetSessionId = projChats[0]?.session_id ?? null;
         } else {
-          targetSessionId =
-            visibleUserChats[0]?.session_id ?? visibleActiveSessions[0]?.session_id ?? null;
+          targetSessionId = visibleUserChats[0]?.session_id ?? null;
         }
 
         const resolvedSession = targetSessionId
@@ -1456,22 +1483,32 @@ export function WorkspaceProvider({
   }, [bridge, healthSnapshot?.connected, initialized, loadConnectedState]);
 
   // Keep right-panel workspace files in sync when active project changes or panel opens.
+  const activeProjectId = activeProject?.project_id ?? null;
   useEffect(() => {
-    if (!healthSnapshot?.connected || !activeProject) {
+    if (!healthSnapshot?.connected || !activeProjectId) {
+      failedFilesProjectIdRef.current = null;
       setProjectFiles(null);
+      setProjectFilesError(null);
       return;
+    }
+    if (failedFilesProjectIdRef.current && failedFilesProjectIdRef.current !== activeProjectId) {
+      failedFilesProjectIdRef.current = null;
+      setProjectFilesError(null);
     }
     if (isRightPanelOpen) {
-      void loadFilesForProject(activeProject.project_id);
+      void loadFilesForProject(activeProjectId, false);
     }
-  }, [activeProject, healthSnapshot?.connected, isRightPanelOpen, loadFilesForProject]);
+  }, [activeProjectId, healthSnapshot?.connected, isRightPanelOpen, loadFilesForProject]);
 
-  const refreshProjectFiles = useCallback(async () => {
-    if (!activeProject) {
-      return;
-    }
-    await loadFilesForProject(activeProject.project_id);
-  }, [activeProject, loadFilesForProject]);
+  const refreshProjectFiles = useCallback(
+    async (force = true) => {
+      if (!activeProject) {
+        return;
+      }
+      await loadFilesForProject(activeProject.project_id, force);
+    },
+    [activeProject, loadFilesForProject],
+  );
 
   activeProjectScopeRef.current = activeProject?.memory_scope ?? null;
 
@@ -2088,7 +2125,7 @@ export function WorkspaceProvider({
         setProjects((prev) => prev.map((p) => (p.project_id === projectId ? updated : p)));
         await upgradeFolderlessAgentIfNeeded(updated, wasFolderless);
         if (activeProject?.project_id === projectId) {
-          await loadFilesForProject(projectId);
+          await loadFilesForProject(projectId, true);
         }
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -2114,7 +2151,7 @@ export function WorkspaceProvider({
         setProjects((prev) => prev.map((p) => (p.project_id === projectId ? resp.project : p)));
         await upgradeFolderlessAgentIfNeeded(resp.project, wasFolderless);
         if (activeProject?.project_id === projectId) {
-          await loadFilesForProject(projectId);
+          await loadFilesForProject(projectId, true);
         }
       } catch (err) {
         setErrorBanner(normalizeBridgeError(err));
@@ -2262,6 +2299,8 @@ export function WorkspaceProvider({
       title?: string | null,
     ): Promise<SessionRecord | null> => {
       setErrorBanner(null);
+      const parentTitle =
+        sessionsRef.current.find((s) => s.session_id === sessionId)?.title ?? "Исходный чат";
       try {
         const forked = await bridge.forkSession(sessionId, {
           from_message_id: fromMessageId,
@@ -2277,6 +2316,7 @@ export function WorkspaceProvider({
         setSelectedProjectSync(forked.project_id ?? null);
         setSelectedSessionSync(forked.session_id);
         setCancelledNotice(null);
+        setForkOriginNotice({ parentSessionId: sessionId, parentTitle });
         await loadSessionDetail(forked.session_id);
         return forked;
       } catch (err) {
@@ -2324,26 +2364,30 @@ export function WorkspaceProvider({
           return next;
         });
         if (selectedSessionRef.current === sessionId) {
+          const activeProjectIds = new Set(
+            projectsRef.current.filter(isActiveProjectRecord).map((p) => p.project_id),
+          );
+          const isActiveUserChat = (s: SessionRecord) =>
+            s.status !== "archived" &&
+            (s.session_kind ?? "user_chat") === "user_chat" &&
+            (s.project_id === null || activeProjectIds.has(s.project_id));
           const fallback =
             remaining.find(
-              (s) =>
-                s.project_id === selectedProjectRef.current &&
-                s.status !== "archived" &&
-                (s.session_kind ?? "user_chat") === "user_chat",
+              (s) => s.project_id === selectedProjectRef.current && isActiveUserChat(s),
             ) ??
-            remaining.find(
-              (s) => s.status !== "archived" && (s.session_kind ?? "user_chat") === "user_chat",
-            ) ??
-            remaining[0] ??
+            remaining.find(isActiveUserChat) ??
             null;
           setSelectedSessionSync(fallback?.session_id ?? null);
-          setSelectedProjectSync(fallback?.project_id ?? selectedProjectRef.current);
+          setSelectedProjectSync(fallback ? fallback.project_id : selectedProjectRef.current);
           if (fallback) {
             await loadSessionDetail(fallback.session_id);
           } else {
             setActiveDetail(null);
             setLiveRun(null);
             setActiveFollowups([]);
+            selectedArtifactIdRef.current = null;
+            setSelectedArtifactId(null);
+            setArtifactRevisions([]);
           }
         }
         return true;
@@ -2815,20 +2859,67 @@ export function WorkspaceProvider({
       const detail = activeDetail;
       const messages = detail && detail.session.session_id === sessionId ? detail.messages : [];
       const idx = messages.findIndex((m) => m.message_id === messageId);
+      const currentSession =
+        sessionsRef.current.find((s) => s.session_id === sessionId) ?? detail?.session ?? null;
+
       if (idx > 0) {
         const priorMsg = messages[idx - 1];
         if (priorMsg) {
           const forked = await forkSession(sessionId, priorMsg.message_id);
-          if (forked) {
-            try {
-              await dispatchMessageToHead(forked.session_id, trimmed, generateClientMessageId());
-            } catch (err) {
-              setErrorBanner(normalizeBridgeError(err));
-            }
+          if (!forked) {
             return;
           }
+          setDraftsBySession((prev) => ({
+            ...prev,
+            [sessionId]: "",
+            [forked.session_id]: "",
+          }));
+          try {
+            await dispatchMessageToHead(forked.session_id, trimmed, generateClientMessageId());
+          } catch (err) {
+            setErrorBanner(normalizeBridgeError(err));
+          }
+          return;
         }
       }
+
+      if (idx === 0 && currentSession) {
+        setErrorBanner(null);
+        const baseTitle = currentSession.title.trim() || "Новый чат";
+        try {
+          const branched = await bridge.createSession({
+            agent_id: currentSession.agent_id,
+            project_id: currentSession.project_id ?? null,
+            title: `${baseTitle} (ветка)`,
+            session_kind: "user_chat",
+          });
+          const nextSessions = sortSessionsByPin([
+            branched,
+            ...sessionsRef.current.filter((s) => s.session_id !== branched.session_id),
+          ]);
+          sessionsRef.current = nextSessions;
+          setSessions(nextSessions);
+          setActiveViewState("chat");
+          setSelectedProjectSync(branched.project_id ?? null);
+          setSelectedSessionSync(branched.session_id);
+          setCancelledNotice(null);
+          setForkOriginNotice({
+            parentSessionId: sessionId,
+            parentTitle: baseTitle,
+          });
+          setDraftsBySession((prev) => ({
+            ...prev,
+            [sessionId]: "",
+            [branched.session_id]: "",
+          }));
+          await loadSessionDetail(branched.session_id);
+          await dispatchMessageToHead(branched.session_id, trimmed, generateClientMessageId());
+        } catch (err) {
+          setErrorBanner(normalizeBridgeError(err));
+        }
+        return;
+      }
+
       setDraftsBySession((prev) => ({ ...prev, [sessionId]: "" }));
       try {
         await dispatchMessageToHead(sessionId, trimmed, generateClientMessageId());
@@ -2836,7 +2927,16 @@ export function WorkspaceProvider({
         setErrorBanner(normalizeBridgeError(err));
       }
     },
-    [activeDetail, dispatchMessageToHead, forkSession, healthSnapshot?.connected],
+    [
+      activeDetail,
+      bridge,
+      dispatchMessageToHead,
+      forkSession,
+      healthSnapshot?.connected,
+      loadSessionDetail,
+      setSelectedProjectSync,
+      setSelectedSessionSync,
+    ],
   );
 
   const saveMessageToMemory = useCallback(
@@ -4443,6 +4543,7 @@ export function WorkspaceProvider({
   const dismissError = useCallback(() => setErrorBanner(null), []);
   const dismissCancelledNotice = useCallback(() => setCancelledNotice(null), []);
   const dismissReconcileNotice = useCallback(() => setReconcileNotice(null), []);
+  const dismissForkOriginNotice = useCallback(() => setForkOriginNotice(null), []);
 
   const openMemoryConflictsCount = globalOpenMemoryConflictsCount;
 
@@ -4557,6 +4658,7 @@ export function WorkspaceProvider({
       dismissError,
       dismissCancelledNotice,
       dismissReconcileNotice,
+      dismissForkOriginNotice,
     }),
     [
       activateProviderConnection,
@@ -4591,6 +4693,7 @@ export function WorkspaceProvider({
       discoverCapabilities,
       dismissCancelledNotice,
       dismissError,
+      dismissForkOriginNotice,
       dismissReconcileNotice,
       editAndResendMessage,
       emergencyStopAll,
@@ -4689,6 +4792,7 @@ export function WorkspaceProvider({
       selectedSessionId,
       activeDetail,
       projectFiles,
+      projectFilesError,
       isLoadingFiles,
       activeScopeNoteCount,
       diagnostics,
@@ -4701,6 +4805,7 @@ export function WorkspaceProvider({
       stoppingTaskIds,
       cancelledNotice,
       reconcileNotice,
+      forkOriginNotice,
       errorBanner,
       isRightPanelOpen,
       isSidebarOpen,
@@ -4747,6 +4852,7 @@ export function WorkspaceProvider({
       effects,
       errorBanner,
       folderPickerIntent,
+      forkOriginNotice,
       healthSnapshot,
       inboxCards,
       initialized,
@@ -4777,6 +4883,7 @@ export function WorkspaceProvider({
       plannedProviders,
       policyRules,
       projectFiles,
+      projectFilesError,
       projects,
       providerConnections,
       queuedMessages,

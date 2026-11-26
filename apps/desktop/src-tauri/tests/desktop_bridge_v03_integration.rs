@@ -16,10 +16,11 @@ use dennett_contracts::{
     ArtifactLifecycleState, CreateAgentRequest, CreateArtifactRequest, CreatePolicyRuleRequest,
     CreateProjectRequest, CreateSessionRequest, CreateTaskRequest, DispatchEffectRequest,
     ExternalEffectStatus, IdempotencyKey, InboxCardKind, MemoryScope, MemoryStatus,
-    PermissionResolutionDecision, PolicyEffect, ProjectLifecycleState, RebindProjectRequest,
-    ReconcileEffectRequest, ResolvePermissionRequest, RevokeGrantRequest, SendMessageRequest,
-    SessionKind, SimEffectBehavior, TaskStatus, ThinkingLevel, UpdateAgentConfigRequest,
-    UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest, WorkspaceWritePolicy,
+    PermissionRequestStatus, PermissionResolutionDecision, PolicyEffect, ProjectLifecycleState,
+    RebindProjectRequest, ReconcileEffectRequest, ResolvePermissionRequest, RevokeGrantRequest,
+    RunStatus, SendMessageRequest, SessionKind, SimEffectBehavior, TaskStatus, ThinkingLevel,
+    UpdateAgentConfigRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    WorkspaceWritePolicy,
 };
 use dennett_desktop_lib::{BridgeError, HeadBridge, HeadEndpointPolicy};
 use serde_json::json;
@@ -90,6 +91,7 @@ struct RunningDaemon {
     child: Child,
     addr: String,
     base_url: String,
+    owner_token: Option<String>,
 }
 
 impl RunningDaemon {
@@ -125,7 +127,7 @@ impl RunningDaemon {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn dennett-memoryd");
-        Self::await_listening(child, "dennett-memoryd").await
+        Self::await_listening(child, "dennett-memoryd", None).await
     }
 
     async fn spawn_head_simulated(
@@ -135,6 +137,7 @@ impl RunningDaemon {
     ) -> Self {
         let bin = locate_binary("dennett-head", "dennett-head");
         let mcp_bin = locate_binary("dennett-memory-mcp", "dennett-memory-mcp");
+        let owner_token = format!("tok-head-v03-{}", Uuid::new_v4().simple());
         let child = Command::new(&bin)
             .args([
                 "--serve",
@@ -149,6 +152,7 @@ impl RunningDaemon {
             .env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
             .env("DENNETT_MEMORY_TOKEN", memory_token)
+            .env("DENNETT_HEAD_TOKEN", &owner_token)
             .env_remove("DENNETT_CONTROL_PG_URL")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -156,10 +160,10 @@ impl RunningDaemon {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn dennett-head");
-        Self::await_listening(child, "dennett-head").await
+        Self::await_listening(child, "dennett-head", Some(owner_token)).await
     }
 
-    async fn await_listening(mut child: Child, label: &str) -> Self {
+    async fn await_listening(mut child: Child, label: &str, owner_token: Option<String>) -> Self {
         let stdout = child.stdout.take().expect("daemon stdout piped");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -177,6 +181,7 @@ impl RunningDaemon {
             child,
             addr,
             base_url,
+            owner_token,
         }
     }
 
@@ -217,8 +222,12 @@ impl RunningDaemon {
     }
 
     async fn shutdown(mut self) {
+        let auth_hdr = self
+            .owner_token
+            .as_deref()
+            .map_or_default(|tok| format!("Authorization: Bearer {tok}\r\n"));
         let req = format!(
-            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "POST /shutdown HTTP/1.1\r\nHost: {}\r\n{auth_hdr}X-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             self.addr
         );
         let mut stream = time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr))
@@ -258,12 +267,14 @@ struct CreatedV03Fixtures {
 )]
 async fn run_v03_session_and_drop_bridge(
     head_base_url: &str,
+    owner_token: Option<String>,
     workspace_dir: &std::path::Path,
     scope: &MemoryScope,
     suffix: &str,
 ) -> CreatedV03Fixtures {
     let bridge =
-        HeadBridge::new(head_base_url, HeadEndpointPolicy::LoopbackOnly).expect("construct bridge");
+        HeadBridge::with_owner_token(head_base_url, HeadEndpointPolicy::LoopbackOnly, owner_token)
+            .expect("construct bridge");
 
     let health_snap = bridge.get_head_health().await;
     assert!(health_snap.connected, "HeadBridge must connect to head");
@@ -392,8 +403,14 @@ async fn v03_closing_desktop_bridge_keeps_daemons_alive_and_restores_conversatio
     let mut memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
     let mut head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
 
-    let created =
-        run_v03_session_and_drop_bridge(&head.base_url, &workspace_dir, &scope, &suffix).await;
+    let created = run_v03_session_and_drop_bridge(
+        &head.base_url,
+        head.owner_token.clone(),
+        &workspace_dir,
+        &scope,
+        &suffix,
+    )
+    .await;
 
     // V03 invariant: BOTH daemons MUST remain alive and healthy after desktop client closes
     head.assert_still_running("dennett-head");
@@ -402,8 +419,12 @@ async fn v03_closing_desktop_bridge_keeps_daemons_alive_and_restores_conversatio
     memoryd.assert_healthz_ok("dennett-memoryd").await;
 
     // Reopen a completely fresh HeadBridge and verify full state restoration
-    let reopened = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
-        .expect("reopen HeadBridge");
+    let reopened = HeadBridge::with_owner_token(
+        &head.base_url,
+        HeadEndpointPolicy::LoopbackOnly,
+        head.owner_token.clone(),
+    )
+    .expect("reopen HeadBridge");
     let projects = reopened.list_projects().await.expect("list_projects");
     assert!(
         projects
@@ -475,8 +496,12 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
 
-    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
-        .expect("construct HeadBridge");
+    let bridge = HeadBridge::with_owner_token(
+        &head.base_url,
+        HeadEndpointPolicy::LoopbackOnly,
+        head.owner_token.clone(),
+    )
+    .expect("construct HeadBridge");
 
     let project = bridge
         .create_project(&CreateProjectRequest {
@@ -605,8 +630,12 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
 
-    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
-        .expect("construct HeadBridge");
+    let bridge = HeadBridge::with_owner_token(
+        &head.base_url,
+        HeadEndpointPolicy::LoopbackOnly,
+        head.owner_token.clone(),
+    )
+    .expect("construct HeadBridge");
 
     let snap_before = bridge
         .get_state_snapshot(None, true)
@@ -651,7 +680,9 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
         .await
         .expect("create_session");
 
-    // Start turn that triggers interactive ask_before_write permission request concurrently.
+    // Start turn that triggers interactive critical-action approval concurrently (under 2-mode
+    // Auto/FullAccess autonomy, routine workspace writes succeed without prompts while risky
+    // external commands such as `git push` pause for interactive owner approval).
     let send_bridge = bridge.clone();
     let sid = session.session_id;
     let turn_handle = tokio::spawn(async move {
@@ -659,8 +690,8 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
             .send_message(
                 sid,
                 &SendMessageRequest {
-                    content: String::from("[SIM:TOOL:write_file:approved.txt|approved via bridge]"),
-                    timeout_ms: Some(15_000),
+                    content: String::from("[SIM:TOOL:run_command:git push origin branch-a]"),
+                    timeout_ms: Some(30_000),
                     client_message_id: None,
                 },
             )
@@ -683,13 +714,7 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
         );
         time::sleep(Duration::from_millis(30)).await;
     };
-
-    // File MUST NOT exist on disk before owner approval!
-    let approved_path = workspace_dir.join("approved.txt");
-    assert!(
-        !approved_path.exists(),
-        "file must not be written before interactive approval"
-    );
+    assert_eq!(pending_req.status, PermissionRequestStatus::Pending);
 
     let inbox = bridge
         .list_inbox_cards(Some("open"), Some(project.project_id))
@@ -704,16 +729,18 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
         "Action Inbox must expose open permission_approval card"
     );
 
-    // Approve for project via HeadBridge -> issues revocable grant + unblocks write_file once.
+    // Approve for project via HeadBridge -> issues revocable grant + unblocks git push once.
     let resolved = bridge
         .resolve_permission_request(
             pending_req.request_id,
             &ResolvePermissionRequest {
                 expected_revision: Some(pending_req.revision),
                 decision: PermissionResolutionDecision::ApproveProject,
-                reason: Some(String::from("Owner approved project write via desktop UI")),
-                max_uses: None,
-                expires_in_secs: None,
+                reason: Some(String::from(
+                    "Owner approved external git push via desktop UI",
+                )),
+                max_uses: Some(5),
+                expires_in_secs: Some(600),
             },
         )
         .await
@@ -721,15 +748,45 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
     let grant = resolved
         .issued_grant
         .expect("ApproveProject must issue a revocable CapabilityGrant");
+    assert_eq!(
+        grant.uses_consumed, 1,
+        "initial approved command must consume 1 use on the newly issued grant"
+    );
 
-    let turn_resp = turn_handle
+    let first_turn_resp = turn_handle
         .await
         .expect("turn task join")
         .expect("send_message should succeed after approval");
-    assert!(turn_resp.assistant_message.is_some());
-    assert_eq!(
-        fs::read_to_string(&approved_path).expect("approved file exists"),
-        "approved via bridge"
+    assert_eq!(first_turn_resp.run.status, RunStatus::Succeeded);
+    assert!(
+        first_turn_resp
+            .assistant_message
+            .as_ref()
+            .is_some_and(|m| m.content.contains("ALLOWED") && m.content.contains("branch-a")),
+        "approved command must run cleanly: {:?}",
+        first_turn_resp.assistant_message
+    );
+
+    // Second critical command succeeds IMMEDIATELY via standing project grant (no prompt!).
+    let granted_turn_resp = bridge
+        .send_message(
+            session.session_id,
+            &SendMessageRequest {
+                content: String::from("[SIM:TOOL:run_command:git push origin branch-b]"),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+        )
+        .await
+        .expect("second git push should succeed via standing grant");
+    assert_eq!(granted_turn_resp.run.status, RunStatus::Succeeded);
+    assert!(
+        granted_turn_resp
+            .assistant_message
+            .as_ref()
+            .is_some_and(|m| m.content.contains("ALLOWED") && m.content.contains("branch-b")),
+        "second command via standing grant must succeed: {:?}",
+        granted_turn_resp.assistant_message
     );
 
     // Events stream observed the permission.requested / permission.resolved events cleanly.
@@ -755,12 +812,20 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
         "event journal must contain permission.resolved"
     );
 
-    // Verify grant is visible and immediately revocable through HeadBridge.
+    // Verify grant is visible (with uses_consumed == 2) and immediately revocable through HeadBridge.
     let grants = bridge
         .list_capability_grants(Some(project.project_id), false)
         .await
         .expect("list_capability_grants");
-    assert!(grants.grants.iter().any(|g| g.grant_id == grant.grant_id));
+    let active_grant = grants
+        .grants
+        .iter()
+        .find(|g| g.grant_id == grant.grant_id)
+        .expect("issued grant must be listed");
+    assert_eq!(
+        active_grant.uses_consumed, 2,
+        "standing grant must reflect both branch-a and branch-b executions"
+    );
 
     let revoked = bridge
         .revoke_capability_grant(
@@ -773,15 +838,16 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
         .expect("revoke_capability_grant");
     assert!(revoked.revoked_at.is_some());
 
-    // After revocation, a second write MUST require approval again; cancelling via Stop unblocks cleanly.
-    let second_bridge = bridge.clone();
-    let second_handle = tokio::spawn(async move {
-        second_bridge
+    // After revocation, a third risky command MUST require approval again; cancelling via Stop
+    // unblocks cleanly and withdraws the pending permission request.
+    let third_bridge = bridge.clone();
+    let third_handle = tokio::spawn(async move {
+        third_bridge
             .send_message(
                 sid,
                 &SendMessageRequest {
-                    content: String::from("[SIM:TOOL:write_file:after-revoke.txt|blocked]"),
-                    timeout_ms: Some(15_000),
+                    content: String::from("[SIM:TOOL:run_command:git push origin branch-c]"),
+                    timeout_ms: Some(20_000),
                     client_message_id: None,
                 },
             )
@@ -789,30 +855,57 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
     });
 
     let deadline2 = time::Instant::now() + Duration::from_secs(10);
-    loop {
+    let perm3 = loop {
         let list = bridge
             .list_permission_requests(Some("pending"), Some(session.session_id))
             .await
             .expect("list_permission_requests after revoke");
-        if !list.requests.is_empty() {
-            break;
+        if let Some(req) = list.requests.into_iter().next() {
+            break req;
         }
         assert!(
             time::Instant::now() < deadline2,
             "revoked grant must force a fresh pending permission request"
         );
         time::sleep(Duration::from_millis(30)).await;
-    }
+    };
 
     let cancel_resp = bridge
         .cancel_run(session.session_id)
         .await
         .expect("cancel_run during pending approval");
     assert!(cancel_resp.cancelled);
-    let _ = second_handle.await.expect("second turn join");
+    let cancelled_turn_resp = third_handle
+        .await
+        .expect("third turn join")
+        .expect("cancelled turn3 should return cancelled run");
+    assert_eq!(cancelled_turn_resp.run.status, RunStatus::Cancelled);
+
+    // Stop MUST withdraw the pending permission request so late approval fails closed!
+    let pending_after_stop = bridge
+        .list_permission_requests(Some("pending"), Some(session.session_id))
+        .await
+        .expect("list pending after stop");
     assert!(
-        !workspace_dir.join("after-revoke.txt").exists(),
-        "cancelled pending approval must never write file"
+        pending_after_stop.requests.is_empty(),
+        "Stop must withdraw pending permission requests, found: {:?}",
+        pending_after_stop.requests
+    );
+    let late_resolve = bridge
+        .resolve_permission_request(
+            perm3.request_id,
+            &ResolvePermissionRequest {
+                expected_revision: Some(perm3.revision),
+                decision: PermissionResolutionDecision::ApproveOnce,
+                reason: None,
+                max_uses: None,
+                expires_in_secs: None,
+            },
+        )
+        .await;
+    assert!(
+        late_resolve.is_err(),
+        "late approval after Stop must fail closed, got: {late_resolve:?}"
     );
 
     head.shutdown().await;
@@ -838,8 +931,12 @@ async fn d2_desktop_bridge_targeted_task_stop_leaves_sibling_alive_and_updates_g
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
 
-    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
-        .expect("construct HeadBridge");
+    let bridge = HeadBridge::with_owner_token(
+        &head.base_url,
+        HeadEndpointPolicy::LoopbackOnly,
+        head.owner_token.clone(),
+    )
+    .expect("construct HeadBridge");
 
     let project = bridge
         .create_project(&CreateProjectRequest {
@@ -1004,8 +1101,12 @@ async fn d2_desktop_bridge_lost_ack_unknown_external_visibility_honest_stop_and_
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
 
-    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
-        .expect("construct HeadBridge");
+    let bridge = HeadBridge::with_owner_token(
+        &head.base_url,
+        HeadEndpointPolicy::LoopbackOnly,
+        head.owner_token.clone(),
+    )
+    .expect("construct HeadBridge");
 
     let project = bridge
         .create_project(&CreateProjectRequest {
@@ -1084,8 +1185,9 @@ async fn d2_desktop_bridge_lost_ack_unknown_external_visibility_honest_stop_and_
         ),
         "expected default-deny before Allow policy rule, got: {denied_before_rule:?}"
     );
-    let head_client =
-        dennett_head_client::HeadClient::new(&head.base_url).expect("head client for policy");
+    let head_client = dennett_head_client::HeadClient::new(&head.base_url)
+        .expect("head client for policy")
+        .with_optional_owner_token(head.owner_token.clone());
     head_client
         .create_policy_rule(
             &CreatePolicyRuleRequest {
@@ -1182,8 +1284,12 @@ async fn d2_desktop_bridge_client_message_id_dedup_project_lifecycle_and_artifac
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &token, &scope_str).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, &token).await;
 
-    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
-        .expect("construct HeadBridge");
+    let bridge = HeadBridge::with_owner_token(
+        &head.base_url,
+        HeadEndpointPolicy::LoopbackOnly,
+        head.owner_token.clone(),
+    )
+    .expect("construct HeadBridge");
 
     let project = bridge
         .create_project(&CreateProjectRequest {
@@ -1428,8 +1534,12 @@ async fn desktop_bridge_standalone_chats_and_pinning_roundtrip() {
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg_base, mem_token, scope.as_str()).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
 
-    let bridge = HeadBridge::new(&head.base_url, HeadEndpointPolicy::LoopbackOnly)
-        .expect("construct HeadBridge");
+    let bridge = HeadBridge::with_owner_token(
+        &head.base_url,
+        HeadEndpointPolicy::LoopbackOnly,
+        head.owner_token.clone(),
+    )
+    .expect("construct HeadBridge");
 
     let agent = bridge
         .create_agent(&CreateAgentRequest {

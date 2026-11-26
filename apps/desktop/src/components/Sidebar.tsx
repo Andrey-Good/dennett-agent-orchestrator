@@ -384,7 +384,7 @@ export function Sidebar() {
                 {isRunning ? "в работе" : formatRelativeTime(session.updated_at)}
               </small>
             </button>
-            <div className="chat-row__actions">
+            <div className="chat-row__actions sidebar-chat-actions">
               <button
                 type="button"
                 className="chat-row__rename-btn"

@@ -66,7 +66,8 @@ const AUTONOMY_MODE_ITEMS: Array<{
   {
     mode: "full_access",
     label: "Полный доступ",
-    description: "Автономная работа без интерактивных подтверждений в рамках границ проекта",
+    description:
+      "Полная автономность без интерактивных подтверждений (уровень полного доступа)",
   },
 ];
 
@@ -138,9 +139,10 @@ export function Composer() {
       activeProject?.workspace_path &&
       isConnected &&
       (!state.projectFiles || state.projectFiles.project_id !== activeProject.project_id) &&
-      !state.isLoadingFiles
+      !state.isLoadingFiles &&
+      !state.projectFilesError
     ) {
-      void actions.refreshProjectFiles();
+      void actions.refreshProjectFiles(false);
     }
   }, [
     actions,
@@ -150,6 +152,7 @@ export function Composer() {
     isConnected,
     state.isLoadingFiles,
     state.projectFiles,
+    state.projectFilesError,
   ]);
 
   const atFileSuggestions: WorkspaceFileEntry[] = useMemo(() => {
@@ -169,7 +172,9 @@ export function Composer() {
   }, [activeProject?.workspace_path, atMention, state.projectFiles?.entries]);
 
   const showAtPopover = Boolean(
-    atMention && activeProject?.workspace_path && atFileSuggestions.length > 0,
+    atMention &&
+      activeProject?.workspace_path &&
+      (atFileSuggestions.length > 0 || Boolean(state.projectFilesError)),
   );
 
   useEffect(() => {
@@ -408,25 +413,27 @@ export function Composer() {
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (showAtPopover) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setAtSelectedIndex((idx) => (idx + 1) % atFileSuggestions.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setAtSelectedIndex(
-          (idx) => (idx - 1 + atFileSuggestions.length) % atFileSuggestions.length,
-        );
-        return;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
-        const chosen = atFileSuggestions[atSelectedIndex] ?? atFileSuggestions[0];
-        if (chosen) {
-          applyAtSelection(chosen);
+      if (atFileSuggestions.length > 0) {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setAtSelectedIndex((idx) => (idx + 1) % atFileSuggestions.length);
+          return;
         }
-        return;
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setAtSelectedIndex(
+            (idx) => (idx - 1 + atFileSuggestions.length) % atFileSuggestions.length,
+          );
+          return;
+        }
+        if (event.key === "Enter" || event.key === "Tab") {
+          event.preventDefault();
+          const chosen = atFileSuggestions[atSelectedIndex] ?? atFileSuggestions[0];
+          if (chosen) {
+            applyAtSelection(chosen);
+          }
+          return;
+        }
       }
       if (event.key === "Escape") {
         event.preventDefault();
@@ -609,31 +616,37 @@ export function Composer() {
           testId="at-file-popover"
         >
           <strong>Файлы проекта</strong>
-          <div className="popover-scroll-list">
-            {atFileSuggestions.map((entry, idx) => (
-              <button
-                key={entry.relative_path}
-                type="button"
-                role="option"
-                aria-selected={idx === atSelectedIndex}
-                className={idx === atSelectedIndex ? "is-selected" : ""}
-                data-testid={`at-file-option-${entry.relative_path}`}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  applyAtSelection(entry);
-                }}
-              >
-                <span className="at-file-option-copy">
-                  {entry.kind === "directory" ? (
-                    <FolderSimple size={13} aria-hidden="true" />
-                  ) : (
-                    <FileText size={13} aria-hidden="true" />
-                  )}
-                  <code>{entry.relative_path}</code>
-                </span>
-              </button>
-            ))}
-          </div>
+          {state.projectFilesError ? (
+            <p className="popover-empty at-file-popover__error" data-testid="at-file-error">
+              Не удалось прочитать папку проекта
+            </p>
+          ) : (
+            <div className="popover-scroll-list">
+              {atFileSuggestions.map((entry, idx) => (
+                <button
+                  key={entry.relative_path}
+                  type="button"
+                  role="option"
+                  aria-selected={idx === atSelectedIndex}
+                  className={idx === atSelectedIndex ? "is-selected" : ""}
+                  data-testid={`at-file-option-${entry.relative_path}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyAtSelection(entry);
+                  }}
+                >
+                  <span className="at-file-option-copy">
+                    {entry.kind === "directory" ? (
+                      <FolderSimple size={13} aria-hidden="true" />
+                    ) : (
+                      <FileText size={13} aria-hidden="true" />
+                    )}
+                    <code>{entry.relative_path}</code>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </PortalPopover>
 
         <PortalPopover

@@ -456,6 +456,43 @@ export function MessageTimeline() {
         </div>
       )}
 
+      {state.forkOriginNotice && (
+        <div
+          className="fork-origin-bar"
+          role="status"
+          data-testid="fork-origin-notice"
+        >
+          <div className="fork-origin-bar__copy">
+            <GitFork size={13} aria-hidden="true" />
+            <span>
+              Создана ветка от сообщения
+              {state.forkOriginNotice.parentTitle
+                ? ` · «${state.forkOriginNotice.parentTitle}»`
+                : ""}
+            </span>
+          </div>
+          <div className="fork-origin-bar__actions">
+            <button
+              type="button"
+              className="fork-origin-bar__back-btn"
+              data-testid="fork-origin-return-btn"
+              onClick={() => void actions.selectSession(state.forkOriginNotice!.parentSessionId)}
+            >
+              Вернуться в исходный чат
+            </button>
+            <button
+              type="button"
+              className="icon-button icon-button--xs"
+              aria-label="Скрыть уведомление о ветке"
+              data-testid="fork-origin-dismiss-btn"
+              onClick={actions.dismissForkOriginNotice}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div
         className="conversation"
         ref={scrollRef}

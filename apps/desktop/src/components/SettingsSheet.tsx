@@ -40,6 +40,7 @@ import type {
   CapabilityScopeKind,
   CapabilityTrust,
   CompatibilityStatus,
+  IndexStatus,
   PlannedProviderInfo,
   PolicyEffect,
   ProviderHealthStatus,
@@ -166,7 +167,7 @@ function providerHealthInfo(status: ProviderHealthStatus): {
 } {
   switch (status) {
     case "healthy":
-      return { label: "Доступен", tone: "ok" };
+      return { label: "Работает", tone: "ok" };
     case "auth_required":
       return { label: "Требуется вход", tone: "warn" };
     case "quota_limited":
@@ -178,6 +179,84 @@ function providerHealthInfo(status: ProviderHealthStatus): {
     case "unknown":
       return { label: "Не проверен", tone: "neutral" };
   }
+}
+
+function localizeIndexStatus(status: IndexStatus | string): string {
+  switch (status) {
+    case "healthy":
+      return "Работает";
+    case "degraded":
+      return "Деградация";
+    case "lagging":
+      return "Отстаёт";
+    case "rebuilding":
+      return "Переиндексация";
+    case "unreachable":
+      return "Недоступен";
+    default:
+      return localizeDiagnosticText(status);
+  }
+}
+
+function localizeDiagnosticComponent(component: string): string {
+  switch (component.trim()) {
+    case "SimulatedRuntime":
+    case "simulated_runtime":
+      return "Симуляция";
+    case "head":
+      return "Сервер управления";
+    case "memoryd":
+    case "memory":
+      return "Память";
+    case "policy":
+    case "PolicyEngine":
+      return "Политика";
+    case "scheduler":
+      return "Планировщик";
+    case "runtime":
+      return "Движок";
+    default:
+      return localizeDiagnosticText(component);
+  }
+}
+
+function localizeDiagnosticEventKind(kind: string): string {
+  switch (kind.trim()) {
+    case "run_succeeded":
+      return "Запуск завершён";
+    case "run_failed":
+      return "Ошибка запуска";
+    case "run_cancelled":
+      return "Запуск остановлен";
+    case "run_started":
+      return "Запуск начат";
+    case "healthy":
+      return "Работает";
+    case "degraded":
+      return "Деградация";
+    case "unreachable":
+      return "Недоступен";
+    case "permission_denied":
+      return "Доступ отклонён";
+    case "permission_requested":
+      return "Запрос разрешения";
+    case "permission_resolved":
+      return "Решение по доступу";
+    case "memory_outbox_flushed":
+      return "Очередь памяти отправлена";
+    default:
+      return localizeDiagnosticText(kind);
+  }
+}
+
+function localizeDiagnosticText(raw: string): string {
+  return raw
+    .replace(/\bSimulatedRuntime\b/g, "Симуляция")
+    .replace(/\brun_succeeded\b/g, "Запуск завершён")
+    .replace(/\brun_failed\b/g, "Ошибка запуска")
+    .replace(/\bhealthy\b/gi, "Работает")
+    .replace(/\bdegraded\b/gi, "Деградация")
+    .replace(/\bunreachable\b/gi, "Недоступен");
 }
 
 function capabilityKindLabel(kind: CapabilityKind): string {
@@ -516,7 +595,7 @@ export function SettingsSheet() {
         ? "Gemini API key · фоновый"
         : `${catalog?.tier ?? "Google AI Ultra"} · oauth-personal`;
   const engineLabel = isSimulated
-    ? "SimulatedRuntime"
+    ? "Симуляция"
     : catalog?.auth_profile === "local-endpoint"
       ? catalog.adapter_id || "local-openai-http"
       : `Google Antigravity · agy acp ${catalog?.agy_version ?? "1.5+"}`;
@@ -691,7 +770,7 @@ export function SettingsSheet() {
         setLocalProbeFeedback(
           `${statusInfo.label}: найдено моделей — ${models.length}${
             probeResp.connection.last_health_detail
-              ? ` (${probeResp.connection.last_health_detail})`
+              ? ` (${localizeDiagnosticText(probeResp.connection.last_health_detail)})`
               : ""
           }`,
         );
@@ -2328,7 +2407,7 @@ export function SettingsSheet() {
                 </button>
                 <button
                   type="button"
-                  className="popover-primary-btn"
+                  className={`popover-secondary-btn cap-toolbar__mcp-btn ${showMcpForm ? "is-active" : ""}`}
                   onClick={() => setShowMcpForm((v) => !v)}
                   disabled={!connected}
                   data-testid="cap-toggle-mcp-btn"
@@ -2833,7 +2912,7 @@ export function SettingsSheet() {
                   <span>Независимый memoryd</span>
                   <strong>
                     {health?.memory_status === "healthy"
-                      ? "Активен"
+                      ? "Работает"
                       : health
                         ? "Недоступен (очередь outbox)"
                         : "—"}
@@ -2865,7 +2944,7 @@ export function SettingsSheet() {
               <section className="settings-card" data-testid="diagnostics-memory-index-card">
                 <div className="settings-card__head">
                   <Database size={16} aria-hidden="true" />
-                  <strong>Индекс памяти (watermark и статус)</strong>
+                  <strong>Индекс памяти (состояние и позиция журнала)</strong>
                 </div>
                 {state.memoryIndexStatus ? (
                   <>
@@ -2875,10 +2954,10 @@ export function SettingsSheet() {
                     </div>
                     <div className="stats-kv">
                       <span>Статус индекса</span>
-                      <strong>{state.memoryIndexStatus.status}</strong>
+                      <strong>{localizeIndexStatus(state.memoryIndexStatus.status)}</strong>
                     </div>
                     <div className="stats-kv">
-                      <span>Watermark seq</span>
+                      <span>Позиция журнала</span>
                       <strong>{state.memoryIndexStatus.watermark_seq}</strong>
                     </div>
                     <div className="stats-kv">
@@ -2922,9 +3001,10 @@ export function SettingsSheet() {
                       <div key={ev.event_id} className="d2-grant-row">
                         <div className="d2-grant-row__info">
                           <strong>
-                            {ev.component} · {ev.event_kind}
+                            {localizeDiagnosticComponent(ev.component)} ·{" "}
+                            {localizeDiagnosticEventKind(ev.event_kind)}
                           </strong>
-                          <small>{ev.safe_summary}</small>
+                          <small>{localizeDiagnosticText(ev.safe_summary)}</small>
                         </div>
                         <span className="d2-time">
                           {new Date(ev.created_at).toLocaleTimeString("ru-RU", {

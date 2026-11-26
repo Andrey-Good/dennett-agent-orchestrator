@@ -89,6 +89,8 @@ function dennettDevDirPickerPlugin(): Plugin {
   };
 }
 
+const devHeadToken = process.env.DENNETT_HEAD_TOKEN?.trim();
+
 export default defineConfig({
   plugins: [react(), dennettDevDirPickerPlugin()],
   clearScreen: false,
@@ -100,6 +102,7 @@ export default defineConfig({
       "/__dennett_dev_head": {
         target: process.env.DENNETT_HEAD_URL || "http://127.0.0.1:41771",
         changeOrigin: false,
+        ...(devHeadToken ? { headers: { Authorization: `Bearer ${devHeadToken}` } } : {}),
         rewrite: (reqPath) => reqPath.replace(/^\/__dennett_dev_head/, ""),
       },
     },

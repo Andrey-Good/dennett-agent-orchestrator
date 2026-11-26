@@ -752,8 +752,10 @@ html.native-shell .workbench {
 .project-heading:focus-within .new-chat-trigger,
 .chat-row-wrap:hover .chat-row__rename-btn,
 .chat-row-wrap:focus-within .chat-row__rename-btn,
+.chat-row-wrap.has-menu-open .chat-row__rename-btn,
 .chat-row-wrap:hover .chat-row__pin-btn,
-.chat-row-wrap:focus-within .chat-row__pin-btn {
+.chat-row-wrap:focus-within .chat-row__pin-btn,
+.chat-row-wrap.has-menu-open .chat-row__pin-btn {
   display: inline-grid;
   opacity: 1;
 }
@@ -798,6 +800,13 @@ html.native-shell .workbench {
   display: flex;
   align-items: center;
   border-radius: var(--radius-row);
+  overflow: hidden;
+  transition: background 120ms ease;
+}
+
+.chat-row-wrap:hover:not(.is-active),
+.chat-row-wrap.has-menu-open:not(.is-active) {
+  background: var(--hover-subtle);
 }
 
 .chat-row-wrap.is-active {
@@ -823,7 +832,7 @@ html.native-shell .workbench {
 
 .chat-row:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
+  background: transparent;
 }
 
 .chat-row.is-active {
@@ -874,24 +883,58 @@ html.native-shell .workbench {
   padding-right: 30px;
 }
 
+.chat-row-wrap:hover .chat-row,
+.chat-row-wrap:focus-within .chat-row,
+.chat-row-wrap.has-menu-open .chat-row {
+  padding-right: 84px;
+}
+
 .chat-row-wrap:hover .chat-row__meta,
 .chat-row-wrap:focus-within .chat-row__meta {
   opacity: 0;
 }
 
-.chat-row__actions {
+.chat-row-wrap:hover .chat-row__meta,
+.chat-row-wrap:focus-within .chat-row__meta,
+.chat-row-wrap.has-menu-open .chat-row__meta {
+  max-width: 0;
+  overflow: hidden;
+}
+
+.chat-row-wrap.has-menu-open .chat-row__meta {
+  opacity: 0;
+}
+
+.chat-row__actions,
+.sidebar-chat-actions {
   position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
+  right: 0;
+  top: 0;
+  bottom: 0;
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  padding: 0 4px 0 18px;
+  border-radius: 0 var(--radius-row) var(--radius-row) 0;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.chat-row-wrap:hover .sidebar-chat-actions,
+.chat-row-wrap:focus-within .sidebar-chat-actions,
+.chat-row-wrap.has-menu-open .sidebar-chat-actions {
+  background: linear-gradient(90deg, transparent, var(--bg-row-hover) 20%);
+}
+
+.chat-row-wrap.is-active:hover .sidebar-chat-actions,
+.chat-row-wrap.is-active:focus-within .sidebar-chat-actions,
+.chat-row-wrap.is-active.has-menu-open .sidebar-chat-actions {
+  background: linear-gradient(90deg, transparent, var(--bg-row-active) 20%);
 }
 
 .chat-row__rename-btn,
 .chat-row__pin-btn {
-  background: rgba(28, 28, 30, 0.92);
+  background: transparent;
 }
 
 .chat-row__pin-btn.is-pinned {
@@ -901,9 +944,10 @@ html.native-shell .workbench {
 }
 
 .chat-row-wrap:hover .chat-row__pin-btn.is-pinned,
-.chat-row-wrap:focus-within .chat-row__pin-btn.is-pinned {
+.chat-row-wrap:focus-within .chat-row__pin-btn.is-pinned,
+.chat-row-wrap.has-menu-open .chat-row__pin-btn.is-pinned {
   opacity: 1;
-  background: rgba(28, 28, 30, 0.92);
+  background: transparent;
 }
 
 .inline-rename-input {
@@ -4681,6 +4725,12 @@ html.native-shell .workbench {
   gap: 6px;
 }
 
+.cap-toolbar__mcp-btn.is-active {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
 .settings-mcp-secret-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5118,6 +5168,57 @@ html.native-shell .workbench {
   font-size: 11px;
 }
 
+.fork-origin-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.fork-origin-bar__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fork-origin-bar__copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fork-origin-bar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fork-origin-bar__back-btn {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary-glass);
+  font-size: 11.5px;
+  font-weight: 540;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fork-origin-bar__back-btn:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: var(--text);
+}
+
 .message-turn-group--match .message-block {
   box-shadow: 0 0 0 1px rgba(243, 198, 119, 0.35);
   border-radius: 12px;
@@ -5331,6 +5432,11 @@ html.native-shell .workbench {
   width: min(360px, calc(100vw - 24px));
 }
 
+.at-file-popover__error {
+  margin: 0;
+  color: #f6ddb0;
+}
+
 .at-file-option-copy {
   display: inline-flex;
   align-items: center;
@@ -5464,7 +5570,7 @@ html.native-shell .workbench {
   border: 0;
   border-radius: 7px;
   color: var(--text-faint);
-  background: rgba(28, 28, 30, 0.92);
+  background: transparent;
   cursor: pointer;
   opacity: 0;
   transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
@@ -5479,7 +5585,7 @@ html.native-shell .workbench {
 .chat-row__menu-btn:hover,
 .chat-row__menu-btn.is-menu-open {
   color: var(--text);
-  background: rgba(42, 42, 46, 0.96);
+  background: rgba(255, 255, 255, 0.11);
 }
 
 .session-delete-inline-confirm {
@@ -5777,6 +5883,20 @@ html.native-shell .workbench {
 @media (max-width: 960px) {
   .workbench {
     grid-template-columns: 52px 220px minmax(0, 1fr);
+  }
+  .nested-chats {
+    padding-left: 14px;
+  }
+  .chat-row-wrap:hover .chat-row,
+  .chat-row-wrap:focus-within .chat-row,
+  .chat-row-wrap.has-menu-open .chat-row {
+    padding-right: 78px;
+  }
+  .chat-row__rename-btn,
+  .chat-row__pin-btn,
+  .chat-row__menu-btn {
+    width: 22px;
+    height: 22px;
   }
   .breadcrumbs .breadcrumb-prefix,
   .breadcrumbs .breadcrumb-sep {

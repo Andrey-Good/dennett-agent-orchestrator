@@ -32,6 +32,8 @@
   --dialog-bg: #1b1b1d;
   --hover-subtle: rgba(255, 255, 255, 0.055);
   --hover-strong: rgba(255, 255, 255, 0.095);
+  --bg-row-hover: #1e1f23;
+  --bg-row-active: #2e2f34;
 
   /* Functional semantic indicators ONLY */
   --ok-dot: #6fd39b;

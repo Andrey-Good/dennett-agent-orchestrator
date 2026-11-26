@@ -35,11 +35,21 @@ export function sanitizeExternalUrl(rawHref: string | undefined | null): string 
 
 /**
  * Opens a validated external `http:`/`https:` URL without ever navigating the Tauri webview.
+ * Inside native Tauri, invokes the shell-free `open_external_url` Rust command; in browser dev
+ * mode, opens safely via `window.open(..., "_blank", "noopener,noreferrer")`.
  */
 export function openSafeExternalUrl(rawHref: string | undefined | null): boolean {
   const safeUrl = sanitizeExternalUrl(rawHref);
   if (!safeUrl || typeof window === "undefined") {
     return false;
+  }
+  if ("__TAURI_INTERNALS__" in window) {
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("open_external_url", { url: safeUrl }))
+      .catch(() => {
+        // Never navigate the WebView if OS browser launch fails.
+      });
+    return true;
   }
   window.open(safeUrl, "_blank", "noopener,noreferrer");
   return true;

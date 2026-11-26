@@ -527,9 +527,12 @@ describe("Bucket A Audit Closure & Chat Fork (Н5)", () => {
       expect(bridge.policyRules).toHaveLength(0);
     });
 
-    // 4. Diagnostics tab shows memory index status card
+    // 4. Diagnostics tab shows memory index status card with localized Russian labels
     await user.click(screen.getByTestId("settings-tab-diagnostics"));
-    expect(await screen.findByTestId("diagnostics-memory-index-card")).toHaveTextContent("healthy");
+    const indexCard = await screen.findByTestId("diagnostics-memory-index-card");
+    expect(indexCard).toHaveTextContent("Работает");
+    expect(indexCard).toHaveTextContent("Позиция журнала");
+    expect(indexCard).not.toHaveTextContent("Watermark seq");
   });
 
   it("Sidebar collapsible project groups & chat context menu + TasksCard RunNow/Pause/Resume/Delete/Subagents + MemoryCard TitleBar search, inline row forget, accept-both conflict & consolidation pause/resume", async () => {
@@ -846,5 +849,251 @@ describe("Bucket A Audit Closure & Chat Fork (Н5)", () => {
         /backdrop-filter\s*:/i,
       );
     }
+  });
+});
+
+describe("D3 Post-Audit Polish & Visual Closure", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it("P2-1: @file failure does NOT loop and renders inline Russian error inside @ popover", async () => {
+    const user = userEvent.setup();
+    const fx = makeRichFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.project],
+      agents: [fx.agent],
+      sessions: [fx.session],
+    });
+    const listFilesSpy = vi.fn(async () => {
+      throw { code: "WORKSPACE_ERROR", message: "Permission denied" };
+    });
+    bridge.listProjectFiles = listFilesSpy;
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    const composer = (await screen.findByLabelText("Поле ввода сообщения")) as HTMLTextAreaElement;
+
+    await user.type(composer, "Открой @src");
+    const errorEl = await screen.findByTestId("at-file-error");
+    expect(errorEl).toHaveTextContent("Не удалось прочитать папку проекта");
+
+    // Wait briefly to guarantee Composer's useEffect does NOT enter an infinite retry loop.
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+    expect(listFilesSpy).toHaveBeenCalledTimes(1);
+
+    // Escape closes the @ popover cleanly even in error state.
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("at-file-popover")).not.toBeInTheDocument();
+  });
+
+  it("P1-5: editing message #0 creates a clean sibling branch without duplicating in original chat and shows return bar", async () => {
+    const user = userEvent.setup();
+    const fx = makeRichFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.project],
+      agents: [fx.agent],
+      sessions: [fx.session],
+      messagesBySession: { [fx.session.session_id]: [fx.userMsg, fx.assistantMsg] },
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId(`message-edit-btn-${fx.userMsg.message_id}`);
+
+    // Put a draft in the original composer to verify drafts are cleared cleanly on edit & resend.
+    const composer = screen.getByLabelText("Поле ввода сообщения") as HTMLTextAreaElement;
+    await user.type(composer, "старый черновик");
+    expect(composer.value).toBe("старый черновик");
+
+    // Edit the very first message (idx === 0)
+    await user.click(screen.getByTestId(`message-edit-btn-${fx.userMsg.message_id}`));
+    const editForm = await screen.findByTestId(`message-edit-form-${fx.userMsg.message_id}`);
+    const editTextarea = within(editForm).getByLabelText("Редактировать сообщение");
+    await user.clear(editTextarea);
+    await user.type(editTextarea, "Обновлённый первый запрос");
+    await user.click(screen.getByTestId(`message-edit-send-${fx.userMsg.message_id}`));
+
+    // Must create a sibling branch session rather than resending duplicate into original chat!
+    await waitFor(() => {
+      expect(bridge.calls.some((c) => c.method === "createSession")).toBe(true);
+      expect(bridge.sessions).toHaveLength(2);
+    });
+    expect(bridge.calls.some((c) => c.method === "forkSession")).toBe(false);
+
+    // Original session retains its exact 2 messages (no duplicate sent into original chat)
+    expect(bridge.messagesBySession[fx.session.session_id]).toHaveLength(2);
+    const branchSession = bridge.sessions.find((s) => s.session_id !== fx.session.session_id);
+    expect(branchSession).toBeTruthy();
+    expect(branchSession?.title).toContain("(ветка)");
+
+    // Edited prompt was dispatched to the new branch session and composer draft is empty
+    const sendCalls = bridge.calls.filter((c) => c.method === "sendMessage");
+    expect(sendCalls).toHaveLength(1);
+    expect((sendCalls[0]?.args as { sessionId: string }).sessionId).toBe(branchSession?.session_id);
+    expect((screen.getByLabelText("Поле ввода сообщения") as HTMLTextAreaElement).value).toBe("");
+
+    // Sleek fork-origin bar appears with 1-click return link to original chat
+    const notice = await screen.findByTestId("fork-origin-notice");
+    expect(notice).toHaveTextContent("Создана ветка от сообщения");
+    await user.click(screen.getByTestId("fork-origin-return-btn"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("fork-origin-notice")).not.toBeInTheDocument();
+      expect(screen.getByText(fx.userMsg.content)).toBeInTheDocument();
+    });
+    // Original session composer draft was also cleared cleanly
+    expect((screen.getByLabelText("Поле ввода сообщения") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("P2-2: deleteSession never falls back to background task_run or archived sessions", async () => {
+    const user = userEvent.setup();
+    const fx = makeRichFixture();
+    const taskRunSession: SessionRecord = {
+      session_id: "30000000-0000-4000-8000-00000000a099",
+      project_id: fx.project.project_id,
+      agent_id: fx.agent.agent_id,
+      title: "Фоновый запуск",
+      session_kind: "task_run",
+      status: "active",
+      pinned: false,
+      created_at: fx.now - 30_000,
+      updated_at: fx.now - 2_000,
+    };
+    const archivedSession: SessionRecord = {
+      session_id: "30000000-0000-4000-8000-00000000a098",
+      project_id: fx.project.project_id,
+      agent_id: fx.agent.agent_id,
+      title: "Архивный чат",
+      session_kind: "user_chat",
+      status: "archived",
+      pinned: false,
+      created_at: fx.now - 20_000,
+      updated_at: fx.now - 1_000,
+    };
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      projects: [fx.project],
+      agents: [fx.agent],
+      sessions: [fx.session, taskRunSession, archivedSession],
+      messagesBySession: { [fx.session.session_id]: [fx.userMsg] },
+    });
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId("chat-composer");
+
+    // Delete the sole active user_chat via sidebar menu
+    await user.click(screen.getByTestId(`session-menu-trigger-${fx.session.session_id}`));
+    await user.click(await screen.findByTestId(`session-menu-delete-${fx.session.session_id}`));
+    await user.click(await screen.findByTestId(`session-menu-delete-yes-${fx.session.session_id}`));
+
+    // Must land on clean empty project state (selectedSessionId === null), NEVER task_run or archived!
+    await screen.findByTestId("empty-project-sessions-state");
+    expect(screen.queryByTestId("composer-task-run-banner")).not.toBeInTheDocument();
+    expect(screen.queryByTestId(`session-archived-badge-${archivedSession.session_id}`)).not.toBeInTheDocument();
+  });
+
+  it("Opus P1-2 & Carbon Visual Polish: honest Full Access copy, localized SettingsSheet diagnostics with zero Watermark seq, dark obsidian MCP toolbar button", async () => {
+    const user = userEvent.setup();
+    const fx = makeRichFixture();
+    const bridge = new MockDesktopBridge({
+      connected: true,
+      runtimeIsSimulated: true,
+      projects: [fx.project],
+      agents: [fx.agent],
+      sessions: [fx.session],
+    });
+    const origDiagnostics = bridge.listDiagnostics.bind(bridge);
+    bridge.listDiagnostics = async (limit?: number) => {
+      const base = await origDiagnostics(limit);
+      return {
+        ...base,
+        events: [
+          {
+            event_id: "ev-1",
+            correlation_id: "c1",
+            component: "SimulatedRuntime",
+            event_kind: "run_succeeded",
+            safe_summary: "SimulatedRuntime run_succeeded healthy",
+            created_at: fx.now - 2_000,
+          },
+          {
+            event_id: "ev-2",
+            correlation_id: "c2",
+            component: "head",
+            event_kind: "run_failed",
+            safe_summary: "runtime degraded unreachable",
+            created_at: fx.now - 1_000,
+          },
+        ],
+      };
+    };
+
+    render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
+    await screen.findByTestId("chat-composer");
+
+    // 1. Composer Full Access copy is honest and accurate
+    await user.click(screen.getByTestId("access-selector-trigger"));
+    const accessMenu = await screen.findByTestId("access-popover");
+    expect(accessMenu).toHaveTextContent(
+      "Полная автономность без интерактивных подтверждений (уровень полного доступа)",
+    );
+    await user.keyboard("{Escape}");
+
+    // 2. SettingsSheet: SimulatedRuntime localized, MCP button uses obsidian secondary class, zero Watermark seq
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    const sheet = await screen.findByTestId("settings-sheet");
+    expect(sheet).toHaveTextContent("Симуляция");
+    expect(sheet).not.toHaveTextContent("SimulatedRuntime");
+
+    await user.click(screen.getByTestId("settings-tab-capabilities"));
+    const mcpBtn = await screen.findByTestId("cap-toggle-mcp-btn");
+    expect(mcpBtn.className).toContain("popover-secondary-btn");
+    expect(mcpBtn.className).not.toContain("popover-primary-btn");
+
+    await user.click(screen.getByTestId("settings-tab-diagnostics"));
+    const diagPanel = await screen.findByTestId("settings-diagnostics-panel");
+    expect(diagPanel).toHaveTextContent("Позиция журнала");
+    expect(diagPanel).not.toHaveTextContent("Watermark seq");
+    expect(diagPanel).toHaveTextContent("Работает");
+    expect(diagPanel).toHaveTextContent("Запуск завершён");
+    expect(diagPanel).toHaveTextContent("Ошибка запуска");
+    expect(diagPanel).toHaveTextContent("Деградация");
+    expect(diagPanel).toHaveTextContent("Недоступен");
+    expect(diagPanel).not.toHaveTextContent("run_succeeded");
+    expect(diagPanel).not.toHaveTextContent("run_failed");
+    expect(diagPanel).not.toHaveTextContent("SimulatedRuntime");
+  });
+
+  it("P1-4 & P2-4: Tauri openSafeExternalUrl invokes open_external_url without window.open, and Vite proxy uses server-side DENNETT_HEAD_TOKEN", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const tauriInvokeSpy = vi.fn(async () => undefined);
+    (
+      window as unknown as {
+        __TAURI_INTERNALS__?: { invoke: typeof tauriInvokeSpy };
+      }
+    ).__TAURI_INTERNALS__ = { invoke: tauriInvokeSpy };
+
+    expect(openSafeExternalUrl("https://dennett.example/safe")).toBe(true);
+    await waitFor(() => {
+      expect(tauriInvokeSpy).toHaveBeenCalledWith(
+        "open_external_url",
+        { url: "https://dennett.example/safe" },
+        undefined,
+      );
+    });
+    expect(openSpy).not.toHaveBeenCalled();
+
+    // Verify Vite dev proxy injects Authorization header server-side from DENNETT_HEAD_TOKEN
+    const viteConfigSrc = fs.readFileSync(path.resolve(__dirname, "../../vite.config.ts"), "utf8");
+    expect(viteConfigSrc).toContain("process.env.DENNETT_HEAD_TOKEN");
+    expect(viteConfigSrc).toContain("Authorization: `Bearer ${devHeadToken}`");
   });
 });

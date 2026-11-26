@@ -1694,7 +1694,6 @@ def run_demo_d1(
                 overrides={
                     "DENNETT_HEAD_URL": head_http_url,
                     "DENNETT_HEAD_TOKEN": head_owner_token,
-                    "VITE_DENNETT_HEAD_TOKEN": head_owner_token,
                 }
             )
             ui_proc = subprocess.Popen(
@@ -2032,7 +2031,6 @@ def run_demo_d2(
                 overrides={
                     "DENNETT_HEAD_URL": head_http_url,
                     "DENNETT_HEAD_TOKEN": head_owner_token,
-                    "VITE_DENNETT_HEAD_TOKEN": head_owner_token,
                 }
             )
             ui_proc = subprocess.Popen(
@@ -2404,7 +2402,6 @@ def run_demo_d3(
                 overrides={
                     "DENNETT_HEAD_URL": head_http_url,
                     "DENNETT_HEAD_TOKEN": head_owner_token,
-                    "VITE_DENNETT_HEAD_TOKEN": head_owner_token,
                 }
             )
             ui_proc = subprocess.Popen(

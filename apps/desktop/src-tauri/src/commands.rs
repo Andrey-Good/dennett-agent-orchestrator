@@ -1528,3 +1528,77 @@ pub async fn get_memory_index_status(
     let bridge = state.snapshot_bridge().await;
     bridge.get_memory_index_status(parsed_scope.as_ref()).await
 }
+
+/// Validates that an external URL uses strictly `http` or `https` and has a host.
+///
+/// Rejects `file:`, `javascript:`, `data:`, `cmd:`, empty strings, and malformed URLs.
+pub(crate) fn validate_external_url(raw: &str) -> Result<url::Url, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(String::from("external URL must not be empty"));
+    }
+    let parsed = url::Url::parse(trimmed).map_err(|err| format!("invalid external URL: {err}"))?;
+    match parsed.scheme() {
+        "http" | "https" if parsed.host_str().is_some() => Ok(parsed),
+        "http" | "https" => Err(String::from("external URL must include a host")),
+        other => Err(format!("unsupported external URL scheme: {other}")),
+    }
+}
+
+/// Opens a validated `http`/`https` URL in the OS default browser without invoking a shell.
+///
+/// # Errors
+///
+/// Returns an error string if the URL is invalid, uses a scheme other than `http`/`https`,
+/// or if spawning the OS URL launcher fails.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command deserializes owned String parameter"
+)]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = validate_external_url(&url)?;
+    let mut cmd = if cfg!(target_os = "windows") {
+        std::process::Command::new("explorer.exe")
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    cmd.arg(parsed.as_str())
+        .spawn()
+        .map_err(|err| format!("failed to launch external browser: {err}"))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_external_url;
+
+    #[test]
+    fn validate_external_url_allows_http_and_https_only() {
+        let https = validate_external_url("https://example.com").expect("https allowed");
+        assert_eq!(https.as_str(), "https://example.com/");
+
+        let http =
+            validate_external_url("  http://example.com/docs?q=1#top  ").expect("http allowed");
+        assert_eq!(http.scheme(), "http");
+
+        for rejected in [
+            "",
+            "   ",
+            "javascript:alert(1)",
+            "file:///C:/Windows",
+            "file:///etc/passwd",
+            "data:text/html,<script>alert(1)</script>",
+            "cmd:///c/calc",
+            "vbscript:msgbox(1)",
+            "relative/path",
+        ] {
+            assert!(
+                validate_external_url(rejected).is_err(),
+                "expected URL to be rejected: {rejected}"
+            );
+        }
+    }
+}

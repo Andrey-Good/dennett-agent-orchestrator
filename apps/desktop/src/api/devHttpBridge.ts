@@ -182,16 +182,18 @@ function buildQuery(entries: Array<[string, string | number | boolean | null | u
 }
 
 function resolveDevOwnerToken(): string | null {
-  const envToken = (import.meta.env as Record<string, string | undefined> | undefined)
-    ?.VITE_DENNETT_HEAD_TOKEN;
-  if (typeof envToken === "string" && envToken.trim().length > 0) {
-    return envToken.trim();
-  }
   if (typeof window !== "undefined") {
     const winToken = (window as unknown as { __DENNETT_HEAD_TOKEN__?: unknown })
       .__DENNETT_HEAD_TOKEN__;
     if (typeof winToken === "string" && winToken.trim().length > 0) {
       return winToken.trim();
+    }
+  }
+  if (import.meta.env.MODE === "test") {
+    const envToken = (import.meta.env as Record<string, string | undefined> | undefined)
+      ?.VITE_DENNETT_HEAD_TOKEN;
+    if (typeof envToken === "string" && envToken.trim().length > 0) {
+      return envToken.trim();
     }
   }
   return null;

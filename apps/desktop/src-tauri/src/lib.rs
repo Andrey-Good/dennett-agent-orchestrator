@@ -221,6 +221,7 @@ pub fn run() {
             commands::resume_task,
             commands::delete_task,
             commands::get_memory_index_status,
+            commands::open_external_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dennett desktop application");
