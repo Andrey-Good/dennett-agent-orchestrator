@@ -460,10 +460,10 @@ impl PolicyEngine {
                 mem_op,
                 "memory_write_note"
                     | "memory_correct_note"
-                    | "memory_create_claim"
-                    | "memory_supersede_claim"
-                    | "memory_resolve_conflict"
-                    | "memory_upsert_document"
+                    | "memory_claim_create"
+                    | "memory_claim_supersede"
+                    | "memory_conflict_resolve"
+                    | "memory_document_write"
                     | "mcp:dennett-memory"
             );
 
@@ -878,20 +878,19 @@ const FILE_TARGET_INPUT_KEYS: &[&str] = &[
     "Uri",
     "uri",
 ];
-const MEMORY_MCP_OPS: [&str; 14] = [
+const MEMORY_MCP_OPS: [&str; 13] = [
     "memory_search",
     "memory_get_current",
     "memory_get_history",
     "memory_write_note",
     "memory_correct_note",
-    "memory_list_claims",
-    "memory_create_claim",
-    "memory_supersede_claim",
-    "memory_list_conflicts",
-    "memory_resolve_conflict",
-    "memory_list_documents",
-    "memory_get_document",
-    "memory_upsert_document",
+    "memory_claim_create",
+    "memory_claim_lookup",
+    "memory_claim_supersede",
+    "memory_conflict_list",
+    "memory_conflict_resolve",
+    "memory_document_read",
+    "memory_document_write",
     "memory_index_status",
 ];
 const CONTROL_MCP_OPS: [&str; 7] = [
@@ -2169,6 +2168,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "verifies A07/A08 policy and all D3 memory/control MCP tool names in one matrix test"
+    )]
     fn d3_a07_a08_policy_enforces_native_subagents_budget_and_registered_mcp_servers() {
         let ws = temp_workspace("d3-a07-a08");
         let project_id = ProjectId::new();
@@ -2240,18 +2243,54 @@ mod tests {
             );
         }
 
-        // 5. D3 memory MCP write tools require explicit allowed scope.
-        let mut ok_claim = make_req("memory_create_claim", "other", None);
-        ok_claim.raw_input = json!({ "scope": "project:alpha", "topic_key": "k" });
-        assert_eq!(
-            engine.evaluate_request(&ok_claim).effect,
-            PolicyEffect::Allow
-        );
-        let missing_scope_claim = make_req("memory_create_claim", "other", None);
-        assert_eq!(
-            engine.evaluate_request(&missing_scope_claim).effect,
-            PolicyEffect::Deny
-        );
+        // 5. D3 memory MCP write & read tools match exact `dennett-memory-mcp` tool names and enforce explicit scope on writes.
+        for write_tool in [
+            "mcp_dennett-memory_memory_claim_create",
+            "mcp_dennett-memory_memory_claim_supersede",
+            "mcp_dennett-memory_memory_conflict_resolve",
+            "mcp_dennett-memory_memory_document_write",
+        ] {
+            let mut ok_req = make_req(write_tool, "other", None);
+            ok_req.raw_input = json!({ "scope": "project:alpha", "topic_key": "k" });
+            assert_eq!(
+                engine.evaluate_request(&ok_req).effect,
+                PolicyEffect::Allow,
+                "expected {write_tool} with authorized scope to be allowed"
+            );
+            let missing_scope = make_req(write_tool, "other", None);
+            assert_eq!(
+                engine.evaluate_request(&missing_scope).effect,
+                PolicyEffect::Deny,
+                "expected {write_tool} without scope to be denied"
+            );
+        }
+        for read_tool in [
+            "mcp_dennett-memory_memory_claim_lookup",
+            "mcp_dennett-memory_memory_conflict_list",
+            "mcp_dennett-memory_memory_document_read",
+            "mcp_dennett-memory_memory_index_status",
+        ] {
+            let mut read_req = make_req(read_tool, "other", None);
+            read_req.raw_input = json!({ "scope": "project:alpha" });
+            assert_eq!(
+                engine.evaluate_request(&read_req).effect,
+                PolicyEffect::Allow,
+                "expected {read_tool} to be allowed"
+            );
+        }
+        for owner_only_tool in [
+            "mcp_dennett-memory_memory_forget",
+            "mcp_dennett-memory_memory_export",
+            "mcp_dennett-memory_memory_import",
+        ] {
+            let mut denied_req = make_req(owner_only_tool, "other", None);
+            denied_req.raw_input = json!({ "scope": "project:alpha" });
+            assert_eq!(
+                engine.evaluate_request(&denied_req).effect,
+                PolicyEffect::Deny,
+                "owner-only {owner_only_tool} must remain default-deny for agents"
+            );
+        }
 
         // 6. Active registered A08 MCP server allowed; unregistered server denied; Deny beats Allow!
         let reg_mcp = make_req("mcp__docs-helper__lookup", "other", None);
