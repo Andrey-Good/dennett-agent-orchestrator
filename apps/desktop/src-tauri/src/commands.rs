@@ -7,27 +7,29 @@
 use std::str::FromStr;
 
 use dennett_contracts::{
-    ActivateConnectionRequest, AgentId, AgentRecord, ArtifactId, ArtifactLifecycleRequest,
-    ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse, CancelTaskResponse,
-    CapabilityGrantId, CapabilityGrantRecord, CapabilityId, CapabilityKind,
+    ActivateConnectionRequest, AgentConfigHistoryResponse, AgentId, AgentRecord, ArtifactId,
+    ArtifactLifecycleRequest, ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse,
+    CancelTaskResponse, CapabilityGrantId, CapabilityGrantRecord, CapabilityId, CapabilityKind,
     CapabilityProjectBinding, CapabilityRecord, CapabilityScopeKind, CommitMemoryNoteRequest,
     CommitMemoryNoteResponse, ConsolidationJob, ConsolidationJobId, CorrectNoteRequest,
     CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest, CreateClaimRequest,
-    CreateConsolidationJobRequest, CreateDocumentRequest, CreateProjectRequest,
-    CreateSessionRequest, CreateTaskRequest, DeleteCapabilityResponse,
+    CreateConsolidationJobRequest, CreateDocumentRequest, CreatePolicyRuleRequest,
+    CreateProjectRequest, CreateSessionRequest, CreateTaskRequest, DeleteCapabilityResponse,
     DeleteProviderConnectionResponse, DiagnosticsResponse, DiscoverCapabilitiesRequest,
     DiscoverCapabilitiesResponse, DispatchEffectRequest, DispatchEffectResponse, DocumentId,
-    EffectClaimId, EnqueueFollowupRequest, EventStreamResponse, ExportRequest, ExportResponse,
-    FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse, GetDocumentVersionsResponse,
-    HeadMemorySearchRequest, HeadMemorySearchResponse, ImportRequest, ImportResponse, InboxCardId,
+    EffectClaimId, EmergencyStopResponse, EnqueueFollowupRequest, EventStreamResponse,
+    ExportRequest, ExportResponse, FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse,
+    ForkSessionRequest, GetDocumentVersionsResponse, HeadMemorySearchRequest,
+    HeadMemorySearchResponse, ImportRequest, ImportResponse, InboxCardId, IndexState,
     ListAgentMessagesResponse, ListAgentsResponse, ListArtifactsResponse, ListCapabilitiesResponse,
     ListCapabilityGrantsResponse, ListClaimsResponse, ListConflictsResponse,
     ListConsolidationJobsResponse, ListDocumentsResponse, ListEffectsResponse, ListInboxResponse,
-    ListPermissionRequestsResponse, ListProjectFilesResponse, ListProjectsResponse,
-    ListProviderConnectionsResponse, ListSecretsResponse, ListSessionsResponse, ListTasksResponse,
-    ListTombstonesResponse, LiveRunResponse, MemoryClaim, MemoryConflict, MemoryDocument,
-    MemoryNoteId, MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
-    PermissionRequestId, ProbeConnectionResponse, ProjectId, ProjectLifecycleResponse,
+    ListPermissionRequestsResponse, ListPolicyRulesResponse, ListProjectFilesResponse,
+    ListProjectsResponse, ListProviderConnectionsResponse, ListSecretsResponse,
+    ListSessionsResponse, ListTasksResponse, ListTombstonesResponse, LiveRunResponse, MemoryClaim,
+    MemoryConflict, MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope,
+    NoteHistoryResponse, NoteMutationResponse, PermissionRequestId, PolicyRule, PolicyRuleId,
+    ProbeConnectionResponse, ProjectFileContentResponse, ProjectId, ProjectLifecycleResponse,
     ProjectRecord, ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest,
     ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest,
     ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
@@ -39,13 +41,15 @@ use dennett_contracts::{
     TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest, TriggerIndexRebuildResponse,
     UpdateAgentConfigRequest, UpdateCapabilityRequest, UpdateDocumentRequest,
     UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
-    UpsertProviderConnectionRequest,
+    UpdateUserPreferencesRequest, UpsertProviderConnectionRequest, UserPreferences,
 };
 use tauri::State;
 use tokio::sync::RwLock;
 
 use crate::MicaAvailability;
-use crate::bridge::{BridgeError, DesktopHealthSnapshot, HeadBridge};
+use crate::bridge::{
+    BridgeError, DesktopArtifactContentResponse, DesktopHealthSnapshot, HeadBridge,
+};
 
 /// Shared mutable bridge state managed by Tauri across IPC command invocations.
 #[derive(Debug)]
@@ -67,8 +71,11 @@ impl SharedBridge {
     }
 
     async fn replace_url(&self, new_url: &str) -> Result<HeadBridge, BridgeError> {
-        let policy = self.inner.read().await.policy();
-        let next = HeadBridge::new(new_url, policy)?;
+        let (policy, owner_token) = {
+            let guard = self.inner.read().await;
+            (guard.policy(), guard.owner_token().map(str::to_owned))
+        };
+        let next = HeadBridge::with_owner_token(new_url, policy, owner_token)?;
         let mut guard = self.inner.write().await;
         *guard = next.clone();
         Ok(next)
@@ -154,6 +161,10 @@ fn parse_consolidation_job_id(raw: &str) -> Result<ConsolidationJobId, BridgeErr
 
 fn parse_followup_id(raw: &str) -> Result<FollowupId, BridgeError> {
     FollowupId::from_str(raw.trim()).map_err(BridgeError::from)
+}
+
+fn parse_policy_rule_id(raw: &str) -> Result<PolicyRuleId, BridgeError> {
+    PolicyRuleId::from_str(raw.trim()).map_err(BridgeError::from)
 }
 
 fn parse_optional_memory_scope(raw: Option<&str>) -> Result<Option<MemoryScope>, BridgeError> {
@@ -1336,4 +1347,184 @@ pub async fn steer_session(
         timeout_ms,
     };
     bridge.steer_session(parsed_session, &req).await
+}
+
+// ============================================================================
+// Phase D3+ Audit Closure IPC Commands
+// ============================================================================
+
+/// Fetches immutable raw bytes (text + base64) for an artifact revision (`GET /v1/sessions/{id}/artifacts/{aid}/content`).
+#[tauri::command]
+pub async fn get_artifact_content(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+    artifact_id: String,
+) -> Result<DesktopArtifactContentResponse, BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let parsed_artifact = parse_artifact_id(&artifact_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .get_artifact_content(parsed_session, parsed_artifact)
+        .await
+}
+
+/// Lists immutable configuration revisions for an agent (`GET /v1/agents/{id}/config-versions`).
+#[tauri::command]
+pub async fn get_agent_config_history(
+    state: State<'_, SharedBridge>,
+    agent_id: String,
+) -> Result<AgentConfigHistoryResponse, BridgeError> {
+    let parsed_agent = parse_agent_id(&agent_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_agent_config_history(parsed_agent).await
+}
+
+/// Lists configured external policy rules (`GET /v1/policies`).
+#[tauri::command]
+pub async fn list_policy_rules(
+    state: State<'_, SharedBridge>,
+) -> Result<ListPolicyRulesResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.list_policy_rules().await
+}
+
+/// Creates a new external policy rule (`POST /v1/policies`).
+#[tauri::command]
+pub async fn create_policy_rule(
+    state: State<'_, SharedBridge>,
+    request: CreatePolicyRuleRequest,
+) -> Result<PolicyRule, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.create_policy_rule(&request).await
+}
+
+/// Deletes an external policy rule (`DELETE /v1/policies/{id}`).
+#[tauri::command]
+pub async fn delete_policy_rule(
+    state: State<'_, SharedBridge>,
+    rule_id: String,
+) -> Result<(), BridgeError> {
+    let parsed_rule = parse_policy_rule_id(&rule_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.delete_policy_rule(parsed_rule).await
+}
+
+/// Forks an existing session up to a chosen message (`POST /v1/sessions/{id}/fork`).
+#[tauri::command]
+pub async fn fork_session(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+    request: ForkSessionRequest,
+) -> Result<SessionRecord, BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.fork_session(parsed_session, &request).await
+}
+
+/// Deletes a persisted session record (`DELETE /v1/sessions/{id}`).
+#[tauri::command]
+pub async fn delete_session(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+) -> Result<(), BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.delete_session(parsed_session).await
+}
+
+/// Retrieves persisted owner preferences (`GET /v1/preferences`).
+#[tauri::command]
+pub async fn get_preferences(
+    state: State<'_, SharedBridge>,
+) -> Result<UserPreferences, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_preferences().await
+}
+
+/// Updates persisted owner preferences (`PATCH /v1/preferences`).
+#[tauri::command]
+pub async fn update_preferences(
+    state: State<'_, SharedBridge>,
+    request: UpdateUserPreferencesRequest,
+) -> Result<UserPreferences, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.update_preferences(&request).await
+}
+
+/// Reads a bounded workspace file preview (`GET /v1/projects/{id}/file?path=...`).
+#[tauri::command]
+pub async fn get_project_file_content(
+    state: State<'_, SharedBridge>,
+    project_id: String,
+    relative_path: String,
+) -> Result<ProjectFileContentResponse, BridgeError> {
+    let parsed_project = parse_project_id(&project_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge
+        .get_project_file_content(parsed_project, &relative_path)
+        .await
+}
+
+/// Cancels all active runs and tasks immediately (`POST /v1/runs/emergency-stop`).
+#[tauri::command]
+pub async fn emergency_stop_all(
+    state: State<'_, SharedBridge>,
+) -> Result<EmergencyStopResponse, BridgeError> {
+    let bridge = state.snapshot_bridge().await;
+    bridge.emergency_stop_all().await
+}
+
+/// Triggers immediate execution of a durable task (`POST /v1/tasks/{id}/run-now`).
+#[tauri::command]
+pub async fn run_task_now(
+    state: State<'_, SharedBridge>,
+    task_id: String,
+) -> Result<TaskRecord, BridgeError> {
+    let parsed_task = parse_task_id(&task_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.run_task_now(parsed_task).await
+}
+
+/// Pauses a scheduled or queued durable task (`POST /v1/tasks/{id}/pause`).
+#[tauri::command]
+pub async fn pause_task(
+    state: State<'_, SharedBridge>,
+    task_id: String,
+) -> Result<TaskRecord, BridgeError> {
+    let parsed_task = parse_task_id(&task_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.pause_task(parsed_task).await
+}
+
+/// Resumes a paused durable task (`POST /v1/tasks/{id}/resume`).
+#[tauri::command]
+pub async fn resume_task(
+    state: State<'_, SharedBridge>,
+    task_id: String,
+) -> Result<TaskRecord, BridgeError> {
+    let parsed_task = parse_task_id(&task_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.resume_task(parsed_task).await
+}
+
+/// Deletes a durable task record (`DELETE /v1/tasks/{id}`).
+#[tauri::command]
+pub async fn delete_task(
+    state: State<'_, SharedBridge>,
+    task_id: String,
+) -> Result<(), BridgeError> {
+    let parsed_task = parse_task_id(&task_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.delete_task(parsed_task).await
+}
+
+/// Queries the memory search index watermark and health status (`GET /v1/memory/index/status`).
+#[tauri::command]
+pub async fn get_memory_index_status(
+    state: State<'_, SharedBridge>,
+    scope: Option<String>,
+) -> Result<IndexState, BridgeError> {
+    let parsed_scope = parse_optional_memory_scope(scope.as_deref())?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_memory_index_status(parsed_scope.as_ref()).await
 }

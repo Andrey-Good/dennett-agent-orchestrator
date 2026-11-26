@@ -11,8 +11,9 @@ pub mod bridge;
 mod commands;
 
 pub use bridge::{
-    ALLOW_REMOTE_HEAD_ENV, BridgeError, DEFAULT_HEAD_URL, DesktopHealthSnapshot, HEAD_URL_ENV,
-    HEALTH_PROBE_TIMEOUT, HeadBridge, HeadEndpointPolicy, validate_head_url,
+    ALLOW_REMOTE_HEAD_ENV, BridgeError, DATA_DIR_ENV, DEFAULT_HEAD_URL,
+    DesktopArtifactContentResponse, DesktopHealthSnapshot, HEAD_TOKEN_ENV, HEAD_URL_ENV,
+    HEALTH_PROBE_TIMEOUT, HeadBridge, HeadEndpointPolicy, resolve_owner_token, validate_head_url,
 };
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,8 +62,12 @@ pub fn run() {
                 fallback_url = DEFAULT_HEAD_URL,
                 "invalid DENNETT_HEAD_URL; falling back to default loopback endpoint"
             );
-            HeadBridge::new(DEFAULT_HEAD_URL, HeadEndpointPolicy::LoopbackOnly)
-                .expect("default loopback Head URL is always valid")
+            HeadBridge::with_owner_token(
+                DEFAULT_HEAD_URL,
+                HeadEndpointPolicy::LoopbackOnly,
+                resolve_owner_token(),
+            )
+            .expect("default loopback Head URL is always valid")
         }
     };
 
@@ -200,6 +205,22 @@ pub fn run() {
             commands::clear_followups,
             commands::resume_followups,
             commands::steer_session,
+            commands::get_artifact_content,
+            commands::get_agent_config_history,
+            commands::list_policy_rules,
+            commands::create_policy_rule,
+            commands::delete_policy_rule,
+            commands::fork_session,
+            commands::delete_session,
+            commands::get_preferences,
+            commands::update_preferences,
+            commands::get_project_file_content,
+            commands::emergency_stop_all,
+            commands::run_task_now,
+            commands::pause_task,
+            commands::resume_task,
+            commands::delete_task,
+            commands::get_memory_index_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dennett desktop application");

@@ -16,6 +16,7 @@ import { DevFolderPickerModal } from "./components/DevFolderPickerModal";
 import { InboxRadarCard } from "./components/InboxRadarCard";
 import { MemoryCard } from "./components/MemoryCard";
 import { SettingsSheet } from "./components/SettingsSheet";
+import { ShortcutsModal } from "./components/ShortcutsModal";
 import { Sidebar } from "./components/Sidebar";
 import { TasksCard } from "./components/TasksCard";
 import { TitleBar } from "./components/TitleBar";
@@ -56,6 +57,7 @@ function DesktopShell() {
       </div>
       <SettingsSheet />
       <CommandPalette />
+      <ShortcutsModal />
       {import.meta.env.DEV && <DevFolderPickerModal />}
     </div>
   );

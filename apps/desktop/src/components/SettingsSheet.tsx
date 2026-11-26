@@ -9,15 +9,21 @@ import {
 import {
   ArrowsClockwise,
   CaretDown,
+  CaretRight,
   Check,
   ClockCounterClockwise,
+  Code,
   Cpu,
   Database,
   FolderPlus,
+  GearSix,
+  Globe,
   Key,
+  Keyboard,
   MagnifyingGlass,
   PlugsConnected,
   PuzzlePiece,
+  Robot,
   ShieldCheck,
   ShieldWarning,
   Trash,
@@ -26,21 +32,26 @@ import {
 } from "@phosphor-icons/react";
 
 import type {
+  AgentConfigVersion,
+  AutonomyMode,
+  CapabilityActivation,
   CapabilityKind,
   CapabilityRecord,
   CapabilityScopeKind,
   CapabilityTrust,
   CompatibilityStatus,
   PlannedProviderInfo,
+  PolicyEffect,
   ProviderHealthStatus,
   RuntimeModelOption,
 } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
 import { formatDecisionReasonRu } from "../utils/formatters";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PortalPopover } from "./PortalPopover";
 import { useModalFocusTrap } from "./useModalFocusTrap";
 
-type SettingsTab = "providers" | "capabilities";
+type SettingsTab = "general" | "providers" | "agent" | "capabilities" | "diagnostics";
 type CapabilityFilter = "all" | CapabilityScopeKind;
 
 const LOCAL_PRESETS = [
@@ -48,6 +59,32 @@ const LOCAL_PRESETS = [
   { id: "lmstudio", label: "LM Studio (1234)", url: "http://127.0.0.1:1234" },
   { id: "llamacpp", label: "llama.cpp (8080)", url: "http://127.0.0.1:8080" },
 ] as const;
+
+const COMMON_TIMEZONES = [
+  "UTC",
+  "Europe/Moscow",
+  "Asia/Yekaterinburg",
+  "Europe/Kaliningrad",
+  "Asia/Novosibirsk",
+  "Asia/Vladivostok",
+  "Europe/London",
+  "Europe/Berlin",
+  "Europe/Paris",
+  "America/New_York",
+  "America/Chicago",
+  "America/Los_Angeles",
+  "Asia/Dubai",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+] as const;
+
+const ACTIVATION_MODES: Array<{ value: CapabilityActivation; label: string }> = [
+  { value: "pinned", label: "Закреплён" },
+  { value: "active", label: "Активен" },
+  { value: "on_demand", label: "По запросу" },
+  { value: "disabled", label: "Отключён" },
+];
 
 const FALLBACK_PLANNED_PROVIDERS: PlannedProviderInfo[] = [
   {
@@ -63,6 +100,65 @@ const FALLBACK_PLANNED_PROVIDERS: PlannedProviderInfo[] = [
     note: "Запланировано за пределами этапа D3 — подключение пока недоступно.",
   },
 ];
+
+/**
+ * Splits a shell-style argument string while respecting single/double quotes and backslash escapes.
+ * E.g. `--flag "hello world" 'a b'` -> ["--flag", "hello world", "a b"]
+ */
+export function parseShellArgs(input: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuote: "'" | '"' | null = null;
+  let hasToken = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i]!;
+    if (inQuote) {
+      if (ch === "\\" && inQuote === '"' && i + 1 < input.length) {
+        const next = input[i + 1]!;
+        if (next === '"' || next === "\\" || next === "$" || next === "`") {
+          current += next;
+          i += 1;
+          continue;
+        }
+      }
+      if (ch === inQuote) {
+        inQuote = null;
+        continue;
+      }
+      current += ch;
+      hasToken = true;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      inQuote = ch;
+      hasToken = true;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < input.length) {
+      current += input[i + 1]!;
+      hasToken = true;
+      i += 1;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (hasToken) {
+        result.push(current);
+        current = "";
+        hasToken = false;
+      }
+      continue;
+    }
+    current += ch;
+    hasToken = true;
+  }
+
+  if (hasToken) {
+    result.push(current);
+  }
+  return result;
+}
 
 function providerHealthInfo(status: ProviderHealthStatus): {
   label: string;
@@ -172,9 +268,17 @@ export function SettingsSheet() {
     state.healthSnapshot?.head_url ?? "http://127.0.0.1:41771",
   );
 
-  // Write-only SecretBroker state for Gemini API key (never prefilled!)
+  // General tab: timezone popover + filter
+  const [tzMenuOpen, setTzMenuOpen] = useState(false);
+  const [tzFilter, setTzFilter] = useState("");
+  const tzTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  // Write-only SecretBroker state for Gemini API key & generic secrets (never prefilled!)
   const [geminiKeyDraft, setGeminiKeyDraft] = useState("");
   const [isSavingGeminiKey, setIsSavingGeminiKey] = useState(false);
+  const [rotatingSecretSlot, setRotatingSecretSlot] = useState<string | null>(null);
+  const [rotateSecretDraft, setRotateSecretDraft] = useState("");
+  const [busySecretSlot, setBusySecretSlot] = useState<string | null>(null);
 
   // Local HTTP server state
   const [localUrlDraft, setLocalUrlDraft] = useState("http://127.0.0.1:11434");
@@ -192,6 +296,26 @@ export function SettingsSheet() {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
 
+  // Agent Profile & Policy Rules tab state
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const agentTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [promptDraft, setPromptDraft] = useState("");
+  const [maxTurnsDraft, setMaxTurnsDraft] = useState("");
+  const [maxWallDraft, setMaxWallDraft] = useState("");
+  const [autonomyDraft, setAutonomyDraft] = useState<AutonomyMode>("auto");
+  const [isSavingAgent, setIsSavingAgent] = useState(false);
+  const [agentSavedFeedback, setAgentSavedFeedback] = useState<string | null>(null);
+  const [agentHistory, setAgentHistory] = useState<AgentConfigVersion[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  const [policyScopeDraft, setPolicyScopeDraft] = useState("global");
+  const [policyToolDraft, setPolicyToolDraft] = useState("");
+  const [policyTargetDraft, setPolicyTargetDraft] = useState("");
+  const [policyEffectDraft, setPolicyEffectDraft] = useState<PolicyEffect>("allow");
+  const [policyReasonDraft, setPolicyReasonDraft] = useState("");
+  const [isCreatingPolicy, setIsCreatingPolicy] = useState(false);
+
   // Capabilities tab state
   const [capFilter, setCapFilter] = useState<CapabilityFilter>("all");
   const [isDiscovering, setIsDiscovering] = useState(false);
@@ -200,17 +324,21 @@ export function SettingsSheet() {
   const [mcpName, setMcpName] = useState("");
   const [mcpCommand, setMcpCommand] = useState("");
   const [mcpArgs, setMcpArgs] = useState("");
+  const [mcpSecretEnv, setMcpSecretEnv] = useState("");
   const [mcpSecretSlot, setMcpSecretSlot] = useState("");
   const [mcpSecretValue, setMcpSecretValue] = useState("");
   const [editingCapId, setEditingCapId] = useState<string | null>(null);
   const [editCapVersion, setEditCapVersion] = useState("");
   const [editCapDesc, setEditCapDesc] = useState("");
+  const [inspectedCapIds, setInspectedCapIds] = useState<Record<string, boolean>>({});
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   const closeSettings = useCallback(() => {
     setConnMenuOpen(false);
     setModelMenuOpen(false);
+    setTzMenuOpen(false);
+    setAgentMenuOpen(false);
     actions.setSettingsOpen(false);
   }, [actions]);
 
@@ -232,7 +360,99 @@ export function SettingsSheet() {
       setLocalUrlDraft(existingLocalConn.endpoint_url);
       setLocalNameDraft(existingLocalConn.display_name);
     }
-  }, [existingLocalConn?.connection_id, existingLocalConn?.display_name, existingLocalConn?.endpoint_url]);
+  }, [
+    existingLocalConn?.connection_id,
+    existingLocalConn?.display_name,
+    existingLocalConn?.endpoint_url,
+  ]);
+
+  const editedAgent = useMemo(() => {
+    if (selectedAgentId) {
+      const found = state.agents.find((a) => a.agent_id === selectedAgentId);
+      if (found) {
+        return found;
+      }
+    }
+    return meta.activeAgent ?? state.agents[0] ?? null;
+  }, [meta.activeAgent, selectedAgentId, state.agents]);
+
+  // Sync editor form fields when switching edited agent or version
+  useEffect(() => {
+    if (!editedAgent) {
+      return;
+    }
+    setPromptDraft(editedAgent.current_config.system_prompt);
+    setMaxTurnsDraft(
+      editedAgent.current_config.default_budget?.max_turns != null
+        ? String(editedAgent.current_config.default_budget.max_turns)
+        : "",
+    );
+    setMaxWallDraft(
+      editedAgent.current_config.default_budget?.max_wall_secs != null
+        ? String(editedAgent.current_config.default_budget.max_wall_secs)
+        : "",
+    );
+    setAutonomyDraft(
+      editedAgent.current_config.autonomy_mode === "full_access" ? "full_access" : "auto",
+    );
+  }, [
+    editedAgent?.agent_id,
+    editedAgent?.current_config.version_number,
+    editedAgent?.current_config.system_prompt,
+    editedAgent?.current_config.autonomy_mode,
+    editedAgent?.current_config.default_budget?.max_turns,
+    editedAgent?.current_config.default_budget?.max_wall_secs,
+  ]);
+
+  // Load agent config history & policies when viewing Agent tab
+  useEffect(() => {
+    if (!state.isSettingsOpen || activeTab !== "agent" || !state.healthSnapshot?.connected) {
+      return;
+    }
+    void actions.refreshPolicyRules();
+    if (!editedAgent) {
+      setAgentHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingHistory(true);
+    void actions
+      .getAgentConfigHistory(editedAgent.agent_id)
+      .then((resp) => {
+        if (!cancelled) {
+          setAgentHistory(resp?.versions ?? []);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    actions,
+    activeTab,
+    editedAgent?.agent_id,
+    editedAgent?.current_config.version_number,
+    state.healthSnapshot?.connected,
+    state.isSettingsOpen,
+  ]);
+
+  // Refresh diagnostics & memory index status when opening Diagnostics tab
+  useEffect(() => {
+    if (!state.isSettingsOpen || activeTab !== "diagnostics" || !state.healthSnapshot?.connected) {
+      return;
+    }
+    void actions.refreshMemoryIndexStatus(meta.activeProject?.memory_scope ?? null);
+  }, [
+    actions,
+    activeTab,
+    meta.activeProject?.memory_scope,
+    state.healthSnapshot?.connected,
+    state.isSettingsOpen,
+  ]);
 
   const projectNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -266,6 +486,20 @@ export function SettingsSheet() {
     });
   }, [capFilter, meta.activeProject?.project_id, state.capabilities]);
 
+  const filteredTimezones = useMemo(() => {
+    const q = tzFilter.trim().toLowerCase();
+    const currentTz = state.userPreferences.timezone;
+    const set = new Set<string>(COMMON_TIMEZONES);
+    if (currentTz) {
+      set.add(currentTz);
+    }
+    const list = Array.from(set);
+    if (!q) {
+      return list;
+    }
+    return list.filter((tz) => tz.toLowerCase().includes(q));
+  }, [state.userPreferences.timezone, tzFilter]);
+
   if (!state.isSettingsOpen) {
     return null;
   }
@@ -275,11 +509,11 @@ export function SettingsSheet() {
   const catalog = state.runtimeCatalog;
   const isSimulated = Boolean(health?.runtime_is_simulated ?? catalog?.is_simulated);
   const authLabel = isSimulated
-    ? "Simulated CI Runtime"
+    ? "Тестовый CI-движок"
     : catalog?.auth_profile === "local-endpoint"
       ? "Локальный OpenAI-совместимый сервер"
       : catalog?.auth_profile === "gemini-api-key"
-        ? "Gemini API key · headless"
+        ? "Gemini API key · фоновый"
         : `${catalog?.tier ?? "Google AI Ultra"} · oauth-personal`;
   const engineLabel = isSimulated
     ? "SimulatedRuntime"
@@ -349,7 +583,7 @@ export function SettingsSheet() {
       await actions.setSecret(
         "gemini_api_key",
         secretVal,
-        "Фоновый Gemini API ключ для headless-задач Antigravity",
+        "Фоновый Gemini API ключ для фоновых задач Antigravity",
       );
     } finally {
       setIsSavingGeminiKey(false);
@@ -363,6 +597,34 @@ export function SettingsSheet() {
       await actions.deleteSecret("gemini_api_key");
     } finally {
       setIsSavingGeminiKey(false);
+    }
+  };
+
+  const handleRotateGenericSecret = async (slotKey: string, description: string, e: FormEvent) => {
+    e.preventDefault();
+    const nextVal = rotateSecretDraft.trim();
+    if (!nextVal) {
+      return;
+    }
+    setBusySecretSlot(slotKey);
+    setRotateSecretDraft("");
+    try {
+      await actions.setSecret(slotKey, nextVal, description || `Секрет ${slotKey}`);
+      setRotatingSecretSlot(null);
+    } finally {
+      setBusySecretSlot(null);
+    }
+  };
+
+  const handleDeleteGenericSecret = async (slotKey: string) => {
+    setBusySecretSlot(slotKey);
+    try {
+      await actions.deleteSecret(slotKey);
+      if (rotatingSecretSlot === slotKey) {
+        setRotatingSecretSlot(null);
+      }
+    } finally {
+      setBusySecretSlot(null);
     }
   };
 
@@ -467,6 +729,89 @@ export function SettingsSheet() {
     );
   };
 
+  const handleSaveAgentProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!editedAgent) {
+      return;
+    }
+    setIsSavingAgent(true);
+    setAgentSavedFeedback(null);
+    try {
+      const parsedTurns = maxTurnsDraft.trim() ? Number.parseInt(maxTurnsDraft.trim(), 10) : null;
+      const parsedWall = maxWallDraft.trim() ? Number.parseInt(maxWallDraft.trim(), 10) : null;
+      const nextBudget =
+        parsedTurns || parsedWall || editedAgent.current_config.default_budget
+          ? {
+              ...(editedAgent.current_config.default_budget ?? {}),
+              max_turns: Number.isFinite(parsedTurns) ? parsedTurns : null,
+              max_wall_secs: Number.isFinite(parsedWall) ? parsedWall : null,
+            }
+          : null;
+      const updated = await actions.updateAgentProfile(editedAgent.agent_id, {
+        system_prompt: promptDraft,
+        autonomy_mode: autonomyDraft,
+        default_budget: nextBudget,
+      });
+      if (updated) {
+        setAgentSavedFeedback(`Сохранена версия v${updated.current_config.version_number}`);
+      }
+    } finally {
+      setIsSavingAgent(false);
+    }
+  };
+
+  const handleRollbackAgentVersion = async (version: AgentConfigVersion) => {
+    if (!editedAgent) {
+      return;
+    }
+    setIsSavingAgent(true);
+    setAgentSavedFeedback(null);
+    try {
+      const updated = await actions.updateAgentProfile(editedAgent.agent_id, {
+        system_prompt: version.system_prompt,
+        model_preference: version.model_preference ?? null,
+        thinking_level: version.thinking_level ?? null,
+        allowed_memory_scopes: version.allowed_memory_scopes,
+        workspace_write_policy: version.workspace_write_policy,
+        autonomy_mode: version.autonomy_mode ?? "auto",
+        default_budget: version.default_budget ?? null,
+        attached_skills: version.attached_skills ?? [],
+        preferred_connection_id: version.preferred_connection_id ?? null,
+      });
+      if (updated) {
+        setAgentSavedFeedback(
+          `Откат к v${version.version_number} -> создана v${updated.current_config.version_number}`,
+        );
+      }
+    } finally {
+      setIsSavingAgent(false);
+    }
+  };
+
+  const handleCreatePolicyRule = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!policyScopeDraft.trim() || !policyToolDraft.trim() || !policyReasonDraft.trim()) {
+      return;
+    }
+    setIsCreatingPolicy(true);
+    try {
+      const created = await actions.createPolicyRule({
+        scope: policyScopeDraft.trim(),
+        tool_name: policyToolDraft.trim(),
+        target_pattern: policyTargetDraft.trim() || null,
+        effect: policyEffectDraft,
+        reason: policyReasonDraft.trim(),
+      });
+      if (created) {
+        setPolicyToolDraft("");
+        setPolicyTargetDraft("");
+        setPolicyReasonDraft("");
+      }
+    } finally {
+      setIsCreatingPolicy(false);
+    }
+  };
+
   const handleDiscover = async (scanPersonalGeminiReadonly: boolean) => {
     setIsDiscovering(true);
     setDiscoveryFeedback(null);
@@ -511,20 +856,18 @@ export function SettingsSheet() {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "") || `mcp-${Date.now().toString(16)}`;
-    const args = mcpArgs
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+    const args = parseShellArgs(mcpArgs);
     const slotKey = mcpSecretSlot.trim();
+    const envVarName = (mcpSecretEnv.trim() || slotKey.toUpperCase()).trim();
     const secretVal = mcpSecretValue.trim();
     setMcpSecretValue("");
 
     const secretSlots: Record<string, string> = {};
-    if (slotKey) {
+    if (slotKey && envVarName) {
       if (secretVal) {
         await actions.setSecret(slotKey, secretVal, `Секрет MCP-сервера ${mcpName.trim()}`);
       }
-      secretSlots[slotKey.toUpperCase()] = slotKey;
+      secretSlots[envVarName] = slotKey;
     }
 
     const created = await actions.createCapability({
@@ -550,25 +893,34 @@ export function SettingsSheet() {
       setMcpName("");
       setMcpCommand("");
       setMcpArgs("");
+      setMcpSecretEnv("");
       setMcpSecretSlot("");
       setShowMcpForm(false);
     }
   };
 
-  const handleToggleCapability = async (cap: CapabilityRecord) => {
-    const isActive = cap.activation_state === "active" || cap.activation_state === "pinned";
-    const nextState = isActive ? "disabled" : "active";
-    const promoteScope =
-      !isActive && cap.scope_kind === "candidate_unattached"
-        ? {
-            scope_kind: (meta.activeProject ? "project" : "global") as CapabilityScopeKind,
-            project_id: meta.activeProject?.project_id ?? null,
-          }
-        : {};
+  // A-UI-P0-2: Promoting candidate_unattached explicitly attaches to active project or global
+  const handleSetCapabilityActivation = async (
+    cap: CapabilityRecord,
+    nextState: CapabilityActivation,
+  ) => {
+    const attachingCandidate =
+      nextState !== "disabled" && cap.scope_kind === "candidate_unattached";
+    const promoteScope = attachingCandidate
+      ? {
+          scope_kind: (meta.activeProject ? "project" : "global") as CapabilityScopeKind,
+          project_id: meta.activeProject?.project_id ?? null,
+        }
+      : {};
     await actions.updateCapability(cap.capability_id, {
       activation_state: nextState,
       ...promoteScope,
     });
+  };
+
+  const handleToggleCapability = async (cap: CapabilityRecord) => {
+    const isActive = cap.activation_state === "active" || cap.activation_state === "pinned";
+    await handleSetCapabilityActivation(cap, isActive ? "disabled" : "active");
   };
 
   const startEditCapability = (cap: CapabilityRecord) => {
@@ -587,6 +939,11 @@ export function SettingsSheet() {
       setEditingCapId(null);
     }
   };
+
+  const browserTimezone =
+    typeof Intl !== "undefined"
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+      : "UTC";
 
   return (
     <div
@@ -608,7 +965,8 @@ export function SettingsSheet() {
           <div>
             <h2>Настройки и подключения</h2>
             <p>
-              Провайдеры, write-only секреты, локальные модели, навыки, плагины, MCP и разрешения
+              Язык и часовой пояс, провайдеры, write-only секреты, профиль агента, навыки и
+              диагностика
             </p>
           </div>
           <button
@@ -622,7 +980,17 @@ export function SettingsSheet() {
         </header>
 
         <div className="settings-tabs-bar">
-          <div className="d2-segmented" role="tablist" aria-label="Разделы настроек">
+          <div className="d2-segmented settings-tabs-segmented" role="tablist" aria-label="Разделы настроек">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "general"}
+              className={activeTab === "general" ? "is-active" : ""}
+              onClick={() => setActiveTab("general")}
+              data-testid="settings-tab-general"
+            >
+              Общие
+            </button>
             <button
               type="button"
               role="tab"
@@ -636,12 +1004,32 @@ export function SettingsSheet() {
             <button
               type="button"
               role="tab"
+              aria-selected={activeTab === "agent"}
+              className={activeTab === "agent" ? "is-active" : ""}
+              onClick={() => setActiveTab("agent")}
+              data-testid="settings-tab-agent"
+            >
+              Агент и правила
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={activeTab === "capabilities"}
               className={activeTab === "capabilities" ? "is-active" : ""}
               onClick={() => setActiveTab("capabilities")}
               data-testid="settings-tab-capabilities"
             >
               Навыки, плагины и MCP ({state.capabilities.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "diagnostics"}
+              className={activeTab === "diagnostics" ? "is-active" : ""}
+              onClick={() => setActiveTab("diagnostics")}
+              data-testid="settings-tab-diagnostics"
+            >
+              Диагностика
             </button>
           </div>
           {state.isLoadingD3Settings && <span className="d2-time">Обновление…</span>}
@@ -665,7 +1053,238 @@ export function SettingsSheet() {
               </button>
             </div>
           )}
-          {activeTab === "providers" ? (
+
+          {/* TAB: GENERAL */}
+          {activeTab === "general" && (
+            <div className="cap-tab-body" data-testid="settings-general-panel">
+              <section className="settings-card">
+                <div className="settings-card__head">
+                  <Globe size={16} aria-hidden="true" />
+                  <strong>Язык и часовой пояс</strong>
+                </div>
+
+                <div className="settings-pref-row">
+                  <div>
+                    <strong>Язык интерфейса</strong>
+                    <small>Применяется к системным подписям и элементам управления</small>
+                  </div>
+                  <div className="d2-segmented" role="group" aria-label="Язык интерфейса">
+                    <button
+                      type="button"
+                      className={state.userPreferences.ui_language === "ru" ? "is-active" : ""}
+                      data-testid="settings-pref-ui-ru"
+                      disabled={!connected}
+                      onClick={() => void actions.updatePreferences({ ui_language: "ru" })}
+                    >
+                      Русский
+                    </button>
+                    <button
+                      type="button"
+                      className={state.userPreferences.ui_language === "en" ? "is-active" : ""}
+                      data-testid="settings-pref-ui-en"
+                      disabled={!connected}
+                      onClick={() => void actions.updatePreferences({ ui_language: "en" })}
+                    >
+                      English
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settings-pref-row">
+                  <div>
+                    <strong>Язык ответов агента</strong>
+                    <small>Предпочитаемый язык рассуждений и итогов агента</small>
+                  </div>
+                  <div className="d2-segmented" role="group" aria-label="Язык агента">
+                    <button
+                      type="button"
+                      className={state.userPreferences.agent_language === "ru" ? "is-active" : ""}
+                      data-testid="settings-pref-agent-ru"
+                      disabled={!connected}
+                      onClick={() => void actions.updatePreferences({ agent_language: "ru" })}
+                    >
+                      Русский
+                    </button>
+                    <button
+                      type="button"
+                      className={state.userPreferences.agent_language === "en" ? "is-active" : ""}
+                      data-testid="settings-pref-agent-en"
+                      disabled={!connected}
+                      onClick={() => void actions.updatePreferences({ agent_language: "en" })}
+                    >
+                      English
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settings-pref-row">
+                  <div>
+                    <strong>Часовой пояс (IANA)</strong>
+                    <small>Используется для расписаний, напоминаний и временных меток</small>
+                  </div>
+                  <div className="settings-tz-controls">
+                    <button
+                      ref={tzTriggerRef}
+                      type="button"
+                      className="project-scope-filter__trigger"
+                      aria-expanded={tzMenuOpen}
+                      aria-haspopup="menu"
+                      disabled={!connected}
+                      data-testid="settings-timezone-trigger"
+                      onClick={() => setTzMenuOpen((v) => !v)}
+                    >
+                      <span>{state.userPreferences.timezone}</span>
+                      <CaretDown size={11} aria-hidden="true" />
+                    </button>
+                    <PortalPopover
+                      isOpen={tzMenuOpen}
+                      anchorEl={tzTriggerRef.current}
+                      onClose={() => setTzMenuOpen(false)}
+                      placement="bottom-end"
+                      className="project-scope-filter__menu settings-tz-popover"
+                      role="menu"
+                      ariaLabel="Выбор часового пояса IANA"
+                      testId="settings-timezone-menu"
+                    >
+                      <input
+                        type="search"
+                        className="settings-tz-search"
+                        value={tzFilter}
+                        onChange={(e) => setTzFilter(e.target.value)}
+                        placeholder="Найти IANA-зону (напр. Europe/Moscow)…"
+                        aria-label="Поиск часового пояса"
+                        data-testid="settings-timezone-search"
+                      />
+                      <div className="popover-scroll-list">
+                        {filteredTimezones.map((tz) => {
+                          const selected = tz === state.userPreferences.timezone;
+                          return (
+                            <button
+                              key={tz}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={selected}
+                              className={selected ? "is-selected" : ""}
+                              data-testid={`settings-tz-option-${tz}`}
+                              onClick={() => {
+                                setTzMenuOpen(false);
+                                setTzFilter("");
+                                void actions.updatePreferences({ timezone: tz });
+                              }}
+                            >
+                              <span>{tz}</span>
+                              {selected && <Check size={13} aria-hidden="true" />}
+                            </button>
+                          );
+                        })}
+                        {tzFilter.trim() &&
+                          !filteredTimezones.includes(tzFilter.trim()) && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              data-testid="settings-tz-custom-apply"
+                              onClick={() => {
+                                const custom = tzFilter.trim();
+                                setTzMenuOpen(false);
+                                setTzFilter("");
+                                void actions.updatePreferences({ timezone: custom });
+                              }}
+                            >
+                              <span>Задать «{tzFilter.trim()}»</span>
+                            </button>
+                          )}
+                      </div>
+                    </PortalPopover>
+                    <button
+                      type="button"
+                      className="popover-secondary-btn"
+                      disabled={!connected}
+                      data-testid="settings-timezone-auto-btn"
+                      onClick={() =>
+                        void actions.updatePreferences({ timezone: browserTimezone })
+                      }
+                    >
+                      Определить ({browserTimezone})
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings-card">
+                <div className="settings-card__head">
+                  <GearSix size={16} aria-hidden="true" />
+                  <strong>Поведение ввода в чате</strong>
+                </div>
+
+                <div className="settings-pref-row">
+                  <div>
+                    <strong>Отправка сообщения</strong>
+                    <small>Выберите, какая клавиша отправляет запрос в поле ввода</small>
+                  </div>
+                  <div className="d2-segmented" role="group" aria-label="Клавиша отправки">
+                    <button
+                      type="button"
+                      className={state.userPreferences.enter_to_send ? "is-active" : ""}
+                      data-testid="settings-enter-send-true"
+                      disabled={!connected}
+                      onClick={() => void actions.updatePreferences({ enter_to_send: true })}
+                    >
+                      Enter — отправить
+                    </button>
+                    <button
+                      type="button"
+                      className={!state.userPreferences.enter_to_send ? "is-active" : ""}
+                      data-testid="settings-enter-send-false"
+                      disabled={!connected}
+                      onClick={() => void actions.updatePreferences({ enter_to_send: false })}
+                    >
+                      Ctrl+Enter — отправить
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings-card">
+                <div className="settings-card__head">
+                  <Keyboard size={16} aria-hidden="true" />
+                  <strong>Горячие клавиши</strong>
+                </div>
+                <div className="stats-kv">
+                  <span>Поиск по текущему чату</span>
+                  <strong>Ctrl + F</strong>
+                </div>
+                <div className="stats-kv">
+                  <span>Палитра команд и проектов</span>
+                  <strong>Ctrl + K</strong>
+                </div>
+                <div className="stats-kv">
+                  <span>Открыть настройки</span>
+                  <strong>Ctrl + ,</strong>
+                </div>
+                <div className="stats-kv">
+                  <span>Новый чат / Панель файлов</span>
+                  <strong>Ctrl + N / Ctrl + \</strong>
+                </div>
+                <div className="settings-actions">
+                  <button
+                    type="button"
+                    className="popover-secondary-btn"
+                    data-testid="settings-open-shortcuts-btn"
+                    onClick={() => {
+                      closeSettings();
+                      actions.setShortcutsOpen(true);
+                    }}
+                  >
+                    <Keyboard size={14} aria-hidden="true" />
+                    Все горячие клавиши…
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
+
+          {/* TAB: PROVIDERS & SECRETS (Default) */}
+          {activeTab === "providers" && (
             <>
               {/* 1. Google Antigravity + SecretBroker (write-only) */}
               <section className="settings-card" data-testid="settings-antigravity-card">
@@ -696,7 +1315,7 @@ export function SettingsSheet() {
                     </small>
                   </div>
                   <div className="settings-profile-tile">
-                    <strong>Gemini API key · headless</strong>
+                    <strong>Gemini API key · фоновый</strong>
                     <small>
                       Фоновые задачи и расписание. Ключ передаётся через write-only Secret Broker.
                     </small>
@@ -872,108 +1491,171 @@ export function SettingsSheet() {
                 )}
 
                 {state.providerConnections.length > 0 && (
-                  <div className="settings-binding-row">
-                    <div className="settings-binding-col">
-                      <span className="settings-binding-label">Активное подключение</span>
-                      <button
-                        ref={connTriggerRef}
-                        type="button"
-                        className="project-scope-filter__trigger settings-popover-trigger"
-                        onClick={() => setConnMenuOpen((v) => !v)}
-                        aria-expanded={connMenuOpen}
-                        aria-haspopup="menu"
-                        disabled={!connected}
-                        data-testid="settings-connection-trigger"
-                      >
-                        <span className="project-scope-filter__label">
-                          {activeConnection?.display_name ?? "Выбрать подключение"}
-                        </span>
-                        <CaretDown size={11} aria-hidden="true" />
-                      </button>
-                      <PortalPopover
-                        isOpen={connMenuOpen}
-                        anchorEl={connTriggerRef.current}
-                        onClose={() => setConnMenuOpen(false)}
-                        placement="bottom-start"
-                        className="project-scope-filter__menu"
-                        role="menu"
-                        ariaLabel="Выбор активного подключения провайдера"
-                        testId="settings-connection-menu"
-                      >
-                        {state.providerConnections.map((conn) => {
-                          const selected = conn.connection_id === activeConnection?.connection_id;
-                          const healthInfo = providerHealthInfo(conn.last_health_status);
-                          return (
-                            <button
-                              key={conn.connection_id}
-                              type="button"
-                              role="menuitemradio"
-                              aria-checked={selected}
-                              className={selected ? "is-selected" : ""}
-                              onClick={() => void handleSelectConnection(conn.connection_id)}
-                              data-testid={`connection-option-${conn.connection_id}`}
-                            >
-                              <span className="popover-option-copy">
-                                <strong>{conn.display_name}</strong>
-                                <small>
-                                  {conn.auth_profile} · {healthInfo.label}
-                                </small>
-                              </span>
-                              {selected && <Check size={13} aria-hidden="true" />}
-                            </button>
-                          );
-                        })}
-                      </PortalPopover>
+                  <>
+                    <div className="settings-binding-row">
+                      <div className="settings-binding-col">
+                        <span className="settings-binding-label">Активное подключение</span>
+                        <button
+                          ref={connTriggerRef}
+                          type="button"
+                          className="project-scope-filter__trigger settings-popover-trigger"
+                          onClick={() => setConnMenuOpen((v) => !v)}
+                          aria-expanded={connMenuOpen}
+                          aria-haspopup="menu"
+                          disabled={!connected}
+                          data-testid="settings-connection-trigger"
+                        >
+                          <span className="project-scope-filter__label">
+                            {activeConnection?.display_name ?? "Выбрать подключение"}
+                          </span>
+                          <CaretDown size={11} aria-hidden="true" />
+                        </button>
+                        <PortalPopover
+                          isOpen={connMenuOpen}
+                          anchorEl={connTriggerRef.current}
+                          onClose={() => setConnMenuOpen(false)}
+                          placement="bottom-start"
+                          className="project-scope-filter__menu"
+                          role="menu"
+                          ariaLabel="Выбор активного подключения провайдера"
+                          testId="settings-connection-menu"
+                        >
+                          {state.providerConnections.map((conn) => {
+                            const selected = conn.connection_id === activeConnection?.connection_id;
+                            const healthInfo = providerHealthInfo(conn.last_health_status);
+                            return (
+                              <button
+                                key={conn.connection_id}
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={selected}
+                                className={selected ? "is-selected" : ""}
+                                onClick={() => void handleSelectConnection(conn.connection_id)}
+                                data-testid={`connection-option-${conn.connection_id}`}
+                              >
+                                <span className="popover-option-copy">
+                                  <strong>{conn.display_name}</strong>
+                                  <small>
+                                    {conn.auth_profile} · {healthInfo.label}
+                                  </small>
+                                </span>
+                                {selected && <Check size={13} aria-hidden="true" />}
+                              </button>
+                            );
+                          })}
+                        </PortalPopover>
+                      </div>
+
+                      <div className="settings-binding-col">
+                        <span className="settings-binding-label">Модель агента</span>
+                        <button
+                          ref={modelTriggerRef}
+                          type="button"
+                          className="project-scope-filter__trigger settings-popover-trigger"
+                          onClick={() => setModelMenuOpen((v) => !v)}
+                          aria-expanded={modelMenuOpen}
+                          aria-haspopup="menu"
+                          disabled={!connected || selectableModels.length === 0}
+                          data-testid="settings-model-trigger"
+                        >
+                          <span className="project-scope-filter__label">{currentModelLabel}</span>
+                          <CaretDown size={11} aria-hidden="true" />
+                        </button>
+                        <PortalPopover
+                          isOpen={modelMenuOpen}
+                          anchorEl={modelTriggerRef.current}
+                          onClose={() => setModelMenuOpen(false)}
+                          placement="bottom-end"
+                          className="project-scope-filter__menu"
+                          role="menu"
+                          ariaLabel="Выбор модели для активного агента"
+                          testId="settings-model-menu"
+                        >
+                          {selectableModels.map((model) => {
+                            const selected = model.model_id === currentModelId;
+                            return (
+                              <button
+                                key={model.model_id}
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={selected}
+                                className={selected ? "is-selected" : ""}
+                                onClick={() => void handleSelectModel(model.model_id)}
+                                data-testid={`settings-model-option-${model.model_id}`}
+                              >
+                                <span className="popover-option-copy">
+                                  <strong>{model.label}</strong>
+                                  <small>{model.model_id}</small>
+                                </span>
+                                {selected && <Check size={13} aria-hidden="true" />}
+                              </button>
+                            );
+                          })}
+                        </PortalPopover>
+                      </div>
                     </div>
 
-                    <div className="settings-binding-col">
-                      <span className="settings-binding-label">Модель агента</span>
-                      <button
-                        ref={modelTriggerRef}
-                        type="button"
-                        className="project-scope-filter__trigger settings-popover-trigger"
-                        onClick={() => setModelMenuOpen((v) => !v)}
-                        aria-expanded={modelMenuOpen}
-                        aria-haspopup="menu"
-                        disabled={!connected || selectableModels.length === 0}
-                        data-testid="settings-model-trigger"
-                      >
-                        <span className="project-scope-filter__label">{currentModelLabel}</span>
-                        <CaretDown size={11} aria-hidden="true" />
-                      </button>
-                      <PortalPopover
-                        isOpen={modelMenuOpen}
-                        anchorEl={modelTriggerRef.current}
-                        onClose={() => setModelMenuOpen(false)}
-                        placement="bottom-end"
-                        className="project-scope-filter__menu"
-                        role="menu"
-                        ariaLabel="Выбор модели для активного агента"
-                        testId="settings-model-menu"
-                      >
-                        {selectableModels.map((model) => {
-                          const selected = model.model_id === currentModelId;
-                          return (
-                            <button
-                              key={model.model_id}
-                              type="button"
-                              role="menuitemradio"
-                              aria-checked={selected}
-                              className={selected ? "is-selected" : ""}
-                              onClick={() => void handleSelectModel(model.model_id)}
-                              data-testid={`settings-model-option-${model.model_id}`}
-                            >
-                              <span className="popover-option-copy">
-                                <strong>{model.label}</strong>
-                                <small>{model.model_id}</small>
-                              </span>
-                              {selected && <Check size={13} aria-hidden="true" />}
-                            </button>
-                          );
-                        })}
-                      </PortalPopover>
+                    <div className="d2-grant-list" data-testid="settings-connections-list">
+                      {state.providerConnections.map((conn) => {
+                        const healthInfo = providerHealthInfo(conn.last_health_status);
+                        return (
+                          <div
+                            key={conn.connection_id}
+                            className="d2-grant-row"
+                            data-testid={`settings-conn-row-${conn.connection_id}`}
+                          >
+                            <div className="d2-grant-row__info">
+                              <strong>
+                                {conn.display_name}{" "}
+                                {conn.is_default_interactive && (
+                                  <span className="d2-meta-chip">Интерактивный</span>
+                                )}{" "}
+                                {conn.is_default_background && (
+                                  <span className="d2-meta-chip">Фоновый</span>
+                                )}
+                              </strong>
+                              <small>
+                                {conn.auth_profile}
+                                {conn.endpoint_url ? ` · ${conn.endpoint_url}` : ""} ·{" "}
+                                {healthInfo.label}
+                              </small>
+                            </div>
+                            <div className="d2-item-card__actions">
+                              {!conn.is_default_background && (
+                                <button
+                                  type="button"
+                                  className="d2-link-btn"
+                                  disabled={!connected}
+                                  data-testid={`connection-set-bg-${conn.connection_id}`}
+                                  onClick={() =>
+                                    void actions.activateProviderConnection(
+                                      conn.connection_id,
+                                      "background",
+                                    )
+                                  }
+                                >
+                                  На фон
+                                </button>
+                              )}
+                              {conn.provider_kind === "local_http" && (
+                                <button
+                                  type="button"
+                                  className="d2-danger-btn d2-danger-btn--sm"
+                                  disabled={!connected}
+                                  data-testid={`connection-delete-${conn.connection_id}`}
+                                  onClick={() =>
+                                    void actions.deleteProviderConnection(conn.connection_id)
+                                  }
+                                >
+                                  Удалить
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  </div>
+                  </>
                 )}
 
                 {meta.activeAgent && (
@@ -983,6 +1665,105 @@ export function SettingsSheet() {
                     {meta.activeAgent.current_config.version_number}): смена подключения и модели не
                     меняет личность и память агента.
                   </p>
+                )}
+              </section>
+
+              {/* 2b. All configured secrets (including MCP custom slots) */}
+              <section className="settings-card" data-testid="settings-all-secrets-card">
+                <div className="settings-card__head">
+                  <Key size={16} aria-hidden="true" />
+                  <strong>Все секреты Secret Broker ({state.secrets.length})</strong>
+                </div>
+                {state.secrets.length === 0 ? (
+                  <p className="settings-note">
+                    Секреты пока не зарегистрированы. Значения хранятся строго в режиме write-only и
+                    никогда не возвращаются в UI.
+                  </p>
+                ) : (
+                  <div className="d2-grant-list">
+                    {state.secrets.map((sec) => {
+                      const isRotating = rotatingSecretSlot === sec.slot_key;
+                      const isBusy = busySecretSlot === sec.slot_key;
+                      return (
+                        <div
+                          key={sec.slot_key}
+                          className="settings-secret-row-wrap"
+                          data-testid={`secret-row-${sec.slot_key}`}
+                        >
+                          <div className="d2-grant-row">
+                            <div className="d2-grant-row__info">
+                              <strong>
+                                <code>{sec.slot_key}</code>{" "}
+                                {sec.configured ? (
+                                  <span className="d2-pill d2-pill--status-succeeded">
+                                    v{sec.version}
+                                    {sec.fingerprint_short ? ` · ${sec.fingerprint_short}` : ""}
+                                  </span>
+                                ) : (
+                                  <span className="d2-meta-chip">Не задан</span>
+                                )}
+                              </strong>
+                              <small>
+                                {sec.description || sec.scope} · источник: {sec.source}
+                              </small>
+                            </div>
+                            <div className="d2-item-card__actions">
+                              <button
+                                type="button"
+                                className="d2-link-btn"
+                                disabled={!connected || isBusy}
+                                data-testid={`secret-rotate-toggle-${sec.slot_key}`}
+                                onClick={() => {
+                                  setRotatingSecretSlot(isRotating ? null : sec.slot_key);
+                                  setRotateSecretDraft("");
+                                }}
+                              >
+                                {sec.configured ? "Обновить" : "Задать"}
+                              </button>
+                              {sec.configured && (
+                                <button
+                                  type="button"
+                                  className="d2-danger-btn d2-danger-btn--sm"
+                                  disabled={!connected || isBusy}
+                                  data-testid={`secret-delete-row-${sec.slot_key}`}
+                                  onClick={() => void handleDeleteGenericSecret(sec.slot_key)}
+                                >
+                                  Удалить
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {isRotating && (
+                            <form
+                              className="settings-secret-form"
+                              onSubmit={(e) =>
+                                void handleRotateGenericSecret(sec.slot_key, sec.description, e)
+                              }
+                            >
+                              <input
+                                type="password"
+                                autoComplete="new-password"
+                                value={rotateSecretDraft}
+                                onChange={(e) => setRotateSecretDraft(e.target.value)}
+                                placeholder={`Новое значение для ${sec.slot_key} (write-only)…`}
+                                aria-label={`Новое значение секрета ${sec.slot_key}`}
+                                data-testid={`secret-rotate-input-${sec.slot_key}`}
+                                disabled={!connected || isBusy}
+                              />
+                              <button
+                                type="submit"
+                                className="popover-primary-btn"
+                                disabled={!connected || isBusy || !rotateSecretDraft.trim()}
+                                data-testid={`secret-rotate-save-${sec.slot_key}`}
+                              >
+                                Сохранить
+                              </button>
+                            </form>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </section>
 
@@ -1096,8 +1877,8 @@ export function SettingsSheet() {
                 </div>
                 {activeGrants.length === 0 ? (
                   <p className="settings-note">
-                    Активных постоянных разрешений записи нет. Выданные через «Разрешить для
-                    проекта» права можно мгновенно отозвать здесь или во Входящих.
+                    Активных постоянных разрешений записи нет. Выданные через «Разрешить всегда»
+                    права можно мгновенно отозвать здесь или во Входящих.
                   </p>
                 ) : (
                   <div className="d2-grant-list">
@@ -1133,58 +1914,354 @@ export function SettingsSheet() {
                   </div>
                 )}
               </section>
+            </>
+          )}
 
-              {/* 6. Preserved Head & memoryd connection card */}
-              <section className="settings-card">
+          {/* TAB: AGENT PROFILE, HISTORY & POLICY RULES */}
+          {activeTab === "agent" && (
+            <div className="cap-tab-body" data-testid="settings-agent-panel">
+              <section className="settings-card" data-testid="settings-agent-editor">
                 <div className="settings-card__head">
-                  <Database size={16} aria-hidden="true" />
-                  <strong>Сервер управления и память</strong>
+                  <Robot size={16} aria-hidden="true" />
+                  <strong>Профиль агента</strong>
                 </div>
 
-                <form className="settings-url-form" onSubmit={handleReconnect}>
-                  <label className="settings-field">
-                    <span>Адрес dennett-head (loopback)</span>
-                    <div className="settings-url-row">
-                      <input
-                        type="text"
-                        value={urlDraft}
-                        onChange={(e) => setUrlDraft(e.target.value)}
-                        placeholder="http://127.0.0.1:41771"
-                        aria-label="Адрес dennett-head"
-                      />
-                      <button type="submit" className="popover-secondary-btn">
-                        Подключить
+                {!editedAgent ? (
+                  <p className="settings-note">Нет доступного агента для редактирования.</p>
+                ) : (
+                  <>
+                    {state.agents.length > 1 && (
+                      <div className="settings-pref-row">
+                        <span>Выбранный агент</span>
+                        <div>
+                          <button
+                            ref={agentTriggerRef}
+                            type="button"
+                            className="project-scope-filter__trigger"
+                            aria-expanded={agentMenuOpen}
+                            aria-haspopup="menu"
+                            data-testid="settings-agent-select-trigger"
+                            onClick={() => setAgentMenuOpen((v) => !v)}
+                          >
+                            <span>{editedAgent.name}</span>
+                            <CaretDown size={11} aria-hidden="true" />
+                          </button>
+                          <PortalPopover
+                            isOpen={agentMenuOpen}
+                            anchorEl={agentTriggerRef.current}
+                            onClose={() => setAgentMenuOpen(false)}
+                            placement="bottom-end"
+                            className="project-scope-filter__menu"
+                            role="menu"
+                            ariaLabel="Выбор агента"
+                          >
+                            {state.agents.map((ag) => (
+                              <button
+                                key={ag.agent_id}
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={ag.agent_id === editedAgent.agent_id}
+                                className={ag.agent_id === editedAgent.agent_id ? "is-selected" : ""}
+                                onClick={() => {
+                                  setSelectedAgentId(ag.agent_id);
+                                  setAgentMenuOpen(false);
+                                }}
+                              >
+                                <span>{ag.name}</span>
+                                {ag.agent_id === editedAgent.agent_id && (
+                                  <Check size={13} aria-hidden="true" />
+                                )}
+                              </button>
+                            ))}
+                          </PortalPopover>
+                        </div>
+                      </div>
+                    )}
+
+                    <form
+                      className="memory-inline-form"
+                      onSubmit={(e) => void handleSaveAgentProfile(e)}
+                    >
+                      <label className="settings-field">
+                        <span>Системная инструкция (system_prompt)</span>
+                        <textarea
+                          rows={4}
+                          value={promptDraft}
+                          onChange={(e) => setPromptDraft(e.target.value)}
+                          aria-label="Системная инструкция агента"
+                          data-testid="settings-agent-prompt-input"
+                          disabled={!connected || isSavingAgent}
+                        />
+                      </label>
+
+                      <div className="settings-pref-row">
+                        <div>
+                          <strong>Режим автономности</strong>
+                          <small>
+                            «Авто» разрешает файлы и shell в рабочей папке, спрашивая только на
+                            критических действиях
+                          </small>
+                        </div>
+                        <div className="d2-segmented" role="group" aria-label="Режим автономности">
+                          <button
+                            type="button"
+                            className={autonomyDraft === "auto" ? "is-active" : ""}
+                            data-testid="settings-agent-autonomy-auto"
+                            onClick={() => setAutonomyDraft("auto")}
+                          >
+                            Авто
+                          </button>
+                          <button
+                            type="button"
+                            className={autonomyDraft === "full_access" ? "is-active" : ""}
+                            data-testid="settings-agent-autonomy-full_access"
+                            onClick={() => setAutonomyDraft("full_access")}
+                          >
+                            Полный доступ
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="settings-mcp-secret-row">
+                        <label className="settings-field">
+                          <span>Лимит ходов по умолчанию</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={500}
+                            value={maxTurnsDraft}
+                            onChange={(e) => setMaxTurnsDraft(e.target.value)}
+                            placeholder="например 16"
+                            aria-label="Лимит ходов по умолчанию"
+                            data-testid="settings-agent-max-turns-input"
+                            disabled={!connected || isSavingAgent}
+                          />
+                        </label>
+                        <label className="settings-field">
+                          <span>Лимит времени (секунд)</span>
+                          <input
+                            type="number"
+                            min={10}
+                            max={86400}
+                            value={maxWallDraft}
+                            onChange={(e) => setMaxWallDraft(e.target.value)}
+                            placeholder="например 900"
+                            aria-label="Лимит времени в секундах"
+                            data-testid="settings-agent-max-wall-input"
+                            disabled={!connected || isSavingAgent}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="d2-item-card__actions">
+                        <button
+                          type="submit"
+                          className="popover-primary-btn"
+                          disabled={!connected || isSavingAgent}
+                          data-testid="settings-agent-save-btn"
+                        >
+                          {isSavingAgent ? "Сохранение…" : "Сохранить профиль"}
+                        </button>
+                        {agentSavedFeedback && (
+                          <span className="settings-probe-feedback">{agentSavedFeedback}</span>
+                        )}
+                      </div>
+                    </form>
+                  </>
+                )}
+              </section>
+
+              {/* Agent Config Version History & Rollback */}
+              <section className="settings-card" data-testid="settings-agent-history">
+                <div className="settings-card__head">
+                  <ClockCounterClockwise size={16} aria-hidden="true" />
+                  <strong>История версий конфигурации ({agentHistory.length})</strong>
+                </div>
+                {isLoadingHistory ? (
+                  <p className="settings-note">Загрузка истории…</p>
+                ) : agentHistory.length === 0 ? (
+                  <p className="settings-note">История изменений конфигурации пуста.</p>
+                ) : (
+                  <div className="d2-grant-list">
+                    {agentHistory
+                      .slice()
+                      .sort((a, b) => b.version_number - a.version_number)
+                      .map((ver) => {
+                        const isCurrent =
+                          editedAgent?.current_config_version_id === ver.config_version_id;
+                        return (
+                          <div
+                            key={ver.config_version_id}
+                            className="d2-grant-row"
+                            data-testid={`agent-history-v-${ver.version_number}`}
+                          >
+                            <div className="d2-grant-row__info">
+                              <strong>
+                                Версия v{ver.version_number}{" "}
+                                {isCurrent && (
+                                  <span className="d2-pill d2-pill--status-succeeded">Текущая</span>
+                                )}
+                              </strong>
+                              <small>
+                                Модель: {ver.model_preference ?? "по умолчанию"} ·{" "}
+                                {ver.autonomy_mode === "full_access" ? "Полный доступ" : "Авто"} ·{" "}
+                                {ver.system_prompt.slice(0, 72)}
+                                {ver.system_prompt.length > 72 ? "…" : ""}
+                              </small>
+                            </div>
+                            {!isCurrent && (
+                              <button
+                                type="button"
+                                className="d2-link-btn"
+                                disabled={!connected || isSavingAgent}
+                                data-testid={`agent-rollback-v-${ver.version_number}`}
+                                onClick={() => void handleRollbackAgentVersion(ver)}
+                              >
+                                <ClockCounterClockwise size={13} aria-hidden="true" />
+                                Откатить к v{ver.version_number}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </section>
+
+              {/* Policy Rules Management (GET/POST/DELETE /v1/policies) */}
+              <section className="settings-card" data-testid="settings-policies-card">
+                <div className="settings-card__head">
+                  <ShieldCheck size={16} aria-hidden="true" />
+                  <strong>Правила политики ({state.policyRules.length})</strong>
+                </div>
+
+                {state.policyRules.length === 0 ? (
+                  <p className="settings-note">
+                    Пользовательских правил политики пока нет. Можно задать явные разрешения или
+                    запреты по имени инструмента и шаблону цели.
+                  </p>
+                ) : (
+                  <div className="d2-grant-list">
+                    {state.policyRules.map((rule) => (
+                      <div
+                        key={rule.rule_id}
+                        className="d2-grant-row"
+                        data-testid={`policy-rule-row-${rule.rule_id}`}
+                      >
+                        <div className="d2-grant-row__info">
+                          <strong>
+                            <code>{rule.tool_name}</code>{" "}
+                            <span
+                              className={`d2-pill ${
+                                rule.effect === "allow"
+                                  ? "d2-pill--status-succeeded"
+                                  : "d2-pill--status-failed"
+                              }`}
+                            >
+                              {rule.effect === "allow" ? "Разрешить" : "Запретить"}
+                            </span>
+                          </strong>
+                          <small>
+                            область: {rule.scope}
+                            {rule.target_pattern ? ` · цель: ${rule.target_pattern}` : ""} ·{" "}
+                            {rule.reason}
+                          </small>
+                        </div>
+                        <button
+                          type="button"
+                          className="d2-danger-btn d2-danger-btn--sm"
+                          disabled={!connected}
+                          data-testid={`policy-delete-${rule.rule_id}`}
+                          onClick={() => void actions.deletePolicyRule(rule.rule_id)}
+                        >
+                          <Trash size={12} aria-hidden="true" />
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <form
+                  className="memory-inline-form"
+                  data-testid="settings-policy-create-form"
+                  onSubmit={(e) => void handleCreatePolicyRule(e)}
+                >
+                  <strong>Добавить правило политики</strong>
+                  <div className="settings-mcp-secret-row">
+                    <input
+                      type="text"
+                      value={policyScopeDraft}
+                      onChange={(e) => setPolicyScopeDraft(e.target.value)}
+                      placeholder="Область (например global или project:...)"
+                      aria-label="Область правила политики"
+                      data-testid="policy-scope-input"
+                      required
+                    />
+                    <input
+                      type="text"
+                      value={policyToolDraft}
+                      onChange={(e) => setPolicyToolDraft(e.target.value)}
+                      placeholder="Инструмент (например shell_exec или workspace_write)"
+                      aria-label="Имя инструмента политики"
+                      data-testid="policy-tool-input"
+                      required
+                    />
+                  </div>
+                  <div className="settings-mcp-secret-row">
+                    <input
+                      type="text"
+                      value={policyTargetDraft}
+                      onChange={(e) => setPolicyTargetDraft(e.target.value)}
+                      placeholder="Шаблон цели (необязательно, напр. src/*)"
+                      aria-label="Шаблон цели политики"
+                      data-testid="policy-target-input"
+                    />
+                    <div className="d2-segmented" role="group" aria-label="Эффект правила">
+                      <button
+                        type="button"
+                        className={policyEffectDraft === "allow" ? "is-active" : ""}
+                        data-testid="policy-effect-allow"
+                        onClick={() => setPolicyEffectDraft("allow")}
+                      >
+                        Разрешить
+                      </button>
+                      <button
+                        type="button"
+                        className={policyEffectDraft === "deny" ? "is-active" : ""}
+                        data-testid="policy-effect-deny"
+                        onClick={() => setPolicyEffectDraft("deny")}
+                      >
+                        Запретить
                       </button>
                     </div>
-                  </label>
+                  </div>
+                  <input
+                    type="text"
+                    value={policyReasonDraft}
+                    onChange={(e) => setPolicyReasonDraft(e.target.value)}
+                    placeholder="Причина правила (например: Разрешить тесты в песочнице)"
+                    aria-label="Причина правила политики"
+                    data-testid="policy-reason-input"
+                    required
+                  />
+                  <div className="d2-item-card__actions">
+                    <button
+                      type="submit"
+                      className="popover-primary-btn"
+                      disabled={!connected || isCreatingPolicy}
+                      data-testid="policy-create-submit"
+                    >
+                      Добавить правило
+                    </button>
+                  </div>
                 </form>
-
-                <div className="stats-kv">
-                  <span>PostgreSQL (dennett_control)</span>
-                  <strong>
-                    {health?.postgres_connected
-                      ? `Подключён (схема v${health.schema_version ?? "?"})`
-                      : "Нет соединения"}
-                  </strong>
-                </div>
-                <div className="stats-kv">
-                  <span>Независимый memoryd</span>
-                  <strong>
-                    {health?.memory_status === "healthy"
-                      ? "Активен"
-                      : health
-                        ? "Недоступен (очередь outbox)"
-                        : "—"}
-                  </strong>
-                </div>
-                <div className="stats-kv">
-                  <span>Записей в очереди outbox</span>
-                  <strong>{health?.pending_outbox_count ?? 0}</strong>
-                </div>
               </section>
-            </>
-          ) : (
-            /* TAB 2: Capabilities (Skills, Plugins, MCP) */
+            </div>
+          )}
+
+          {/* TAB: CAPABILITIES (Skills, Plugins, MCP) — A-UI-P0-2 + MCP fixes */}
+          {activeTab === "capabilities" && (
             <div className="cap-tab-body" data-testid="settings-capabilities-panel">
               <div className="cap-filter-row" data-testid="capabilities-filter-bar">
                 {(
@@ -1263,9 +2340,8 @@ export function SettingsSheet() {
 
               <p className="settings-note">
                 Сканирование <code>~/.gemini/</code> выполняется строго в режиме{" "}
-                <strong>только чтение</strong>: кандидаты не модифицируют файлы и остаются
-                отключёнными до явного включения. Локальные навыки и плагины добавляются через
-                системный выбор папки.
+                <strong>только чтение</strong>: кандидаты не модифицируют файлы и при включении
+                явно привязываются к проекту или глобальной области.
               </p>
 
               {discoveryFeedback && (
@@ -1304,16 +2380,24 @@ export function SettingsSheet() {
                     type="text"
                     value={mcpArgs}
                     onChange={(e) => setMcpArgs(e.target.value)}
-                    placeholder="Аргументы через пробел (например -y @modelcontextprotocol/server)"
+                    placeholder='Аргументы (поддерживаются кавычки, напр. -y --path "My Folder")'
                     aria-label="Аргументы MCP"
                     data-testid="cap-mcp-args-input"
                   />
-                  <div className="settings-mcp-secret-row">
+                  <div className="settings-mcp-secret-grid">
+                    <input
+                      type="text"
+                      value={mcpSecretEnv}
+                      onChange={(e) => setMcpSecretEnv(e.target.value)}
+                      placeholder="Переменная среды (напр. GITHUB_TOKEN)"
+                      aria-label="Имя переменной среды секрета MCP"
+                      data-testid="cap-mcp-secret-env-input"
+                    />
                     <input
                       type="text"
                       value={mcpSecretSlot}
                       onChange={(e) => setMcpSecretSlot(e.target.value)}
-                      placeholder="Слот секрета (необязательно, напр. mcp_token)"
+                      placeholder="Слот секрета (напр. mcp_github_token)"
                       aria-label="Имя слота секрета MCP"
                       data-testid="cap-mcp-secret-slot-input"
                     />
@@ -1358,6 +2442,12 @@ export function SettingsSheet() {
                       cap.activation_state === "active" || cap.activation_state === "pinned";
                     const compat = compatibilityInfo(cap.compatibility_status);
                     const isEditing = editingCapId === cap.capability_id;
+                    const isInspected = Boolean(inspectedCapIds[cap.capability_id]);
+                    const activeProjectBinding = meta.activeProject
+                      ? (cap.project_bindings ?? []).find(
+                          (b) => b.project_id === meta.activeProject!.project_id,
+                        )
+                      : null;
 
                     return (
                       <article
@@ -1370,11 +2460,25 @@ export function SettingsSheet() {
                             <strong>{cap.display_name}</strong>
                             <span className="d2-meta-chip">v{cap.version}</span>
                             <span className="d2-meta-chip">{capabilityKindLabel(cap.kind)}</span>
-                            <span className="d2-meta-chip">
+                            <span
+                              className="d2-meta-chip"
+                              data-testid={`cap-scope-${cap.capability_id}`}
+                            >
                               {capabilityScopeLabel(cap.scope_kind)}
                             </span>
                             <span className={`d2-pill ${compat.className}`}>{compat.label}</span>
-                            <span className="d2-meta-chip">{trustLabel(cap.trust_state)}</span>
+                            <span
+                              className={`d2-meta-chip ${
+                                cap.trust_state === "trusted"
+                                  ? "cap-trust--trusted"
+                                  : cap.trust_state === "revoked"
+                                    ? "cap-trust--revoked"
+                                    : ""
+                              }`}
+                              data-testid={`cap-trust-badge-${cap.capability_id}`}
+                            >
+                              {trustLabel(cap.trust_state)}
+                            </span>
                             {cap.origin_kind === "personal_discovered" && (
                               <span className="d2-pill d2-pill--warn">
                                 ~/.gemini/ · только чтение
@@ -1401,6 +2505,196 @@ export function SettingsSheet() {
                         {cap.description && <p className="settings-note">{cap.description}</p>}
                         {cap.compatibility_detail && (
                           <p className="cap-card__compat-detail">{cap.compatibility_detail}</p>
+                        )}
+
+                        {/* 4-mode activation selector (pinned / active / on_demand / disabled) */}
+                        <div className="cap-controls-row">
+                          <div
+                            className="d2-segmented cap-activation-group"
+                            role="group"
+                            aria-label={`Режим активации ${cap.display_name}`}
+                            data-testid={`cap-activation-group-${cap.capability_id}`}
+                          >
+                            {ACTIVATION_MODES.map((mode) => (
+                              <button
+                                key={mode.value}
+                                type="button"
+                                className={cap.activation_state === mode.value ? "is-active" : ""}
+                                disabled={!connected}
+                                data-testid={`cap-act-${cap.capability_id}-${mode.value}`}
+                                onClick={() => void handleSetCapabilityActivation(cap, mode.value)}
+                              >
+                                {mode.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Explicit Trust / Revoke controls (no dead-end on restricted/unreviewed!) */}
+                          <div className="d2-item-card__actions">
+                            {(cap.trust_state === "restricted" ||
+                              cap.trust_state === "unreviewed" ||
+                              cap.trust_state === "revoked") && (
+                              <button
+                                type="button"
+                                className="popover-secondary-btn"
+                                disabled={!connected}
+                                data-testid={`cap-trust-btn-${cap.capability_id}`}
+                                onClick={() =>
+                                  void actions.updateCapability(cap.capability_id, {
+                                    trust_state: "trusted",
+                                  })
+                                }
+                              >
+                                <ShieldCheck size={13} aria-hidden="true" />
+                                Доверять
+                              </button>
+                            )}
+                            {cap.trust_state !== "revoked" && (
+                              <button
+                                type="button"
+                                className="d2-danger-btn d2-danger-btn--sm"
+                                disabled={!connected}
+                                data-testid={`cap-revoke-btn-${cap.capability_id}`}
+                                onClick={() =>
+                                  void actions.updateCapability(cap.capability_id, {
+                                    trust_state: "revoked",
+                                  })
+                                }
+                              >
+                                <ShieldWarning size={13} aria-hidden="true" />
+                                Отозвать
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Per-project override binding when an active project exists */}
+                        {meta.activeProject &&
+                          (cap.scope_kind === "global" ||
+                            cap.scope_kind === "candidate_unattached") && (
+                            <div
+                              className="cap-project-binding-row"
+                              data-testid={`cap-project-binding-${cap.capability_id}`}
+                            >
+                              <span className="d2-time">
+                                Для проекта «{meta.activeProject.name}»
+                                {activeProjectBinding
+                                  ? ` (сейчас: ${activeProjectBinding.activation_state})`
+                                  : ""}
+                                :
+                              </span>
+                              <div className="d2-item-card__actions">
+                                {(
+                                  [
+                                    { value: "active", label: "Вкл в проекте" },
+                                    { value: "on_demand", label: "По запросу" },
+                                    { value: "disabled", label: "Откл в проекте" },
+                                  ] as const
+                                ).map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    type="button"
+                                    className={`d2-link-btn ${
+                                      activeProjectBinding?.activation_state === opt.value
+                                        ? "is-selected"
+                                        : ""
+                                    }`}
+                                    disabled={!connected}
+                                    data-testid={`cap-project-bind-${cap.capability_id}-${opt.value}`}
+                                    onClick={() =>
+                                      void actions.setProjectCapabilityBinding(
+                                        meta.activeProject!.project_id,
+                                        cap.capability_id,
+                                        opt.value,
+                                      )
+                                    }
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                        {/* Inline expandable SKILL.md / manifest viewer */}
+                        {isInspected && (
+                          <div
+                            className="cap-manifest-viewer"
+                            data-testid={`cap-manifest-viewer-${cap.capability_id}`}
+                          >
+                            {cap.source_path && (
+                              <div className="cap-manifest-meta">
+                                <span>Путь:</span> <code>{cap.source_path}</code>
+                              </div>
+                            )}
+                            <div className="cap-manifest-meta">
+                              <span>SHA-256:</span> <code>{cap.content_sha256.slice(0, 16)}…</code>
+                            </div>
+
+                            {cap.spec.kind === "skill" && (
+                              <div className="cap-manifest-skill-body">
+                                <MarkdownRenderer content={cap.spec.skill_markdown || "(SKILL.md пуст)"} />
+                                {cap.spec.has_scripts && (
+                                  <p className="cap-card__compat-detail">
+                                    Содержит скрипты — перед доверием проверьте исходники.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {cap.spec.kind === "mcp_server" && (
+                              <div className="cap-manifest-code">
+                                <div>
+                                  <strong>Команда:</strong> <code>{cap.spec.command}</code>
+                                </div>
+                                <div>
+                                  <strong>Аргументы:</strong>{" "}
+                                  <code>
+                                    {(cap.spec.args ?? []).length > 0
+                                      ? JSON.stringify(cap.spec.args)
+                                      : "[]"}
+                                  </code>
+                                </div>
+                                {cap.spec.secret_slots &&
+                                  Object.keys(cap.spec.secret_slots).length > 0 && (
+                                    <div>
+                                      <strong>Слоты секретов:</strong>{" "}
+                                      <code>
+                                        {Object.entries(cap.spec.secret_slots)
+                                          .map(([envName, slot]) => `${envName} -> ${slot}`)
+                                          .join(", ")}
+                                      </code>
+                                    </div>
+                                  )}
+                              </div>
+                            )}
+
+                            {cap.spec.kind === "plugin" && (
+                              <div className="cap-manifest-code">
+                                <div>
+                                  <strong>Manifest:</strong> <code>v{cap.spec.manifest_version}</code>
+                                </div>
+                                {cap.spec.skills && cap.spec.skills.length > 0 && (
+                                  <div>
+                                    <strong>Навыки:</strong> <code>{cap.spec.skills.join(", ")}</code>
+                                  </div>
+                                )}
+                                {cap.spec.mcp_servers && cap.spec.mcp_servers.length > 0 && (
+                                  <div>
+                                    <strong>MCP-серверы:</strong>{" "}
+                                    <code>
+                                      {cap.spec.mcp_servers.map((m) => m.name).join(", ")}
+                                    </code>
+                                  </div>
+                                )}
+                                {cap.spec.has_hooks && (
+                                  <p className="cap-card__compat-detail">
+                                    Плагин содержит hooks — проверьте перед выдачей доверия.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         )}
 
                         {isEditing ? (
@@ -1445,6 +2739,26 @@ export function SettingsSheet() {
                             <button
                               type="button"
                               className="d2-link-btn"
+                              aria-expanded={isInspected}
+                              data-testid={`cap-inspect-btn-${cap.capability_id}`}
+                              onClick={() =>
+                                setInspectedCapIds((prev) => ({
+                                  ...prev,
+                                  [cap.capability_id]: !prev[cap.capability_id],
+                                }))
+                              }
+                            >
+                              {isInspected ? (
+                                <CaretDown size={12} aria-hidden="true" />
+                              ) : (
+                                <CaretRight size={12} aria-hidden="true" />
+                              )}
+                              <Code size={13} aria-hidden="true" />
+                              {isInspected ? "Скрыть манифест" : "Инспектировать"}
+                            </button>
+                            <button
+                              type="button"
+                              className="d2-link-btn"
                               onClick={() => startEditCapability(cap)}
                               data-testid={`cap-update-${cap.capability_id}`}
                             >
@@ -1477,6 +2791,153 @@ export function SettingsSheet() {
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB: DIAGNOSTICS (PostgreSQL, memoryd outbox, index status, events) */}
+          {activeTab === "diagnostics" && (
+            <div className="cap-tab-body" data-testid="settings-diagnostics-panel">
+              <section className="settings-card" data-testid="settings-diagnostics-head-card">
+                <div className="settings-card__head">
+                  <Database size={16} aria-hidden="true" />
+                  <strong>Сервер управления (dennett-head) и PostgreSQL</strong>
+                </div>
+
+                <form className="settings-url-form" onSubmit={handleReconnect}>
+                  <label className="settings-field">
+                    <span>Адрес dennett-head (loopback)</span>
+                    <div className="settings-url-row">
+                      <input
+                        type="text"
+                        value={urlDraft}
+                        onChange={(e) => setUrlDraft(e.target.value)}
+                        placeholder="http://127.0.0.1:41771"
+                        aria-label="Адрес dennett-head"
+                      />
+                      <button type="submit" className="popover-secondary-btn">
+                        Подключить
+                      </button>
+                    </div>
+                  </label>
+                </form>
+
+                <div className="stats-kv">
+                  <span>PostgreSQL (dennett_control)</span>
+                  <strong>
+                    {health?.postgres_connected
+                      ? `Подключён (схема v${health.schema_version ?? "?"})`
+                      : "Нет соединения"}
+                  </strong>
+                </div>
+                <div className="stats-kv">
+                  <span>Независимый memoryd</span>
+                  <strong>
+                    {health?.memory_status === "healthy"
+                      ? "Активен"
+                      : health
+                        ? "Недоступен (очередь outbox)"
+                        : "—"}
+                  </strong>
+                </div>
+                <div className="stats-kv">
+                  <span>Записей в очереди outbox</span>
+                  <strong>{health?.pending_outbox_count ?? 0}</strong>
+                </div>
+                {(health?.pending_outbox_count ?? 0) > 0 && connected && (
+                  <div className="settings-actions">
+                    <button
+                      type="button"
+                      className="popover-secondary-btn"
+                      disabled={state.isFlushingOutbox}
+                      onClick={() => void actions.flushMemoryOutbox()}
+                    >
+                      <ArrowsClockwise
+                        size={13}
+                        className={state.isFlushingOutbox ? "spin" : ""}
+                        aria-hidden="true"
+                      />
+                      Отправить очередь outbox
+                    </button>
+                  </div>
+                )}
+              </section>
+
+              <section className="settings-card" data-testid="diagnostics-memory-index-card">
+                <div className="settings-card__head">
+                  <Database size={16} aria-hidden="true" />
+                  <strong>Индекс памяти (watermark и статус)</strong>
+                </div>
+                {state.memoryIndexStatus ? (
+                  <>
+                    <div className="stats-kv">
+                      <span>Область</span>
+                      <strong>{state.memoryIndexStatus.scope}</strong>
+                    </div>
+                    <div className="stats-kv">
+                      <span>Статус индекса</span>
+                      <strong>{state.memoryIndexStatus.status}</strong>
+                    </div>
+                    <div className="stats-kv">
+                      <span>Watermark seq</span>
+                      <strong>{state.memoryIndexStatus.watermark_seq}</strong>
+                    </div>
+                    <div className="stats-kv">
+                      <span>Версия модели индекса</span>
+                      <strong>{state.memoryIndexStatus.model_version}</strong>
+                    </div>
+                  </>
+                ) : (
+                  <p className="settings-note">Нет данных о состоянии индекса памяти.</p>
+                )}
+                <div className="settings-actions">
+                  <button
+                    type="button"
+                    className="popover-secondary-btn"
+                    disabled={!connected}
+                    data-testid="diagnostics-refresh-index-btn"
+                    onClick={() =>
+                      void actions.refreshMemoryIndexStatus(
+                        meta.activeProject?.memory_scope ?? null,
+                      )
+                    }
+                  >
+                    <ArrowsClockwise size={13} aria-hidden="true" />
+                    Обновить статус индекса
+                  </button>
+                </div>
+              </section>
+
+              <section className="settings-card" data-testid="diagnostics-events-card">
+                <div className="settings-card__head">
+                  <ClockCounterClockwise size={16} aria-hidden="true" />
+                  <strong>
+                    Последние диагностические события ({state.diagnostics?.events.length ?? 0})
+                  </strong>
+                </div>
+                {!state.diagnostics || state.diagnostics.events.length === 0 ? (
+                  <p className="settings-note">Диагностических событий пока нет.</p>
+                ) : (
+                  <div className="d2-grant-list" data-testid="diagnostics-events-list">
+                    {state.diagnostics.events.slice(0, 15).map((ev) => (
+                      <div key={ev.event_id} className="d2-grant-row">
+                        <div className="d2-grant-row__info">
+                          <strong>
+                            {ev.component} · {ev.event_kind}
+                          </strong>
+                          <small>{ev.safe_summary}</small>
+                        </div>
+                        <span className="d2-time">
+                          {new Date(ev.created_at).toLocaleTimeString("ru-RU", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
             </div>
           )}
         </div>

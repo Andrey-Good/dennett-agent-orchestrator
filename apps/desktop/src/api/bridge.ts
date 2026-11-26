@@ -3,7 +3,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type {
   ActivateConnectionRequest,
+  AgentConfigHistoryResponse,
   AgentRecord,
+  ArtifactContentResponse,
   ArtifactLifecycleRequest,
   ArtifactLifecycleResponse,
   ArtifactRecord,
@@ -24,6 +26,7 @@ import type {
   CreateClaimRequest,
   CreateConsolidationJobRequest,
   CreateDocumentRequest,
+  CreatePolicyRuleRequest,
   CreateProjectRequest,
   CreateSessionRequest,
   CreateTaskRequest,
@@ -35,6 +38,7 @@ import type {
   DiscoverCapabilitiesResponse,
   DispatchEffectRequest,
   DispatchEffectResponse,
+  EmergencyStopResponse,
   EnqueueFollowupRequest,
   EventStreamResponse,
   ExportRequest,
@@ -42,11 +46,13 @@ import type {
   FlushOutboxResponse,
   ForgetRequest,
   ForgetResponse,
+  ForkSessionRequest,
   GetDocumentVersionsResponse,
   HeadMemorySearchRequest,
   HeadMemorySearchResponse,
   ImportRequest,
   ImportResponse,
+  IndexState,
   ListAgentMessagesResponse,
   ListAgentsResponse,
   ListArtifactsResponse,
@@ -59,6 +65,7 @@ import type {
   ListEffectsResponse,
   ListInboxResponse,
   ListPermissionRequestsResponse,
+  ListPolicyRulesResponse,
   ListProjectFilesResponse,
   ListProjectsResponse,
   ListProviderConnectionsResponse,
@@ -73,7 +80,9 @@ import type {
   MemoryOverviewResponse,
   NoteHistoryResponse,
   NoteMutationResponse,
+  PolicyRule,
   ProbeConnectionResponse,
+  ProjectFileContentResponse,
   ProjectLifecycleResponse,
   ProjectRecord,
   ProviderConnectionRecord,
@@ -115,7 +124,9 @@ import type {
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateTaskRequest,
+  UpdateUserPreferencesRequest,
   UpsertProviderConnectionRequest,
+  UserPreferences,
 } from "./contracts";
 
 export interface DesktopBridge {
@@ -291,6 +302,26 @@ export interface DesktopBridge {
   clearFollowups(sessionId: string): Promise<void>;
   resumeFollowups(sessionId: string): Promise<ResumeFollowupsResponse>;
   steerSession(sessionId: string, request: SteerSessionRequest): Promise<SendMessageResponse>;
+  // Phase D3+ Audit Closure: Artifact Content, Fork, Preferences, Policies, Controls & Index Status
+  getArtifactContent(sessionId: string, artifactId: string): Promise<ArtifactContentResponse>;
+  getAgentConfigHistory(agentId: string): Promise<AgentConfigHistoryResponse>;
+  listPolicyRules(): Promise<ListPolicyRulesResponse>;
+  createPolicyRule(request: CreatePolicyRuleRequest): Promise<PolicyRule>;
+  deletePolicyRule(ruleId: string): Promise<void>;
+  forkSession(sessionId: string, request: ForkSessionRequest): Promise<SessionRecord>;
+  deleteSession(sessionId: string): Promise<void>;
+  getPreferences(): Promise<UserPreferences>;
+  updatePreferences(request: UpdateUserPreferencesRequest): Promise<UserPreferences>;
+  getProjectFileContent(
+    projectId: string,
+    relativePath: string,
+  ): Promise<ProjectFileContentResponse>;
+  emergencyStopAll(): Promise<EmergencyStopResponse>;
+  runTaskNow(taskId: string): Promise<TaskRecord>;
+  pauseTask(taskId: string): Promise<TaskRecord>;
+  resumeTask(taskId: string): Promise<TaskRecord>;
+  deleteTask(taskId: string): Promise<void>;
+  getMemoryIndexStatus(scope?: string | null): Promise<IndexState>;
 }
 
 export interface WindowControls {
@@ -581,6 +612,32 @@ export function createTauriBridge(): DesktopBridge {
         clientMessageId: request.client_message_id ?? null,
         timeoutMs: request.timeout_ms ?? null,
       }),
+    getArtifactContent: (sessionId: string, artifactId: string) =>
+      invoke<ArtifactContentResponse>("get_artifact_content", { sessionId, artifactId }),
+    getAgentConfigHistory: (agentId: string) =>
+      invoke<AgentConfigHistoryResponse>("get_agent_config_history", { agentId }),
+    listPolicyRules: () => invoke<ListPolicyRulesResponse>("list_policy_rules"),
+    createPolicyRule: (request: CreatePolicyRuleRequest) =>
+      invoke<PolicyRule>("create_policy_rule", { request }),
+    deletePolicyRule: (ruleId: string) => invoke<void>("delete_policy_rule", { ruleId }),
+    forkSession: (sessionId: string, request: ForkSessionRequest) =>
+      invoke<SessionRecord>("fork_session", { sessionId, request }),
+    deleteSession: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
+    getPreferences: () => invoke<UserPreferences>("get_preferences"),
+    updatePreferences: (request: UpdateUserPreferencesRequest) =>
+      invoke<UserPreferences>("update_preferences", { request }),
+    getProjectFileContent: (projectId: string, relativePath: string) =>
+      invoke<ProjectFileContentResponse>("get_project_file_content", {
+        projectId,
+        relativePath,
+      }),
+    emergencyStopAll: () => invoke<EmergencyStopResponse>("emergency_stop_all"),
+    runTaskNow: (taskId: string) => invoke<TaskRecord>("run_task_now", { taskId }),
+    pauseTask: (taskId: string) => invoke<TaskRecord>("pause_task", { taskId }),
+    resumeTask: (taskId: string) => invoke<TaskRecord>("resume_task", { taskId }),
+    deleteTask: (taskId: string) => invoke<void>("delete_task", { taskId }),
+    getMemoryIndexStatus: (scope?: string | null) =>
+      invoke<IndexState>("get_memory_index_status", { scope: scope ?? null }),
   };
 }
 

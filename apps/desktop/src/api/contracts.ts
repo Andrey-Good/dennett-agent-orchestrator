@@ -600,6 +600,34 @@ export interface ListAgentsResponse {
   agents: AgentRecord[];
 }
 
+export interface AgentConfigHistoryResponse {
+  agent_id: string;
+  current_config_version_id: string;
+  versions: AgentConfigVersion[];
+}
+
+export interface PolicyRule {
+  rule_id: string;
+  scope: string;
+  tool_name: string;
+  target_pattern?: string | null;
+  effect: PolicyEffect;
+  reason: string;
+  created_at: number;
+}
+
+export interface CreatePolicyRuleRequest {
+  scope: string;
+  tool_name: string;
+  target_pattern?: string | null;
+  effect: PolicyEffect;
+  reason: string;
+}
+
+export interface ListPolicyRulesResponse {
+  rules: PolicyRule[];
+}
+
 export interface CreateAgentRequest {
   name: string;
   description: string;

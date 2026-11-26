@@ -250,7 +250,7 @@ describe("Dennett Desktop D1 Rework UI", () => {
     // Switch to Claude Opus 4.6 (Thinking) -> built-in thinking badge shown, no thinking trigger
     await user.click(screen.getByTestId("model-selector-trigger"));
     await user.click(await screen.findByTestId("model-option-claude-opus-4-6-thinking"));
-    expect(await screen.findByTestId("thinking-builtin-badge")).toHaveTextContent("Thinking");
+    expect(await screen.findByTestId("thinking-builtin-badge")).toHaveTextContent("Размышление");
     expect(screen.queryByTestId("thinking-selector-trigger")).not.toBeInTheDocument();
 
     // Fail next send -> error alert shown AND unsent draft preserved losslessly
@@ -483,7 +483,7 @@ describe("Dennett Desktop D1 Rework UI", () => {
     const banner = await screen.findByTestId("memory-outage-banner");
     expect(banner).toHaveAttribute("role", "alert");
     expect(banner).toHaveTextContent(
-      "Память memoryd недоступна — разговор сохраняется, отложенные записи ждут в очереди, Stop доступен",
+      "Память memoryd недоступна — разговор сохраняется, отложенные записи ждут в очереди, Стоп доступен",
     );
     expect(banner).toHaveTextContent("В очереди outbox: 3");
 
@@ -572,7 +572,7 @@ describe("Dennett Desktop D1 Rework UI", () => {
       sessions: [simSession],
     });
     render(<App bridge={simBridge} windowControls={createTestWindowControls()} />);
-    expect(await screen.findByTestId("simulated-runtime-badge")).toHaveTextContent("SIMULATED");
+    expect(await screen.findByTestId("simulated-runtime-badge")).toHaveTextContent("Симуляция");
   });
 
   it("toggles right sibling Workspace card cleanly and renders adversarial content safely without XSS or <select>", async () => {
@@ -881,17 +881,16 @@ describe("Dennett Desktop D1 Rework UI", () => {
       expect(bridge.agents[0]?.current_config.workspace_write_policy.mode).toBe("allow_workspace");
     });
 
-    // 3. Access popover in D2 offers all 3 live choices: Спрашивать запись, Запись в папку, Только чтение
+    // 3. Autonomy popover exposes ONLY Owner's 2 modes: Авто & Полный доступ (NO manual confirmation!)
     await user.click(screen.getByTestId("access-selector-trigger"));
     const accessPopover = await screen.findByTestId("access-popover");
-    expect(accessPopover).toHaveTextContent("Спрашивать запись");
-    expect(accessPopover).toHaveTextContent("Запись в папку");
-    expect(accessPopover).toHaveTextContent("Только чтение");
-    await user.click(screen.getByTestId("write-policy-option-ask_before_write"));
+    expect(accessPopover).toHaveTextContent("Авто");
+    expect(accessPopover).toHaveTextContent("Полный доступ");
+    expect(accessPopover).not.toHaveTextContent("Спрашивать запись");
+    expect(screen.queryByTestId("write-policy-option-ask_before_write")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("autonomy-option-full_access"));
     await waitFor(() => {
-      expect(bridge.agents[0]?.current_config.workspace_write_policy.mode).toBe(
-        "ask_before_write",
-      );
+      expect(bridge.agents[0]?.current_config.autonomy_mode).toBe("full_access");
     });
 
     // 4. Denied permission_decisions + run with assistant_message_id=null renders explicit visible notices

@@ -18,18 +18,20 @@ import {
   FileText,
   GitDiff,
   MagnifyingGlass,
+  Pause,
   PencilSimple,
+  Play,
   Plus,
   ShieldWarning,
   Trash,
   UploadSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 import {
   normalizeBridgeError,
+  type ConsolidationJob,
+  type ConsolidationJobStatus,
   type DocumentVersion,
   type EpistemicStatus,
   type ExportResponse,
@@ -47,6 +49,7 @@ import {
   type NoteHistoryResponse,
 } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PortalPopover } from "./PortalPopover";
 import { ProjectScopeFilter, STANDALONE_SCOPE_VALUE } from "./ProjectScopeFilter";
 import { StatusBanners } from "./StatusBanners";
@@ -159,6 +162,23 @@ function propagationStatusLabel(status: ForgetPropagationStatus): string {
   }
 }
 
+function consolidationStatusLabel(status: ConsolidationJobStatus): string {
+  switch (status) {
+    case "pending":
+      return "ожидает";
+    case "running":
+      return "выполняется";
+    case "paused":
+      return "на паузе";
+    case "completed":
+      return "завершено";
+    case "failed":
+      return "ошибка";
+    case "cancelled":
+      return "отменено";
+  }
+}
+
 function localizeResidualBackupNotice(notice: string): string {
   const trimmed = notice.trim();
   if (!trimmed) {
@@ -240,18 +260,24 @@ export function MemoryCard() {
   // Provenance jump highlight
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
-  // Inline Forget confirmation (zero window.confirm!) & honest residual_backup_notice
+  // Inline Forget confirmation rendered directly on clicked row (zero window.confirm, zero scroll jump!)
   const [forgetTarget, setForgetTarget] = useState<ForgetTargetState | null>(null);
   const [forgetReason, setForgetReason] = useState("Удалено владельцем из памяти Dennett");
   const [isForgetting, setIsForgetting] = useState(false);
   const [lastForgetResult, setLastForgetResult] = useState<ForgetResponse | null>(null);
 
-  // Export & Untrusted Import (Contract J)
+  // Export & Untrusted Import (Contract J) + explicit scope selector
+  const [transferScopeOverride, setTransferScopeOverride] = useState<string | null>(null);
+  const [transferScopeMenuOpen, setTransferScopeMenuOpen] = useState(false);
+  const transferScopeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [lastExport, setLastExport] = useState<ExportResponse | null>(null);
   const [lastImport, setLastImport] = useState<ImportResponse | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const importFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Consolidation job pause/resume busy state
+  const [busyJobId, setBusyJobId] = useState<string | null>(null);
 
   const activeProjects = useMemo(
     () =>
@@ -283,6 +309,17 @@ export function MemoryCard() {
     return activeProjects[0]?.memory_scope ?? STANDALONE_SCOPE_VALUE;
   }, [activeProjects, meta.activeProject, selectedMemoryScope]);
 
+  const effectiveTransferScope = transferScopeOverride ?? defaultWriteScope;
+
+  const availableTransferScopes = useMemo(() => {
+    const items: Array<{ scope: string; label: string }> = [];
+    for (const proj of activeProjects) {
+      items.push({ scope: proj.memory_scope, label: proj.name });
+    }
+    items.push({ scope: STANDALONE_SCOPE_VALUE, label: "Одиночные чаты" });
+    return items;
+  }, [activeProjects]);
+
   const scopeLabelByScope = useMemo(() => {
     const map = new Map<string, string>();
     map.set(STANDALONE_SCOPE_VALUE, "Одиночные чаты");
@@ -291,6 +328,9 @@ export function MemoryCard() {
     }
     return map;
   }, [state.projects]);
+
+  // Wire top TitleBar searchQuery into MemoryCard filtering/search cleanly!
+  const effectiveQuery = (queryInput.trim() || state.searchQuery.trim()).trim();
 
   const connected = Boolean(state.healthSnapshot?.connected);
   const globalOverview = state.memoryOverview;
@@ -361,21 +401,20 @@ export function MemoryCard() {
     [bridge, connected],
   );
 
-  // Debounced search whenever query, includeHistory, or scope changes
+  // Debounced search whenever effectiveQuery (local or TitleBar), includeHistory, or scope changes
   useEffect(() => {
     if (!connected) {
       return;
     }
-    const trimmed = queryInput.trim();
-    if (!trimmed && !includeHistory) {
+    if (!effectiveQuery && !includeHistory) {
       setSearchResult(null);
       return;
     }
     const timer = window.setTimeout(() => {
-      void runSearch(trimmed, includeHistory, selectedMemoryScope);
+      void runSearch(effectiveQuery, includeHistory, selectedMemoryScope);
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [connected, includeHistory, queryInput, runSearch, selectedMemoryScope]);
+  }, [connected, effectiveQuery, includeHistory, runSearch, selectedMemoryScope]);
 
   const effectiveIndexStatus: IndexStatus =
     searchResult?.index_status ?? overview?.stats?.index_status ?? "healthy";
@@ -395,11 +434,18 @@ export function MemoryCard() {
       return searchResult.notes;
     }
     const all = overview?.notes ?? [];
-    if (!selectedMemoryScope) {
-      return all;
+    const scoped = selectedMemoryScope ? all.filter((n) => n.scope === selectedMemoryScope) : all;
+    const q = effectiveQuery.toLowerCase();
+    if (!q) {
+      return scoped;
     }
-    return all.filter((n) => n.scope === selectedMemoryScope);
-  }, [overview?.notes, searchResult, selectedMemoryScope]);
+    return scoped.filter(
+      (n) =>
+        n.title.toLowerCase().includes(q) ||
+        n.body.toLowerCase().includes(q) ||
+        (n.tags ?? []).some((t) => t.toLowerCase().includes(q)),
+    );
+  }, [effectiveQuery, overview?.notes, searchResult, selectedMemoryScope]);
 
   const allClaims = useMemo<MemoryClaim[]>(() => {
     const raw = overview?.claims ?? [];
@@ -411,13 +457,31 @@ export function MemoryCard() {
     for (const c of overview?.claims ?? []) {
       map.set(c.claim_id, c);
     }
+    for (const c of searchResult?.claims ?? []) {
+      map.set(c.claim_id, c);
+    }
     return map;
-  }, [overview?.claims]);
+  }, [overview?.claims, searchResult?.claims]);
 
+  // Unified search display: use server-returned searchResult.claims when available!
   const visibleClaims = useMemo<MemoryClaim[]>(() => {
-    const q = queryInput.trim().toLowerCase();
+    if (
+      searchResult &&
+      searchResult.memory_status === "healthy" &&
+      Array.isArray(searchResult.claims)
+    ) {
+      return searchResult.claims.filter(
+        (c) =>
+          includeHistory ||
+          (c.epistemic_status !== "superseded" && c.epistemic_status !== "retracted"),
+      );
+    }
+    const q = effectiveQuery.toLowerCase();
     return allClaims.filter((c) => {
-      if (!includeHistory && (c.epistemic_status === "superseded" || c.epistemic_status === "retracted")) {
+      if (
+        !includeHistory &&
+        (c.epistemic_status === "superseded" || c.epistemic_status === "retracted")
+      ) {
         return false;
       }
       if (!q) {
@@ -429,12 +493,12 @@ export function MemoryCard() {
         (c.caveats ?? []).some((cav) => cav.toLowerCase().includes(q))
       );
     });
-  }, [allClaims, includeHistory, queryInput]);
+  }, [allClaims, effectiveQuery, includeHistory, searchResult]);
 
   const visibleConflicts = useMemo<MemoryConflict[]>(() => {
     const raw = overview?.conflicts ?? [];
     const scoped = selectedMemoryScope ? raw.filter((c) => c.scope === selectedMemoryScope) : raw;
-    const q = queryInput.trim().toLowerCase();
+    const q = effectiveQuery.toLowerCase();
     if (!q) {
       return scoped;
     }
@@ -445,7 +509,7 @@ export function MemoryCard() {
       );
       return topicMatch || candMatch;
     });
-  }, [claimById, overview?.conflicts, queryInput, selectedMemoryScope]);
+  }, [claimById, effectiveQuery, overview?.conflicts, selectedMemoryScope]);
 
   const openConflicts = useMemo(
     () => visibleConflicts.filter((c) => c.status === "open"),
@@ -456,10 +520,18 @@ export function MemoryCard() {
     [visibleConflicts],
   );
 
+  // Unified search display: use server-returned searchResult.documents when available!
   const visibleDocuments = useMemo<MemoryDocument[]>(() => {
+    if (
+      searchResult &&
+      searchResult.memory_status === "healthy" &&
+      Array.isArray(searchResult.documents)
+    ) {
+      return searchResult.documents;
+    }
     const raw = overview?.documents ?? [];
     const scoped = selectedMemoryScope ? raw.filter((d) => d.scope === selectedMemoryScope) : raw;
-    const q = queryInput.trim().toLowerCase();
+    const q = effectiveQuery.toLowerCase();
     if (!q) {
       return scoped;
     }
@@ -469,7 +541,12 @@ export function MemoryCard() {
         d.document_key.toLowerCase().includes(q) ||
         d.current_body.toLowerCase().includes(q),
     );
-  }, [overview?.documents, queryInput, selectedMemoryScope]);
+  }, [effectiveQuery, overview?.documents, searchResult, selectedMemoryScope]);
+
+  const visibleConsolidationJobs = useMemo<ConsolidationJob[]>(() => {
+    const raw = overview?.consolidation_jobs ?? [];
+    return selectedMemoryScope ? raw.filter((j) => j.scope === selectedMemoryScope) : raw;
+  }, [overview?.consolidation_jobs, selectedMemoryScope]);
 
   const visibleTombstones = useMemo(() => {
     const raw = overview?.tombstones ?? [];
@@ -564,7 +641,7 @@ export function MemoryCard() {
   // Handlers
   const handleSearchSubmit = (event: FormEvent) => {
     event.preventDefault();
-    void runSearch(queryInput, includeHistory, selectedMemoryScope);
+    void runSearch(effectiveQuery, includeHistory, selectedMemoryScope);
   };
 
   const handleCreateNote = async (event: FormEvent) => {
@@ -707,15 +784,21 @@ export function MemoryCard() {
     }
   };
 
-  const handleResolveConflict = async (conflict: MemoryConflict, explicitWinnerId?: string) => {
+  const handleResolveConflict = async (
+    conflict: MemoryConflict,
+    mode: "resolved" | "accepted_ambiguity" = "resolved",
+  ) => {
     const winningClaimId =
-      explicitWinnerId ??
-      selectedWinnerByConflict[conflict.conflict_id] ??
-      conflict.candidate_claim_ids[0] ??
-      null;
+      mode === "accepted_ambiguity"
+        ? null
+        : (selectedWinnerByConflict[conflict.conflict_id] ??
+          conflict.candidate_claim_ids[0] ??
+          null);
     const note =
       resolutionNoteByConflict[conflict.conflict_id]?.trim() ||
-      "Разрешено владельцем в разделе Память";
+      (mode === "accepted_ambiguity"
+        ? "Приняты оба варианта в зависимости от контекста"
+        : "Разрешено владельцем в разделе Память");
     setResolvingConflictId(conflict.conflict_id);
     setLocalError(null);
     try {
@@ -724,7 +807,7 @@ export function MemoryCard() {
         scope: conflict.scope,
         resolution_note: note,
         winning_claim_id: winningClaimId,
-        target_status: "resolved",
+        target_status: mode,
         idempotency_key: makeIdempotencyKey("ui-conflict"),
       });
       await reloadAfterMutation();
@@ -820,8 +903,8 @@ export function MemoryCard() {
       setLastForgetResult(resp);
       setForgetTarget(null);
       await reloadAfterMutation();
-      if (queryInput.trim() || includeHistory) {
-        await runSearch(queryInput, includeHistory, selectedMemoryScope);
+      if (effectiveQuery || includeHistory) {
+        await runSearch(effectiveQuery, includeHistory, selectedMemoryScope);
       }
     } catch (err) {
       setLocalError(normalizeBridgeError(err).message);
@@ -835,7 +918,7 @@ export function MemoryCard() {
     setLocalError(null);
     try {
       const exported = await meta.bridge.exportMemoryPackage({
-        scope: defaultWriteScope,
+        scope: effectiveTransferScope,
         format_version: "1.0",
       });
       setLastExport(exported);
@@ -869,7 +952,7 @@ export function MemoryCard() {
     try {
       const text = await readFileAsText(file);
       const imported = await meta.bridge.importMemoryPackage({
-        scope: defaultWriteScope,
+        scope: effectiveTransferScope,
         package_json: text,
       });
       setLastImport(imported);
@@ -878,6 +961,23 @@ export function MemoryCard() {
       setLocalError(normalizeBridgeError(err).message);
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handlePauseOrResumeJob = async (job: ConsolidationJob, action: "pause" | "resume") => {
+    setBusyJobId(job.job_id);
+    setLocalError(null);
+    try {
+      if (action === "pause") {
+        await meta.bridge.pauseMemoryConsolidationJob(job.job_id);
+      } else {
+        await meta.bridge.resumeMemoryConsolidationJob(job.job_id);
+      }
+      await reloadAfterMutation();
+    } catch (err) {
+      setLocalError(normalizeBridgeError(err).message);
+    } finally {
+      setBusyJobId(null);
     }
   };
 
@@ -914,6 +1014,9 @@ export function MemoryCard() {
       setQueryInput("");
       setSearchResult(null);
     }
+    if (state.searchQuery.trim()) {
+      actions.setSearchQuery("");
+    }
 
     setActiveTab("knowledge");
     setHighlightedId(entityId);
@@ -931,6 +1034,61 @@ export function MemoryCard() {
     }, 30);
     return () => window.clearTimeout(timer);
   }, [activeTab, highlightedId, includeHistory, visibleClaims.length, visibleNotes.length]);
+
+  const renderInlineForgetConfirm = (targetType: ForgetTargetType, targetId: string) => {
+    if (
+      !forgetTarget ||
+      forgetTarget.targetType !== targetType ||
+      forgetTarget.targetId !== targetId
+    ) {
+      return null;
+    }
+    return (
+      <section
+        className="memory-forget-confirm memory-forget-confirm--inline"
+        role="alertdialog"
+        aria-label="Подтверждение забывания записи"
+        data-testid="memory-forget-confirm"
+      >
+        <div className="memory-forget-confirm__head">
+          <Trash size={15} aria-hidden="true" />
+          <strong>
+            Забыть ({targetTypeLabel(forgetTarget.targetType)}): «{forgetTarget.label}»?
+          </strong>
+        </div>
+        <p>
+          Запись будет немедленно удалена из активных проекций и поискового индекса с фиксацией
+          content-free tombstone в журнале аудита.
+        </p>
+        <div className="d2-inline-reply">
+          <input
+            type="text"
+            value={forgetReason}
+            onChange={(e) => setForgetReason(e.target.value)}
+            placeholder="Причина забывания (без секретов и содержимого)…"
+            aria-label="Причина забывания"
+            data-testid="memory-forget-reason-input"
+          />
+          <button
+            type="button"
+            className="d2-danger-btn"
+            onClick={() => void handleConfirmForget()}
+            disabled={isForgetting || !forgetReason.trim()}
+            data-testid="memory-forget-confirm-btn"
+          >
+            {isForgetting ? "Удаление…" : "Подтвердить забывание"}
+          </button>
+          <button
+            type="button"
+            className="popover-secondary-btn"
+            onClick={() => setForgetTarget(null)}
+          >
+            Отмена
+          </button>
+        </div>
+      </section>
+    );
+  };
 
   return (
     <main className="chat-card d2-surface-card memory-card" data-testid="memory-card">
@@ -971,13 +1129,62 @@ export function MemoryCard() {
             </span>
           )}
 
+          {/* Explicit scope selector for Export / Import (zero <select>!) */}
+          <button
+            ref={transferScopeTriggerRef}
+            type="button"
+            className="project-scope-filter__trigger"
+            aria-expanded={transferScopeMenuOpen}
+            aria-haspopup="menu"
+            disabled={!connected || isDegradedUnreachable}
+            data-testid="memory-transfer-scope-trigger"
+            title="Область для экспорта и импорта JSON"
+            onClick={() => setTransferScopeMenuOpen((v) => !v)}
+          >
+            <span className="project-scope-filter__label">
+              Область: {scopeLabelByScope.get(effectiveTransferScope) ?? effectiveTransferScope}
+            </span>
+            <CaretDown size={11} aria-hidden="true" />
+          </button>
+          <PortalPopover
+            isOpen={transferScopeMenuOpen}
+            anchorEl={transferScopeTriggerRef.current}
+            onClose={() => setTransferScopeMenuOpen(false)}
+            placement="bottom-end"
+            className="project-scope-filter__menu"
+            role="menu"
+            ariaLabel="Выбор области для экспорта и импорта"
+            testId="memory-transfer-scope-menu"
+          >
+            {availableTransferScopes.map((item) => {
+              const selected = item.scope === effectiveTransferScope;
+              return (
+                <button
+                  key={item.scope}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  className={selected ? "is-selected" : ""}
+                  data-testid={`memory-transfer-scope-option-${item.scope}`}
+                  onClick={() => {
+                    setTransferScopeOverride(item.scope);
+                    setTransferScopeMenuOpen(false);
+                  }}
+                >
+                  <span>{item.label}</span>
+                  {selected && <Check size={13} aria-hidden="true" />}
+                </button>
+              );
+            })}
+          </PortalPopover>
+
           <button
             type="button"
             className="popover-secondary-btn"
             onClick={() => void handleExport()}
             disabled={!connected || isDegradedUnreachable || isExporting}
             data-testid="memory-export-btn"
-            title="Экспортировать детерминированный JSON без секретов"
+            title={`Экспортировать детерминированный JSON (${effectiveTransferScope}) без секретов`}
           >
             <DownloadSimple size={14} aria-hidden="true" />
             Экспорт
@@ -989,7 +1196,7 @@ export function MemoryCard() {
             onClick={() => importFileRef.current?.click()}
             disabled={!connected || isDegradedUnreachable || isImporting}
             data-testid="memory-import-btn"
-            title="Импортировать JSON-пакет как недоверенные внешние данные"
+            title={`Импортировать JSON-пакет в ${effectiveTransferScope} как недоверенные внешние данные`}
           >
             <UploadSimple size={14} aria-hidden="true" />
             Импорт
@@ -1027,7 +1234,11 @@ export function MemoryCard() {
             type="search"
             value={queryInput}
             onChange={(e) => setQueryInput(e.target.value)}
-            placeholder="Поиск по заметкам, утверждениям и темам…"
+            placeholder={
+              state.searchQuery.trim()
+                ? `Фильтр из шапки: «${state.searchQuery.trim()}»`
+                : "Поиск по заметкам, утверждениям и досье…"
+            }
             aria-label="Поиск по памяти"
             data-testid="memory-search-input"
             disabled={!connected || isDegradedUnreachable}
@@ -1157,8 +1368,8 @@ export function MemoryCard() {
                 <div className="memory-alert memory-alert--ok" data-testid="memory-export-banner">
                   <DownloadSimple size={15} aria-hidden="true" />
                   <span>
-                    Экспортировано элементов: {lastExport.item_count} (секреты удалены) · SHA-256:{" "}
-                    <code>{lastExport.manifest_sha256.slice(0, 16)}…</code>
+                    Экспортировано элементов: {lastExport.item_count} ({lastExport.scope}, секреты
+                    удалены) · SHA-256: <code>{lastExport.manifest_sha256.slice(0, 16)}…</code>
                   </span>
                   <button
                     type="button"
@@ -1177,7 +1388,8 @@ export function MemoryCard() {
                     <strong>Недоверенный импорт · инструкции отключены</strong>
                     <span>
                       Импортировано: {lastImport.items_imported}, отклонено:{" "}
-                      {lastImport.items_rejected} (уровень доверия: {lastImport.trust_level})
+                      {lastImport.items_rejected} (область: {lastImport.scope}, уровень доверия:{" "}
+                      {lastImport.trust_level})
                     </span>
                     {lastImport.validation_errors && lastImport.validation_errors.length > 0 && (
                       <small>{lastImport.validation_errors.join("; ")}</small>
@@ -1191,52 +1403,6 @@ export function MemoryCard() {
                     Скрыть
                   </button>
                 </div>
-              )}
-
-              {forgetTarget && (
-                <section
-                  className="memory-forget-confirm"
-                  role="alertdialog"
-                  aria-label="Подтверждение забывания записи"
-                  data-testid="memory-forget-confirm"
-                >
-                  <div className="memory-forget-confirm__head">
-                    <Trash size={16} aria-hidden="true" />
-                    <strong>
-                      Забыть ({targetTypeLabel(forgetTarget.targetType)}): «{forgetTarget.label}»?
-                    </strong>
-                  </div>
-                  <p>
-                    Запись будет немедленно удалена из активных проекций и поискового индекса с
-                    фиксацией content-free tombstone в журнале аудита.
-                  </p>
-                  <div className="d2-inline-reply">
-                    <input
-                      type="text"
-                      value={forgetReason}
-                      onChange={(e) => setForgetReason(e.target.value)}
-                      placeholder="Причина забывания (без секретов и содержимого)…"
-                      aria-label="Причина забывания"
-                      data-testid="memory-forget-reason-input"
-                    />
-                    <button
-                      type="button"
-                      className="d2-danger-btn"
-                      onClick={() => void handleConfirmForget()}
-                      disabled={isForgetting || !forgetReason.trim()}
-                      data-testid="memory-forget-confirm-btn"
-                    >
-                      {isForgetting ? "Удаление…" : "Подтвердить забывание"}
-                    </button>
-                    <button
-                      type="button"
-                      className="popover-secondary-btn"
-                      onClick={() => setForgetTarget(null)}
-                    >
-                      Отмена
-                    </button>
-                  </div>
-                </section>
               )}
 
               {lastForgetResult && (
@@ -1317,7 +1483,7 @@ export function MemoryCard() {
                         rows={3}
                         value={noteBody}
                         onChange={(e) => setNoteBody(e.target.value)}
-                        placeholder="Факты, решения и контекст…"
+                        placeholder="Факты, решения и контекст (поддерживается Markdown)…"
                         aria-label="Текст заметки"
                         required
                       />
@@ -1532,6 +1698,8 @@ export function MemoryCard() {
                                   </button>
                                 </div>
                               )}
+
+                              {renderInlineForgetConfirm("claim", claim.claim_id)}
                             </article>
                           );
                         })}
@@ -1593,7 +1761,9 @@ export function MemoryCard() {
                               </div>
 
                               <h3 className="d2-item-card__title">{note.title}</h3>
-                              <p className="d2-item-card__detail memory-body-text">{note.body}</p>
+                              <div className="d2-item-card__detail memory-note-markdown">
+                                <MarkdownRenderer content={note.body} />
+                              </div>
 
                               {correctingNoteId === note.note_id ? (
                                 <form
@@ -1676,6 +1846,8 @@ export function MemoryCard() {
                                   </button>
                                 </div>
                               )}
+
+                              {renderInlineForgetConfirm("note", note.note_id)}
 
                               {expandedHistoryNoteId === note.note_id && history && (
                                 <div
@@ -1815,10 +1987,21 @@ export function MemoryCard() {
                                 type="button"
                                 className="popover-primary-btn"
                                 disabled={isBusy}
-                                onClick={() => void handleResolveConflict(conflict)}
+                                onClick={() => void handleResolveConflict(conflict, "resolved")}
                                 data-testid={`conflict-resolve-btn-${conflict.conflict_id}`}
                               >
                                 {isBusy ? "Сохранение…" : "Разрешить конфликт"}
+                              </button>
+                              <button
+                                type="button"
+                                className="popover-secondary-btn"
+                                disabled={isBusy}
+                                onClick={() =>
+                                  void handleResolveConflict(conflict, "accepted_ambiguity")
+                                }
+                                data-testid={`conflict-accept-both-${conflict.conflict_id}`}
+                              >
+                                Принять оба (контекстуально)
                               </button>
                             </div>
                           </article>
@@ -1843,11 +2026,16 @@ export function MemoryCard() {
                           >
                             <div className="d2-grant-row__info">
                               <strong>
-                                {c.topic_key ?? conflictTypeLabel(c.conflict_type)} — разрешён
+                                {c.topic_key ?? conflictTypeLabel(c.conflict_type)} —{" "}
+                                {c.status === "accepted_ambiguity"
+                                  ? "приняты оба (контекстуально)"
+                                  : "разрешён"}
                               </strong>
                               <small>{c.resolution_note ?? "Решение зафиксировано"}</small>
                             </div>
-                            <span className="d2-pill d2-pill--status-succeeded">Разрешён</span>
+                            <span className="d2-pill d2-pill--status-succeeded">
+                              {c.status === "accepted_ambiguity" ? "Оба приняты" : "Разрешён"}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -2070,6 +2258,8 @@ export function MemoryCard() {
                             </span>
                           )}
 
+                          {renderInlineForgetConfirm("document", selectedDoc.document_id)}
+
                           {editingDoc ? (
                             <form
                               className="memory-inline-form"
@@ -2119,9 +2309,9 @@ export function MemoryCard() {
                               className="artifact-preview__markdown memory-dossier-markdown"
                               data-testid="dossier-markdown-body"
                             >
-                              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-                                {activeDocVersionObj?.body ?? selectedDoc.current_body}
-                              </ReactMarkdown>
+                              <MarkdownRenderer
+                                content={activeDocVersionObj?.body ?? selectedDoc.current_body}
+                              />
                             </div>
                           )}
 
@@ -2160,6 +2350,74 @@ export function MemoryCard() {
                       )}
                     </div>
                   )}
+                </section>
+              )}
+
+              {/* Consolidation Jobs List with Pause / Resume controls */}
+              {visibleConsolidationJobs.length > 0 && (
+                <section className="d2-section" data-testid="memory-consolidation-section">
+                  <div className="d2-section__head">
+                    <h2>
+                      Задачи консолидации памяти <span>{visibleConsolidationJobs.length}</span>
+                    </h2>
+                  </div>
+                  <div className="d2-grant-list memory-consolidation-list">
+                    {visibleConsolidationJobs.map((job) => {
+                      const canPause = job.status === "running" || job.status === "pending";
+                      const canResume = job.status === "paused";
+                      const isBusy = busyJobId === job.job_id;
+                      return (
+                        <div
+                          key={job.job_id}
+                          className="d2-grant-row"
+                          data-testid={`consolidation-job-${job.job_id}`}
+                        >
+                          <div className="d2-grant-row__info">
+                            <strong>
+                              {job.job_type} ·{" "}
+                              {scopeLabelByScope.get(job.scope) ?? job.scope}
+                            </strong>
+                            <small>
+                              Обновлено: {formatDateTime(job.updated_at)}
+                              {job.error_detail ? ` · ${job.error_detail}` : ""}
+                            </small>
+                          </div>
+                          <div className="d2-item-card__actions">
+                            <span
+                              className="d2-meta-chip"
+                              data-testid={`consolidation-job-status-${job.job_id}`}
+                            >
+                              {consolidationStatusLabel(job.status)}
+                            </span>
+                            {canPause && (
+                              <button
+                                type="button"
+                                className="d2-link-btn"
+                                disabled={!connected || isBusy}
+                                data-testid={`consolidation-job-pause-${job.job_id}`}
+                                onClick={() => void handlePauseOrResumeJob(job, "pause")}
+                              >
+                                <Pause size={12} aria-hidden="true" />
+                                Пауза
+                              </button>
+                            )}
+                            {canResume && (
+                              <button
+                                type="button"
+                                className="d2-link-btn"
+                                disabled={!connected || isBusy}
+                                data-testid={`consolidation-job-resume-${job.job_id}`}
+                                onClick={() => void handlePauseOrResumeJob(job, "resume")}
+                              >
+                                <Play size={12} aria-hidden="true" />
+                                Возобновить
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </section>
               )}
 

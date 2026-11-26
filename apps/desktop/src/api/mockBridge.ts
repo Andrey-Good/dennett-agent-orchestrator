@@ -3,8 +3,11 @@ import {
   sortProjectsByPin,
   sortSessionsByPin,
   type ActivateConnectionRequest,
+  type AgentConfigHistoryResponse,
+  type AgentConfigVersion,
   type AgentMessageRecord,
   type AgentRecord,
+  type ArtifactContentResponse,
   type ArtifactLifecycleRequest,
   type ArtifactLifecycleResponse,
   type ArtifactRecord,
@@ -26,6 +29,7 @@ import {
   type CreateClaimRequest,
   type CreateConsolidationJobRequest,
   type CreateDocumentRequest,
+  type CreatePolicyRuleRequest,
   type CreateProjectRequest,
   type CreateSessionRequest,
   type CreateTaskRequest,
@@ -39,6 +43,7 @@ import {
   type DispatchEffectResponse,
   type DocumentVersion,
   type EffectClaimRecord,
+  type EmergencyStopResponse,
   type EnqueueFollowupRequest,
   type EventStreamResponse,
   type ExportRequest,
@@ -47,6 +52,7 @@ import {
   type ForgetRequest,
   type ForgetResponse,
   type ForgetTombstone,
+  type ForkSessionRequest,
   type GetDocumentVersionsResponse,
   type HeadHealth,
   type HeadMemorySearchRequest,
@@ -54,6 +60,7 @@ import {
   type ImportRequest,
   type ImportResponse,
   type InboxCardRecord,
+  type IndexState,
   type IndexStatus,
   type ListAgentMessagesResponse,
   type ListAgentsResponse,
@@ -67,6 +74,7 @@ import {
   type ListEffectsResponse,
   type ListInboxResponse,
   type ListPermissionRequestsResponse,
+  type ListPolicyRulesResponse,
   type ListProjectFilesResponse,
   type ListProjectsResponse,
   type ListProviderConnectionsResponse,
@@ -89,7 +97,9 @@ import {
   type PermissionDecisionRecord,
   type PermissionRequestRecord,
   type PlannedProviderInfo,
+  type PolicyRule,
   type ProbeConnectionResponse,
+  type ProjectFileContentResponse,
   type ProjectLifecycleResponse,
   type ProjectRecord,
   type ProviderConnectionRecord,
@@ -140,7 +150,9 @@ import {
   type UpdateProjectRequest,
   type UpdateSessionRequest,
   type UpdateTaskRequest,
+  type UpdateUserPreferencesRequest,
   type UpsertProviderConnectionRequest,
+  type UserPreferences,
   type WorkspaceFileEntry,
 } from "./contracts";
 
@@ -198,6 +210,10 @@ export interface MockBridgeSeed {
   quotaError?: ProviderQuotaError | null;
   localProbeModels?: RuntimeModelOption[];
   memorySourcesCount?: number;
+  fileContentsByProject?: Record<string, Record<string, string | ProjectFileContentResponse>>;
+  artifactContentsById?: Record<string, ArtifactContentResponse>;
+  preferences?: Partial<UserPreferences>;
+  policyRules?: PolicyRule[];
   folderCapabilitiesByPath?: Record<
     string,
     {
@@ -384,6 +400,11 @@ export class MockDesktopBridge implements DesktopBridge {
   public quotaError: ProviderQuotaError | null;
   public localProbeModels: RuntimeModelOption[];
   public memorySourcesCount: number;
+  public fileContentsByProject: Record<string, Record<string, string | ProjectFileContentResponse>>;
+  public artifactContentsById: Record<string, ArtifactContentResponse>;
+  public preferences: UserPreferences;
+  public policyRules: PolicyRule[];
+  public agentConfigHistoryByAgentId: Record<string, AgentConfigVersion[]>;
   public folderCapabilitiesByPath: NonNullable<MockBridgeSeed["folderCapabilitiesByPath"]>;
   private previousCapabilitySnapshots = new Map<string, CapabilityRecord>();
   private lastRebuildAt: number | null = null;
@@ -588,6 +609,20 @@ export class MockDesktopBridge implements DesktopBridge {
       ? [...seed.localProbeModels]
       : [...DEFAULT_LOCAL_HTTP_MODELS];
     this.memorySourcesCount = seed.memorySourcesCount ?? 0;
+    this.fileContentsByProject = { ...(seed.fileContentsByProject ?? {}) };
+    this.artifactContentsById = { ...(seed.artifactContentsById ?? {}) };
+    this.preferences = {
+      ui_language: seed.preferences?.ui_language ?? "ru",
+      agent_language: seed.preferences?.agent_language ?? "ru",
+      timezone: seed.preferences?.timezone ?? "Asia/Yekaterinburg",
+      enter_to_send: seed.preferences?.enter_to_send ?? true,
+      updated_at: seed.preferences?.updated_at ?? initNow,
+    };
+    this.policyRules = seed.policyRules ? seed.policyRules.map((r) => ({ ...r })) : [];
+    this.agentConfigHistoryByAgentId = {};
+    for (const agent of this.agents) {
+      this.agentConfigHistoryByAgentId[agent.agent_id] = [{ ...agent.current_config }];
+    }
     this.folderCapabilitiesByPath = { ...(seed.folderCapabilitiesByPath ?? {}) };
   }
 
@@ -1049,6 +1084,7 @@ export class MockDesktopBridge implements DesktopBridge {
         thinking_level: request.thinking_level ?? null,
         allowed_memory_scopes: [...request.allowed_memory_scopes],
         workspace_write_policy: request.workspace_write_policy,
+        autonomy_mode: request.autonomy_mode ?? "auto",
         default_budget: request.default_budget ?? null,
         attached_skills: [...(request.attached_skills ?? [])],
         preferred_connection_id: request.preferred_connection_id ?? null,
@@ -1058,6 +1094,7 @@ export class MockDesktopBridge implements DesktopBridge {
       updated_at: now,
     };
     this.agents = [agent, ...this.agents];
+    this.agentConfigHistoryByAgentId[agentId] = [{ ...agent.current_config }];
     return agent;
   }
 
@@ -1073,29 +1110,34 @@ export class MockDesktopBridge implements DesktopBridge {
     }
     const now = Date.now();
     const nextCfgId = this.nextUuid("22000000");
+    // Mirrors real Head contract: omits/undefined fields overwrite on the server!
+    const nextConfig: AgentConfigVersion = {
+      config_version_id: nextCfgId,
+      agent_id: existing.agent_id,
+      version_number: existing.current_config.version_number + 1,
+      system_prompt: request.system_prompt,
+      model_preference: request.model_preference ?? null,
+      thinking_level: request.thinking_level ?? null,
+      allowed_memory_scopes: [...request.allowed_memory_scopes],
+      workspace_write_policy: request.workspace_write_policy,
+      autonomy_mode: request.autonomy_mode ?? existing.current_config.autonomy_mode ?? "auto",
+      default_budget: request.default_budget !== undefined ? request.default_budget : null,
+      attached_skills: request.attached_skills !== undefined ? [...request.attached_skills] : [],
+      preferred_connection_id:
+        request.preferred_connection_id !== undefined ? request.preferred_connection_id : null,
+      created_at: now,
+    };
     const updated: AgentRecord = {
       ...existing,
       current_config_version_id: nextCfgId,
       updated_at: now,
-      current_config: {
-        config_version_id: nextCfgId,
-        agent_id: existing.agent_id,
-        version_number: existing.current_config.version_number + 1,
-        system_prompt: request.system_prompt,
-        model_preference: request.model_preference ?? null,
-        thinking_level: request.thinking_level ?? null,
-        allowed_memory_scopes: [...request.allowed_memory_scopes],
-        workspace_write_policy: request.workspace_write_policy,
-        default_budget: request.default_budget ?? existing.current_config.default_budget ?? null,
-        attached_skills: request.attached_skills ?? existing.current_config.attached_skills ?? [],
-        preferred_connection_id:
-          request.preferred_connection_id !== undefined
-            ? request.preferred_connection_id
-            : (existing.current_config.preferred_connection_id ?? null),
-        created_at: now,
-      },
+      current_config: nextConfig,
     };
     this.agents = this.agents.map((a) => (a.agent_id === agentId ? updated : a));
+    this.agentConfigHistoryByAgentId[agentId] = [
+      ...(this.agentConfigHistoryByAgentId[agentId] ?? [{ ...existing.current_config }]),
+      { ...nextConfig },
+    ];
     return updated;
   }
 
@@ -1181,8 +1223,12 @@ export class MockDesktopBridge implements DesktopBridge {
   ): Promise<SessionRecord> {
     this.calls.push({ method: "updateSession", args: { sessionId, request } });
     this.ensureConnected();
-    if (request.title === undefined && request.pinned === undefined) {
-      throw { code: "INVALID_INPUT", message: "updateSession requires title or pinned" };
+    if (
+      request.title === undefined &&
+      request.pinned === undefined &&
+      request.status === undefined
+    ) {
+      throw { code: "INVALID_INPUT", message: "updateSession requires title, pinned, or status" };
     }
     const existing = this.sessions.find((s) => s.session_id === sessionId);
     if (!existing) {
@@ -1199,12 +1245,17 @@ export class MockDesktopBridge implements DesktopBridge {
         : request.pinned === false
           ? null
           : (existing.pinned_at ?? null);
+    const nextStatus = request.status ?? existing.status;
     const updated: SessionRecord = {
       ...existing,
       title: nextTitle,
+      status: nextStatus,
       pinned: nextPinned,
       pinned_at: nextPinnedAt,
-      updated_at: request.title !== undefined ? this.nextTimestamp() : existing.updated_at,
+      updated_at:
+        request.title !== undefined || request.status !== undefined
+          ? this.nextTimestamp()
+          : existing.updated_at,
     };
     this.sessions = sortSessionsByPin(
       this.sessions.map((s) => (s.session_id === sessionId ? updated : s)),
@@ -2523,6 +2574,22 @@ export class MockDesktopBridge implements DesktopBridge {
       }
     }
     const limited = request.limit ? matchedNotes.slice(0, request.limit) : matchedNotes;
+    const matchedClaims = this.memoryClaims.filter(
+      (c) =>
+        (!request.scope || c.scope === request.scope) &&
+        (!q ||
+          c.topic_key.toLowerCase().includes(q) ||
+          c.natural_language.toLowerCase().includes(q) ||
+          (c.caveats ?? []).some((cv) => cv.toLowerCase().includes(q))),
+    );
+    const matchedDocs = this.memoryDocuments.filter(
+      (d) =>
+        (!request.scope || d.scope === request.scope) &&
+        (!q ||
+          d.title.toLowerCase().includes(q) ||
+          d.document_key.toLowerCase().includes(q) ||
+          d.current_body.toLowerCase().includes(q)),
+    );
     const staleWarning =
       this.staleWarning ??
       (this.indexStatus === "degraded"
@@ -2536,6 +2603,8 @@ export class MockDesktopBridge implements DesktopBridge {
       memory_status: "healthy",
       degraded_reason: null,
       notes: limited,
+      claims: request.limit ? matchedClaims.slice(0, request.limit) : matchedClaims,
+      documents: request.limit ? matchedDocs.slice(0, request.limit) : matchedDocs,
       index_status: this.indexStatus,
       stale_warning: staleWarning,
     };
@@ -4085,6 +4154,322 @@ export class MockDesktopBridge implements DesktopBridge {
       client_message_id: request.client_message_id ?? null,
       timeout_ms: request.timeout_ms ?? null,
     });
+  }
+
+  // Phase D3+ Audit Closure mock implementations
+  public async getArtifactContent(
+    sessionId: string,
+    artifactId: string,
+  ): Promise<ArtifactContentResponse> {
+    this.calls.push({ method: "getArtifactContent", args: { sessionId, artifactId } });
+    this.ensureConnected();
+    const seeded = this.artifactContentsById[artifactId];
+    if (seeded) {
+      return { ...seeded };
+    }
+    const art = (this.artifactsBySession[sessionId] ?? []).find(
+      (a) => a.artifact_id === artifactId,
+    );
+    if (!art) {
+      throw { code: "NOT_FOUND", message: `artifact ${artifactId} not found` };
+    }
+    const text = art.content ?? "";
+    const bytes = new TextEncoder().encode(text);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]!);
+    }
+    return {
+      mime_type: art.mime_type,
+      sha256: art.sha256,
+      byte_size: bytes.byteLength,
+      text,
+      base64: btoa(binary),
+      is_binary: false,
+    };
+  }
+
+  public async getAgentConfigHistory(agentId: string): Promise<AgentConfigHistoryResponse> {
+    this.calls.push({ method: "getAgentConfigHistory", args: agentId });
+    this.ensureConnected();
+    const agent = this.agents.find((a) => a.agent_id === agentId);
+    if (!agent) {
+      throw { code: "NOT_FOUND", message: `agent ${agentId} not found` };
+    }
+    const versions = this.agentConfigHistoryByAgentId[agentId] ?? [agent.current_config];
+    return {
+      agent_id: agent.agent_id,
+      current_config_version_id: agent.current_config_version_id,
+      versions: versions.map((v) => ({ ...v })),
+    };
+  }
+
+  public async listPolicyRules(): Promise<ListPolicyRulesResponse> {
+    this.calls.push({ method: "listPolicyRules" });
+    this.ensureConnected();
+    return { rules: this.policyRules.map((r) => ({ ...r })) };
+  }
+
+  public async createPolicyRule(request: CreatePolicyRuleRequest): Promise<PolicyRule> {
+    this.calls.push({ method: "createPolicyRule", args: request });
+    this.ensureConnected();
+    const rule: PolicyRule = {
+      rule_id: this.nextUuid("84000000"),
+      scope: request.scope.trim(),
+      tool_name: request.tool_name.trim(),
+      target_pattern: request.target_pattern?.trim() || null,
+      effect: request.effect,
+      reason: request.reason.trim(),
+      created_at: this.nextTimestamp(),
+    };
+    this.policyRules = [...this.policyRules, rule];
+    return { ...rule };
+  }
+
+  public async deletePolicyRule(ruleId: string): Promise<void> {
+    this.calls.push({ method: "deletePolicyRule", args: ruleId });
+    this.ensureConnected();
+    const exists = this.policyRules.some((r) => r.rule_id === ruleId);
+    if (!exists) {
+      throw { code: "NOT_FOUND", message: `policy_rule ${ruleId} not found` };
+    }
+    this.policyRules = this.policyRules.filter((r) => r.rule_id !== ruleId);
+  }
+
+  public async forkSession(
+    sessionId: string,
+    request: ForkSessionRequest,
+  ): Promise<SessionRecord> {
+    this.calls.push({ method: "forkSession", args: { sessionId, request } });
+    this.ensureConnected();
+    const source = this.sessions.find((s) => s.session_id === sessionId);
+    if (!source) {
+      throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
+    }
+    const sourceMessages = this.messagesBySession[sessionId] ?? [];
+    const cutIdx = sourceMessages.findIndex((m) => m.message_id === request.from_message_id);
+    if (cutIdx < 0) {
+      throw { code: "NOT_FOUND", message: `message ${request.from_message_id} not found` };
+    }
+    const now = this.nextTimestamp();
+    const forkedId = this.nextUuid("31000000");
+    const forkedTitle = request.title?.trim() || `${source.title} (ветка)`;
+    const forked: SessionRecord = {
+      session_id: forkedId,
+      agent_id: source.agent_id,
+      project_id: source.project_id,
+      title: forkedTitle,
+      session_kind: source.session_kind ?? "user_chat",
+      runtime_binding: null,
+      status: "active",
+      pinned: false,
+      pinned_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    this.sessions = sortSessionsByPin([forked, ...this.sessions]);
+    this.messagesBySession[forkedId] = sourceMessages.slice(0, cutIdx + 1).map((m, idx) => ({
+      ...m,
+      message_id: this.nextUuid(`52${String(idx).padStart(6, "0")}`),
+      session_id: forkedId,
+    }));
+    this.artifactsBySession[forkedId] = [];
+    this.runsBySession[forkedId] = [];
+    this.emitControlEvent("session.forked", { projectId: forked.project_id, sessionId: forkedId });
+    return forked;
+  }
+
+  public async deleteSession(sessionId: string): Promise<void> {
+    this.calls.push({ method: "deleteSession", args: sessionId });
+    this.ensureConnected();
+    const existing = this.sessions.find((s) => s.session_id === sessionId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
+    }
+    this.sessions = this.sessions.filter((s) => s.session_id !== sessionId);
+    delete this.messagesBySession[sessionId];
+    delete this.artifactsBySession[sessionId];
+    delete this.runsBySession[sessionId];
+    delete this.followupsBySession[sessionId];
+    delete this.liveRunBySession[sessionId];
+    this.emitControlEvent("session.deleted", { projectId: existing.project_id, sessionId });
+  }
+
+  public async getPreferences(): Promise<UserPreferences> {
+    this.calls.push({ method: "getPreferences" });
+    this.ensureConnected();
+    return { ...this.preferences };
+  }
+
+  public async updatePreferences(request: UpdateUserPreferencesRequest): Promise<UserPreferences> {
+    this.calls.push({ method: "updatePreferences", args: request });
+    this.ensureConnected();
+    this.preferences = {
+      ui_language: request.ui_language ?? this.preferences.ui_language,
+      agent_language: request.agent_language ?? this.preferences.agent_language,
+      timezone: request.timezone ?? this.preferences.timezone,
+      enter_to_send:
+        request.enter_to_send !== undefined && request.enter_to_send !== null
+          ? request.enter_to_send
+          : this.preferences.enter_to_send,
+      updated_at: this.nextTimestamp(),
+    };
+    return { ...this.preferences };
+  }
+
+  public async getProjectFileContent(
+    projectId: string,
+    relativePath: string,
+  ): Promise<ProjectFileContentResponse> {
+    this.calls.push({ method: "getProjectFileContent", args: { projectId, relativePath } });
+    this.ensureConnected();
+    const project = this.projects.find((p) => p.project_id === projectId);
+    if (!project) {
+      throw { code: "NOT_FOUND", message: `project ${projectId} not found` };
+    }
+    const projectMap = this.fileContentsByProject[projectId] ?? {};
+    const entry = projectMap[relativePath];
+    if (entry && typeof entry !== "string") {
+      return { ...entry };
+    }
+    const text =
+      typeof entry === "string"
+        ? entry
+        : `// Файл ${relativePath}\n// Предпросмотр содержимого из mockBridge.\n`;
+    const bytes = new TextEncoder().encode(text);
+    return {
+      relative_path: relativePath,
+      mime_type: relativePath.endsWith(".md") ? "text/markdown" : "text/plain",
+      byte_size: bytes.byteLength,
+      sha256: deterministicHex(`${projectId}:${relativePath}:${text}`, 64),
+      content: text,
+      truncated: false,
+      is_binary: false,
+    };
+  }
+
+  public async emergencyStopAll(): Promise<EmergencyStopResponse> {
+    this.calls.push({ method: "emergencyStopAll" });
+    this.ensureConnected();
+    const cancelledSessionIds: string[] = [];
+    for (const [sid, resolver] of Array.from(this.pendingCancelResolvers.entries())) {
+      resolver("stop");
+      cancelledSessionIds.push(sid);
+    }
+    for (const sid of Array.from(this.seededRunningSessionIds)) {
+      this.seededRunningSessionIds.delete(sid);
+      if (!cancelledSessionIds.includes(sid)) {
+        cancelledSessionIds.push(sid);
+      }
+    }
+    for (const sid of Object.keys(this.liveRunBySession)) {
+      if (this.liveRunBySession[sid]) {
+        this.liveRunBySession[sid] = null;
+        if (!cancelledSessionIds.includes(sid)) {
+          cancelledSessionIds.push(sid);
+        }
+      }
+    }
+    const now = this.nextTimestamp();
+    const cancelledTaskIds: string[] = [];
+    this.tasks = this.tasks.map((t) => {
+      if (
+        ["queued", "running", "waiting_timer", "waiting_signal", "waiting_approval", "waiting_clarification"].includes(
+          t.status,
+        )
+      ) {
+        cancelledTaskIds.push(t.task_id);
+        return { ...t, status: "cancelled", finished_at: now, updated_at: now };
+      }
+      return t;
+    });
+    this.emitControlEvent("runs.emergency_stopped", {
+      payload: { cancelledSessionIds, cancelledTaskIds },
+    });
+    return {
+      cancelled_session_ids: cancelledSessionIds,
+      cancelled_task_ids: cancelledTaskIds,
+    };
+  }
+
+  public async runTaskNow(taskId: string): Promise<TaskRecord> {
+    this.calls.push({ method: "runTaskNow", args: taskId });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    const updated: TaskRecord = {
+      ...existing,
+      status: "running",
+      updated_at: this.nextTimestamp(),
+    };
+    this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    this.emitControlEvent("task.run_now", { projectId: updated.project_id, taskId });
+    return updated;
+  }
+
+  public async pauseTask(taskId: string): Promise<TaskRecord> {
+    this.calls.push({ method: "pauseTask", args: taskId });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    const updated: TaskRecord = {
+      ...existing,
+      status: existing.schedule ? "waiting_timer" : "queued",
+      wait_detail: "Приостановлено владельцем",
+      updated_at: this.nextTimestamp(),
+    };
+    this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    this.emitControlEvent("task.paused", { projectId: updated.project_id, taskId });
+    return updated;
+  }
+
+  public async resumeTask(taskId: string): Promise<TaskRecord> {
+    this.calls.push({ method: "resumeTask", args: taskId });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    const updated: TaskRecord = {
+      ...existing,
+      status: existing.schedule ? "waiting_timer" : "queued",
+      wait_detail: null,
+      updated_at: this.nextTimestamp(),
+    };
+    this.tasks = this.tasks.map((t) => (t.task_id === taskId ? updated : t));
+    this.emitControlEvent("task.resumed", { projectId: updated.project_id, taskId });
+    return updated;
+  }
+
+  public async deleteTask(taskId: string): Promise<void> {
+    this.calls.push({ method: "deleteTask", args: taskId });
+    this.ensureConnected();
+    const existing = this.tasks.find((t) => t.task_id === taskId);
+    if (!existing) {
+      throw { code: "NOT_FOUND", message: `task ${taskId} not found` };
+    }
+    this.tasks = this.tasks.filter((t) => t.task_id !== taskId);
+    this.emitControlEvent("task.deleted", { projectId: existing.project_id, taskId });
+  }
+
+  public async getMemoryIndexStatus(scope?: string | null): Promise<IndexState> {
+    this.calls.push({ method: "getMemoryIndexStatus", args: { scope } });
+    this.ensureConnected();
+    const resolvedScope = scope ?? Object.keys(this.notesByScope)[0] ?? "global";
+    const notesCount = (this.notesByScope[resolvedScope] ?? []).length;
+    return {
+      scope: resolvedScope,
+      watermark_event_id: this.nextUuid("97000000"),
+      watermark_seq: notesCount,
+      model_version: "fts-v1",
+      status: this.indexStatus,
+      last_rebuild_at: this.lastRebuildAt,
+      updated_at: Date.now(),
+    };
   }
 }
 

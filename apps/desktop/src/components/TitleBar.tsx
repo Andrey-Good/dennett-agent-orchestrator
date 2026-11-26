@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import {
   MagnifyingGlass,
   Minus,
+  Octagon,
   Sidebar,
   SidebarSimple,
   Square,
@@ -22,7 +23,7 @@ function resolveStatusLabel(
     return { text: "Head офлайн", tone: "offline" };
   }
   if (isSimulated) {
-    return { text: "SIMULATED", tone: "warn" };
+    return { text: "Симуляция", tone: "warn" };
   }
   if (authProfile === "local-endpoint") {
     return {
@@ -42,11 +43,14 @@ function resolveStatusLabel(
 export function TitleBar() {
   const { state, actions, meta } = useWorkspace();
   const statsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const emergencyTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [editingBreadcrumb, setEditingBreadcrumb] = useState(false);
   const [breadcrumbTitleDraft, setBreadcrumbTitleDraft] = useState("");
+  const [emergencyConfirmOpen, setEmergencyConfirmOpen] = useState(false);
 
   const health = state.healthSnapshot?.health;
   const connected = Boolean(state.healthSnapshot?.connected && health);
+  const hasAnyActiveWork = state.runningSessionIds.length > 0 || meta.activeTaskCount > 0;
   const catalog = state.runtimeCatalog;
   const binding = state.activeDetail?.session.runtime_binding;
 
@@ -306,6 +310,61 @@ export function TitleBar() {
       </div>
 
       <div className="titlebar__right">
+        {connected && hasAnyActiveWork && (
+          <div className="stats-anchor">
+            <button
+              ref={emergencyTriggerRef}
+              type="button"
+              className="emergency-stop-pill"
+              data-testid="emergency-stop-trigger"
+              disabled={state.isEmergencyStopping}
+              aria-expanded={emergencyConfirmOpen}
+              aria-haspopup="dialog"
+              title="Экстренно остановить все активные чаты и поручения"
+              onClick={() => setEmergencyConfirmOpen((prev) => !prev)}
+            >
+              <Octagon size={13} weight="fill" aria-hidden="true" />
+              <span>Стоп всё</span>
+            </button>
+            <PortalPopover
+              isOpen={emergencyConfirmOpen}
+              anchorEl={emergencyTriggerRef.current}
+              onClose={() => setEmergencyConfirmOpen(false)}
+              placement="bottom-end"
+              className="confirm-popover"
+              role="dialog"
+              ariaLabel="Подтверждение экстренной остановки"
+              testId="emergency-stop-popover"
+            >
+              <strong>Остановить все активные запуски?</strong>
+              <p>
+                Будет отправлен сигнал отмены во все запущенные чаты и активные фоновые поручения.
+              </p>
+              <div className="confirm-popover__actions">
+                <button
+                  type="button"
+                  className="d2-danger-btn d2-danger-btn--sm"
+                  data-testid="emergency-stop-confirm-btn"
+                  disabled={state.isEmergencyStopping}
+                  onClick={() => {
+                    setEmergencyConfirmOpen(false);
+                    void actions.emergencyStopAll();
+                  }}
+                >
+                  Остановить всё
+                </button>
+                <button
+                  type="button"
+                  className="popover-secondary-btn"
+                  onClick={() => setEmergencyConfirmOpen(false)}
+                >
+                  Отмена
+                </button>
+              </div>
+            </PortalPopover>
+          </div>
+        )}
+
         <div className="stats-anchor">
           <button
             ref={statsTriggerRef}
@@ -326,7 +385,7 @@ export function TitleBar() {
             <span className={`status-dot status-dot--${dotTone}`} aria-hidden="true" />
             <span className="status-pill__text" data-testid="runtime-status-pill">
               {connected && isSimulated ? (
-                <span data-testid="simulated-runtime-badge">SIMULATED</span>
+                <span data-testid="simulated-runtime-badge">Симуляция</span>
               ) : (
                 statusInfo.text
               )}

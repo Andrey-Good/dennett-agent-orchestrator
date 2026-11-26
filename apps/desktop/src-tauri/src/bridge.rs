@@ -9,33 +9,37 @@
 //! - Redacts potential secret patterns before returning errors across the IPC boundary.
 
 use std::env;
+use std::fs;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    ActivateConnectionRequest, AgentId, AgentRecord, ArtifactId, ArtifactLifecycleRequest,
-    ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse, CancelTaskResponse,
-    CapabilityGrantId, CapabilityGrantRecord, CapabilityId, CapabilityKind,
+    ActivateConnectionRequest, AgentConfigHistoryResponse, AgentId, AgentRecord, ArtifactId,
+    ArtifactLifecycleRequest, ArtifactLifecycleResponse, ArtifactRecord, CancelRunResponse,
+    CancelTaskResponse, CapabilityGrantId, CapabilityGrantRecord, CapabilityId, CapabilityKind,
     CapabilityProjectBinding, CapabilityRecord, CapabilityScopeKind, CommitMemoryNoteRequest,
     CommitMemoryNoteResponse, ConsolidationJob, ConsolidationJobId, CorrectNoteRequest,
     CorrelationId, CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest,
-    CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest, CreateProjectRequest,
-    CreateSessionRequest, CreateTaskRequest, DeleteCapabilityResponse,
-    DeleteProviderConnectionResponse, DennettError, DiagnosticsResponse,
+    CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
+    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
+    DeleteCapabilityResponse, DeleteProviderConnectionResponse, DennettError, DiagnosticsResponse,
     DiscoverCapabilitiesRequest, DiscoverCapabilitiesResponse, DispatchEffectRequest,
-    DispatchEffectResponse, DocumentId, EffectClaimId, EnqueueFollowupRequest, EventStreamResponse,
-    ExportRequest, ExportResponse, FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse,
+    DispatchEffectResponse, DocumentId, EffectClaimId, EmergencyStopResponse,
+    EnqueueFollowupRequest, EventStreamResponse, ExportRequest, ExportResponse,
+    FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse, ForkSessionRequest,
     GetDocumentVersionsResponse, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
-    ImportRequest, ImportResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
-    ListArtifactsResponse, ListCapabilitiesResponse, ListCapabilityGrantsResponse,
-    ListClaimsResponse, ListConflictsResponse, ListConsolidationJobsResponse,
-    ListDocumentsResponse, ListEffectsResponse, ListInboxResponse, ListPermissionRequestsResponse,
-    ListProjectFilesResponse, ListProjectsResponse, ListProviderConnectionsResponse,
-    ListSecretsResponse, ListSessionsResponse, ListTasksResponse, ListTombstonesResponse,
-    LiveRunResponse, MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId,
-    MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
-    PermissionRequestId, ProbeConnectionResponse, ProjectId, ProjectLifecycleResponse,
+    ImportRequest, ImportResponse, InboxCardId, IndexState, ListAgentMessagesResponse,
+    ListAgentsResponse, ListArtifactsResponse, ListCapabilitiesResponse,
+    ListCapabilityGrantsResponse, ListClaimsResponse, ListConflictsResponse,
+    ListConsolidationJobsResponse, ListDocumentsResponse, ListEffectsResponse, ListInboxResponse,
+    ListPermissionRequestsResponse, ListPolicyRulesResponse, ListProjectFilesResponse,
+    ListProjectsResponse, ListProviderConnectionsResponse, ListSecretsResponse,
+    ListSessionsResponse, ListTasksResponse, ListTombstonesResponse, LiveRunResponse, MemoryClaim,
+    MemoryConflict, MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope,
+    NoteHistoryResponse, NoteMutationResponse, PermissionRequestId, PolicyRule, PolicyRuleId,
+    ProbeConnectionResponse, ProjectFileContentResponse, ProjectId, ProjectLifecycleResponse,
     ProjectRecord, ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest,
     ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest,
     ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
@@ -47,10 +51,10 @@ use dennett_contracts::{
     TaskDetailResponse, TaskId, TaskRecord, TaskSignalRequest, TaskSignalResponse,
     TriggerIndexRebuildRequest, TriggerIndexRebuildResponse, UpdateAgentConfigRequest,
     UpdateCapabilityRequest, UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest,
-    UpdateSessionRequest, UpdateTaskRequest, UpsertProviderConnectionRequest,
-    validate_secret_slot_key,
+    UpdateSessionRequest, UpdateTaskRequest, UpdateUserPreferencesRequest,
+    UpsertProviderConnectionRequest, UserPreferences, validate_secret_slot_key,
 };
-use dennett_head_client::HeadClient;
+use dennett_head_client::{HEAD_TOKEN_ENV as CLIENT_HEAD_TOKEN_ENV, HeadClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::{Host, Url};
@@ -59,6 +63,10 @@ use url::{Host, Url};
 pub const DEFAULT_HEAD_URL: &str = "http://127.0.0.1:41771";
 /// Environment variable overriding the `dennett-head` base URL for the desktop shell.
 pub const HEAD_URL_ENV: &str = "DENNETT_HEAD_URL";
+/// Environment variable carrying the optional owner bearer token for `dennett-head`.
+pub const HEAD_TOKEN_ENV: &str = CLIENT_HEAD_TOKEN_ENV;
+/// Environment variable pointing to Dennett's data directory containing `head.token`.
+pub const DATA_DIR_ENV: &str = "DENNETT_DATA_DIR";
 /// Opt-in environment flag (`"1"`) allowing a non-loopback `dennett-head` URL.
 pub const ALLOW_REMOTE_HEAD_ENV: &str = "DENNETT_DESKTOP_ALLOW_REMOTE_HEAD";
 /// Fast probe timeout used for [`HeadBridge::get_head_health`] so offline detection stays crisp.
@@ -186,6 +194,113 @@ pub struct DesktopHealthSnapshot {
     pub error: Option<String>,
 }
 
+/// JSON-serializable immutable artifact snapshot returned to the desktop UI by `get_artifact_content`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopArtifactContentResponse {
+    /// Reported MIME media type (`Content-Type`).
+    pub mime_type: String,
+    /// Lowercase SHA-256 hex digest (`X-Dennett-Artifact-Sha256`).
+    pub sha256: String,
+    /// Raw byte length of the immutable snapshot.
+    pub byte_size: usize,
+    /// Decoded UTF-8 text when the payload is non-binary UTF-8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Standard RFC 4648 base64 encoding of the exact raw bytes for faithful download.
+    pub base64: String,
+    /// `true` when bytes contain NUL or invalid UTF-8 and cannot be previewed as plain text.
+    pub is_binary: bool,
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let mut idx = 0;
+    while idx + 3 <= bytes.len() {
+        let n = (u32::from(bytes[idx]) << 16)
+            | (u32::from(bytes[idx + 1]) << 8)
+            | u32::from(bytes[idx + 2]);
+        out.push(char::from(TABLE[((n >> 18) & 0x3F) as usize]));
+        out.push(char::from(TABLE[((n >> 12) & 0x3F) as usize]));
+        out.push(char::from(TABLE[((n >> 6) & 0x3F) as usize]));
+        out.push(char::from(TABLE[(n & 0x3F) as usize]));
+        idx += 3;
+    }
+    match bytes.len() - idx {
+        1 => {
+            let n = u32::from(bytes[idx]) << 16;
+            out.push(char::from(TABLE[((n >> 18) & 0x3F) as usize]));
+            out.push(char::from(TABLE[((n >> 12) & 0x3F) as usize]));
+            out.push('=');
+            out.push('=');
+        }
+        2 => {
+            let n = (u32::from(bytes[idx]) << 16) | (u32::from(bytes[idx + 1]) << 8);
+            out.push(char::from(TABLE[((n >> 18) & 0x3F) as usize]));
+            out.push(char::from(TABLE[((n >> 12) & 0x3F) as usize]));
+            out.push(char::from(TABLE[((n >> 6) & 0x3F) as usize]));
+            out.push('=');
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Reads a trimmed non-empty owner bearer token from `<dir>/head.token`, if present.
+#[must_use]
+pub fn read_owner_token_from_dir(dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(dir.join("head.token")).ok()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+/// Resolves the optional `dennett-head` owner bearer token from `DENNETT_HEAD_TOKEN`
+/// or, when unset/empty, from `<data_dir>/head.token`.
+#[must_use]
+pub fn resolve_owner_token() -> Option<String> {
+    if let Ok(raw) = env::var(HEAD_TOKEN_ENV) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+
+    let mut candidate_dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(explicit) = env::var(DATA_DIR_ENV) {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            candidate_dirs.push(PathBuf::from(trimmed));
+        }
+    }
+    if cfg!(windows) {
+        if let Ok(local) = env::var("LOCALAPPDATA")
+            && !local.trim().is_empty()
+        {
+            candidate_dirs.push(PathBuf::from(local).join("Dennett"));
+        }
+        if let Ok(roaming) = env::var("APPDATA")
+            && !roaming.trim().is_empty()
+        {
+            candidate_dirs.push(PathBuf::from(roaming).join("Dennett"));
+        }
+    } else {
+        if let Ok(xdg) = env::var("XDG_DATA_HOME")
+            && !xdg.trim().is_empty()
+        {
+            candidate_dirs.push(PathBuf::from(xdg).join("dennett"));
+        }
+        if let Ok(home) = env::var("HOME")
+            && !home.trim().is_empty()
+        {
+            candidate_dirs.push(PathBuf::from(home).join(".local").join("share").join("dennett"));
+        }
+    }
+
+    candidate_dirs
+        .into_iter()
+        .find_map(|dir| read_owner_token_from_dir(&dir))
+}
+
 /// Validates and normalizes a `dennett-head` HTTP base URL under `policy`.
 ///
 /// Rejects non-HTTP(S) schemes, embedded credentials (`user:pass@`), query strings,
@@ -276,15 +391,17 @@ pub struct HeadBridge {
 }
 
 impl HeadBridge {
-    /// Constructs a [`HeadBridge`] after validating `base_url` against `policy`.
+    /// Constructs a [`HeadBridge`] after validating `base_url` against `policy` and loading any
+    /// owner bearer token from `DENNETT_HEAD_TOKEN`.
     ///
     /// # Errors
     ///
     /// Returns [`BridgeError::InvalidConfig`] if `base_url` fails validation.
     pub fn new(base_url: &str, policy: HeadEndpointPolicy) -> Result<Self, BridgeError> {
         let normalized = validate_head_url(base_url, policy)?;
-        let client = HeadClient::new(&normalized)?;
-        let health_client = HeadClient::with_timeout(&normalized, HEALTH_PROBE_TIMEOUT)?;
+        let client = HeadClient::new(&normalized)?.with_owner_token_from_env();
+        let health_client =
+            HeadClient::with_timeout(&normalized, HEALTH_PROBE_TIMEOUT)?.with_owner_token_from_env();
         Ok(Self {
             client,
             health_client,
@@ -292,8 +409,30 @@ impl HeadBridge {
         })
     }
 
-    /// Constructs a [`HeadBridge`] from `DENNETT_HEAD_URL` (default [`DEFAULT_HEAD_URL`])
-    /// and [`ALLOW_REMOTE_HEAD_ENV`].
+    /// Constructs a [`HeadBridge`] with an explicit optional owner bearer token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError::InvalidConfig`] if `base_url` fails validation.
+    pub fn with_owner_token(
+        base_url: &str,
+        policy: HeadEndpointPolicy,
+        owner_token: Option<String>,
+    ) -> Result<Self, BridgeError> {
+        let normalized = validate_head_url(base_url, policy)?;
+        let client = HeadClient::new(&normalized)?.with_optional_owner_token(owner_token.clone());
+        let health_client = HeadClient::with_timeout(&normalized, HEALTH_PROBE_TIMEOUT)?
+            .with_optional_owner_token(owner_token);
+        Ok(Self {
+            client,
+            health_client,
+            policy,
+        })
+    }
+
+    /// Constructs a [`HeadBridge`] from `DENNETT_HEAD_URL` (default [`DEFAULT_HEAD_URL`]),
+    /// [`ALLOW_REMOTE_HEAD_ENV`], and [`resolve_owner_token`] (`DENNETT_HEAD_TOKEN` or
+    /// `<data_dir>/head.token`).
     ///
     /// # Errors
     ///
@@ -305,13 +444,19 @@ impl HeadBridge {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| String::from(DEFAULT_HEAD_URL));
-        Self::new(&raw_url, policy)
+        Self::with_owner_token(&raw_url, policy, resolve_owner_token())
     }
 
     /// Returns the normalized `dennett-head` base URL.
     #[must_use]
     pub fn head_url(&self) -> &str {
         self.client.base_url()
+    }
+
+    /// Returns the configured owner bearer token, when present.
+    #[must_use]
+    pub fn owner_token(&self) -> Option<&str> {
+        self.client.owner_token()
     }
 
     /// Returns the active [`HeadEndpointPolicy`].
@@ -1942,6 +2087,263 @@ impl HeadBridge {
             .await
             .map_err(BridgeError::from)
     }
+
+    // ========================================================================
+    // Phase D3+ Audit Closure: Artifact Content, Fork, Preferences, Policies, Controls & Index Status
+    // ========================================================================
+
+    /// Fetches the immutable byte snapshot of an artifact revision (`GET /v1/sessions/{id}/artifacts/{aid}/content`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the artifact is missing or Head is unreachable.
+    pub async fn get_artifact_content(
+        &self,
+        session_id: SessionId,
+        artifact_id: ArtifactId,
+    ) -> Result<DesktopArtifactContentResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        let raw = self
+            .client
+            .get_artifact_content(session_id, artifact_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)?;
+        let byte_size = raw.bytes.len();
+        let base64 = encode_base64(&raw.bytes);
+        let has_nul = raw.bytes.contains(&0);
+        let text = if has_nul {
+            None
+        } else {
+            String::from_utf8(raw.bytes).ok()
+        };
+        let is_binary = text.is_none();
+        Ok(DesktopArtifactContentResponse {
+            mime_type: raw.mime_type,
+            sha256: raw.sha256.as_str().to_owned(),
+            byte_size,
+            text,
+            base64,
+            is_binary,
+        })
+    }
+
+    /// Lists all immutable configuration revisions for an agent (`GET /v1/agents/{id}/config-versions`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the agent is missing or Head is unreachable.
+    pub async fn get_agent_config_history(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<AgentConfigHistoryResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_agent_config_history(agent_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Lists configured external policy rules (`GET /v1/policies`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if Head is unreachable or rejects the request.
+    pub async fn list_policy_rules(&self) -> Result<ListPolicyRulesResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .list_policy_rules(Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Creates a new external policy rule (`POST /v1/policies`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn create_policy_rule(
+        &self,
+        req: &CreatePolicyRuleRequest,
+    ) -> Result<PolicyRule, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .create_policy_rule(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Deletes an external policy rule (`DELETE /v1/policies/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the rule is missing or Head is unreachable.
+    pub async fn delete_policy_rule(&self, rule_id: PolicyRuleId) -> Result<(), BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_policy_rule(rule_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Forks a session from an existing message (`POST /v1/sessions/{id}/fork`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing session/message, or unreachable Head.
+    pub async fn fork_session(
+        &self,
+        session_id: SessionId,
+        req: &ForkSessionRequest,
+    ) -> Result<SessionRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .fork_session(session_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Deletes a persisted session record (`DELETE /v1/sessions/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the session is missing or Head is unreachable.
+    pub async fn delete_session(&self, session_id: SessionId) -> Result<(), BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_session(session_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Fetches persisted owner preferences (`GET /v1/preferences`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if Head is unreachable or rejects the request.
+    pub async fn get_preferences(&self) -> Result<UserPreferences, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_preferences(Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Updates persisted owner preferences (`PATCH /v1/preferences`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure or unreachable Head.
+    pub async fn update_preferences(
+        &self,
+        req: &UpdateUserPreferencesRequest,
+    ) -> Result<UserPreferences, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_preferences(req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Reads a bounded preview of a workspace file inside a project (`GET /v1/projects/{id}/file?path=...`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on invalid path, boundary denial, missing file, or unreachable Head.
+    pub async fn get_project_file_content(
+        &self,
+        project_id: ProjectId,
+        relative_path: &str,
+    ) -> Result<ProjectFileContentResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_project_file_content(project_id, relative_path, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Cancels all active runs and tasks immediately (`POST /v1/runs/emergency-stop`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if Head is unreachable or rejects the request.
+    pub async fn emergency_stop_all(&self) -> Result<EmergencyStopResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .emergency_stop_all(Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Triggers immediate execution of a durable task (`POST /v1/tasks/{id}/run-now`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the task is missing or Head is unreachable.
+    pub async fn run_task_now(&self, task_id: TaskId) -> Result<TaskRecord, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .run_task_now(task_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Pauses a scheduled or queued durable task (`POST /v1/tasks/{id}/pause`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the task is missing or Head is unreachable.
+    pub async fn pause_task(&self, task_id: TaskId) -> Result<TaskRecord, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .pause_task(task_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Resumes a paused durable task (`POST /v1/tasks/{id}/resume`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the task is missing or Head is unreachable.
+    pub async fn resume_task(&self, task_id: TaskId) -> Result<TaskRecord, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .resume_task(task_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Deletes a durable task record (`DELETE /v1/tasks/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the task is missing or Head is unreachable.
+    pub async fn delete_task(&self, task_id: TaskId) -> Result<(), BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_task(task_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Queries the memory search index watermark and health status (`GET /v1/memory/index/status`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if Head is unreachable or rejects the request.
+    pub async fn get_memory_index_status(
+        &self,
+        scope: Option<&MemoryScope>,
+    ) -> Result<IndexState, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_memory_index_status(scope, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
 }
 
 const _: () = {
@@ -1949,6 +2351,7 @@ const _: () = {
     assert_send_sync::<HeadBridge>();
     assert_send_sync::<BridgeError>();
     assert_send_sync::<DesktopHealthSnapshot>();
+    assert_send_sync::<DesktopArtifactContentResponse>();
 };
 
 #[cfg(test)]
@@ -2243,5 +2646,83 @@ mod tests {
         assert_eq!(resumed.followups, Vec::<SessionFollowupRecord>::new());
 
         server.await.expect("mock server done");
+    }
+
+    #[test]
+    fn base64_encoder_matches_rfc4648_vectors() {
+        assert_eq!(encode_base64(b""), "");
+        assert_eq!(encode_base64(b"f"), "Zg==");
+        assert_eq!(encode_base64(b"fo"), "Zm8=");
+        assert_eq!(encode_base64(b"foo"), "Zm9v");
+        assert_eq!(encode_base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(encode_base64(&[0x00, 0xFF, 0x10]), "AP8Q");
+    }
+
+    #[test]
+    fn read_owner_token_from_dir_reads_trimmed_token() {
+        let dir = env::temp_dir().join(format!("dennett-tok-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        assert_eq!(read_owner_token_from_dir(&dir), None);
+        fs::write(dir.join("head.token"), "  owner-tok-test-99 \r\n").expect("write token");
+        assert_eq!(
+            read_owner_token_from_dir(&dir).as_deref(),
+            Some("owner-tok-test-99")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn head_bridge_sends_owner_bearer_token_and_fetches_artifact_content() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let session_id = SessionId::new();
+        let artifact_id = ArtifactId::new();
+        let expected_sha = "a".repeat(64);
+        let sha_clone = expected_sha.clone();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock server");
+        let addr = listener.local_addr().expect("local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = [0_u8; 4096];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            assert!(
+                req.to_ascii_lowercase()
+                    .contains("authorization: bearer desktop-secret-tok-42"),
+                "expected Authorization Bearer header, got: {req}"
+            );
+            let body = "# Snapshot\nhello";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nX-Dennett-Artifact-Sha256: {sha_clone}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        });
+
+        let bridge = HeadBridge::with_owner_token(
+            &format!("http://{addr}"),
+            HeadEndpointPolicy::LoopbackOnly,
+            Some(String::from("desktop-secret-tok-42")),
+        )
+        .expect("bridge");
+        // Debug format must never leak the raw owner token.
+        let dbg = format!("{bridge:?}");
+        assert!(!dbg.contains("desktop-secret-tok-42"));
+
+        let content = bridge
+            .get_artifact_content(session_id, artifact_id)
+            .await
+            .expect("get_artifact_content");
+        assert_eq!(content.mime_type, "text/markdown");
+        assert_eq!(content.sha256, expected_sha);
+        assert!(!content.is_binary);
+        assert_eq!(content.text.as_deref(), Some("# Snapshot\nhello"));
+        assert_eq!(content.base64, encode_base64(b"# Snapshot\nhello"));
+
+        server.await.expect("server join");
     }
 }

@@ -299,7 +299,7 @@ export function InboxRadarCard() {
             {card.kind === "permission_approval" && (
               <span className="d2-pill d2-pill--approval">
                 <ShieldCheck size={12} aria-hidden="true" />
-                Подтверждение записи
+                Запрос разрешения
               </span>
             )}
             {card.kind === "clarification" && (
@@ -438,7 +438,23 @@ export function InboxRadarCard() {
               }
             >
               <Check size={13} aria-hidden="true" />
-              Разрешить один раз
+              Разрешить раз
+            </button>
+            <button
+              type="button"
+              className="popover-secondary-btn"
+              disabled={isBusy}
+              data-testid={`inbox-approve-task-${card.card_id}`}
+              onClick={() =>
+                void runBusy(card.card_id, () =>
+                  actions.resolveInboxCard(card.card_id, card.revision, {
+                    action: "permission",
+                    decision: "approve_task",
+                  }),
+                )
+              }
+            >
+              Разрешить в этом чате
             </button>
             <button
               type="button"
@@ -454,7 +470,7 @@ export function InboxRadarCard() {
                 )
               }
             >
-              Разрешить для проекта
+              Разрешить всегда
             </button>
             <button
               type="button"
@@ -597,9 +613,9 @@ export function InboxRadarCard() {
                 void runBusy(card.card_id, () =>
                   actions.resolveInboxCard(card.card_id, card.revision, {
                     action: "increase_budget",
-                    additional_turns: 3,
+                    additional_turns: 4,
                     additional_tokens: 10000,
-                    additional_wall_secs: 120,
+                    additional_wall_secs: 600,
                   }),
                 )
               }
