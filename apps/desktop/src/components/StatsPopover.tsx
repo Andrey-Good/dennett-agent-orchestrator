@@ -102,15 +102,18 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
     contextUsedTokens = meta.activeLiveRun.context_used_tokens ?? null;
     contextWindowTokens = meta.activeLiveRun.context_window_tokens ?? null;
   } else if (runs.length > 0) {
-    let latestRun = runs[runs.length - 1]!;
+    let latestWithContext: (typeof runs)[number] | null = null;
     for (const run of runs) {
-      if (run.created_at >= latestRun.created_at) {
-        latestRun = run;
+      if (run.context_used_tokens == null && run.context_window_tokens == null) {
+        continue;
+      }
+      if (!latestWithContext || run.created_at >= latestWithContext.created_at) {
+        latestWithContext = run;
       }
     }
-    if (latestRun.context_used_tokens != null || latestRun.context_window_tokens != null) {
-      contextUsedTokens = latestRun.context_used_tokens ?? null;
-      contextWindowTokens = latestRun.context_window_tokens ?? null;
+    if (latestWithContext) {
+      contextUsedTokens = latestWithContext.context_used_tokens ?? null;
+      contextWindowTokens = latestWithContext.context_window_tokens ?? null;
     }
   }
   const contextUsageLabel = formatContextUsage(contextUsedTokens, contextWindowTokens);

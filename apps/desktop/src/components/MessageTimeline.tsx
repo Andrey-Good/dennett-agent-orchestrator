@@ -208,7 +208,23 @@ export function MessageTimeline() {
     state.selectedSessionId,
     meta.isRunningActiveSession,
     meta.activeLiveRun?.streaming_text,
+    meta.activeFollowups.length,
   ]);
+
+  // Keep bottom-pinned chat aligned when composer/follow-up queue bar resizes the viewport.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const handleTimelineScroll = () => {
     const el = scrollRef.current;
