@@ -13,13 +13,22 @@ use std::str::FromStr;
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    AgentId, BudgetExceedPolicy, CorrelationId, CreateSessionRequest, CreateTaskRequest,
-    DennettError, IdempotencyKey, MissedRunPolicy, ProjectId, ScheduleKind,
-    SendAgentMessageRequest, SessionId, SessionKind, TaskBudget, TaskId, TaskSchedule, TaskStatus,
-    TimestampMs, UpdateTaskRequest,
+    AgentId, ArtifactCompleteness, BudgetExceedPolicy, CorrelationId, CreateArtifactRequest,
+    CreateSessionRequest, CreateTaskRequest, DennettError, IdempotencyKey, MissedRunPolicy,
+    ProjectId, ProviderConnectionId, RunId, ScheduleKind, SendAgentMessageRequest, SessionId,
+    SessionKind, TaskBudget, TaskId, TaskSchedule, TaskSignalRequest, TaskStatus, TaskTrigger,
+    ThinkingLevel, TimestampMs, UpdateTaskRequest,
 };
 use dennett_head_client::HeadClient;
 use serde_json::{Value, json};
+
+/// Hidden system project UUID backing standalone session reminders in `dennett-head`.
+const STANDALONE_SYSTEM_PROJECT_UUID_STR: &str = "00000000-0000-4000-8000-0000000000ff";
+
+fn standalone_system_project_id() -> ProjectId {
+    ProjectId::from_str(STANDALONE_SYSTEM_PROJECT_UUID_STR)
+        .expect("static standalone system project UUID is valid")
+}
 
 /// Environment variable pointing to `dennett-head` loopback HTTP base URL.
 pub const ENV_HEAD_URL: &str = "DENNETT_HEAD_URL";
@@ -336,8 +345,12 @@ impl ControlMcpServer {
             "dennett_event_list" => self.tool_event_list(args, &cid).await,
             "dennett_event_update" => self.tool_event_update(args, &cid).await,
             "dennett_event_cancel" => self.tool_event_cancel(args, &cid).await,
+            "dennett_agent_list" => self.tool_agent_list(args, &cid).await,
             "dennett_agent_send_message" => self.tool_agent_send_message(args, &cid).await,
             "dennett_agent_list_messages" => self.tool_agent_list_messages(args, &cid).await,
+            "dennett_artifact_register" => self.tool_artifact_register(args, &cid).await,
+            "dennett_artifact_list" => self.tool_artifact_list(&cid).await,
+            "dennett_task_send_signal" => self.tool_task_send_signal(args, &cid).await,
             "dennett_delegate_task" => self.tool_delegate_task(args, &cid).await,
             "dennett_skill_list" => self.tool_skill_list(&cid).await,
             "dennett_skill_read" => self.tool_skill_read(args, &cid).await,
@@ -380,16 +393,41 @@ impl ControlMcpServer {
         Ok(project_id)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "parses all trigger kinds, creates isolated task_run session, and registers durable task atomically"
-    )]
+    /// Resolves effective `ProjectId` for event tools that support both project-bound sessions
+    /// and standalone session reminders (`project_id == None` -> `STANDALONE_SYSTEM_PROJECT_ID`).
+    fn resolve_event_project_id(
+        &self,
+        args: &Value,
+        tool_name: &str,
+    ) -> Result<(ProjectId, bool), DennettError> {
+        if self.project_id.is_some() {
+            let pid = self.enforce_optional_project_arg(args, tool_name)?;
+            Ok((pid, false))
+        } else {
+            if let Some(raw_pid) = args
+                .get("project_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return Err(DennettError::AccessDenied {
+                    scope: format!("session:{}", self.session_id),
+                    reason: format!(
+                        "standalone session cannot target project `{raw_pid}` in `{tool_name}`"
+                    ),
+                });
+            }
+            Ok((standalone_system_project_id(), true))
+        }
+    }
+
     async fn tool_event_create(
         &self,
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        let project_id = self.enforce_optional_project_arg(args, "dennett_event_create")?;
+        let (project_id, is_standalone) =
+            self.resolve_event_project_id(args, "dennett_event_create")?;
 
         let title = required_trimmed_str(args, "title")?;
         let goal = required_trimmed_str(args, "goal")?;
@@ -401,121 +439,24 @@ impl ControlMcpServer {
             .unwrap_or("immediate")
             .to_ascii_lowercase();
 
-        let timezone = args
-            .get("timezone")
+        let (schedule, wait_for_signal, task_trigger, schedule_summary) =
+            parse_event_schedule_or_trigger(args, &trigger_kind)?;
+
+        let target_session_mode = args
+            .get("target_session")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .unwrap_or("UTC")
-            .to_owned();
-        let misfire_policy =
-            parse_misfire_policy(args.get("misfire_policy").and_then(Value::as_str))?;
-
-        let (schedule, wait_for_signal, schedule_summary) = match trigger_kind.as_str() {
-            "once_at" => {
-                let fire_val = args
-                    .get("fire_at_iso_or_ms")
-                    .or_else(|| args.get("fire_at"))
-                    .ok_or_else(|| DennettError::InvalidInput {
-                        field: String::from("fire_at_iso_or_ms"),
-                        reason: String::from(
-                            "once_at requires `fire_at_iso_or_ms` (ISO-8601 or epoch ms)",
-                        ),
-                    })?;
-                let fire_at = parse_iso8601_or_epoch_ms(fire_val)?;
-                let sched = TaskSchedule {
-                    kind: ScheduleKind::OnceAt { fire_at },
-                    timezone: timezone.clone(),
-                    original_expression: fire_val.as_str().map(ToOwned::to_owned),
-                    missed_run_policy: misfire_policy,
-                    next_fire_at: None,
-                };
-                sched.validate()?;
-                (
-                    Some(sched),
-                    None,
-                    format!("once_at {} ({timezone})", fire_at.as_millis()),
-                )
-            }
-            "interval" => {
-                let interval_secs = args
-                    .get("interval_secs")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| DennettError::InvalidInput {
-                        field: String::from("interval_secs"),
-                        reason: String::from("interval requires integer `interval_secs` >= 10"),
-                    })?;
-                let sched = TaskSchedule {
-                    kind: ScheduleKind::Interval { interval_secs },
-                    timezone: timezone.clone(),
-                    original_expression: Some(format!("every {interval_secs}s")),
-                    missed_run_policy: misfire_policy,
-                    next_fire_at: None,
-                };
-                sched.validate()?;
-                (
-                    Some(sched),
-                    None,
-                    format!("interval every {interval_secs}s ({timezone})"),
-                )
-            }
-            "daily_local_time" | "daily_wall_time" => {
-                let (hour, minute) = extract_hour_minute(args)?;
-                let sched = TaskSchedule {
-                    kind: ScheduleKind::DailyWallTime { hour, minute },
-                    timezone: timezone.clone(),
-                    original_expression: Some(format!("daily {hour:02}:{minute:02} {timezone}")),
-                    missed_run_policy: misfire_policy,
-                    next_fire_at: None,
-                };
-                sched.validate()?;
-                (
-                    Some(sched),
-                    None,
-                    format!("daily at {hour:02}:{minute:02} ({timezone})"),
-                )
-            }
-            "weekly_local_time" | "weekly_wall_time" => {
-                let (hour, minute) = extract_hour_minute(args)?;
-                let weekdays_val =
-                    args.get("weekdays")
-                        .ok_or_else(|| DennettError::InvalidInput {
-                            field: String::from("weekdays"),
-                            reason: String::from(
-                                "weekly_local_time requires non-empty `weekdays` array (mon..sun)",
-                            ),
-                        })?;
-                let weekdays_mask = parse_weekdays_json(weekdays_val)?;
-                let sched = TaskSchedule {
-                    kind: ScheduleKind::WeeklyWallTime {
-                        weekdays_mask,
-                        hour,
-                        minute,
-                    },
-                    timezone: timezone.clone(),
-                    original_expression: Some(format!(
-                        "weekly mask={weekdays_mask} {hour:02}:{minute:02} {timezone}"
-                    )),
-                    missed_run_policy: misfire_policy,
-                    next_fire_at: None,
-                };
-                sched.validate()?;
-                (
-                    Some(sched),
-                    None,
-                    format!("weekly mask={weekdays_mask} at {hour:02}:{minute:02} ({timezone})"),
-                )
-            }
-            "wait_for_signal" => {
-                let sig = required_trimmed_str(args, "expected_signal_name")?;
-                (None, Some(sig.clone()), format!("wait_for_signal `{sig}`"))
-            }
-            "immediate" => (None, None, String::from("immediate")),
+            .unwrap_or("isolated")
+            .to_ascii_lowercase();
+        let (target_session_id, notify_session_id) = match target_session_mode.as_str() {
+            "current" => (Some(self.session_id), Some(self.session_id)),
+            "isolated" => (None, Some(self.session_id)),
             other => {
                 return Err(DennettError::InvalidInput {
-                    field: String::from("trigger_kind"),
+                    field: String::from("target_session"),
                     reason: format!(
-                        "unsupported trigger_kind `{other}` (expected once_at|interval|daily_local_time|weekly_local_time|wait_for_signal|immediate)"
+                        "unsupported target_session `{other}` (expected `current` or `isolated`)"
                     ),
                 });
             }
@@ -523,29 +464,33 @@ impl ControlMcpServer {
 
         let budget = parse_optional_budget(args)?;
 
-        // Step 1: Create dedicated clean `SessionKind::TaskRun` session so background runs never
-        // pollute the interactive user chat list or block the user's active conversation!
-        let task_session = self
-            .client
-            .create_session(
-                &CreateSessionRequest {
-                    agent_id: self.agent_id,
-                    project_id: Some(project_id),
-                    title: title.clone(),
-                    session_kind: SessionKind::TaskRun,
-                },
-                Some(cid),
-            )
-            .await?;
+        // For `"current"` target_session, run directly in caller's session; for `"isolated"`
+        // create a dedicated `SessionKind::TaskRun` session and notify caller session on finish.
+        let bound_session_id = if target_session_mode == "current" {
+            self.session_id
+        } else {
+            let task_session = self
+                .client
+                .create_session(
+                    &CreateSessionRequest {
+                        agent_id: self.agent_id,
+                        project_id: Some(project_id),
+                        title: title.clone(),
+                        session_kind: SessionKind::TaskRun,
+                    },
+                    Some(cid),
+                )
+                .await?;
+            task_session.session_id
+        };
 
-        // Step 2: Create the durable task bound to the new `task_run` session.
         let created_task = self
             .client
             .create_task(
                 &CreateTaskRequest {
                     project_id,
                     agent_id: self.agent_id,
-                    session_id: Some(task_session.session_id),
+                    session_id: Some(bound_session_id),
                     parent_task_id: None,
                     title: Some(title),
                     goal,
@@ -554,13 +499,13 @@ impl ControlMcpServer {
                     budget,
                     attached_skills: Vec::new(),
                     auth_profile_override: None,
-                    target_session_id: None,
-                    notify_session_id: None,
+                    target_session_id,
+                    notify_session_id,
                     model_override: None,
                     thinking_override: None,
                     connection_override_id: None,
                     skill_slugs_override: None,
-                    trigger: None,
+                    trigger: task_trigger,
                     execute_immediately: Some(trigger_kind == "immediate"),
                 },
                 Some(cid),
@@ -577,6 +522,8 @@ impl ControlMcpServer {
             "task_id": created_task.task_id,
             "session_id": created_task.session_id,
             "origin_session_id": self.session_id,
+            "target_session": target_session_mode,
+            "standalone": is_standalone,
             "title": created_task.title,
             "status": created_task.status,
             "next_fire_at": next_fire_at,
@@ -589,7 +536,8 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        let project_id = self.enforce_optional_project_arg(args, "dennett_event_list")?;
+        let (project_id, is_standalone) =
+            self.resolve_event_project_id(args, "dennett_event_list")?;
         let status_filter = args
             .get("status")
             .and_then(Value::as_str)
@@ -608,6 +556,13 @@ impl ControlMcpServer {
             .tasks
             .into_iter()
             .filter(|t| {
+                if is_standalone
+                    && t.session_id != self.session_id
+                    && t.target_session_id != Some(self.session_id)
+                    && t.notify_session_id != Some(self.session_id)
+                {
+                    return false;
+                }
                 include_completed
                     || status_filter.is_some()
                     || !matches!(t.status, TaskStatus::Succeeded | TaskStatus::Cancelled)
@@ -616,6 +571,8 @@ impl ControlMcpServer {
                 json!({
                     "task_id": t.task_id,
                     "session_id": t.session_id,
+                    "target_session_id": t.target_session_id,
+                    "notify_session_id": t.notify_session_id,
                     "title": t.title,
                     "goal": t.goal,
                     "status": t.status,
@@ -627,7 +584,7 @@ impl ControlMcpServer {
             .collect();
 
         Ok(json!({
-            "project_id": project_id,
+            "project_id": if is_standalone { Value::Null } else { json!(project_id) },
             "count": events.len(),
             "events": events,
         }))
@@ -638,16 +595,22 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        let project_id = self.enforce_optional_project_arg(args, "dennett_event_update")?;
+        let (project_id, is_standalone) =
+            self.resolve_event_project_id(args, "dennett_event_update")?;
         let raw_task_id = required_trimmed_str(args, "task_id")?;
         let task_id = TaskId::from_str(&raw_task_id)?;
 
-        // Defense-in-depth project ownership check (enforced on Head HTTP boundary too).
+        // Defense-in-depth project/session ownership check (enforced on Head HTTP boundary too).
         let detail = self.client.get_task_detail(task_id, Some(cid)).await?;
-        if detail.task.project_id != project_id {
+        if detail.task.project_id != project_id
+            || (is_standalone
+                && detail.task.session_id != self.session_id
+                && detail.task.target_session_id != Some(self.session_id)
+                && detail.task.notify_session_id != Some(self.session_id))
+        {
             return Err(DennettError::AccessDenied {
-                scope: format!("project:{project_id}"),
-                reason: format!("task `{task_id}` does not belong to bound project"),
+                scope: format!("session:{}", self.session_id),
+                reason: format!("task `{task_id}` does not belong to caller scope"),
             });
         }
 
@@ -667,6 +630,7 @@ impl ControlMcpServer {
             .get("clear_schedule")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let schedule = parse_optional_update_schedule(args)?;
         let budget = parse_optional_budget(args)?;
 
         let updated = self
@@ -676,7 +640,7 @@ impl ControlMcpServer {
                 &UpdateTaskRequest {
                     title,
                     goal,
-                    schedule: None,
+                    schedule,
                     clear_schedule,
                     budget,
                     execute_immediately: Some(false),
@@ -691,6 +655,7 @@ impl ControlMcpServer {
             "goal": updated.goal,
             "status": updated.status,
             "generation": updated.generation,
+            "next_fire_at": updated.schedule.as_ref().and_then(|s| s.next_fire_at).map(TimestampMs::as_millis),
         }))
     }
 
@@ -699,9 +664,171 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        let project_id = self.enforce_optional_project_arg(args, "dennett_event_cancel")?;
+        let (project_id, is_standalone) =
+            self.resolve_event_project_id(args, "dennett_event_cancel")?;
         let raw_task_id = required_trimmed_str(args, "task_id")?;
         let task_id = TaskId::from_str(&raw_task_id)?;
+
+        let detail = self.client.get_task_detail(task_id, Some(cid)).await?;
+        if detail.task.project_id != project_id
+            || (is_standalone
+                && detail.task.session_id != self.session_id
+                && detail.task.target_session_id != Some(self.session_id)
+                && detail.task.notify_session_id != Some(self.session_id))
+        {
+            return Err(DennettError::AccessDenied {
+                scope: format!("session:{}", self.session_id),
+                reason: format!("task `{task_id}` does not belong to caller scope"),
+            });
+        }
+
+        let resp = self.client.cancel_task(task_id, Some(cid)).await?;
+        Ok(json!({
+            "task_id": resp.task.task_id,
+            "status": resp.task.status,
+            "external_outcome_unknown": resp.external_outcome_unknown,
+        }))
+    }
+
+    async fn tool_agent_list(
+        &self,
+        args: &Value,
+        cid: &CorrelationId,
+    ) -> Result<Value, DennettError> {
+        let project_id = self.enforce_optional_project_arg(args, "dennett_agent_list")?;
+        let resp = self.client.list_agents(Some(cid)).await?;
+        let agents: Vec<Value> = resp
+            .agents
+            .into_iter()
+            .map(|a| {
+                json!({
+                    "agent_id": a.agent_id,
+                    "name": a.name,
+                    "description": a.description,
+                    "model_preference": a.current_config.model_preference,
+                    "thinking_level": a.current_config.thinking_level,
+                    "autonomy_mode": a.current_config.autonomy_mode,
+                    "workspace_write_policy": a.current_config.workspace_write_policy,
+                    "attached_skills": a.current_config.attached_skills,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "project_id": project_id,
+            "count": agents.len(),
+            "agents": agents,
+        }))
+    }
+
+    async fn tool_artifact_register(
+        &self,
+        args: &Value,
+        cid: &CorrelationId,
+    ) -> Result<Value, DennettError> {
+        let name = required_trimmed_str(args, "name")?;
+        let mime_type = args
+            .get("mime_type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("text/markdown")
+            .to_owned();
+        let content = args
+            .get("content")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let relative_path = args
+            .get("relative_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let completeness_status = match args
+            .get("completeness_status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(raw) => ArtifactCompleteness::from_str(raw)?,
+            None => ArtifactCompleteness::Final,
+        };
+        let req = CreateArtifactRequest {
+            run_id: None,
+            name,
+            mime_type,
+            content,
+            relative_path,
+            completeness_status,
+        };
+        req.validate()?;
+        let art = self
+            .client
+            .create_artifact(self.session_id, &req, Some(cid))
+            .await?;
+        Ok(json!({
+            "artifact_id": art.artifact_id,
+            "session_id": art.session_id,
+            "name": art.name,
+            "mime_type": art.mime_type,
+            "revision": art.revision,
+            "sha256": art.sha256,
+            "relative_path": art.relative_path,
+            "completeness_status": art.completeness_status,
+        }))
+    }
+
+    async fn tool_artifact_list(&self, cid: &CorrelationId) -> Result<Value, DennettError> {
+        let resp = self
+            .client
+            .list_artifacts(self.session_id, Some(cid))
+            .await?;
+        let artifacts: Vec<Value> = resp
+            .artifacts
+            .into_iter()
+            .map(|a| {
+                json!({
+                    "artifact_id": a.artifact_id,
+                    "name": a.name,
+                    "mime_type": a.mime_type,
+                    "revision": a.revision,
+                    "relative_path": a.relative_path,
+                    "sha256": a.sha256,
+                    "completeness_status": a.completeness_status,
+                    "lifecycle_state": a.lifecycle_state,
+                    "created_at": a.created_at,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "session_id": self.session_id,
+            "count": artifacts.len(),
+            "artifacts": artifacts,
+        }))
+    }
+
+    async fn tool_task_send_signal(
+        &self,
+        args: &Value,
+        cid: &CorrelationId,
+    ) -> Result<Value, DennettError> {
+        let project_id = self.enforce_optional_project_arg(args, "dennett_task_send_signal")?;
+        let raw_task_id = required_trimmed_str(args, "task_id")?;
+        let task_id = TaskId::from_str(&raw_task_id)?;
+        let signal_name = required_trimmed_str(args, "signal_name")?;
+        let payload_text = args
+            .get("payload_text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let idempotency_key = match args
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(k) => IdempotencyKey::try_new(k)?,
+            None => IdempotencyKey::generate(),
+        };
 
         let detail = self.client.get_task_detail(task_id, Some(cid)).await?;
         if detail.task.project_id != project_id {
@@ -711,11 +838,24 @@ impl ControlMcpServer {
             });
         }
 
-        let resp = self.client.cancel_task(task_id, Some(cid)).await?;
+        let resp = self
+            .client
+            .send_task_signal(
+                task_id,
+                &TaskSignalRequest {
+                    idempotency_key,
+                    signal_name,
+                    payload_text,
+                },
+                Some(cid),
+            )
+            .await?;
         Ok(json!({
+            "signal_id": resp.signal.signal_id,
             "task_id": resp.task.task_id,
-            "status": resp.task.status,
-            "external_outcome_unknown": resp.external_outcome_unknown,
+            "outcome_status": resp.signal.outcome_status,
+            "task_status": resp.task.status,
+            "deduplicated": resp.deduplicated,
         }))
     }
 
@@ -818,23 +958,26 @@ impl ControlMcpServer {
         }))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "parses optional agent/model/thinking/connection/skills/wait_for_run overrides and dispatches delegated task cleanly"
+    )]
     async fn tool_delegate_task(
         &self,
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
         let project_id = self.enforce_optional_project_arg(args, "dennett_delegate_task")?;
-        let target_raw = args
+        let target_agent_id = match args
             .get("recipient_agent_id")
             .or_else(|| args.get("agent_id"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| DennettError::InvalidInput {
-                field: String::from("recipient_agent_id"),
-                reason: String::from("missing or empty `recipient_agent_id`"),
-            })?;
-        let target_agent_id = AgentId::from_str(target_raw)?;
+        {
+            Some(raw) => AgentId::from_str(raw)?,
+            None => self.agent_id,
+        };
         let goal = required_trimmed_str(args, "goal")?;
         let title = args
             .get("title")
@@ -852,11 +995,47 @@ impl ControlMcpServer {
             .filter(|s| !s.is_empty())
             .map(TaskId::from_str)
             .transpose()?;
+        let model_override = args
+            .get("model")
+            .or_else(|| args.get("model_override"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let thinking_override = args
+            .get("thinking_level")
+            .or_else(|| args.get("thinking_override"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ThinkingLevel::from_str)
+            .transpose()?;
+        let connection_override_id = args
+            .get("connection_id")
+            .or_else(|| args.get("connection_override_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ProviderConnectionId::from_str)
+            .transpose()?;
+        let skill_slugs_override = parse_optional_string_array(
+            args.get("attached_skills")
+                .or_else(|| args.get("skill_slugs_override")),
+            "attached_skills",
+        )?;
+        let trigger = args
+            .get("wait_for_run_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(RunId::from_str)
+            .transpose()?
+            .map(|run_id| TaskTrigger::OnRunCompleted { run_id });
         let budget = parse_optional_budget(args)?;
         let execute_immediately = args
             .get("execute_immediately")
             .and_then(Value::as_bool)
-            .unwrap_or(true);
+            .unwrap_or(trigger.is_none());
 
         let task_session = self
             .client
@@ -884,15 +1063,15 @@ impl ControlMcpServer {
                     schedule: None,
                     wait_for_signal: None,
                     budget,
-                    attached_skills: Vec::new(),
+                    attached_skills: skill_slugs_override.clone().unwrap_or_default(),
                     auth_profile_override: None,
                     target_session_id: None,
-                    notify_session_id: None,
-                    model_override: None,
-                    thinking_override: None,
-                    connection_override_id: None,
-                    skill_slugs_override: None,
-                    trigger: None,
+                    notify_session_id: Some(self.session_id),
+                    model_override,
+                    thinking_override,
+                    connection_override_id,
+                    skill_slugs_override,
+                    trigger,
                     execute_immediately: Some(execute_immediately),
                 },
                 Some(cid),
@@ -902,6 +1081,7 @@ impl ControlMcpServer {
         Ok(json!({
             "task_id": created_task.task_id,
             "session_id": created_task.session_id,
+            "notify_session_id": created_task.notify_session_id,
             "agent_id": created_task.agent_id,
             "parent_task_id": created_task.parent_task_id,
             "title": created_task.title,
@@ -931,93 +1111,146 @@ impl ControlMcpServer {
     }
 }
 
-/// Returns the JSON Schema definitions for all 9 control MCP tools (project + session skills).
+/// Returns the JSON Schema definitions for all 13 control MCP tools (project + standalone).
 #[must_use]
 pub fn tool_definitions() -> Value {
     tool_definitions_for_scope(true)
 }
 
 /// Returns the JSON Schema definitions visible for this session scope:
-/// - Project sessions (`has_project = true`): all 9 tools (events, agent messages, delegation, skills).
-/// - Standalone sessions (`has_project = false`): read-only session skill tools only.
+/// - Project sessions (`has_project = true`): all 13 tools (events, agents, messages, delegation,
+///   signals, artifacts, and session skills).
+/// - Standalone sessions (`has_project = false`): session reminders (`dennett_event_*`), session
+///   artifacts (`dennett_artifact_*`), and session skills (`dennett_skill_*`).
 #[must_use]
 #[expect(
     clippy::too_many_lines,
     reason = "declares static MCP tool JSON schemas in one declarative builder"
 )]
 pub fn tool_definitions_for_scope(has_project: bool) -> Value {
-    let mut defs = Vec::new();
+    let mut defs = vec![
+        json!({
+            "name": "dennett_event_create",
+            "description": "Create a durable scheduled event, recurring reminder (including yearly_wall), signal-triggered, or run-completion task (supports target_session `isolated` or `current` and standalone reminders).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["title", "goal", "trigger_kind"],
+                "properties": {
+                    "title": { "type": "string", "description": "Short human-readable title shown in Tasks (<= 120 chars)" },
+                    "goal": { "type": "string", "description": "Full instructions for the agent when the event triggers" },
+                    "trigger_kind": {
+                        "type": "string",
+                        "enum": ["once_at", "interval", "daily_local_time", "weekly_local_time", "yearly_wall", "wait_for_signal", "on_run_completed", "immediate"]
+                    },
+                    "target_session": {
+                        "type": "string",
+                        "enum": ["isolated", "current"],
+                        "description": "Run in isolated background task_run session notifying this chat (default) or directly in current chat session"
+                    },
+                    "fire_at_iso_or_ms": {
+                        "description": "For once_at: RFC3339/ISO-8601 timestamp (e.g. 2026-11-25T09:30:00+05:00 or ...Z) or Unix epoch milliseconds"
+                    },
+                    "interval_secs": { "type": "integer", "minimum": 1 },
+                    "month": { "type": "integer", "minimum": 1, "maximum": 12 },
+                    "day": { "type": "integer", "minimum": 1, "maximum": 31 },
+                    "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+                    "minute": { "type": "integer", "minimum": 0, "maximum": 59 },
+                    "weekdays": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }
+                    },
+                    "timezone": { "type": "string", "description": "IANA timezone name, e.g. Asia/Yekaterinburg or UTC" },
+                    "misfire_policy": { "type": "string", "enum": ["catch_up_once", "execute_once", "skip", "ask"] },
+                    "expected_signal_name": { "type": "string" },
+                    "run_id": { "type": "string", "description": "For on_run_completed: RunId UUID whose completion wakes this task" },
+                    "max_turns": { "type": "integer", "minimum": 1 },
+                    "max_tokens": { "type": "integer", "minimum": 1 },
+                    "max_wall_secs": { "type": "integer", "minimum": 1 }
+                }
+            }
+        }),
+        json!({
+            "name": "dennett_event_list",
+            "description": "List durable scheduled events and reminders belonging to the current project or standalone session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string" },
+                    "include_completed": { "type": "boolean" }
+                }
+            }
+        }),
+        json!({
+            "name": "dennett_event_update",
+            "description": "Update title, goal, schedule (once_at/interval/daily/weekly/yearly_wall), clear_schedule, or budget of an existing durable event/task.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": { "type": "string" },
+                    "title": { "type": "string" },
+                    "goal": { "type": "string" },
+                    "schedule": { "type": "object", "description": "Optional replacement TaskSchedule JSON object" },
+                    "trigger_kind": { "type": "string", "enum": ["once_at", "interval", "daily_local_time", "weekly_local_time", "yearly_wall"] },
+                    "fire_at_iso_or_ms": {},
+                    "interval_secs": { "type": "integer", "minimum": 1 },
+                    "month": { "type": "integer", "minimum": 1, "maximum": 12 },
+                    "day": { "type": "integer", "minimum": 1, "maximum": 31 },
+                    "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+                    "minute": { "type": "integer", "minimum": 0, "maximum": 59 },
+                    "weekdays": { "type": "array", "items": { "type": "string" } },
+                    "timezone": { "type": "string" },
+                    "misfire_policy": { "type": "string" },
+                    "clear_schedule": { "type": "boolean" },
+                    "max_turns": { "type": "integer", "minimum": 1 },
+                    "max_tokens": { "type": "integer", "minimum": 1 },
+                    "max_wall_secs": { "type": "integer", "minimum": 1 }
+                }
+            }
+        }),
+        json!({
+            "name": "dennett_event_cancel",
+            "description": "Cancel/stop an existing durable event or scheduled reminder.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": { "type": "string" }
+                }
+            }
+        }),
+        json!({
+            "name": "dennett_artifact_register",
+            "description": "Register a new artifact revision (inline markdown/text or canonical workspace-relative file snapshot) on the current session.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string", "description": "Artifact display filename (e.g. report.md)" },
+                    "mime_type": { "type": "string", "description": "MIME type (default text/markdown)" },
+                    "content": { "type": "string", "description": "Inline UTF-8 artifact content" },
+                    "relative_path": { "type": "string", "description": "Workspace-relative file path to snapshot" },
+                    "completeness_status": { "type": "string", "enum": ["partial", "final"] }
+                }
+            }
+        }),
+        json!({
+            "name": "dennett_artifact_list",
+            "description": "List artifacts registered in the current session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }),
+    ];
     if has_project {
         defs.extend([
             json!({
-                "name": "dennett_event_create",
-                "description": "Create a durable scheduled event, recurring check, or signal-triggered task in the current Dennett project (uses an isolated background task_run session).",
+                "name": "dennett_agent_list",
+                "description": "List available Dennett agents with their IDs, models, thinking levels, and autonomy modes.",
                 "inputSchema": {
                     "type": "object",
-                    "required": ["title", "goal", "trigger_kind"],
-                    "properties": {
-                        "title": { "type": "string", "description": "Short human-readable title shown in Tasks (<= 120 chars)" },
-                        "goal": { "type": "string", "description": "Full instructions for the agent when the event triggers" },
-                        "trigger_kind": {
-                            "type": "string",
-                            "enum": ["once_at", "interval", "daily_local_time", "weekly_local_time", "wait_for_signal", "immediate"]
-                        },
-                        "fire_at_iso_or_ms": {
-                            "description": "For once_at: RFC3339/ISO-8601 timestamp (e.g. 2026-11-25T09:30:00+05:00 or ...Z) or Unix epoch milliseconds"
-                        },
-                        "interval_secs": { "type": "integer", "minimum": 10 },
-                        "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
-                        "minute": { "type": "integer", "minimum": 0, "maximum": 59 },
-                        "weekdays": {
-                            "type": "array",
-                            "items": { "type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }
-                        },
-                        "timezone": { "type": "string", "description": "IANA timezone name, e.g. Asia/Yekaterinburg or UTC" },
-                        "misfire_policy": { "type": "string", "enum": ["catch_up_once", "execute_once", "skip", "ask"] },
-                        "expected_signal_name": { "type": "string" },
-                        "max_turns": { "type": "integer", "minimum": 1 },
-                        "max_tokens": { "type": "integer", "minimum": 1 },
-                        "max_wall_secs": { "type": "integer", "minimum": 1 }
-                    }
-                }
-            }),
-            json!({
-                "name": "dennett_event_list",
-                "description": "List durable scheduled events and tasks belonging to the current Dennett project.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "status": { "type": "string" },
-                        "include_completed": { "type": "boolean" }
-                    }
-                }
-            }),
-            json!({
-                "name": "dennett_event_update",
-                "description": "Update title, goal, or budget of an existing durable event/task in the current Dennett project.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["task_id"],
-                    "properties": {
-                        "task_id": { "type": "string" },
-                        "title": { "type": "string" },
-                        "goal": { "type": "string" },
-                        "clear_schedule": { "type": "boolean" },
-                        "max_turns": { "type": "integer", "minimum": 1 },
-                        "max_tokens": { "type": "integer", "minimum": 1 },
-                        "max_wall_secs": { "type": "integer", "minimum": 1 }
-                    }
-                }
-            }),
-            json!({
-                "name": "dennett_event_cancel",
-                "description": "Cancel/stop an existing durable event or scheduled task in the current Dennett project.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["task_id"],
-                    "properties": {
-                        "task_id": { "type": "string" }
-                    }
+                    "properties": {}
                 }
             }),
             json!({
@@ -1045,16 +1278,36 @@ pub fn tool_definitions_for_scope(has_project: bool) -> Value {
                 }
             }),
             json!({
-                "name": "dennett_delegate_task",
-                "description": "Delegate a free-form plain-text task to another agent within the current project; Head strictly enforces child_scope subset of parent_scope (A07).",
+                "name": "dennett_task_send_signal",
+                "description": "Send an idempotent wake/coordination signal to a waiting task in the current project.",
                 "inputSchema": {
                     "type": "object",
-                    "required": ["recipient_agent_id", "goal"],
+                    "required": ["task_id", "signal_name"],
                     "properties": {
-                        "recipient_agent_id": { "type": "string", "description": "Helper agent UUID" },
+                        "task_id": { "type": "string" },
+                        "signal_name": { "type": "string" },
+                        "payload_text": { "type": "string" },
+                        "idempotency_key": { "type": "string" }
+                    }
+                }
+            }),
+            json!({
+                "name": "dennett_delegate_task",
+                "description": "Delegate a free-form plain-text task to a subagent within the current project; Head strictly enforces child <= parent privilege ceiling and notifies this chat on completion.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["goal"],
+                    "properties": {
+                        "recipient_agent_id": { "type": "string", "description": "Optional helper agent UUID (defaults to current agent)" },
+                        "agent_id": { "type": "string", "description": "Alias for recipient_agent_id" },
                         "goal": { "type": "string", "description": "Free-form plain-text instructions for the helper agent" },
                         "title": { "type": "string" },
                         "parent_task_id": { "type": "string" },
+                        "model": { "type": "string", "description": "Optional runtime model override" },
+                        "thinking_level": { "type": "string", "enum": ["low", "medium", "high", "xhigh"] },
+                        "connection_id": { "type": "string", "description": "Optional provider connection UUID override" },
+                        "attached_skills": { "type": "array", "items": { "type": "string" } },
+                        "wait_for_run_id": { "type": "string", "description": "Optional RunId UUID to wake after completion" },
                         "max_turns": { "type": "integer", "minimum": 1 },
                         "max_tokens": { "type": "integer", "minimum": 1 },
                         "max_wall_secs": { "type": "integer", "minimum": 1 },
@@ -1086,6 +1339,252 @@ pub fn tool_definitions_for_scope(has_project: bool) -> Value {
         }),
     ]);
     Value::Array(defs)
+}
+
+type ParsedEventSchedule = (Option<TaskSchedule>, Option<String>, Option<TaskTrigger>, String);
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "parses once_at, interval, daily, weekly, yearly_wall, wait_for_signal, and on_run_completed cleanly"
+)]
+fn parse_event_schedule_or_trigger(
+    args: &Value,
+    trigger_kind: &str,
+) -> Result<ParsedEventSchedule, DennettError> {
+    let timezone = args
+        .get("timezone")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("UTC")
+        .to_owned();
+    let misfire_policy = parse_misfire_policy(args.get("misfire_policy").and_then(Value::as_str))?;
+
+    match trigger_kind {
+        "once_at" => {
+            let fire_val = args
+                .get("fire_at_iso_or_ms")
+                .or_else(|| args.get("fire_at"))
+                .ok_or_else(|| DennettError::InvalidInput {
+                    field: String::from("fire_at_iso_or_ms"),
+                    reason: String::from(
+                        "once_at requires `fire_at_iso_or_ms` (ISO-8601 or epoch ms)",
+                    ),
+                })?;
+            let fire_at = parse_iso8601_or_epoch_ms(fire_val)?;
+            let sched = TaskSchedule {
+                kind: ScheduleKind::OnceAt { fire_at },
+                timezone: timezone.clone(),
+                original_expression: fire_val.as_str().map(ToOwned::to_owned),
+                missed_run_policy: misfire_policy,
+                next_fire_at: None,
+            };
+            sched.validate()?;
+            Ok((
+                Some(sched),
+                None,
+                None,
+                format!("once_at {} ({timezone})", fire_at.as_millis()),
+            ))
+        }
+        "interval" => {
+            let interval_secs = args
+                .get("interval_secs")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| DennettError::InvalidInput {
+                    field: String::from("interval_secs"),
+                    reason: String::from("interval requires integer `interval_secs` >= 1"),
+                })?;
+            let sched = TaskSchedule {
+                kind: ScheduleKind::Interval { interval_secs },
+                timezone: timezone.clone(),
+                original_expression: Some(format!("every {interval_secs}s")),
+                missed_run_policy: misfire_policy,
+                next_fire_at: None,
+            };
+            sched.validate()?;
+            Ok((
+                Some(sched),
+                None,
+                None,
+                format!("interval every {interval_secs}s ({timezone})"),
+            ))
+        }
+        "daily_local_time" | "daily_wall_time" | "daily_wall" => {
+            let (hour, minute) = extract_hour_minute(args)?;
+            let sched = TaskSchedule {
+                kind: ScheduleKind::DailyWallTime { hour, minute },
+                timezone: timezone.clone(),
+                original_expression: Some(format!("daily {hour:02}:{minute:02} {timezone}")),
+                missed_run_policy: misfire_policy,
+                next_fire_at: None,
+            };
+            sched.validate()?;
+            Ok((
+                Some(sched),
+                None,
+                None,
+                format!("daily at {hour:02}:{minute:02} ({timezone})"),
+            ))
+        }
+        "weekly_local_time" | "weekly_wall_time" | "weekly_wall" => {
+            let (hour, minute) = extract_hour_minute(args)?;
+            let weekdays_val =
+                args.get("weekdays")
+                    .ok_or_else(|| DennettError::InvalidInput {
+                        field: String::from("weekdays"),
+                        reason: String::from(
+                            "weekly_local_time requires non-empty `weekdays` array (mon..sun)",
+                        ),
+                    })?;
+            let weekdays_mask = parse_weekdays_json(weekdays_val)?;
+            let sched = TaskSchedule {
+                kind: ScheduleKind::WeeklyWallTime {
+                    weekdays_mask,
+                    hour,
+                    minute,
+                },
+                timezone: timezone.clone(),
+                original_expression: Some(format!(
+                    "weekly mask={weekdays_mask} {hour:02}:{minute:02} {timezone}"
+                )),
+                missed_run_policy: misfire_policy,
+                next_fire_at: None,
+            };
+            sched.validate()?;
+            Ok((
+                Some(sched),
+                None,
+                None,
+                format!("weekly mask={weekdays_mask} at {hour:02}:{minute:02} ({timezone})"),
+            ))
+        }
+        "yearly_wall" | "yearly_local_time" | "yearly_wall_time" => {
+            let (month, day) = extract_month_day(args)?;
+            let (hour, minute) = extract_hour_minute(args)?;
+            let sched = TaskSchedule {
+                kind: ScheduleKind::YearlyWallTime {
+                    month,
+                    day,
+                    hour,
+                    minute,
+                },
+                timezone: timezone.clone(),
+                original_expression: Some(format!(
+                    "yearly {month:02}-{day:02} {hour:02}:{minute:02} {timezone}"
+                )),
+                missed_run_policy: misfire_policy,
+                next_fire_at: None,
+            };
+            sched.validate()?;
+            Ok((
+                Some(sched),
+                None,
+                None,
+                format!("yearly {month:02}-{day:02} at {hour:02}:{minute:02} ({timezone})"),
+            ))
+        }
+        "wait_for_signal" => {
+            let sig = required_trimmed_str(args, "expected_signal_name")?;
+            Ok((None, Some(sig.clone()), None, format!("wait_for_signal `{sig}`")))
+        }
+        "on_run_completed" => {
+            let raw_run_id = required_trimmed_str(args, "run_id")?;
+            let run_id = RunId::from_str(&raw_run_id)?;
+            Ok((
+                None,
+                None,
+                Some(TaskTrigger::OnRunCompleted { run_id }),
+                format!("on_run_completed `{run_id}`"),
+            ))
+        }
+        "immediate" => Ok((None, None, None, String::from("immediate"))),
+        other => Err(DennettError::InvalidInput {
+            field: String::from("trigger_kind"),
+            reason: format!(
+                "unsupported trigger_kind `{other}` (expected once_at|interval|daily_local_time|weekly_local_time|yearly_wall|wait_for_signal|on_run_completed|immediate)"
+            ),
+        }),
+    }
+}
+
+fn parse_optional_update_schedule(args: &Value) -> Result<Option<TaskSchedule>, DennettError> {
+    if let Some(sched_val) = args.get("schedule").filter(|v| !v.is_null()) {
+        if let Ok(sched) = serde_json::from_value::<TaskSchedule>(sched_val.clone()) {
+            sched.validate()?;
+            return Ok(Some(sched));
+        }
+        if let Some(kind_str) = sched_val
+            .get("trigger_kind")
+            .or_else(|| sched_val.get("kind"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let (sched, _, _, _) =
+                parse_event_schedule_or_trigger(sched_val, &kind_str.to_ascii_lowercase())?;
+            return Ok(sched);
+        }
+        return Err(DennettError::InvalidInput {
+            field: String::from("schedule"),
+            reason: String::from("invalid `schedule` object on dennett_event_update"),
+        });
+    }
+    if let Some(kind_str) = args
+        .get("trigger_kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let (sched, _, _, _) =
+            parse_event_schedule_or_trigger(args, &kind_str.to_ascii_lowercase())?;
+        return Ok(sched);
+    }
+    Ok(None)
+}
+
+fn extract_month_day(args: &Value) -> Result<(u8, u8), DennettError> {
+    let month = args
+        .get("month")
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok())
+        .ok_or_else(|| DennettError::InvalidInput {
+            field: String::from("month"),
+            reason: String::from("expected integer `month` in 1..=12"),
+        })?;
+    let day = args
+        .get("day")
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok())
+        .ok_or_else(|| DennettError::InvalidInput {
+            field: String::from("day"),
+            reason: String::from("expected integer `day` in 1..=31"),
+        })?;
+    Ok((month, day))
+}
+
+fn parse_optional_string_array(
+    val: Option<&Value>,
+    field: &str,
+) -> Result<Option<Vec<String>>, DennettError> {
+    let Some(val) = val.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let arr = val.as_array().ok_or_else(|| DennettError::InvalidInput {
+        field: field.to_owned(),
+        reason: format!("`{field}` must be an array of strings"),
+    })?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err(DennettError::InvalidInput {
+                field: field.to_owned(),
+                reason: format!("each entry in `{field}` must be a non-empty string"),
+            });
+        };
+        out.push(s.to_owned());
+    }
+    Ok(Some(out))
 }
 
 fn required_trimmed_str(args: &Value, field: &str) -> Result<String, DennettError> {
@@ -1457,20 +1956,23 @@ mod tests {
         let tools = list_resp["result"]["tools"]
             .as_array()
             .expect("tools array");
-        assert_eq!(tools.len(), 9);
-        assert!(
-            tools
-                .iter()
-                .any(|t| t["name"] == "dennett_agent_send_message")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|t| t["name"] == "dennett_agent_list_messages")
-        );
-        assert!(tools.iter().any(|t| t["name"] == "dennett_delegate_task"));
-        assert!(tools.iter().any(|t| t["name"] == "dennett_skill_list"));
-        assert!(tools.iter().any(|t| t["name"] == "dennett_skill_read"));
+        assert_eq!(tools.len(), 13);
+        for expected in [
+            "dennett_agent_list",
+            "dennett_agent_send_message",
+            "dennett_agent_list_messages",
+            "dennett_artifact_register",
+            "dennett_artifact_list",
+            "dennett_task_send_signal",
+            "dennett_delegate_task",
+            "dennett_skill_list",
+            "dennett_skill_read",
+        ] {
+            assert!(
+                tools.iter().any(|t| t["name"] == expected),
+                "missing project control-mcp tool `{expected}`"
+            );
+        }
 
         let foreign_call = server
             .handle_message(&json!({
@@ -1492,7 +1994,8 @@ mod tests {
             .expect("text");
         assert!(err_text.contains("ACCESS_DENIED"));
 
-        // Standalone server exposes only read-only session skill tools and denies project tools.
+        // Standalone server exposes session reminders, artifacts, and skills, while strictly denying
+        // project delegation/agents and foreign project_id access.
         let standalone = ControlMcpServer::new(
             client,
             None,
@@ -1511,39 +2014,107 @@ mod tests {
         let standalone_tools = standalone_list["result"]["tools"]
             .as_array()
             .expect("standalone tools");
-        assert_eq!(standalone_tools.len(), 2);
-        assert!(
-            standalone_tools
-                .iter()
-                .any(|t| t["name"] == "dennett_skill_list")
-        );
-        assert!(
-            standalone_tools
-                .iter()
-                .any(|t| t["name"] == "dennett_skill_read")
-        );
+        assert_eq!(standalone_tools.len(), 8);
+        for expected in [
+            "dennett_event_create",
+            "dennett_event_list",
+            "dennett_event_update",
+            "dennett_event_cancel",
+            "dennett_artifact_register",
+            "dennett_artifact_list",
+            "dennett_skill_list",
+            "dennett_skill_read",
+        ] {
+            assert!(
+                standalone_tools.iter().any(|t| t["name"] == expected),
+                "missing standalone control-mcp tool `{expected}`"
+            );
+        }
 
-        let standalone_event_deny = standalone
+        let standalone_delegate_deny = standalone
             .handle_message(&json!({
                 "jsonrpc": "2.0",
                 "id": 4,
                 "method": "tools/call",
                 "params": {
-                    "name": "dennett_event_list",
-                    "arguments": {}
+                    "name": "dennett_delegate_task",
+                    "arguments": { "goal": "escape" }
                 }
             }))
             .await
-            .expect("standalone event deny");
+            .expect("standalone delegate deny");
         assert_eq!(
-            standalone_event_deny["result"]["isError"],
+            standalone_delegate_deny["result"]["isError"],
             Value::Bool(true)
         );
         assert!(
-            standalone_event_deny["result"]["content"][0]["text"]
+            standalone_delegate_deny["result"]["content"][0]["text"]
                 .as_str()
                 .expect("text")
                 .contains("ACCESS_DENIED")
         );
+
+        let standalone_foreign_evt_deny = standalone
+            .handle_message(&json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "dennett_event_list",
+                    "arguments": { "project_id": foreign_pid.to_string() }
+                }
+            }))
+            .await
+            .expect("standalone foreign project event deny");
+        assert_eq!(
+            standalone_foreign_evt_deny["result"]["isError"],
+            Value::Bool(true)
+        );
+        assert!(
+            standalone_foreign_evt_deny["result"]["content"][0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("ACCESS_DENIED")
+        );
+
+        // Yearly wall schedule parsing works cleanly for create & update.
+        let (yearly_sched, _, _, _) = parse_event_schedule_or_trigger(
+            &json!({
+                "month": 11,
+                "day": 26,
+                "hour": 9,
+                "minute": 15,
+                "timezone": "Asia/Yekaterinburg"
+            }),
+            "yearly_wall",
+        )
+        .expect("yearly_wall schedule");
+        assert_eq!(
+            yearly_sched.expect("sched").kind,
+            ScheduleKind::YearlyWallTime {
+                month: 11,
+                day: 26,
+                hour: 9,
+                minute: 15,
+            }
+        );
+        let upd_sched = parse_optional_update_schedule(&json!({
+            "trigger_kind": "yearly_wall",
+            "month": 1,
+            "day": 1,
+            "hour": 0,
+            "minute": 0,
+            "timezone": "UTC"
+        }))
+        .expect("update yearly schedule");
+        assert!(matches!(
+            upd_sched.map(|s| s.kind),
+            Some(ScheduleKind::YearlyWallTime {
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0
+            })
+        ));
     }
 }

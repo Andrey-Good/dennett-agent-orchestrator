@@ -54,7 +54,7 @@ pub use policy::{
 };
 pub use secrets::{
     GEMINI_API_KEY_SLOT, SECRET_AEAD_ALGORITHM, SecretCipher, VaultMasterKey,
-    compute_secret_fingerprint,
+    compute_secret_fingerprint, write_owner_only_file,
 };
 pub use service::{
     ArtifactContentBlob, DEFAULT_CONTROL_POOL_SIZE, DEFAULT_PG_OP_TIMEOUT, DEFAULT_PROBE_TIMEOUT,
@@ -65,4 +65,7 @@ pub use tasks::{
     BACKGROUND_SCHEDULER_POLL_INTERVAL, MISFIRE_GRACE_MS, TIMER_CLAIM_LEASE_SECS,
     compute_next_fire_at_pg, verify_pg_timezone,
 };
-pub use workspace_files::{list_project_workspace_files, validate_safe_workspace_root};
+pub use workspace_files::{
+    MAX_FILE_PREVIEW_BYTES, list_project_workspace_files, read_project_workspace_file,
+    validate_safe_workspace_root,
+};

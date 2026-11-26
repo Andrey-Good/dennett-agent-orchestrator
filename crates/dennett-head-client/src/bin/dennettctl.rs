@@ -7,33 +7,35 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
 use dennett_contracts::redact::{redact_secrets, sanitize_cli_arg};
 use dennett_contracts::{
     ActivateConnectionRequest, AgentId, ArtifactCompleteness, ArtifactId, ArtifactLifecycleAction,
-    ArtifactLifecycleRequest, BudgetExceedPolicy, CapabilityActivation, CapabilityGrantId,
-    CapabilityId, CapabilityKind, CapabilityOrigin, CapabilityOwnership, CapabilityScopeKind,
-    CapabilitySpec, CapabilityTrust, ClaimId, CommitMemoryNoteRequest, ConflictId, ConflictStatus,
-    ConnectionActivationRole, ConsolidationJobId, ConsolidationJobType, CorrectNoteRequest,
-    CorrelationId, CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest,
-    CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
-    CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
-    DennettError, DiscoverCapabilitiesRequest, DispatchEffectRequest, DocumentId, EffectClaimId,
-    EnqueueFollowupRequest, EpistemicStatus, ExportRequest, FollowupId, ForgetRequest,
-    ForgetTargetType, HeadMemorySearchRequest, IdempotencyKey, ImportRequest, InboxCardId,
-    InboxResolutionAction, ManualEffectResolution, MemoryNoteId, MemoryScope, MissedRunPolicy,
-    PermissionRequestId, PermissionResolutionDecision, PolicyEffect, ProjectId,
-    ProviderConnectionId, ProviderKind, RebindProjectRequest, ReconcileEffectRequest,
-    ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest, ResolvePermissionRequest,
-    RevokeGrantRequest, RuntimeAuthProfile, ScheduleKind, SendAgentMessageRequest,
-    SendMessageRequest, SessionId, SessionKind, SetProjectCapabilityBindingRequest,
-    SetSecretRequest, SimEffectBehavior, SteerSessionRequest, SupersedeClaimRequest, TaskBudget,
-    TaskId, TaskSchedule, TaskSignalRequest, ThinkingLevel, TimestampMs,
-    TriggerIndexRebuildRequest, UpdateAgentConfigRequest, UpdateCapabilityRequest,
-    UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest,
-    UpdateTaskRequest, UpsertProviderConnectionRequest, WorkspaceWritePolicy,
+    ArtifactLifecycleRequest, AutonomyMode, BudgetExceedPolicy, CapabilityActivation,
+    CapabilityGrantId, CapabilityId, CapabilityKind, CapabilityOrigin, CapabilityOwnership,
+    CapabilityScopeKind, CapabilitySpec, CapabilityTrust, ClaimId, CommitMemoryNoteRequest,
+    ConflictId, ConflictStatus, ConnectionActivationRole, ConsolidationJobId, ConsolidationJobType,
+    CorrectNoteRequest, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
+    CreateCapabilityRequest, CreateClaimRequest, CreateConsolidationJobRequest,
+    CreateDocumentRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
+    CreateTaskRequest, DennettError, DiscoverCapabilitiesRequest, DispatchEffectRequest,
+    DocumentId, EffectClaimId, EnqueueFollowupRequest, EpistemicStatus, ExportRequest, FollowupId,
+    ForgetRequest, ForgetTargetType, ForkSessionRequest, HeadMemorySearchRequest, IdempotencyKey,
+    ImportRequest, InboxCardId, InboxResolutionAction, ManualEffectResolution, MemoryNoteId,
+    MemoryScope, MessageId, MissedRunPolicy, PermissionRequestId, PermissionResolutionDecision,
+    PolicyEffect, PolicyRuleId, ProjectId, ProviderConnectionId, ProviderKind,
+    RebindProjectRequest, ReconcileEffectRequest, ReplyTaskRequest, ResolveConflictRequest,
+    ResolveInboxCardRequest, ResolvePermissionRequest, RevokeGrantRequest, RuntimeAuthProfile,
+    ScheduleKind, SendAgentMessageRequest, SendMessageRequest, SessionId, SessionKind,
+    SessionStatus, SetProjectCapabilityBindingRequest, SetSecretRequest, SimEffectBehavior,
+    SteerSessionRequest, SupersedeClaimRequest, TaskBudget, TaskId, TaskSchedule,
+    TaskSignalRequest, ThinkingLevel, TimestampMs, TriggerIndexRebuildRequest,
+    UpdateAgentConfigRequest, UpdateCapabilityRequest, UpdateDocumentRequest,
+    UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    UpdateUserPreferencesRequest, UpsertProviderConnectionRequest, WorkspaceWritePolicy,
     validate_secret_slot_key,
 };
 use dennett_head_client::HeadClient;
@@ -42,10 +44,12 @@ use uuid::Uuid;
 
 const DEFAULT_HEAD_URL: &str = "http://127.0.0.1:18081";
 const ENV_HEAD_URL: &str = "DENNETT_HEAD_URL";
+const ENV_HEAD_TOKEN: &str = "DENNETT_HEAD_TOKEN";
 
 #[derive(Debug, Clone)]
 struct GlobalOpts {
     url: String,
+    token: Option<String>,
     json: bool,
     correlation_id: Option<CorrelationId>,
 }
@@ -101,6 +105,11 @@ enum Action {
         project_id: ProjectId,
         subpath: Option<String>,
     },
+    ProjectFileContent {
+        g: GlobalOpts,
+        project_id: ProjectId,
+        path: String,
+    },
     ProjectRebind {
         g: GlobalOpts,
         project_id: ProjectId,
@@ -140,6 +149,15 @@ enum Action {
         g: GlobalOpts,
         session_id: SessionId,
         req: UpdateSessionRequest,
+    },
+    SessionFork {
+        g: GlobalOpts,
+        session_id: SessionId,
+        req: ForkSessionRequest,
+    },
+    SessionDelete {
+        g: GlobalOpts,
+        session_id: SessionId,
     },
     SessionLive {
         g: GlobalOpts,
@@ -207,6 +225,11 @@ enum Action {
         artifact_id: ArtifactId,
         req: ArtifactLifecycleRequest,
     },
+    ArtifactContent {
+        g: GlobalOpts,
+        session_id: SessionId,
+        artifact_id: ArtifactId,
+    },
     TaskCreate {
         g: GlobalOpts,
         req: CreateTaskRequest,
@@ -236,6 +259,22 @@ enum Action {
         req: ReplyTaskRequest,
     },
     TaskCancel {
+        g: GlobalOpts,
+        task_id: TaskId,
+    },
+    TaskRunNow {
+        g: GlobalOpts,
+        task_id: TaskId,
+    },
+    TaskPause {
+        g: GlobalOpts,
+        task_id: TaskId,
+    },
+    TaskResume {
+        g: GlobalOpts,
+        task_id: TaskId,
+    },
+    TaskDelete {
         g: GlobalOpts,
         task_id: TaskId,
     },
@@ -301,6 +340,16 @@ enum Action {
         req: CreatePolicyRuleRequest,
     },
     PolicyList(GlobalOpts),
+    PolicyDelete {
+        g: GlobalOpts,
+        rule_id: PolicyRuleId,
+    },
+    PrefsGet(GlobalOpts),
+    PrefsSet {
+        g: GlobalOpts,
+        req: UpdateUserPreferencesRequest,
+    },
+    EmergencyStop(GlobalOpts),
     MemoryCommit {
         g: GlobalOpts,
         req: CommitMemoryNoteRequest,
@@ -446,6 +495,10 @@ enum Action {
         g: GlobalOpts,
         req: ImportRequest,
     },
+    MemoryIndexStatus {
+        g: GlobalOpts,
+        scope: Option<MemoryScope>,
+    },
     MemoryIndexRebuild {
         g: GlobalOpts,
         req: TriggerIndexRebuildRequest,
@@ -529,6 +582,7 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::ProjectList { g, .. }
         | Action::ProjectUpdate { g, .. }
         | Action::ProjectFiles { g, .. }
+        | Action::ProjectFileContent { g, .. }
         | Action::ProjectRebind { g, .. }
         | Action::ProjectDetach { g, .. }
         | Action::ProjectArchive { g, .. }
@@ -539,6 +593,8 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::SessionList(g)
         | Action::SessionShow { g, .. }
         | Action::SessionUpdate { g, .. }
+        | Action::SessionFork { g, .. }
+        | Action::SessionDelete { g, .. }
         | Action::SessionLive { g, .. }
         | Action::SessionSteer { g, .. }
         | Action::SessionFollowupAdd { g, .. }
@@ -553,6 +609,7 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::ArtifactList { g, .. }
         | Action::ArtifactRevisions { g, .. }
         | Action::ArtifactLifecycle { g, .. }
+        | Action::ArtifactContent { g, .. }
         | Action::TaskCreate { g, .. }
         | Action::TaskList { g, .. }
         | Action::TaskShow { g, .. }
@@ -560,6 +617,10 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::TaskSignal { g, .. }
         | Action::TaskReply { g, .. }
         | Action::TaskCancel { g, .. }
+        | Action::TaskRunNow { g, .. }
+        | Action::TaskPause { g, .. }
+        | Action::TaskResume { g, .. }
+        | Action::TaskDelete { g, .. }
         | Action::InboxList { g, .. }
         | Action::InboxResolve { g, .. }
         | Action::PermissionList { g, .. }
@@ -573,6 +634,10 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::EventsTail { g, .. }
         | Action::PolicyAdd { g, .. }
         | Action::PolicyList(g)
+        | Action::PolicyDelete { g, .. }
+        | Action::PrefsGet(g)
+        | Action::PrefsSet { g, .. }
+        | Action::EmergencyStop(g)
         | Action::MemoryCommit { g, .. }
         | Action::MemoryFlushOutbox(g)
         | Action::MemoryOutbox(g)
@@ -610,6 +675,7 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::MemoryTombstones { g, .. }
         | Action::MemoryExport { g, .. }
         | Action::MemoryImport { g, .. }
+        | Action::MemoryIndexStatus { g, .. }
         | Action::MemoryIndexRebuild { g, .. }
         | Action::MemoryConsolidationList { g, .. }
         | Action::MemoryConsolidationCreate { g, .. }
@@ -627,36 +693,36 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
     match action {
         Action::Help | Action::Version => Ok(()),
         Action::Health(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.healthz(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
         Action::RuntimeCatalog { g, refresh } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_runtime_catalog(refresh, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::AgentCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.create_agent(&req, g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
         Action::AgentList(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.list_agents(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
         Action::AgentUpdateConfig { g, agent_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_agent_config(agent_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::AgentHistory { g, agent_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_agent_config_history(agent_id, g.correlation_id.as_ref())
                 .await?;
@@ -667,7 +733,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             recipient_agent_id,
             req,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .send_agent_message(recipient_agent_id, &req, g.correlation_id.as_ref())
                 .await?;
@@ -678,14 +744,14 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             agent_id,
             undelivered_only,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_agent_messages(agent_id, undelivered_only, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ProjectCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_project(&req, g.correlation_id.as_ref())
                 .await?;
@@ -695,14 +761,14 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             g,
             include_archived,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_projects_with_options(include_archived, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ProjectUpdate { g, project_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_project(project_id, &req, g.correlation_id.as_ref())
                 .await?;
@@ -713,42 +779,53 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             project_id,
             subpath,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_project_files(project_id, subpath.as_deref(), g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
+        Action::ProjectFileContent {
+            g,
+            project_id,
+            path,
+        } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .get_project_file_content(project_id, &path, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
         Action::ProjectRebind { g, project_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .rebind_project(project_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ProjectDetach { g, project_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .detach_project_workspace(project_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ProjectArchive { g, project_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .archive_project(project_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ProjectUnarchive { g, project_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .unarchive_project(project_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ProjectRemove { g, project_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .remove_project(project_id, g.correlation_id.as_ref())
                 .await?;
@@ -759,61 +836,81 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             project_id,
             confirm,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .delete_project(project_id, confirm, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SessionCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_session(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SessionList(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.list_sessions(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
         Action::SessionShow { g, session_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_session_detail(session_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SessionUpdate { g, session_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_session(session_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
+        Action::SessionFork { g, session_id, req } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .fork_session(session_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SessionDelete { g, session_id } => {
+            let client = build_head_client(&g)?;
+            client
+                .delete_session(session_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(
+                &serde_json::json!({
+                    "session_id": session_id,
+                    "deleted": true,
+                }),
+                g.json,
+            )
+        }
         Action::SessionLive { g, session_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_session_live(session_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SessionSteer { g, session_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .steer_session(session_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SessionFollowupAdd { g, session_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .enqueue_followup(session_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SessionFollowupList { g, session_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_session_live(session_id, g.correlation_id.as_ref())
                 .await?;
@@ -825,7 +922,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             followup_id,
             req,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_followup(session_id, followup_id, &req, g.correlation_id.as_ref())
                 .await?;
@@ -836,7 +933,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             session_id,
             followup_id,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             client
                 .delete_followup(session_id, followup_id, g.correlation_id.as_ref())
                 .await?;
@@ -850,7 +947,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             )
         }
         Action::SessionFollowupClear { g, session_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             client
                 .clear_followups(session_id, g.correlation_id.as_ref())
                 .await?;
@@ -863,42 +960,42 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             )
         }
         Action::SessionFollowupResume { g, session_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .resume_followups(session_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::Send { g, session_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .send_message(session_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::Cancel { g, session_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .cancel_run(session_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ArtifactCreate { g, session_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_artifact(session_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ArtifactList { g, session_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_artifacts(session_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ArtifactRevisions { g, session_id, key } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_artifact_revisions(session_id, &key, g.correlation_id.as_ref())
                 .await?;
@@ -910,14 +1007,37 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             artifact_id,
             req,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .apply_artifact_lifecycle(session_id, artifact_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
+        Action::ArtifactContent {
+            g,
+            session_id,
+            artifact_id,
+        } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .get_artifact_content(session_id, artifact_id, g.correlation_id.as_ref())
+                .await?;
+            let content_utf8 = String::from_utf8(resp.bytes.clone()).ok();
+            print_output(
+                &serde_json::json!({
+                    "session_id": session_id,
+                    "artifact_id": artifact_id,
+                    "mime_type": resp.mime_type,
+                    "sha256": resp.sha256,
+                    "byte_size": resp.bytes.len(),
+                    "is_binary": content_utf8.is_none(),
+                    "content": content_utf8,
+                }),
+                g.json,
+            )
+        }
         Action::TaskCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.create_task(&req, g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
@@ -926,60 +1046,94 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             project_id,
             status,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_tasks(project_id, status.as_deref(), g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::TaskShow { g, task_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_task_detail(task_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::TaskUpdate { g, task_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_task(task_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::TaskSignal { g, task_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .send_task_signal(task_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::TaskReply { g, task_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .reply_to_task(task_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::TaskCancel { g, task_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .cancel_task(task_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
+        }
+        Action::TaskRunNow { g, task_id } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .run_task_now(task_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::TaskPause { g, task_id } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .pause_task(task_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::TaskResume { g, task_id } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .resume_task(task_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::TaskDelete { g, task_id } => {
+            let client = build_head_client(&g)?;
+            client
+                .delete_task(task_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(
+                &serde_json::json!({
+                    "task_id": task_id,
+                    "deleted": true,
+                }),
+                g.json,
+            )
         }
         Action::InboxList {
             g,
             status,
             project_id,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_inbox_cards(status.as_deref(), project_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::InboxResolve { g, card_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .resolve_inbox_card(card_id, &req, g.correlation_id.as_ref())
                 .await?;
@@ -990,14 +1144,14 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             status,
             session_id,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_permission_requests(status.as_deref(), session_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::PermissionResolve { g, request_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .resolve_permission_request(request_id, &req, g.correlation_id.as_ref())
                 .await?;
@@ -1008,21 +1162,21 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             project_id,
             include_revoked,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_capability_grants(project_id, include_revoked, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::GrantRevoke { g, grant_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .revoke_capability_grant(grant_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::EffectDispatch { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .dispatch_effect(&req, g.correlation_id.as_ref())
                 .await?;
@@ -1034,7 +1188,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             session_id,
             status,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_effects(
                     task_id,
@@ -1046,7 +1200,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             print_output(&resp, g.json)
         }
         Action::EffectReconcile { g, effect_id, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .reconcile_effect(effect_id, &req, g.correlation_id.as_ref())
                 .await?;
@@ -1057,7 +1211,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             project_id,
             include_archived,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_state_snapshot(project_id, include_archived, g.correlation_id.as_ref())
                 .await?;
@@ -1070,7 +1224,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             project_id,
             limit,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_events(
                     after_cursor,
@@ -1083,71 +1237,103 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             print_output(&resp, g.json)
         }
         Action::PolicyAdd { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_policy_rule(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::PolicyList(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.list_policy_rules(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
+        Action::PolicyDelete { g, rule_id } => {
+            let client = build_head_client(&g)?;
+            client
+                .delete_policy_rule(rule_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(
+                &serde_json::json!({
+                    "rule_id": rule_id,
+                    "deleted": true,
+                }),
+                g.json,
+            )
+        }
+        Action::PrefsGet(g) => {
+            let client = build_head_client(&g)?;
+            let resp = client.get_preferences(g.correlation_id.as_ref()).await?;
+            print_output(&resp, g.json)
+        }
+        Action::PrefsSet { g, req } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .update_preferences(&req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::EmergencyStop(g) => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .emergency_stop_all(g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
         Action::MemoryCommit { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .commit_memory_note(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryFlushOutbox(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .flush_memory_outbox(g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryOutbox(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.list_memory_outbox(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
         Action::MemorySearch { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .search_memory(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SecretsList(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client.list_secrets(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
         Action::SecretsSet { g, slot_key, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .set_secret(&slot_key, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::SecretsDelete { g, slot_key } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .delete_secret(&slot_key, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ConnectionsList(g) => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_provider_connections(g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ConnectionsCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_provider_connection(&req, g.correlation_id.as_ref())
                 .await?;
@@ -1158,21 +1344,21 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             connection_id,
             req,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_provider_connection(connection_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ConnectionsDelete { g, connection_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .delete_provider_connection(connection_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::ConnectionsProbe { g, connection_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .probe_provider_connection(connection_id, g.correlation_id.as_ref())
                 .await?;
@@ -1183,7 +1369,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             connection_id,
             req,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .activate_provider_connection(connection_id, &req, g.correlation_id.as_ref())
                 .await?;
@@ -1195,21 +1381,21 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             scope_kind,
             kind,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_capabilities(project_id, scope_kind, kind, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::CapabilitiesDiscover { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .discover_capabilities(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::CapabilitiesCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_capability(&req, g.correlation_id.as_ref())
                 .await?;
@@ -1220,21 +1406,21 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             capability_id,
             req,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_capability(capability_id, &req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::CapabilitiesRollback { g, capability_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .rollback_capability(capability_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::CapabilitiesDelete { g, capability_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .delete_capability(capability_id, g.correlation_id.as_ref())
                 .await?;
@@ -1246,7 +1432,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             capability_id,
             req,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .set_project_capability_binding(
                     project_id,
@@ -1258,21 +1444,21 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             print_output(&resp, g.json)
         }
         Action::MemoryOverview { g, scope } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_memory_overview(scope.as_ref(), g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryNoteCorrect { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .correct_memory_note(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryNoteHistory { g, note_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_memory_note_history(note_id, g.correlation_id.as_ref())
                 .await?;
@@ -1283,7 +1469,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             scope,
             topic_key,
         } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_memory_claims(
                     scope.as_ref(),
@@ -1294,133 +1480,140 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             print_output(&resp, g.json)
         }
         Action::MemoryClaimsCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_memory_claim(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryClaimsSupersede { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .supersede_memory_claim(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryConflictsList { g, scope } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_memory_conflicts(scope.as_ref(), g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryConflictsResolve { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .resolve_memory_conflict(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryDocsList { g, scope } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_memory_documents(scope.as_ref(), g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryDocsCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_memory_document(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryDocsGet { g, document_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_memory_document(document_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryDocsUpdate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .update_memory_document(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryDocsVersions { g, document_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_memory_document_versions(document_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryForget { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .forget_memory_item(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryTombstones { g, scope } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_memory_tombstones(scope.as_ref(), g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryExport { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .export_memory_package(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryImport { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .import_memory_package(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
+        Action::MemoryIndexStatus { g, scope } => {
+            let client = build_head_client(&g)?;
+            let resp = client
+                .get_memory_index_status(scope.as_ref(), g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
         Action::MemoryIndexRebuild { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .trigger_memory_index_rebuild(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryConsolidationList { g, scope } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .list_memory_consolidation_jobs(scope.as_ref(), g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryConsolidationCreate { g, req } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .create_memory_consolidation_job(&req, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryConsolidationPause { g, job_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .pause_memory_consolidation_job(job_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::MemoryConsolidationResume { g, job_id } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .resume_memory_consolidation_job(job_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
         Action::Diagnostics { g, limit } => {
-            let client = HeadClient::new(&g.url)?;
+            let client = build_head_client(&g)?;
             let resp = client
                 .get_diagnostics(limit, g.correlation_id.as_ref())
                 .await?;
@@ -1429,12 +1622,58 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
     }
 }
 
+fn default_head_token_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(local) = env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
+            return PathBuf::from(local).join("dennett").join("head.token");
+        }
+    }
+    if let Some(xdg) = env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(xdg).join("dennett").join("head.token");
+    }
+    if let Some(home) = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .filter(|v| !v.is_empty())
+    {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("dennett")
+            .join("head.token");
+    }
+    env::temp_dir().join("dennett-head").join("head.token")
+}
+
+fn resolve_owner_token(explicit: Option<&str>) -> Option<String> {
+    if let Some(raw) = explicit {
+        let trimmed = raw.trim();
+        return (!trimmed.is_empty()).then(|| trimmed.to_owned());
+    }
+    if let Ok(env_tok) = env::var(ENV_HEAD_TOKEN) {
+        let trimmed = env_tok.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    let token_path = default_head_token_path();
+    let raw = fs::read_to_string(token_path).ok()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn build_head_client(g: &GlobalOpts) -> Result<HeadClient, DennettError> {
+    let token = resolve_owner_token(g.token.as_deref());
+    Ok(HeadClient::new(&g.url)?.with_optional_owner_token(token))
+}
+
 fn parse_cli<I>(args: I, default_url: &str) -> Result<Action, DennettError>
 where
     I: IntoIterator<Item = String>,
 {
     let mut g = GlobalOpts {
         url: default_url.to_owned(),
+        token: None,
         json: false,
         correlation_id: None,
     };
@@ -1446,6 +1685,7 @@ where
             "-V" | "--version" => return Ok(Action::Version),
             "--json" => g.json = true,
             "--url" => g.url = next_val(&mut iter, "--url")?,
+            "--token" => g.token = Some(next_val(&mut iter, "--token")?),
             "--correlation-id" => {
                 let raw = next_val(&mut iter, "--correlation-id")?;
                 g.correlation_id = Some(CorrelationId::try_new(raw)?);
@@ -1465,19 +1705,24 @@ where
             Ok(Action::Health(g))
         }
         "runtime" => parse_runtime_subcommand(g, &mut pos),
-        "agent" => parse_agent_subcommand(g, &mut pos),
-        "project" => parse_project_subcommand(g, &mut pos),
+        "agent" | "agents" => parse_agent_subcommand(g, &mut pos),
+        "project" | "projects" => parse_project_subcommand(g, &mut pos),
         "session" | "sessions" => parse_session_subcommand(g, &mut pos),
         "send" => parse_send(g, &mut pos),
         "cancel" => parse_cancel(g, &mut pos),
-        "artifact" => parse_artifact_subcommand(g, &mut pos),
-        "task" => parse_task_subcommand(g, &mut pos),
+        "emergency-stop" => {
+            ensure_no_extra(&mut pos)?;
+            Ok(Action::EmergencyStop(g))
+        }
+        "prefs" | "preferences" => parse_prefs_subcommand(g, &mut pos),
+        "artifact" | "artifacts" => parse_artifact_subcommand(g, &mut pos),
+        "task" | "tasks" => parse_task_subcommand(g, &mut pos),
         "inbox" => parse_inbox_subcommand(g, &mut pos),
         "permission" | "approval" => parse_permission_subcommand(g, &mut pos),
         "grant" => parse_grant_subcommand(g, &mut pos),
         "effect" => parse_effect_subcommand(g, &mut pos),
         "events" => parse_events_subcommand(g, &mut pos),
-        "policy" => parse_policy_subcommand(g, &mut pos),
+        "policy" | "policies" => parse_policy_subcommand(g, &mut pos),
         "memory" => parse_memory_subcommand(g, &mut pos),
         "secrets" | "secret" => parse_secrets_subcommand(g, &mut pos),
         "connections" | "connection" => parse_connections_subcommand(g, &mut pos),
@@ -1532,6 +1777,7 @@ fn parse_agent_subcommand(
             let mut thinking_level = None;
             let mut scopes = BTreeSet::new();
             let mut write_policy = WorkspaceWritePolicy::AskBeforeWrite;
+            let mut autonomy_mode = None;
             let mut attached_skills = Vec::new();
             let mut preferred_connection_id = None;
             let mut max_turns: Option<u32> = None;
@@ -1553,6 +1799,10 @@ fn parse_agent_subcommand(
                     }
                     "--write-policy" => {
                         write_policy = parse_write_policy(&next_val(iter, "--write-policy")?)?;
+                    }
+                    "--autonomy" => {
+                        autonomy_mode =
+                            Some(AutonomyMode::from_str(&next_val(iter, "--autonomy")?)?);
                     }
                     "--skill" => attached_skills.push(next_val(iter, "--skill")?),
                     "--preferred-connection" => {
@@ -1597,7 +1847,7 @@ fn parse_agent_subcommand(
                 thinking_level,
                 allowed_memory_scopes: scopes,
                 workspace_write_policy: write_policy,
-                autonomy_mode: None,
+                autonomy_mode,
                 default_budget,
                 attached_skills,
                 preferred_connection_id,
@@ -1612,6 +1862,7 @@ fn parse_agent_subcommand(
             let mut thinking_level = None;
             let mut scopes = BTreeSet::new();
             let mut write_policy = WorkspaceWritePolicy::AskBeforeWrite;
+            let mut autonomy_mode = None;
             let mut attached_skills = Vec::new();
             let mut preferred_connection_id = None;
             let mut max_turns: Option<u32> = None;
@@ -1632,6 +1883,10 @@ fn parse_agent_subcommand(
                     }
                     "--write-policy" => {
                         write_policy = parse_write_policy(&next_val(iter, "--write-policy")?)?;
+                    }
+                    "--autonomy" => {
+                        autonomy_mode =
+                            Some(AutonomyMode::from_str(&next_val(iter, "--autonomy")?)?);
                     }
                     "--skill" => attached_skills.push(next_val(iter, "--skill")?),
                     "--preferred-connection" => {
@@ -1674,7 +1929,7 @@ fn parse_agent_subcommand(
                 thinking_level,
                 allowed_memory_scopes: scopes,
                 workspace_write_policy: write_policy,
-                autonomy_mode: None,
+                autonomy_mode,
                 default_budget,
                 attached_skills,
                 preferred_connection_id,
@@ -1863,6 +2118,27 @@ fn parse_project_subcommand(
                 subpath,
             })
         }
+        "file" => {
+            let mut id = None;
+            let mut path = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--project" => {
+                        id = Some(ProjectId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    "--path" => path = Some(next_val(iter, "--path")?),
+                    other if id.is_none() && !other.starts_with("--") => {
+                        id = Some(ProjectId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::ProjectFileContent {
+                g,
+                project_id: req_opt(id, "--id")?,
+                path: req_opt(path, "--path")?,
+            })
+        }
         "rebind" => {
             let mut id = None;
             let mut workspace = None;
@@ -1980,10 +2256,14 @@ fn parse_session_subcommand(
             let mut id = None;
             let mut title = None;
             let mut pinned: Option<bool> = None;
+            let mut status: Option<SessionStatus> = None;
             while let Some(flag) = iter.next() {
                 match flag.as_str() {
                     "--id" => id = Some(SessionId::from_str(&next_val(iter, "--id")?)?),
                     "--title" => title = Some(next_val(iter, "--title")?),
+                    "--status" => {
+                        status = Some(SessionStatus::from_str(&next_val(iter, "--status")?)?);
+                    }
                     "--pin" => {
                         if pinned == Some(false) {
                             return Err(DennettError::InvalidInput {
@@ -2011,13 +2291,62 @@ fn parse_session_subcommand(
             let req = UpdateSessionRequest {
                 title,
                 pinned,
-                status: None,
+                status,
             };
             req.validate()?;
             Ok(Action::SessionUpdate {
                 g,
                 session_id: req_opt(id, "--id")?,
                 req,
+            })
+        }
+        "fork" => {
+            let mut id = None;
+            let mut from_message_id = None;
+            let mut title = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    "--from-message" => {
+                        from_message_id =
+                            Some(MessageId::from_str(&next_val(iter, "--from-message")?)?);
+                    }
+                    "--title" => title = Some(next_val(iter, "--title")?),
+                    other if id.is_none() && !other.starts_with("--") => {
+                        id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = ForkSessionRequest {
+                from_message_id: req_opt(from_message_id, "--from-message")?,
+                title,
+            };
+            req.validate()?;
+            Ok(Action::SessionFork {
+                g,
+                session_id: req_opt(id, "--id")?,
+                req,
+            })
+        }
+        "delete" => {
+            let mut id = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    other if id.is_none() && !other.starts_with("--") => {
+                        id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::SessionDelete {
+                g,
+                session_id: req_opt(id, "--id")?,
             })
         }
         "live" => {
@@ -2287,6 +2616,10 @@ fn parse_cancel(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "parses all artifact list/create/revisions/content/lifecycle subcommands in one match"
+)]
 fn parse_artifact_subcommand(
     g: GlobalOpts,
     iter: &mut impl Iterator<Item = String>,
@@ -2351,6 +2684,26 @@ fn parse_artifact_subcommand(
                 g,
                 session_id: req_opt(session_id, "--session")?,
                 key: req_opt(key, "--id|--name")?,
+            })
+        }
+        "content" => {
+            let mut session_id = None;
+            let mut artifact_id = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--session" => {
+                        session_id = Some(SessionId::from_str(&next_val(iter, "--session")?)?);
+                    }
+                    "--id" => {
+                        artifact_id = Some(ArtifactId::from_str(&next_val(iter, "--id")?)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::ArtifactContent {
+                g,
+                session_id: req_opt(session_id, "--session")?,
+                artifact_id: req_opt(artifact_id, "--id")?,
             })
         }
         "finalize" | "archive" | "unarchive" | "remove" | "delete" => {
@@ -2706,6 +3059,22 @@ fn parse_task_subcommand(
         "cancel" => {
             let task_id = parse_only_id::<TaskId>(iter, "--id")?;
             Ok(Action::TaskCancel { g, task_id })
+        }
+        "run-now" => {
+            let task_id = parse_id_or_positional::<TaskId>(iter, "--id")?;
+            Ok(Action::TaskRunNow { g, task_id })
+        }
+        "pause" => {
+            let task_id = parse_id_or_positional::<TaskId>(iter, "--id")?;
+            Ok(Action::TaskPause { g, task_id })
+        }
+        "resume" => {
+            let task_id = parse_id_or_positional::<TaskId>(iter, "--id")?;
+            Ok(Action::TaskResume { g, task_id })
+        }
+        "delete" => {
+            let task_id = parse_id_or_positional::<TaskId>(iter, "--id")?;
+            Ok(Action::TaskDelete { g, task_id })
         }
         other => Err(unknown_flag(other)),
     }
@@ -3160,6 +3529,63 @@ fn parse_policy_subcommand(
             };
             req.validate()?;
             Ok(Action::PolicyAdd { g, req })
+        }
+        "delete" => {
+            let rule_id = parse_id_or_positional::<PolicyRuleId>(iter, "--id")?;
+            Ok(Action::PolicyDelete { g, rule_id })
+        }
+        other => Err(unknown_flag(other)),
+    }
+}
+
+fn parse_prefs_subcommand(
+    g: GlobalOpts,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<Action, DennettError> {
+    let sub = next_val(iter, "prefs <subcommand>")?;
+    match sub.as_str() {
+        "get" => {
+            ensure_no_extra(iter)?;
+            Ok(Action::PrefsGet(g))
+        }
+        "set" => {
+            let mut ui_language = None;
+            let mut agent_language = None;
+            let mut timezone = None;
+            let mut enter_to_send = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--ui-language" => ui_language = Some(next_val(iter, "--ui-language")?),
+                    "--agent-language" => {
+                        agent_language = Some(next_val(iter, "--agent-language")?);
+                    }
+                    "--tz" | "--timezone" => timezone = Some(next_val(iter, &flag)?),
+                    "--enter-to-send" => {
+                        let raw = next_val(iter, "--enter-to-send")?;
+                        enter_to_send = Some(match raw.trim().to_ascii_lowercase().as_str() {
+                            "true" | "1" | "yes" => true,
+                            "false" | "0" | "no" => false,
+                            other => {
+                                return Err(DennettError::InvalidInput {
+                                    field: String::from("--enter-to-send"),
+                                    reason: format!(
+                                        "expected boolean true|false, got `{other}`"
+                                    ),
+                                });
+                            }
+                        });
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = UpdateUserPreferencesRequest {
+                ui_language,
+                agent_language,
+                timezone,
+                enter_to_send,
+            };
+            req.validate()?;
+            Ok(Action::PrefsSet { g, req })
         }
         other => Err(unknown_flag(other)),
     }
@@ -3643,6 +4069,10 @@ fn parse_memory_subcommand(
             };
             req.validate()?;
             Ok(Action::MemoryImport { g, req })
+        }
+        "index-status" => {
+            let scope = parse_optional_scope_flag(iter)?;
+            Ok(Action::MemoryIndexStatus { g, scope })
         }
         "index-rebuild" => {
             let scope = req_opt(parse_optional_scope_flag(iter)?, "--scope")?;
@@ -4252,6 +4682,23 @@ fn parse_only_id<T: FromStr<Err = DennettError>>(
     req_opt(id, flag_name)
 }
 
+fn parse_id_or_positional<T: FromStr<Err = DennettError>>(
+    iter: &mut impl Iterator<Item = String>,
+    flag_name: &str,
+) -> Result<T, DennettError> {
+    let mut id = None;
+    while let Some(flag) = iter.next() {
+        if flag == flag_name {
+            id = Some(T::from_str(&next_val(iter, flag_name)?)?);
+        } else if id.is_none() && !flag.starts_with("--") {
+            id = Some(T::from_str(&flag)?);
+        } else {
+            return Err(unknown_flag(&flag));
+        }
+    }
+    req_opt(id, flag_name)
+}
+
 fn parse_u32(raw: &str, flag: &str) -> Result<u32, DennettError> {
     raw.parse::<u32>().map_err(|_| DennettError::InvalidInput {
         field: flag.to_owned(),
@@ -4513,15 +4960,16 @@ fn print_usage() {
          \n\
          GLOBAL FLAGS:\n\
            --url <http://...>          Head base URL (default: $DENNETT_HEAD_URL or {DEFAULT_HEAD_URL})\n\
+           --token <tok>               Owner bearer token (default: $DENNETT_HEAD_TOKEN or <data_dir>/head.token)\n\
            --json                      Emit compact machine-readable JSON\n\
            --correlation-id <id>       Attach explicit correlation ID\n\
          \n\
          COMMANDS:\n\
            health\n\
            runtime catalog [--refresh]\n\
-           agent create --name <n> --system-prompt <p> [--model <m>] [--thinking <l>] [--scope <s>] [--write-policy <p>] [--skill <s>] [--max-turns <n>] [--max-tokens <n>] [--max-wall-secs <n>]\n\
+           agent create --name <n> --system-prompt <p> [--model <m>] [--thinking <l>] [--scope <s>] [--write-policy <p>] [--autonomy auto|full_access] [--skill <s>] [--max-turns <n>] [--max-tokens <n>] [--max-wall-secs <n>]\n\
            agent list\n\
-           agent update-config --id <uuid> --system-prompt <p> [--model <m>] [--thinking <l>] [--scope <s>] [--write-policy <p>] [--skill <s>]\n\
+           agent update-config --id <uuid> --system-prompt <p> [--model <m>] [--thinking <l>] [--scope <s>] [--write-policy <p>] [--autonomy auto|full_access] [--skill <s>]\n\
            agent history --id <uuid>\n\
            agent send-message --to <uuid> --project <uuid> --body <text> [--from <uuid>] [--task <uuid>] [--idempotency-key <k>]\n\
            agent inbox --id <uuid> [--undelivered]\n\
@@ -4529,6 +4977,7 @@ fn print_usage() {
            project list [--include-archived]\n\
            project update --id <uuid> [--name <n>] [--workspace <dir>] [--pin | --unpin]\n\
            project files --id <uuid> [--subpath <rel>]\n\
+           project file --id <uuid> --path <rel>\n\
            project rebind --id <uuid> --workspace <dir> [--reason <r>]\n\
            project detach --id <uuid>\n\
            project archive|unarchive|remove --id <uuid>\n\
@@ -4536,12 +4985,18 @@ fn print_usage() {
            session create --agent <uuid> [--project <uuid>] [--title <t>] [--kind user_chat|task_run]\n\
            session list\n\
            session show --id <uuid>\n\
-           session update --id <uuid> [--title <t>] [--pin | --unpin]\n\
+           session update --id <uuid> [--title <t>] [--status active|archived|closed] [--pin | --unpin]\n\
+           session fork --id <uuid> --from-message <uuid> [--title <t>]\n\
+           session delete --id <uuid>\n\
            send --session <uuid> --message <text> [--client-message-id <k>] [--timeout-ms <ms>]\n\
            cancel --session <uuid>\n\
+           emergency-stop\n\
+           prefs get\n\
+           prefs set [--ui-language <l>] [--agent-language <l>] [--tz <iana>] [--enter-to-send true|false]\n\
            artifact create --session <uuid> --name <n> [--mime-type <m>] [--status partial|final] (--content <c> | --path <rel>)\n\
            artifact list --session <uuid>\n\
            artifact revisions --session <uuid> (--id <uuid> | --name <n>)\n\
+           artifact content --session <uuid> --id <uuid>\n\
            artifact finalize|archive|unarchive|remove|delete --session <uuid> --id <uuid> [--confirm]\n\
            task create --project <uuid> --agent <uuid> --title <t> --goal <g> [--fire-at-ms <ms> | --interval-secs <s> | --daily HH:MM | --weekly mon,wed@HH:MM] [--tz <iana>] [--misfire execute_once|skip|ask] [--wait-for-signal <name>] [--max-turns <n>] [--max-tokens <n>] [--max-wall-secs <n>] [--budget-policy ask_approval|fail] [--parent-task <uuid>] [--skill <s>] [--auth-profile <p>] [--no-auto-run]\n\
            task list [--project <uuid>] [--status <s>]\n\
@@ -4549,7 +5004,7 @@ fn print_usage() {
            task update --id <uuid> [--title <t>] [--goal <g>] [--clear-schedule | --fire-at-ms <ms> | --interval-secs <s> | --daily HH:MM | --weekly mon,wed@HH:MM] [--tz <iana>] [--misfire execute_once|skip|ask] [--max-turns <n>] [--max-tokens <n>] [--max-wall-secs <n>] [--budget-policy ask_approval|fail] [--no-auto-run]\n\
            task signal --id <uuid> --name <n> --payload <text> --idempotency-key <k>\n\
            task reply --id <uuid> --answer <text>\n\
-           task cancel --id <uuid>\n\
+           task cancel|run-now|pause|resume|delete --id <uuid>\n\
            inbox list [--status open|resolved|all] [--project <uuid>]\n\
            inbox resolve --id <uuid> --revision <n> --action <permission|reply|increase_budget|run_now|skip_missed|reconcile_effect|stop_task> [...]\n\
            permission list [--status pending|all] [--session <uuid>]\n\
@@ -4563,6 +5018,7 @@ fn print_usage() {
            events tail [--after <seq>] [--epoch <n>] [--project <uuid>] [--limit <n>]\n\
            policy add --scope <scope> --tool <tool> [--target <pat>] --effect <allow|deny> --reason <r>\n\
            policy list\n\
+           policy delete --id <uuid>\n\
            memory commit --scope <s> --title <t> --body <b> [--session <uuid>] [--idempotency-key <k>]\n\
            memory outbox\n\
            memory flush-outbox\n\
@@ -4570,7 +5026,7 @@ fn print_usage() {
            memory overview [--scope <s>]\n\
            memory note-correct|note-history|claims-list|claims-create|claims-supersede [...]\n\
            memory conflicts-list|conflicts-resolve|docs-list|docs-create|docs-get|docs-update|docs-versions [...]\n\
-           memory forget|tombstones|export|import|index-rebuild [...]\n\
+           memory forget|tombstones|export|import|index-status|index-rebuild [...]\n\
            memory consolidation-list|consolidation-create|consolidation-pause|consolidation-resume [...]\n\
            secrets list|set|delete [...]\n\
            connections list|create|update|delete|probe|activate [...]\n\
@@ -5194,6 +5650,207 @@ mod tests {
             )
             .expect("parse followup resume"),
             Action::SessionFollowupResume { session_id, .. } if session_id == sid
+        ));
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exercises all D3 audit-closure CLI flags and subcommands in one parser test"
+    )]
+    fn cli_parses_audit_closure_token_and_parity_commands() {
+        let pid = ProjectId::new();
+        let sid = SessionId::new();
+        let mid = MessageId::new();
+        let aid = ArtifactId::new();
+        let tid = TaskId::new();
+        let rid = PolicyRuleId::new();
+
+        assert!(matches!(
+            parse_cli(
+                ["--token", "tok-owner-123", "emergency-stop"].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse emergency-stop with token"),
+            Action::EmergencyStop(ref g) if g.token.as_deref() == Some("tok-owner-123")
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "agent",
+                    "create",
+                    "--name",
+                    "AutoAgent",
+                    "--system-prompt",
+                    "Work autonomously",
+                    "--autonomy",
+                    "full_access",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse agent autonomy"),
+            Action::AgentCreate { ref req, .. }
+                if req.autonomy_mode == Some(AutonomyMode::FullAccess)
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "session",
+                    "fork",
+                    "--id",
+                    &sid.to_string(),
+                    "--from-message",
+                    &mid.to_string(),
+                    "--title",
+                    "Branch B",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse session fork"),
+            Action::SessionFork {
+                session_id,
+                ref req,
+                ..
+            } if session_id == sid
+                && req.from_message_id == mid
+                && req.title.as_deref() == Some("Branch B")
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "session",
+                    "update",
+                    &sid.to_string(),
+                    "--status",
+                    "archived",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse session status update"),
+            Action::SessionUpdate { ref req, .. } if req.status == Some(SessionStatus::Archived)
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["session", "delete", &sid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse session delete"),
+            Action::SessionDelete { session_id, .. } if session_id == sid
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "project",
+                    "file",
+                    "--id",
+                    &pid.to_string(),
+                    "--path",
+                    "src/lib.rs",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse project file"),
+            Action::ProjectFileContent {
+                project_id,
+                ref path,
+                ..
+            } if project_id == pid && path == "src/lib.rs"
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "artifact",
+                    "content",
+                    "--session",
+                    &sid.to_string(),
+                    "--id",
+                    &aid.to_string(),
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse artifact content"),
+            Action::ArtifactContent {
+                session_id,
+                artifact_id,
+                ..
+            } if session_id == sid && artifact_id == aid
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["task", "run-now", &tid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse task run-now"),
+            Action::TaskRunNow { task_id, .. } if task_id == tid
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["task", "pause", &tid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse task pause"),
+            Action::TaskPause { task_id, .. } if task_id == tid
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["task", "resume", &tid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse task resume"),
+            Action::TaskResume { task_id, .. } if task_id == tid
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["task", "delete", &tid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse task delete"),
+            Action::TaskDelete { task_id, .. } if task_id == tid
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["policy", "delete", &rid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse policy delete"),
+            Action::PolicyDelete { rule_id, .. } if rule_id == rid
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "prefs",
+                    "set",
+                    "--ui-language",
+                    "en",
+                    "--agent-language",
+                    "ru",
+                    "--tz",
+                    "Asia/Yekaterinburg",
+                    "--enter-to-send",
+                    "false",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse prefs set"),
+            Action::PrefsSet { ref req, .. }
+                if req.ui_language.as_deref() == Some("en")
+                    && req.agent_language.as_deref() == Some("ru")
+                    && req.timezone.as_deref() == Some("Asia/Yekaterinburg")
+                    && req.enter_to_send == Some(false)
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["memory", "index-status", "--scope", "project:alpha"].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse memory index-status"),
+            Action::MemoryIndexStatus { scope: Some(_), .. }
         ));
     }
 }

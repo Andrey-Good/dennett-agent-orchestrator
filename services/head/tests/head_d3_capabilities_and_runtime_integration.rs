@@ -166,6 +166,7 @@ impl LiveHeadHarness {
             runtime_adapter_id: service.runtime_adapter_id().to_owned(),
             runtime_is_simulated: service.runtime_is_simulated(),
             allow_non_loopback: false,
+            owner_token: zeroize::Zeroizing::new(service.owner_token().to_owned()),
             shutdown_tx: shutdown_tx.clone(),
             request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
         };
@@ -185,7 +186,9 @@ impl LiveHeadHarness {
             .await;
         });
 
-        let client = HeadClient::new(&head_url).expect("construct HeadClient");
+        let client = HeadClient::new(&head_url)
+            .expect("construct HeadClient")
+            .with_owner_token(service.owner_token());
         Self {
             base_url,
             schema,

@@ -1287,6 +1287,7 @@ def _graceful_stop_daemon(
     label: str,
     *,
     base_url: str | None = None,
+    bearer_token: str | None = None,
 ) -> None:
     """Stop a spawned demo daemon cleanly: HTTP `/shutdown` -> terminate -> Windows `taskkill /F /T` (`D2-OPS-01`)."""
     if proc is None or proc.poll() is not None:
@@ -1295,10 +1296,13 @@ def _graceful_stop_daemon(
     if base_url:
         try:
             opener = build_opener(ProxyHandler({}))
+            headers = {"X-Dennett-Shutdown": "1"}
+            if bearer_token:
+                headers["Authorization"] = f"Bearer {bearer_token}"
             req = Request(
                 f"{base_url.rstrip('/')}/shutdown",
                 data=b"",
-                headers={"X-Dennett-Shutdown": "1"},
+                headers=headers,
                 method="POST",
             )
             with opener.open(req, timeout=1.5):
@@ -1338,14 +1342,23 @@ def _graceful_stop_daemon(
         print(f"[dennett-check] warning: could not verify exit of {label}", file=sys.stderr)
 
 
-def _post_loopback_json(base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _post_loopback_json(
+    base_url: str,
+    path: str,
+    payload: dict[str, Any],
+    *,
+    bearer_token: str | None = None,
+) -> dict[str, Any]:
     """Send a loopback JSON POST request directly to `dennett-head` (bypassing proxies)."""
     opener = build_opener(ProxyHandler({}))
     body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
     req = Request(
         f"{base_url}{path}",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with opener.open(req, timeout=15) as resp:
@@ -1368,11 +1381,18 @@ def _check_windows_binary_unlocked(binary_path: Path, label: str) -> None:
         ) from exc
 
 
-def _resolve_catalog_default_model(head_http_url: str) -> str | None:
+def _resolve_catalog_default_model(
+    head_http_url: str,
+    *,
+    bearer_token: str | None = None,
+) -> str | None:
     """Query live runtime catalog so starter agents default to the runtime's primary model."""
     try:
         opener = build_opener(ProxyHandler({}))
-        req = Request(f"{head_http_url}/v1/runtime/catalog", method="GET")
+        headers: dict[str, str] = {}
+        if bearer_token:
+            headers["Authorization"] = f"Bearer {bearer_token}"
+        req = Request(f"{head_http_url}/v1/runtime/catalog", headers=headers, method="GET")
         with opener.open(req, timeout=10) as resp:
             payload = json.loads(resp.read().decode("utf-8", errors="replace"))
         default_id = payload.get("default_model_id")
@@ -1392,9 +1412,11 @@ def _preseed_demo_d1_workspace(
     head_http_url: str,
     workspace_dir: Path,
     memory_scope: str,
+    *,
+    bearer_token: str | None = None,
 ) -> dict[str, str]:
     """Pre-seed a clean starter workspace, agent, and blank chat ready for immediate typing."""
-    default_model_id = _resolve_catalog_default_model(head_http_url)
+    default_model_id = _resolve_catalog_default_model(head_http_url, bearer_token=bearer_token)
     project = _post_loopback_json(
         head_http_url,
         "/v1/projects",
@@ -1403,6 +1425,7 @@ def _preseed_demo_d1_workspace(
             "workspace_path": str(workspace_dir),
             "memory_scope": memory_scope,
         },
+        bearer_token=bearer_token,
     )
     agent_payload: dict[str, Any] = {
         "name": "Проектный агент",
@@ -1418,10 +1441,11 @@ def _preseed_demo_d1_workspace(
         "thinking_level": "medium",
         "allowed_memory_scopes": [memory_scope],
         "workspace_write_policy": {"mode": "allow_workspace"},
+        "autonomy_mode": "auto",
     }
     if default_model_id:
         agent_payload["model_preference"] = default_model_id
-    agent = _post_loopback_json(head_http_url, "/v1/agents", agent_payload)
+    agent = _post_loopback_json(head_http_url, "/v1/agents", agent_payload, bearer_token=bearer_token)
     session = _post_loopback_json(
         head_http_url,
         "/v1/sessions",
@@ -1430,6 +1454,7 @@ def _preseed_demo_d1_workspace(
             "project_id": project["project_id"],
             "title": "Новый чат",
         },
+        bearer_token=bearer_token,
     )
     return {
         "project_id": str(project["project_id"]),
@@ -1541,6 +1566,7 @@ def run_demo_d1(
     profile_root.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     demo_token = f"dennett-demo-{secrets.token_hex(16)}"
+    head_owner_token = secrets.token_hex(32)
     memory_hmac_secret = secrets.token_hex(32)
     auth_config_json = json.dumps(
         {
@@ -1609,6 +1635,7 @@ def run_demo_d1(
             overrides={
                 "DENNETT_TEST_PROFILE": "1",
                 "DENNETT_TEST_CONTROL_PG_URL": ctrl_url,
+                "DENNETT_HEAD_TOKEN": head_owner_token,
                 "DENNETT_MEMORY_TOKEN": demo_token,
                 "DENNETT_MEMORY_HMAC_SECRET": memory_hmac_secret,
             },
@@ -1643,7 +1670,9 @@ def run_demo_d1(
         )
         head_addr = _read_listening_addr(head_proc, "dennett-head")
         head_http_url = f"http://{head_addr}"
-        seeded = _preseed_demo_d1_workspace(head_http_url, workspace_dir, memory_scope)
+        seeded = _preseed_demo_d1_workspace(
+            head_http_url, workspace_dir, memory_scope, bearer_token=head_owner_token
+        )
 
         print("\n=== Dennett D1 Isolated Environment Ready ===", flush=True)
         print(f"  DENNETT_HEAD_URL      : {head_http_url}", flush=True)
@@ -1661,7 +1690,13 @@ def run_demo_d1(
         )
 
         if not no_ui:
-            ui_env = build_tool_env(overrides={"DENNETT_HEAD_URL": head_http_url})
+            ui_env = build_tool_env(
+                overrides={
+                    "DENNETT_HEAD_URL": head_http_url,
+                    "DENNETT_HEAD_TOKEN": head_owner_token,
+                    "VITE_DENNETT_HEAD_TOKEN": head_owner_token,
+                }
+            )
             ui_proc = subprocess.Popen(
                 [str(desktop_bin)],
                 cwd=repo_root,
@@ -1678,7 +1713,9 @@ def run_demo_d1(
         print("\n[dennett-check] Ctrl+C received; tearing down isolated D1 demo...", flush=True)
     finally:
         _graceful_stop_daemon(ui_proc, "dennett-desktop")
-        _graceful_stop_daemon(head_proc, "dennett-head", base_url=head_http_url)
+        _graceful_stop_daemon(
+            head_proc, "dennett-head", base_url=head_http_url, bearer_token=head_owner_token
+        )
         _graceful_stop_daemon(memoryd_proc, "dennett-memoryd", base_url=memoryd_http_url)
         run_cmd(
             [*compose_base, "down", "-v"],
@@ -1703,9 +1740,11 @@ def _preseed_demo_d2_workspace(
     head_http_url: str,
     workspace_dir: Path,
     memory_scope: str,
+    *,
+    bearer_token: str | None = None,
 ) -> dict[str, str]:
-    """Pre-seed a clean D2 starter workspace with interactive `ask_before_write` policy."""
-    default_model_id = _resolve_catalog_default_model(head_http_url)
+    """Pre-seed a clean D2/D3 starter workspace with 2-mode `auto` autonomy."""
+    default_model_id = _resolve_catalog_default_model(head_http_url, bearer_token=bearer_token)
     project = _post_loopback_json(
         head_http_url,
         "/v1/projects",
@@ -1714,10 +1753,11 @@ def _preseed_demo_d2_workspace(
             "workspace_path": str(workspace_dir),
             "memory_scope": memory_scope,
         },
+        bearer_token=bearer_token,
     )
     agent_payload: dict[str, Any] = {
         "name": "Проектный агент",
-        "description": "Проектный агент Dennett (D2: интерактивные подтверждения, поручения и таймеры)",
+        "description": "Проектный агент Dennett (режим Авто: локальная работа без лишних запросов)",
         "system_prompt": (
             f"Ты агент Dennett. Используй MCP-инструменты `dennett-memory` с областью "
             f"`{memory_scope}` для чтения и записи проектных решений, MCP-инструменты "
@@ -1728,11 +1768,12 @@ def _preseed_demo_d2_workspace(
         ),
         "thinking_level": "medium",
         "allowed_memory_scopes": [memory_scope],
-        "workspace_write_policy": {"mode": "ask_before_write"},
+        "workspace_write_policy": {"mode": "allow_workspace"},
+        "autonomy_mode": "auto",
     }
     if default_model_id:
         agent_payload["model_preference"] = default_model_id
-    agent = _post_loopback_json(head_http_url, "/v1/agents", agent_payload)
+    agent = _post_loopback_json(head_http_url, "/v1/agents", agent_payload, bearer_token=bearer_token)
     session = _post_loopback_json(
         head_http_url,
         "/v1/sessions",
@@ -1741,6 +1782,7 @@ def _preseed_demo_d2_workspace(
             "project_id": project["project_id"],
             "title": "Новый чат",
         },
+        bearer_token=bearer_token,
     )
     return {
         "project_id": str(project["project_id"]),
@@ -1782,7 +1824,7 @@ def run_demo_d2(
         plan = {
             "mode": "demo-d2-dry-run",
             "stage": "D2",
-            "control_schema_version": 10,
+            "control_schema_version": 11,
             "memory_schema_version": 3,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
@@ -1858,6 +1900,7 @@ def run_demo_d2(
     profile_root.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     demo_token = f"dennett-demo-d2-{secrets.token_hex(16)}"
+    head_owner_token = secrets.token_hex(32)
     memory_hmac_secret = secrets.token_hex(32)
     auth_config_json = json.dumps(
         {
@@ -1926,6 +1969,7 @@ def run_demo_d2(
             overrides={
                 "DENNETT_TEST_PROFILE": "1",
                 "DENNETT_TEST_CONTROL_PG_URL": ctrl_url,
+                "DENNETT_HEAD_TOKEN": head_owner_token,
                 "DENNETT_MEMORY_TOKEN": demo_token,
                 "DENNETT_MEMORY_HMAC_SECRET": memory_hmac_secret,
             },
@@ -1962,7 +2006,9 @@ def run_demo_d2(
         )
         head_addr = _read_listening_addr(head_proc, "dennett-head")
         head_http_url = f"http://{head_addr}"
-        seeded = _preseed_demo_d2_workspace(head_http_url, workspace_dir, memory_scope)
+        seeded = _preseed_demo_d2_workspace(
+            head_http_url, workspace_dir, memory_scope, bearer_token=head_owner_token
+        )
 
         print("\n=== Dennett D2 Isolated Environment Ready ===", flush=True)
         print(f"  DENNETT_HEAD_URL      : {head_http_url}", flush=True)
@@ -1972,7 +2018,7 @@ def run_demo_d2(
         print(f"  Effects Ledger        : {effects_ledger_path}", flush=True)
         print(f"  Starter Project       : Рабочее пространство ({seeded['project_id']})", flush=True)
         print(f"  Starter Session       : Новый чат ({seeded['session_id']})", flush=True)
-        print("  Write Policy          : ask_before_write (Спрашивать запись)", flush=True)
+        print("  Autonomy Mode         : auto (Авто)", flush=True)
         print(f"  Memory Scope (HMAC)   : {memory_scope} (+ dynamic per-project scopes)", flush=True)
         print(f"  Isolated agy Profile  : {profile_root}", flush=True)
         print(
@@ -1982,7 +2028,13 @@ def run_demo_d2(
         )
 
         if not no_ui:
-            ui_env = build_tool_env(overrides={"DENNETT_HEAD_URL": head_http_url})
+            ui_env = build_tool_env(
+                overrides={
+                    "DENNETT_HEAD_URL": head_http_url,
+                    "DENNETT_HEAD_TOKEN": head_owner_token,
+                    "VITE_DENNETT_HEAD_TOKEN": head_owner_token,
+                }
+            )
             ui_proc = subprocess.Popen(
                 [str(desktop_bin)],
                 cwd=repo_root,
@@ -1999,7 +2051,9 @@ def run_demo_d2(
         print("\n[dennett-check] Ctrl+C received; tearing down isolated D2 demo...", flush=True)
     finally:
         _graceful_stop_daemon(ui_proc, "dennett-desktop")
-        _graceful_stop_daemon(head_proc, "dennett-head", base_url=head_http_url)
+        _graceful_stop_daemon(
+            head_proc, "dennett-head", base_url=head_http_url, bearer_token=head_owner_token
+        )
         _graceful_stop_daemon(memoryd_proc, "dennett-memoryd", base_url=memoryd_http_url)
         run_cmd(
             [*compose_base, "down", "-v"],
@@ -2024,9 +2078,13 @@ def _preseed_demo_d3_workspace(
     head_http_url: str,
     workspace_dir: Path,
     memory_scope: str,
+    *,
+    bearer_token: str | None = None,
 ) -> dict[str, str]:
     """Pre-seed a realistic D3 starter workspace with Memory Fabric v2 records and a project-local skill."""
-    seeded = _preseed_demo_d2_workspace(head_http_url, workspace_dir, memory_scope)
+    seeded = _preseed_demo_d2_workspace(
+        head_http_url, workspace_dir, memory_scope, bearer_token=bearer_token
+    )
 
     # Plant a small project-local skill so Settings -> Навыки, плагины и MCP discovery works immediately.
     skill_dir = workspace_dir / ".agents" / "skills" / "project-checklist"
@@ -2052,6 +2110,7 @@ def _preseed_demo_d3_workspace(
             "caveats": ["Для мобильных устройств допускается локальный offline-кэш черновиков."],
             "idempotency_key": f"demo-d3-claim-pg-{uuid.uuid4().hex[:8]}",
         },
+        bearer_token=bearer_token,
     )
     claim_old = _post_loopback_json(
         head_http_url,
@@ -2065,6 +2124,7 @@ def _preseed_demo_d3_workspace(
             "caveats": ["Критичные патчи безопасности выходят вне окна."],
             "idempotency_key": f"demo-d3-claim-c1-{uuid.uuid4().hex[:8]}",
         },
+        bearer_token=bearer_token,
     )
     _post_loopback_json(
         head_http_url,
@@ -2078,6 +2138,7 @@ def _preseed_demo_d3_workspace(
             "caveats": ["Нужно подтвердить окно с командой инфраструктуры."],
             "idempotency_key": f"demo-d3-claim-c2-{uuid.uuid4().hex[:8]}",
         },
+        bearer_token=bearer_token,
     )
     _post_loopback_json(
         head_http_url,
@@ -2097,6 +2158,7 @@ def _preseed_demo_d3_workspace(
             "provenance_note_ids": [],
             "idempotency_key": f"demo-d3-doc-{uuid.uuid4().hex[:8]}",
         },
+        bearer_token=bearer_token,
     )
     return seeded
 
@@ -2134,7 +2196,7 @@ def run_demo_d3(
         plan = {
             "mode": "demo-d3-dry-run",
             "stage": "D3",
-            "control_schema_version": 10,
+            "control_schema_version": 11,
             "memory_schema_version": 3,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
@@ -2205,6 +2267,7 @@ def run_demo_d3(
     profile_root.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     demo_token = f"dennett-demo-d3-{secrets.token_hex(16)}"
+    head_owner_token = secrets.token_hex(32)
     memory_hmac_secret = secrets.token_hex(32)
     auth_config_json = json.dumps(
         {
@@ -2273,6 +2336,7 @@ def run_demo_d3(
             overrides={
                 "DENNETT_TEST_PROFILE": "1",
                 "DENNETT_TEST_CONTROL_PG_URL": ctrl_url,
+                "DENNETT_HEAD_TOKEN": head_owner_token,
                 "DENNETT_MEMORY_TOKEN": demo_token,
                 "DENNETT_MEMORY_HMAC_SECRET": memory_hmac_secret,
             },
@@ -2309,12 +2373,17 @@ def run_demo_d3(
         )
         head_addr = _read_listening_addr(head_proc, "dennett-head")
         head_http_url = f"http://{head_addr}"
-        seeded = _preseed_demo_d3_workspace(head_http_url, workspace_dir, memory_scope)
+        seeded = _preseed_demo_d3_workspace(
+            head_http_url, workspace_dir, memory_scope, bearer_token=head_owner_token
+        )
 
         token_file = temp_root / "memory-token.txt"
         token_file.write_text(demo_token, encoding="utf-8")
+        head_token_file = temp_root / "head-token.txt"
+        head_token_file.write_text(head_owner_token, encoding="utf-8")
         print("\n=== Dennett D3 Isolated Environment Ready ===", flush=True)
         print(f"  DENNETT_HEAD_URL      : {head_http_url}", flush=True)
+        print(f"  Head Owner Token File : {head_token_file} (for dennettctl / Bearer auth)", flush=True)
         print(f"  DENNETT_MEMORY_URL    : {memoryd_http_url}", flush=True)
         print(f"  Memory CLI Token File : {token_file} (for standalone dennett-memory-cli without Head)", flush=True)
         print(f"  Runtime / Auth Profile: {runtime} / {auth_profile}", flush=True)
@@ -2331,7 +2400,13 @@ def run_demo_d3(
         )
 
         if not no_ui:
-            ui_env = build_tool_env(overrides={"DENNETT_HEAD_URL": head_http_url})
+            ui_env = build_tool_env(
+                overrides={
+                    "DENNETT_HEAD_URL": head_http_url,
+                    "DENNETT_HEAD_TOKEN": head_owner_token,
+                    "VITE_DENNETT_HEAD_TOKEN": head_owner_token,
+                }
+            )
             ui_proc = subprocess.Popen(
                 [str(desktop_bin)],
                 cwd=repo_root,
@@ -2348,7 +2423,9 @@ def run_demo_d3(
         print("\n[dennett-check] Ctrl+C received; tearing down isolated D3 demo...", flush=True)
     finally:
         _graceful_stop_daemon(ui_proc, "dennett-desktop")
-        _graceful_stop_daemon(head_proc, "dennett-head", base_url=head_http_url)
+        _graceful_stop_daemon(
+            head_proc, "dennett-head", base_url=head_http_url, bearer_token=head_owner_token
+        )
         _graceful_stop_daemon(memoryd_proc, "dennett-memoryd", base_url=memoryd_http_url)
         run_cmd(
             [*compose_base, "down", "-v"],

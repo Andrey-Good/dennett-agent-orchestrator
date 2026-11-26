@@ -939,7 +939,7 @@ impl HeadService {
                             ),
                         })?;
                 let (bearer_token, secret_version) = match record.secret_slot_key.as_deref() {
-                    Some(slot) => match self.resolve_secret_plaintext(slot).await? {
+                    Some(slot) => match self.resolve_secret_plaintext(slot, None).await? {
                         Some((val, _, ver)) => (Some(val.to_string()), Some(ver)),
                         None => (None, None),
                     },
@@ -1015,6 +1015,7 @@ impl HeadService {
                         let mut cfg = AntigravityRuntimeConfig::oauth_personal(
                             self.antigravity_profile_root(),
                         );
+                        cfg.enable_sandbox = self.antigravity_enable_sandbox();
                         if let Some(bin) = self.antigravity_binary() {
                             cfg.binary = bin;
                         }
@@ -1038,7 +1039,7 @@ impl HeadService {
                             .secret_slot_key
                             .as_deref()
                             .unwrap_or(GEMINI_API_KEY_SLOT);
-                        let resolved = self.resolve_secret_plaintext(slot).await?;
+                        let resolved = self.resolve_secret_plaintext(slot, None).await?;
                         let Some((api_key, _, secret_version)) = resolved else {
                             return Err(DennettError::AuthRequired {
                                 profile: RuntimeAuthProfile::GeminiApiKey,
@@ -1062,6 +1063,7 @@ impl HeadService {
                             self.antigravity_profile_root(),
                             Some(api_key.to_string()),
                         );
+                        cfg.enable_sandbox = self.antigravity_enable_sandbox();
                         if let Some(bin) = self.antigravity_binary() {
                             cfg.binary = bin;
                         }

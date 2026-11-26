@@ -508,6 +508,7 @@ impl HeadService {
                 task_id: req.task_id,
                 workspace_root: ws_root,
                 workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
+                autonomy_mode: agent.current_config.autonomy_mode,
                 parent_write_ceiling: None,
                 allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
                 registered_mcp_servers: std::collections::BTreeSet::new(),

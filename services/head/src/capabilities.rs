@@ -20,10 +20,10 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use dennett_contracts::{
-    CapabilityActivation, CapabilityId, CapabilityKind, CapabilityOrigin, CapabilityOwnership,
-    CapabilityPossession, CapabilityProjectBinding, CapabilityRecord, CapabilityScopeKind,
-    CapabilitySpec, CapabilityTrust, CompatibilityStatus, CorrelationId, CreateCapabilityRequest,
-    DeleteCapabilityResponse, DennettError, DiscoverCapabilitiesRequest,
+    AgentId, CapabilityActivation, CapabilityId, CapabilityKind, CapabilityOrigin,
+    CapabilityOwnership, CapabilityPossession, CapabilityProjectBinding, CapabilityRecord,
+    CapabilityScopeKind, CapabilitySpec, CapabilityTrust, CompatibilityStatus, CorrelationId,
+    CreateCapabilityRequest, DeleteCapabilityResponse, DennettError, DiscoverCapabilitiesRequest,
     DiscoverCapabilitiesResponse, ListCapabilitiesResponse, MAX_CAPABILITY_DESCRIPTION_BYTES,
     MAX_CAPABILITY_LIST_ITEMS, MAX_CAPABILITY_MARKDOWN_BYTES, MAX_CAPABILITY_NAME_LEN,
     MAX_CAPABILITY_VERSION_LEN, PluginMcpServerEntry, ProjectId, SessionSkillDetailResponse,
@@ -40,17 +40,62 @@ use crate::events::{ControlEventAppend, append_control_event_in_tx};
 use crate::memory_auth::ControlTokenClaims;
 use crate::migrations::sha256_hex;
 use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService};
-use crate::store::{append_audit_event, fetch_project, fetch_session, map_pg_err, truncate_utf8};
+use crate::store::{
+    append_audit_event, fetch_agent, fetch_project, fetch_session, map_pg_err, truncate_utf8,
+};
 use crate::workspace_files::{clean_display_path, is_symlink_or_reparse_point};
 
 const CAPABILITY_SELECT_COLS: &str = "
     capability_id, slug, kind, display_name, description, version,
-    origin_kind, ownership, scope_kind, project_id,
+    origin_kind, ownership, scope_kind, project_id, agent_id,
     possession_state, trust_state, activation_state,
     compatibility_status, compatibility_detail, source_path,
     content_sha256, spec_json, previous_snapshot_json IS NOT NULL, revision,
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+";
+
+/// Canonical built-in on-demand guide skill slug (`A-AGT-1`).
+pub const BUILTIN_DENNETT_GUIDE_SLUG: &str = "dennett-guide";
+const BUILTIN_DENNETT_GUIDE_UUID: Uuid = Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_0101);
+const BUILTIN_DENNETT_GUIDE_MARKDOWN: &str = "\
+# Dennett Built-in Guide
+
+You are running inside **Dennett**, an agentic workspace & memory orchestration system.
+Your active context (`session_id`, `agent_id`, `project_id`, `workspace_path`, `autonomy_mode`,
+`allowed_memory_scopes`, `user_language`, `timezone`, and active skills) is injected on every turn
+in the `[Dennett Runtime Context]` block.
+
+## Memory (`dennett-memory` MCP)
+- Search memory (`memory_search`), inspect notes (`memory_get_current`, `memory_get_history`),
+  manage structured claims (`memory_claim_create`, `memory_claim_lookup`, `memory_claim_supersede`),
+  evidence (`memory_evidence_create`, `memory_evidence_list`), conflicts (`memory_conflict_list`,
+  `memory_conflict_resolve`), dossiers (`memory_document_read`, `memory_document_write`), and index
+  status (`memory_index_status`).
+- Always pass an explicit authorized `scope` from `allowed_memory_scopes` when writing.
+
+## Events, Reminders & Timers (`dennett-control` MCP)
+- `dennett_event_create`: schedule one-shot (`once_at`), recurring (`interval`, `daily_local_time`,
+  `weekly_local_time`, `yearly_wall`), signal-triggered (`wait_for_signal`), or run-completion
+  (`on_run_completed`) tasks. Use `target_session: \"current\"` to post directly into the current
+  chat or `\"isolated\"` (default) to run in a clean background task session and notify this chat.
+- Standalone chats (without a bound project) can create personal reminders scoped to their session.
+- Use `dennett_event_list`, `dennett_event_update` (supports updating schedule or `clear_schedule`),
+  `dennett_event_cancel`, and `dennett_task_send_signal` to inspect and control durable tasks.
+
+## Subagents & Agent Coordination (`dennett-control` MCP)
+- `dennett_agent_list`: discover agents in this project along with their model and autonomy settings.
+- `dennett_delegate_task`: delegate a goal to another agent (or a configured subagent with optional
+  `model`, `thinking_level`, `connection_id`, `attached_skills` overrides). Child privileges are
+  strictly bounded by parent scope/autonomy (`child <= parent`), and a concise completion summary is
+  automatically delivered back to your session when the child task finishes.
+- `dennett_agent_send_message` / `dennett_agent_list_messages`: plain-text inter-agent messages.
+
+## Artifacts & Skills (`dennett-control` MCP)
+- `dennett_artifact_register` / `dennett_artifact_list`: register and list session artifacts
+  (inline markdown/text or canonical workspace-relative file snapshots).
+- `dennett_skill_list` / `dennett_skill_read(slug)`: inspect and load full instructions for any
+  active or on-demand Dennett skill available to this session.
 ";
 
 /// Maximum bytes inlined directly into `[Dennett Active Skills Index]` for a `pinned` skill (16 KiB).
@@ -138,6 +183,8 @@ struct CapabilitySnapshot {
     version: String,
     scope_kind: CapabilityScopeKind,
     project_id: Option<ProjectId>,
+    #[serde(default)]
+    agent_id: Option<AgentId>,
     trust_state: CapabilityTrust,
     activation_state: CapabilityActivation,
     content_sha256: Sha256Hex,
@@ -245,7 +292,7 @@ fn decode_capability_row(
     project_bindings: Vec<CapabilityProjectBinding>,
 ) -> Result<CapabilityRecord, DennettError> {
     let spec: CapabilitySpec =
-        serde_json::from_value(row.get::<_, JsonValue>(17)).map_err(|err| {
+        serde_json::from_value(row.get::<_, JsonValue>(18)).map_err(|err| {
             DennettError::Internal {
                 detail: format!("corrupt capability_records.spec_json: {err}"),
             }
@@ -261,20 +308,20 @@ fn decode_capability_row(
         ownership: CapabilityOwnership::from_str(&row.get::<_, String>(7))?,
         scope_kind: CapabilityScopeKind::from_str(&row.get::<_, String>(8))?,
         project_id: row.get::<_, Option<Uuid>>(9).map(ProjectId::from_uuid),
-        agent_id: None,
-        possession_state: CapabilityPossession::from_str(&row.get::<_, String>(10))?,
-        trust_state: CapabilityTrust::from_str(&row.get::<_, String>(11))?,
-        activation_state: CapabilityActivation::from_str(&row.get::<_, String>(12))?,
-        compatibility_status: CompatibilityStatus::from_str(&row.get::<_, String>(13))?,
-        compatibility_detail: row.get(14),
-        source_path: row.get(15),
-        content_sha256: Sha256Hex::try_new(row.get::<_, String>(16))?,
+        agent_id: row.get::<_, Option<Uuid>>(10).map(AgentId::from_uuid),
+        possession_state: CapabilityPossession::from_str(&row.get::<_, String>(11))?,
+        trust_state: CapabilityTrust::from_str(&row.get::<_, String>(12))?,
+        activation_state: CapabilityActivation::from_str(&row.get::<_, String>(13))?,
+        compatibility_status: CompatibilityStatus::from_str(&row.get::<_, String>(14))?,
+        compatibility_detail: row.get(15),
+        source_path: row.get(16),
+        content_sha256: Sha256Hex::try_new(row.get::<_, String>(17))?,
         spec,
-        can_rollback: row.get(18),
-        revision: row.get(19),
+        can_rollback: row.get(19),
+        revision: row.get(20),
         project_bindings,
-        created_at: TimestampMs::from_millis(row.get(20)),
-        updated_at: TimestampMs::from_millis(row.get(21)),
+        created_at: TimestampMs::from_millis(row.get(21)),
+        updated_at: TimestampMs::from_millis(row.get(22)),
     })
 }
 
@@ -288,6 +335,52 @@ fn decode_binding_row(row: &Row) -> Result<CapabilityProjectBinding, DennettErro
 }
 
 impl HeadService {
+    /// Idempotently seeds built-in Dennett capabilities (including the on-demand `dennett-guide`
+    /// skill, `A-AGT-1`) on database initialization/migration.
+    pub(crate) async fn ensure_builtin_capabilities_seeded_on_conn<
+        C: deadpool_postgres::GenericClient,
+    >(
+        &self,
+        conn: &C,
+    ) -> Result<(), DennettError> {
+        let spec = CapabilitySpec::Skill {
+            skill_markdown: String::from(BUILTIN_DENNETT_GUIDE_MARKDOWN),
+            has_scripts: false,
+            entry_files: Vec::new(),
+        };
+        let version = "1.0.0";
+        let sha = compute_capability_sha256(version, &spec);
+        let spec_json = serde_json::to_value(&spec).map_err(|err| DennettError::Internal {
+            detail: format!("failed serializing built-in dennett-guide spec: {err}"),
+        })?;
+        let _ = conn
+            .execute(
+                "INSERT INTO capability_records (
+                    capability_id, slug, kind, display_name, description, version,
+                    origin_kind, ownership, scope_kind, project_id, agent_id,
+                    possession_state, trust_state, activation_state,
+                    compatibility_status, source_path, content_sha256, spec_json
+                 ) VALUES (
+                    $1, $2, 'skill', 'Dennett Guide',
+                    'Concise on-demand guide to Dennett memory, scheduled events, subagents, artifacts, and skills.',
+                    $3, 'builtin', 'dennett', 'global', NULL, NULL,
+                    'installed', 'trusted', 'on_demand',
+                    'compatible', NULL, $4, $5
+                 )
+                 ON CONFLICT (capability_id) DO NOTHING",
+                &[
+                    &BUILTIN_DENNETT_GUIDE_UUID,
+                    &BUILTIN_DENNETT_GUIDE_SLUG,
+                    &version,
+                    &sha.as_str(),
+                    &spec_json,
+                ],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        Ok(())
+    }
+
     /// Lists registered capabilities with optional `project_id`, `scope_kind`, `kind`, and `origin`
     /// filters (`GET /v1/capabilities`).
     ///
@@ -325,7 +418,7 @@ impl HeadService {
         let sql = format!(
             "SELECT {CAPABILITY_SELECT_COLS}
              FROM capability_records
-             WHERE ($1::uuid IS NULL OR project_id = $1 OR scope_kind IN ('global', 'candidate_unattached'))
+             WHERE ($1::uuid IS NULL OR project_id = $1 OR scope_kind IN ('global', 'agent', 'candidate_unattached'))
                AND ($2::text IS NULL OR scope_kind = $2)
                AND ($3::text IS NULL OR kind = $3)
                AND ($4::text IS NULL OR origin_kind = $4)
@@ -479,6 +572,7 @@ impl HeadService {
                     version: existing.version.clone(),
                     scope_kind: existing.scope_kind,
                     project_id: existing.project_id,
+                    agent_id: existing.agent_id,
                     trust_state: existing.trust_state,
                     activation_state: existing.activation_state,
                     content_sha256: existing.content_sha256.clone(),
@@ -724,6 +818,24 @@ impl HeadService {
         if let Some(pid) = req.project_id {
             let _ = fetch_project(&tx, pid, self.pg_target()).await?;
         }
+        let persisted_agent_id = match req.scope_kind {
+            CapabilityScopeKind::Agent => {
+                let aid = req.agent_id.ok_or_else(|| DennettError::InvalidInput {
+                    field: String::from("agent_id"),
+                    reason: String::from("agent_id is required when `scope_kind` is `agent`"),
+                })?;
+                let _ = fetch_agent(&tx, aid, self.pg_target()).await?;
+                Some(aid)
+            }
+            _ => {
+                if let Some(aid) = req.agent_id {
+                    let _ = fetch_agent(&tx, aid, self.pg_target()).await?;
+                    Some(aid)
+                } else {
+                    None
+                }
+            }
+        };
 
         let cap_id = CapabilityId::new();
         let content_sha256 = compute_capability_sha256(&version, &spec);
@@ -746,14 +858,14 @@ impl HeadService {
         let insert_sql = format!(
             "INSERT INTO capability_records (
                 capability_id, slug, kind, display_name, description, version,
-                origin_kind, ownership, scope_kind, project_id,
+                origin_kind, ownership, scope_kind, project_id, agent_id,
                 possession_state, trust_state, activation_state,
                 compatibility_status, source_path, content_sha256, spec_json
              ) VALUES (
                 $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10,
-                $11, $12, $13,
-                'compatible', $14, $15, $16
+                $7, $8, $9, $10, $11,
+                $12, $13, $14,
+                'compatible', $15, $16, $17
              )
              RETURNING {CAPABILITY_SELECT_COLS}"
         );
@@ -771,6 +883,7 @@ impl HeadService {
                     &req.ownership.as_str(),
                     &req.scope_kind.as_str(),
                     &req.project_id.map(ProjectId::as_uuid),
+                    &persisted_agent_id.map(AgentId::as_uuid),
                     &possession.as_str(),
                     &trust_state.as_str(),
                     &req.activation_state.as_str(),
@@ -900,8 +1013,26 @@ impl HeadService {
                 let _ = fetch_project(&tx, pid, self.pg_target()).await?;
                 Some(pid)
             }
-            CapabilityScopeKind::Global | CapabilityScopeKind::CandidateUnattached => None,
+            CapabilityScopeKind::Global
+            | CapabilityScopeKind::Agent
+            | CapabilityScopeKind::CandidateUnattached => None,
             _ => req.project_id.or(existing.project_id),
+        };
+        let next_agent_id = match next_scope_kind {
+            CapabilityScopeKind::Agent => {
+                let aid = req.agent_id.or(existing.agent_id).ok_or_else(|| {
+                    DennettError::InvalidInput {
+                        field: String::from("agent_id"),
+                        reason: String::from("agent_id is required when `scope_kind` is `agent`"),
+                    }
+                })?;
+                let _ = fetch_agent(&tx, aid, self.pg_target()).await?;
+                Some(aid)
+            }
+            CapabilityScopeKind::Global
+            | CapabilityScopeKind::Project
+            | CapabilityScopeKind::CandidateUnattached => None,
+            _ => req.agent_id.or(existing.agent_id),
         };
 
         let next_display_name = req
@@ -972,6 +1103,7 @@ impl HeadService {
                 version: existing.version.clone(),
                 scope_kind: existing.scope_kind,
                 project_id: existing.project_id,
+                agent_id: existing.agent_id,
                 trust_state: existing.trust_state,
                 activation_state: existing.activation_state,
                 content_sha256: existing.content_sha256.clone(),
@@ -996,12 +1128,13 @@ impl HeadService {
                  version = $4,
                  scope_kind = $5,
                  project_id = $6,
-                 possession_state = $7,
-                 trust_state = $8,
-                 activation_state = $9,
-                 content_sha256 = $10,
-                 spec_json = $11,
-                 previous_snapshot_json = COALESCE($12, previous_snapshot_json),
+                 agent_id = $7,
+                 possession_state = $8,
+                 trust_state = $9,
+                 activation_state = $10,
+                 content_sha256 = $11,
+                 spec_json = $12,
+                 previous_snapshot_json = COALESCE($13, previous_snapshot_json),
                  revision = revision + 1,
                  updated_at = now()
              WHERE capability_id = $1
@@ -1017,6 +1150,7 @@ impl HeadService {
                     &next_version.as_str(),
                     &next_scope_kind.as_str(),
                     &next_project_id.map(ProjectId::as_uuid),
+                    &next_agent_id.map(AgentId::as_uuid),
                     &next_possession.as_str(),
                     &next_trust_state.as_str(),
                     &next_activation_state.as_str(),
@@ -1156,10 +1290,11 @@ impl HeadService {
                  version = $4,
                  scope_kind = $5,
                  project_id = $6,
-                 trust_state = $7,
-                 activation_state = $8,
-                 content_sha256 = $9,
-                 spec_json = $10,
+                 agent_id = $7,
+                 trust_state = $8,
+                 activation_state = $9,
+                 content_sha256 = $10,
+                 spec_json = $11,
                  previous_snapshot_json = NULL,
                  revision = revision + 1,
                  updated_at = now()
@@ -1176,6 +1311,7 @@ impl HeadService {
                     &snap.version.as_str(),
                     &snap.scope_kind.as_str(),
                     &snap.project_id.map(ProjectId::as_uuid),
+                    &snap.agent_id.map(AgentId::as_uuid),
                     &snap.trust_state.as_str(),
                     &snap.activation_state.as_str(),
                     &snap.content_sha256.as_str(),
@@ -1386,10 +1522,23 @@ impl HeadService {
         claims: &ControlTokenClaims,
     ) -> Result<Vec<SessionSkillSummary>, DennettError> {
         self.verify_control_token_session_scope(claims).await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let attached_skills = fetch_agent(&conn, claims.agent_id, self.pg_target())
+            .await
+            .map_or_default(|a| a.current_config.attached_skills);
         let resolved = self
-            .resolve_session_skills_internal(claims.project_id)
+            .resolve_active_capabilities_for_session(
+                claims.project_id,
+                Some(claims.agent_id),
+                &attached_skills,
+                None,
+            )
             .await?;
-        Ok(resolved.into_iter().map(|s| s.summary).collect())
+        Ok(resolved
+            .session_skills
+            .into_iter()
+            .map(|s| s.summary)
+            .collect())
     }
 
     /// Reads the full `SKILL.md` content for one enabled skill scoped strictly by `claims`
@@ -1424,10 +1573,23 @@ impl HeadService {
         }
         self.verify_control_token_session_scope(claims).await?;
 
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let attached_skills = fetch_agent(&conn, claims.agent_id, self.pg_target())
+            .await
+            .map_or_default(|a| a.current_config.attached_skills);
         let resolved = self
-            .resolve_session_skills_internal(claims.project_id)
+            .resolve_active_capabilities_for_session(
+                claims.project_id,
+                Some(claims.agent_id),
+                &attached_skills,
+                None,
+            )
             .await?;
-        if let Some(found) = resolved.into_iter().find(|s| s.summary.slug == trimmed) {
+        if let Some(found) = resolved
+            .session_skills
+            .into_iter()
+            .find(|s| s.summary.slug == trimmed)
+        {
             let source_path = found.source_path.clone();
             let fallback_md = found.skill_markdown.clone();
             let skill_md_content = tokio::task::spawn_blocking(move || {
@@ -1444,7 +1606,6 @@ impl HeadService {
         }
 
         // Distinguish disabled/blocked/foreign-project skills (403) from completely unknown slugs (404).
-        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let exists_elsewhere: bool = conn
             .query_one(
                 "SELECT EXISTS(SELECT 1 FROM capability_records WHERE kind = 'skill' AND slug = $1)",
@@ -1485,43 +1646,41 @@ impl HeadService {
         Ok(())
     }
 
-    pub(crate) async fn resolve_session_skills_internal(
-        &self,
-        project_id: Option<ProjectId>,
-    ) -> Result<Vec<ResolvedSessionSkill>, DennettError> {
-        let listed = self
-            .list_capabilities(project_id, None, Some(CapabilityKind::Skill), None)
-            .await?;
-        Ok(select_session_skills_from_records(
-            listed.capabilities,
-            project_id,
-        ))
-    }
-
-    /// Resolves all active A08 skills and MCP servers for an upcoming runtime turn, strictly
-    /// enforcing:
+    /// Resolves all active A08 skills, plugin skills, and MCP servers for an upcoming runtime turn,
+    /// strictly enforcing:
     /// - `CandidateUnattached` (including `PersonalDiscovered` from `~/.gemini/`) is NEVER active
     ///   unless explicitly bound to `project_id` via `capability_project_bindings`.
     /// - `Revoked`, `Restricted` (rug-pulled), and `Incompatible` capabilities are NEVER active.
     /// - Per-project `Forbidden` / `Disabled` overrides always suppress global capabilities.
-    /// - `secret_slots` on active MCP servers are resolved via `SecretBroker` and registered in
-    ///   Head's live secret redactor before returning.
+    /// - `CapabilityScopeKind::Agent` activates strictly for its matching `agent_id` (`A-CAP-1`).
+    /// - Standalone chats (`project_id == None`) NEVER receive global MCP servers or global plugin
+    ///   MCP servers + secrets unless explicitly scoped to this agent (`A11`).
+    /// - `Plugin.skills` are materialized when their parent plugin is active (`A-CAP-1`).
+    /// - `agent_attached_skills` and optional `skill_slugs_override` are honored during resolution.
+    /// - `secret_slots` on active MCP servers are resolved via scoped `SecretBroker` (`A-SEC-3`).
     #[expect(
         clippy::too_many_lines,
-        reason = "resolves trust/scope/project overrides, deduplicates skills/MCPs, and binds SecretBroker slots in one pass"
+        reason = "resolves trust/scope/agent/project overrides, plugin skills, deduplicates skills/MCPs, and binds scoped SecretBroker slots in one pass"
     )]
     pub(crate) async fn resolve_active_capabilities_for_session(
         &self,
         project_id: Option<ProjectId>,
+        agent_id: Option<AgentId>,
         agent_attached_skills: &[String],
+        skill_slugs_override: Option<&[String]>,
     ) -> Result<ResolvedSessionCapabilities, DennettError> {
         let listed = self.list_capabilities(project_id, None, None, None).await?;
-        let attached_set: BTreeSet<&str> =
-            agent_attached_skills.iter().map(String::as_str).collect();
+        let effective_attached_slice = skill_slugs_override.unwrap_or(agent_attached_skills);
+        let attached_set: BTreeSet<&str> = effective_attached_slice
+            .iter()
+            .map(String::as_str)
+            .collect();
 
         let mut out = ResolvedSessionCapabilities::default();
         let mut skill_records = Vec::new();
         let mut seen_mcp_names: BTreeSet<String> = BTreeSet::new();
+        let mut plugin_promoted_slugs: BTreeSet<String> = BTreeSet::new();
+        let mut plugin_bundled_skills: Vec<ResolvedSessionSkill> = Vec::new();
 
         for cap in listed.capabilities {
             if cap.kind == CapabilityKind::Skill {
@@ -1546,6 +1705,13 @@ impl HeadService {
             let effective_activation = match project_override {
                 Some(override_state) => override_state,
                 None => match cap.scope_kind {
+                    CapabilityScopeKind::Agent => {
+                        if agent_id.is_some() && cap.agent_id == agent_id {
+                            cap.activation_state
+                        } else {
+                            CapabilityActivation::Disabled
+                        }
+                    }
                     CapabilityScopeKind::Project => {
                         if cap.project_id == project_id && project_id.is_some() {
                             cap.activation_state
@@ -1553,7 +1719,15 @@ impl HeadService {
                             CapabilityActivation::Disabled
                         }
                     }
-                    CapabilityScopeKind::Global => cap.activation_state,
+                    CapabilityScopeKind::Global => {
+                        // A11: Never inject global MCP servers/plugins + secrets into standalone
+                        // chats (`project_id == None`) unless explicitly agent-scoped!
+                        if project_id.is_some() {
+                            cap.activation_state
+                        } else {
+                            CapabilityActivation::Disabled
+                        }
+                    }
                     _ => CapabilityActivation::Disabled,
                 },
             };
@@ -1567,6 +1741,10 @@ impl HeadService {
                 continue;
             }
 
+            let cap_source_path = cap.source_path.clone();
+            let cap_version = cap.version.clone();
+            let cap_trust = cap.trust_state;
+            let cap_scope = cap.scope_kind;
             match cap.spec {
                 CapabilitySpec::McpServer {
                     command,
@@ -1584,6 +1762,7 @@ impl HeadService {
                                 &args,
                                 &env_vars,
                                 &secret_slots,
+                                project_id,
                             )
                             .await?;
                         out.registered_mcp_server_names.insert(cap.slug);
@@ -1591,6 +1770,7 @@ impl HeadService {
                     }
                 }
                 CapabilitySpec::Plugin {
+                    skills,
                     mcp_servers,
                     enabled_components,
                     ..
@@ -1611,10 +1791,59 @@ impl HeadService {
                                     &srv.args,
                                     &srv.env_vars,
                                     &srv.secret_slots,
+                                    project_id,
                                 )
                                 .await?;
                             out.registered_mcp_server_names.insert(srv.name);
                             out.extra_mcp_servers.push(spec);
+                        }
+                    }
+                    // A-CAP-1: Materialize `Plugin.skills` when activating a plugin!
+                    for skill_slug in skills {
+                        if filter_components
+                            && !enabled_components.iter().any(|c| c == &skill_slug)
+                        {
+                            continue;
+                        }
+                        let trimmed_slug = skill_slug.trim();
+                        if trimmed_slug.is_empty()
+                            || trimmed_slug.contains('/')
+                            || trimmed_slug.contains('\\')
+                            || trimmed_slug.contains("..")
+                        {
+                            continue;
+                        }
+                        plugin_promoted_slugs.insert(trimmed_slug.to_owned());
+
+                        if let Some(ref plugin_root_raw) = cap_source_path {
+                            let candidate_dir =
+                                Path::new(plugin_root_raw).join("skills").join(trimmed_slug);
+                            if let Ok(inspected) = inspect_skill_folder_readonly(&candidate_dir) {
+                                let bundled_spec = CapabilitySpec::Skill {
+                                    skill_markdown: inspected.markdown.clone(),
+                                    has_scripts: inspected.has_scripts,
+                                    entry_files: inspected.entry_files,
+                                };
+                                let sha = compute_capability_sha256(&cap_version, &bundled_spec);
+                                plugin_bundled_skills.push(ResolvedSessionSkill {
+                                    summary: SessionSkillSummary {
+                                        slug: trimmed_slug.to_owned(),
+                                        display_name: inspected
+                                            .display_name
+                                            .unwrap_or_else(|| trimmed_slug.to_owned()),
+                                        description: inspected.description.unwrap_or_default(),
+                                        version: inspected
+                                            .version
+                                            .unwrap_or_else(|| cap_version.clone()),
+                                        scope: cap_scope,
+                                        activation_state: effective_activation,
+                                        trust_state: cap_trust,
+                                    },
+                                    skill_markdown: inspected.markdown,
+                                    source_path: Some(clean_display_path(&candidate_dir)),
+                                    content_sha256: sha.as_str().to_owned(),
+                                });
+                            }
                         }
                     }
                 }
@@ -1622,12 +1851,41 @@ impl HeadService {
             }
         }
 
-        let session_skills = select_session_skills_from_records(skill_records, project_id);
+        let mut session_skills = select_session_skills_from_records(
+            skill_records,
+            project_id,
+            agent_id,
+            &attached_set,
+            &plugin_promoted_slugs,
+        );
+        // Append any bundled plugin skills from disk not already represented by a registry skill.
+        let mut seen_skill_slugs: BTreeSet<String> = session_skills
+            .iter()
+            .map(|s| s.summary.slug.clone())
+            .collect();
+        for bundled in plugin_bundled_skills {
+            if seen_skill_slugs.insert(bundled.summary.slug.clone()) {
+                session_skills.push(bundled);
+            }
+        }
+
+        // If a task explicitly supplied `skill_slugs_override`, filter session skills strictly to
+        // that override list (while keeping built-in `dennett-guide` available on demand).
+        if let Some(override_list) = skill_slugs_override {
+            let override_set: BTreeSet<&str> =
+                override_list.iter().map(String::as_str).collect();
+            session_skills.retain(|s| {
+                override_set.contains(s.summary.slug.as_str())
+                    || s.summary.slug == BUILTIN_DENNETT_GUIDE_SLUG
+            });
+        }
+
         for skill in &session_skills {
             let should_materialize_disk = match skill.summary.activation_state {
                 CapabilityActivation::Pinned | CapabilityActivation::Active => true,
                 CapabilityActivation::OnDemand => {
                     attached_set.contains(skill.summary.slug.as_str())
+                        || plugin_promoted_slugs.contains(skill.summary.slug.as_str())
                 }
                 _ => false,
             };
@@ -1637,6 +1895,7 @@ impl HeadService {
                     version: skill.summary.version.clone(),
                     content_sha256: skill.content_sha256.clone(),
                     skill_markdown: skill.skill_markdown.clone(),
+                    source_dir: resolve_skill_source_dir_opt(skill.source_path.as_deref()),
                 });
             }
         }
@@ -1652,6 +1911,7 @@ impl HeadService {
         args: &[String],
         env_vars: &BTreeMap<String, String>,
         secret_slots: &BTreeMap<String, String>,
+        caller_project_id: Option<ProjectId>,
     ) -> Result<RuntimeMcpServerSpec, DennettError> {
         let mut env = Vec::with_capacity(env_vars.len() + secret_slots.len());
         for (k, v) in env_vars {
@@ -1661,7 +1921,10 @@ impl HeadService {
             });
         }
         for (env_name, slot_key) in secret_slots {
-            if let Some((plaintext, _, _)) = self.resolve_secret_plaintext(slot_key).await? {
+            if let Some((plaintext, _, _)) = self
+                .resolve_secret_plaintext(slot_key, caller_project_id)
+                .await?
+            {
                 self.register_secret_for_redaction(&plaintext);
                 env.push(RuntimeMcpEnvEntry {
                     name: env_name.clone(),
@@ -1675,6 +1938,25 @@ impl HeadService {
             args: args.to_vec(),
             env,
         })
+    }
+}
+
+fn resolve_skill_source_dir_opt(source_path: Option<&str>) -> Option<PathBuf> {
+    let raw = source_path.map(str::trim).filter(|s| !s.is_empty())?;
+    let p = Path::new(raw);
+    if p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return None;
+    }
+    let meta = fs::symlink_metadata(p).ok()?;
+    if is_symlink_or_reparse_point(&meta) {
+        return None;
+    }
+    if meta.is_dir() {
+        Some(p.to_path_buf())
+    } else if meta.is_file() {
+        p.parent().map(Path::to_path_buf)
+    } else {
+        None
     }
 }
 
@@ -1699,11 +1981,14 @@ async fn fetch_bindings_for_cap<C: deadpool_postgres::GenericClient>(
 
 #[expect(
     clippy::too_many_lines,
-    reason = "resolves scope precedence (project over global), trust filtering, deduplication, and activation ranking in one pass"
+    reason = "resolves scope precedence (agent > project > global), trust filtering, agent/plugin skill promotion, deduplication, and activation ranking in one pass"
 )]
 fn select_session_skills_from_records(
     records: Vec<CapabilityRecord>,
     project_id: Option<ProjectId>,
+    agent_id: Option<AgentId>,
+    attached_skills: &BTreeSet<&str>,
+    plugin_promoted_slugs: &BTreeSet<String>,
 ) -> Vec<ResolvedSessionSkill> {
     struct Candidate {
         scope_priority: u8,
@@ -1724,43 +2009,56 @@ fn select_session_skills_from_records(
             continue;
         }
 
-        let (scope_priority, effective_activation, effective_scope) = if let Some(pid) = project_id
-        {
-            let binding = cap
-                .project_bindings
-                .iter()
-                .find(|b| b.project_id == pid)
-                .map(|b| b.activation_state);
-            match cap.scope_kind {
-                CapabilityScopeKind::Project => {
-                    if cap.project_id != Some(pid) {
-                        continue;
+        let (scope_priority, mut effective_activation, effective_scope) =
+            if cap.scope_kind == CapabilityScopeKind::Agent {
+                if agent_id.is_none() || cap.agent_id != agent_id {
+                    continue;
+                }
+                (0_u8, cap.activation_state, CapabilityScopeKind::Agent)
+            } else if let Some(pid) = project_id {
+                let binding = cap
+                    .project_bindings
+                    .iter()
+                    .find(|b| b.project_id == pid)
+                    .map(|b| b.activation_state);
+                match cap.scope_kind {
+                    CapabilityScopeKind::Project => {
+                        if cap.project_id != Some(pid) {
+                            continue;
+                        }
+                        (
+                            1_u8,
+                            binding.unwrap_or(cap.activation_state),
+                            CapabilityScopeKind::Project,
+                        )
                     }
-                    (
-                        0_u8,
+                    CapabilityScopeKind::CandidateUnattached => {
+                        let Some(bound_state) = binding else {
+                            continue;
+                        };
+                        (2_u8, bound_state, CapabilityScopeKind::Project)
+                    }
+                    CapabilityScopeKind::Global => (
+                        3_u8,
                         binding.unwrap_or(cap.activation_state),
-                        CapabilityScopeKind::Project,
-                    )
+                        CapabilityScopeKind::Global,
+                    ),
+                    _ => continue,
                 }
-                CapabilityScopeKind::CandidateUnattached => {
-                    let Some(bound_state) = binding else {
-                        continue;
-                    };
-                    (1_u8, bound_state, CapabilityScopeKind::Project)
+            } else {
+                if cap.scope_kind != CapabilityScopeKind::Global {
+                    continue;
                 }
-                CapabilityScopeKind::Global => (
-                    2_u8,
-                    binding.unwrap_or(cap.activation_state),
-                    CapabilityScopeKind::Global,
-                ),
-                _ => continue,
-            }
-        } else {
-            if cap.scope_kind != CapabilityScopeKind::Global {
-                continue;
-            }
-            (2_u8, cap.activation_state, CapabilityScopeKind::Global)
-        };
+                (3_u8, cap.activation_state, CapabilityScopeKind::Global)
+            };
+
+        // Honor explicit `agent.current_config.attached_skills` and active `Plugin.skills`
+        // (never bypassing `Forbidden`, `Revoked`, `Restricted`, or foreign project scope!).
+        let explicitly_attached = attached_skills.contains(cap.slug.as_str())
+            || plugin_promoted_slugs.contains(cap.slug.as_str());
+        if explicitly_attached && effective_activation == CapabilityActivation::OnDemand {
+            effective_activation = CapabilityActivation::Active;
+        }
 
         if !matches!(
             effective_activation,

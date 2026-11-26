@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 const CONTROL_MIGRATION_ADVISORY_LOCK_KEY: i64 = 842_190_537_612_049_311;
 
 /// Latest Control schema migration version bundled in this build.
-pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 10;
+pub const LATEST_CONTROL_SCHEMA_VERSION: i64 = 11;
 
 /// One forward-only PostgreSQL migration owned by `dennett-head`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +75,11 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 10,
         name: "0010_d3_artifact_blobs_and_forget_sync",
         sql: include_str!("../migrations/0010_d3_artifact_blobs_and_forget_sync.sql"),
+    },
+    ControlMigration {
+        version: 11,
+        name: "0011_audit_closure",
+        sql: include_str!("../migrations/0011_audit_closure.sql"),
     },
 ];
 

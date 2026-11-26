@@ -9,18 +9,20 @@
 //! - Semantic decisions stay with the agent; `Head` persists commitments, enforces external
 //!   budgets & permissions, and fences stale generations cleanly.
 
+use std::collections::BTreeSet;
 use std::str::FromStr;
 use std::time::Duration;
 
 use deadpool_postgres::GenericClient;
 use dennett_contracts::{
-    AgentId, AgentMessageId, AgentMessageRecord, BudgetExceedPolicy, CancelTaskResponse,
-    CorrelationId, CreateTaskRequest, DennettError, EffectClaimRecord, ExternalEffectStatus,
-    InboxCardId, ListAgentMessagesResponse, ListTasksResponse, MessageId, MissedRunPolicy,
-    ProjectId, ProjectLifecycleState, ReplyTaskRequest, RunId, RunStatus, ScheduleKind,
-    SchedulerTickResponse, SendAgentMessageRequest, SendAgentMessageResponse, SessionId,
-    TaskDetailResponse, TaskId, TaskRecord, TaskSchedule, TaskSignalId, TaskSignalOutcome,
-    TaskSignalRequest, TaskSignalResponse, TaskStatus, TaskTimerId, TaskUsage, TimerPauseReason,
+    AgentId, AgentMessageId, AgentMessageRecord, AutonomyMode, BudgetExceedPolicy,
+    CancelTaskResponse, CorrelationId, CreateTaskRequest, DennettError, EffectClaimRecord,
+    ExternalEffectStatus, InboxCardId, ListAgentMessagesResponse, ListTasksResponse, MessageId,
+    MissedRunPolicy, ProjectId, ProjectLifecycleState, ProviderConnectionId, ProviderKind,
+    ReplyTaskRequest, RunId, RunStatus, ScheduleKind, SchedulerTickResponse,
+    SendAgentMessageRequest, SendAgentMessageResponse, SessionId, SessionKind, TaskDetailResponse,
+    TaskId, TaskRecord, TaskSchedule, TaskSignalId, TaskSignalOutcome, TaskSignalRequest,
+    TaskSignalResponse, TaskStatus, TaskTimerId, TaskTrigger, TaskUsage, TimerPauseReason,
     TimestampMs, UpdateTaskRequest, UsageConfidence, write_policy_is_subset_of,
 };
 use dennett_runtime_antigravity::{RuntimeEvent, TurnOutcome};
@@ -54,6 +56,8 @@ pub const MISFIRE_GRACE_MS: i64 = 60_000;
 pub const TIMER_CLAIM_LEASE_SECS: f64 = 30.0;
 /// Poll interval for the background `HeadScheduler` task inside `dennett-head`.
 pub const BACKGROUND_SCHEDULER_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Maximum concurrent active follow-up scheduled timers a background `TaskRun` may spawn.
+pub const MAX_TASK_FOLLOWUP_TIMERS: i64 = 3;
 
 /// Validates an IANA timezone identifier against PostgreSQL 16's native `pg_timezone_names` catalog.
 ///
@@ -89,6 +93,10 @@ pub async fn verify_pg_timezone<C: GenericClient>(
 /// # Errors
 ///
 /// Returns [`DennettError::InvalidInput`] or [`DennettError::DatabaseUnavailable`].
+#[expect(
+    clippy::too_many_lines,
+    reason = "computes OnceAt, Interval, DailyWallTime, WeeklyWallTime, and YearlyWallTime next fire timestamps inside PostgreSQL 16 IANA timezone engine"
+)]
 pub async fn compute_next_fire_at_pg<C: GenericClient>(
     client: &C,
     schedule: &TaskSchedule,
@@ -168,6 +176,51 @@ pub async fn compute_next_fire_at_pg<C: GenericClient>(
                 .get(0);
             Ok(Some(TimestampMs::from_millis(next_ms)))
         }
+        ScheduleKind::YearlyWallTime {
+            month,
+            day,
+            hour,
+            minute,
+        } => {
+            let ref_secs = ms_to_pg_epoch_secs(reference_now.as_millis());
+            let mo = i32::from(month);
+            let dy = i32::from(day);
+            let h = i32::from(hour);
+            let m = i32::from(minute);
+            let next_ms: i64 = client
+                .query_one(
+                    "WITH ref AS (
+                         SELECT to_timestamp($1::double precision) AS ref_utc
+                     ),
+                     local_ref AS (
+                         SELECT ref_utc, EXTRACT(YEAR FROM (ref_utc AT TIME ZONE $2))::int AS base_year
+                         FROM ref
+                     ),
+                     years AS (
+                         SELECT ref_utc, (base_year + offset_y) AS yr
+                         FROM local_ref, generate_series(0, 8) AS offset_y
+                     ),
+                     candidates AS (
+                         SELECT
+                             ref_utc,
+                             CASE
+                                 WHEN $3 = 2 AND $4 = 29
+                                      AND NOT ((yr % 4 = 0 AND yr % 100 <> 0) OR yr % 400 = 0)
+                                     THEN NULL::timestamptz
+                                 ELSE (make_timestamp(yr, $3, $4, $5, $6, 0.0) AT TIME ZONE $2)
+                             END AS cand_utc
+                         FROM years
+                     )
+                     SELECT TRUNC(EXTRACT(EPOCH FROM MIN(cand_utc)) * 1000)::bigint
+                     FROM candidates
+                     WHERE cand_utc IS NOT NULL AND cand_utc > ref_utc",
+                    &[&ref_secs, &schedule.timezone.as_str(), &mo, &dy, &h, &m],
+                )
+                .await
+                .map_err(|err| map_pg_err(target, &err))?
+                .get(0);
+            Ok(Some(TimestampMs::from_millis(next_ms)))
+        }
         _ => Err(DennettError::InvalidInput {
             field: String::from("schedule.kind"),
             reason: String::from("unsupported schedule kind"),
@@ -237,31 +290,47 @@ impl HeadService {
                     ),
                 });
             }
-            let parent_agent = fetch_agent(&tx, parent_task.agent_id, self.pg_target()).await?;
-            if !agent
-                .current_config
-                .allowed_memory_scopes
-                .is_subset(&parent_agent.current_config.allowed_memory_scopes)
-            {
-                return Err(DennettError::ForbiddenScope {
-                    scope: format!("agent:{}", agent.agent_id),
-                    reason: String::from(
-                        "delegated helper agent's allowed_memory_scopes must be a subset of parent agent's scopes",
-                    ),
-                });
-            }
-            if !write_policy_is_subset_of(
-                &agent.current_config.workspace_write_policy,
-                &parent_agent.current_config.workspace_write_policy,
-            ) {
-                return Err(DennettError::AccessDenied {
-                    scope: format!("agent:{}", agent.agent_id),
-                    reason: String::from(
-                        "delegated helper agent's workspace_write_policy cannot exceed parent agent's permissions",
-                    ),
-                });
-            }
+            self.enforce_delegated_agent_scope_subset_on_client(
+                &tx,
+                parent_task.agent_id,
+                req.agent_id,
+                req.connection_override_id,
+            )
+            .await?;
             effective_budget = effective_budget.clamp_to_parent(&parent_task.budget);
+        }
+
+        if let Some(conn_id) = req.connection_override_id {
+            let exists: bool = tx
+                .query_one(
+                    "SELECT EXISTS(SELECT 1 FROM provider_connections WHERE connection_id = $1)",
+                    &[&conn_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                .get(0);
+            if !exists {
+                return Err(DennettError::NotFound {
+                    resource: String::from("provider_connection"),
+                    id: conn_id.to_string(),
+                });
+            }
+        }
+
+        let standalone_pid = crate::policy::standalone_system_project_id();
+        if let Some(target_sid) = req.target_session_id {
+            let target_sess = fetch_session(&tx, target_sid, self.pg_target()).await?;
+            let target_ok = target_sess.project_id == Some(req.project_id)
+                || (target_sess.project_id.is_none() && req.project_id == standalone_pid);
+            if !target_ok {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("target_session_id"),
+                    reason: String::from("target_session_id does not belong to the task's project"),
+                });
+            }
+        }
+        if let Some(notify_sid) = req.notify_session_id {
+            let _ = fetch_session(&tx, notify_sid, self.pg_target()).await?;
         }
 
         let title = req
@@ -273,14 +342,18 @@ impl HeadService {
             .or_else(|| derive_auto_session_title(&req.goal))
             .unwrap_or_else(|| String::from("Поручение"));
 
+        let mut caller_is_task_run_session = false;
         let session_id = if let Some(sid) = req.session_id {
             let sess = fetch_session(&tx, sid, self.pg_target()).await?;
-            if sess.project_id != Some(req.project_id) {
+            let belongs_to_project = sess.project_id == Some(req.project_id)
+                || (sess.project_id.is_none() && req.project_id == standalone_pid);
+            if !belongs_to_project {
                 return Err(DennettError::InvalidInput {
                     field: String::from("session_id"),
                     reason: String::from("session does not belong to the specified project"),
                 });
             }
+            caller_is_task_run_session = sess.session_kind == SessionKind::TaskRun;
             sid
         } else {
             let sid = SessionId::new();
@@ -299,6 +372,39 @@ impl HeadService {
             sid
         };
 
+        // Bounded follow-up timers from background `TaskRun` sessions (A-AGT-3): cap active
+        // follow-up scheduled tasks per lineage to prevent unbounded timer amplification loops.
+        if req.schedule.is_some() && (req.parent_task_id.is_some() || caller_is_task_run_session) {
+            let active_followups: i64 = tx
+                .query_one(
+                    "SELECT COUNT(*)::bigint
+                     FROM tasks
+                     WHERE deleted_at IS NULL
+                       AND schedule_json IS NOT NULL
+                       AND status NOT IN ('cancelled', 'succeeded', 'failed')
+                       AND (
+                           ($1::uuid IS NOT NULL AND parent_task_id = $1)
+                           OR ($2::uuid IS NOT NULL AND notify_session_id = $2)
+                           OR session_id = $3
+                       )",
+                    &[
+                        &req.parent_task_id.map(TaskId::as_uuid),
+                        &req.notify_session_id.map(SessionId::as_uuid),
+                        &session_id.as_uuid(),
+                    ],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                .get(0);
+            if active_followups >= MAX_TASK_FOLLOWUP_TIMERS {
+                return Err(DennettError::SafetyGuardRejected {
+                    reason: format!(
+                        "background task_run follow-up timer limit ({MAX_TASK_FOLLOWUP_TIMERS}) reached; refusing unbounded timer spawning"
+                    ),
+                });
+            }
+        }
+
         let now = TimestampMs::now();
         let mut schedule_opt = req.schedule.clone();
         let (initial_status, wait_detail, expected_signal_name, initial_fire_at) =
@@ -312,6 +418,31 @@ impl HeadService {
                     None,
                     fire_at,
                 )
+            } else if let Some(TaskTrigger::OnRunCompleted { run_id: watch_run_id }) = req.trigger {
+                let run_row = tx
+                    .query_opt(
+                        "SELECT status FROM runs WHERE run_id = $1",
+                        &[&watch_run_id.as_uuid()],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                let Some(rrow) = run_row else {
+                    return Err(DennettError::NotFound {
+                        resource: String::from("run"),
+                        id: watch_run_id.to_string(),
+                    });
+                };
+                let run_status_str: String = rrow.get(0);
+                if run_status_str == "running" {
+                    (
+                        TaskStatus::WaitingSignal,
+                        Some(format!("Ожидает завершения запуска {watch_run_id}")),
+                        None,
+                        None,
+                    )
+                } else {
+                    (TaskStatus::Queued, None, None, None)
+                }
             } else if let Some(ref sig_name) = req.wait_for_signal {
                 let trimmed_sig = sig_name.trim().to_owned();
                 (
@@ -352,13 +483,41 @@ impl HeadService {
         let auth_override_str = req
             .auth_profile_override
             .map(|p| p.as_method_id().to_owned());
+        let thinking_override_str = req.thinking_override.map(|t| t.as_str().to_owned());
+        let model_override_trimmed = req
+            .model_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let skill_slugs_override_json = req
+            .skill_slugs_override
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing skill_slugs_override: {err}"),
+            })?;
+        let trigger_json = req
+            .trigger
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing task trigger: {err}"),
+            })?;
 
         let insert_sql = format!(
             "INSERT INTO tasks (
                 task_id, project_id, session_id, agent_id, parent_task_id,
                 title, goal, generation, status, wait_detail, expected_signal_name,
-                schedule_json, budget_json, attached_skills, auth_profile_override
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14)
+                schedule_json, budget_json, attached_skills, auth_profile_override,
+                target_session_id, notify_session_id, model_override, thinking_override,
+                connection_override_id, skill_slugs_override_json, trigger_json
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14,
+                $15, $16, $17, $18, $19, $20, $21
+             )
              RETURNING {TASK_SELECT_COLS}"
         );
         let task_row = tx
@@ -379,6 +538,14 @@ impl HeadService {
                     &budget_json,
                     &skills_json,
                     &auth_override_str,
+                    &req.target_session_id.map(SessionId::as_uuid),
+                    &req.notify_session_id.map(SessionId::as_uuid),
+                    &model_override_trimmed.as_deref(),
+                    &thinking_override_str.as_deref(),
+                    &req.connection_override_id
+                        .map(ProviderConnectionId::as_uuid),
+                    &skill_slugs_override_json.as_deref(),
+                    &trigger_json.as_deref(),
                 ],
             )
             .await
@@ -457,11 +624,12 @@ impl HeadService {
         let sql = format!(
             "SELECT {TASK_SELECT_COLS}
              FROM tasks
-             WHERE EXISTS (
-                 SELECT 1 FROM projects p
-                 WHERE p.project_id = tasks.project_id
-                   AND p.lifecycle_state <> 'deleted_record'
-             )
+             WHERE deleted_at IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM projects p
+                   WHERE p.project_id = tasks.project_id
+                     AND p.lifecycle_state <> 'deleted_record'
+               )
                AND ($1::uuid IS NULL OR project_id = $1)
                AND ($2::text IS NULL OR status = $2)
              ORDER BY updated_at DESC"
@@ -573,8 +741,9 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let lock_sql =
-            format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 FOR UPDATE");
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
         let Some(row) = tx
             .query_opt(&lock_sql, &[&task_id.as_uuid()])
             .await
@@ -860,8 +1029,9 @@ impl HeadService {
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         // Lock task row FIRST so concurrent retries with the same `idempotency_key` serialize cleanly!
-        let lock_sql =
-            format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 FOR UPDATE");
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
         let Some(task_row) = tx
             .query_opt(&lock_sql, &[&task_id.as_uuid()])
             .await
@@ -1052,8 +1222,9 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let lock_sql =
-            format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 FOR UPDATE");
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
         let Some(row) = tx
             .query_opt(&lock_sql, &[&task_id.as_uuid()])
             .await
@@ -1226,8 +1397,9 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-        let lock_sql =
-            format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 FOR UPDATE");
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
         let Some(row) = tx
             .query_opt(&lock_sql, &[&task_id.as_uuid()])
             .await
@@ -1409,6 +1581,600 @@ impl HeadService {
         })
     }
 
+    /// Triggers immediate execution of an idle/scheduled/paused task (`POST /v1/tasks/{task_id}/run-now`).
+    ///
+    /// Rejects tasks that are actively `running` or blocked on `unknown_external` with `409 Conflict`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn run_task_now(
+        &self,
+        task_id: TaskId,
+        correlation_id: &CorrelationId,
+    ) -> Result<TaskRecord, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
+        let Some(row) = tx
+            .query_opt(&lock_sql, &[&task_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("task"),
+                id: task_id.to_string(),
+            });
+        };
+        let existing = decode_task_row(&row)?;
+        let _ =
+            ensure_project_active_in_tx(&tx, existing.project_id, "run task now", self.pg_target())
+                .await?;
+        if matches!(
+            existing.status,
+            TaskStatus::Running | TaskStatus::UnknownExternal
+        ) {
+            return Err(DennettError::Conflict {
+                resource: String::from("task"),
+                expected_revision: Some(existing.generation),
+                actual_revision: Some(existing.generation),
+                reason: format!(
+                    "cannot run task `{task_id}` now while status is `{}`",
+                    existing.status
+                ),
+            });
+        }
+
+        let update_sql = format!(
+            "UPDATE tasks
+             SET status = 'queued',
+                 paused_manually = FALSE,
+                 wait_detail = NULL,
+                 error_code = NULL,
+                 error_summary = NULL,
+                 finished_at = NULL,
+                 updated_at = now()
+             WHERE task_id = $1
+             RETURNING {TASK_SELECT_COLS}"
+        );
+        let updated_row = tx
+            .query_one(&update_sql, &[&task_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let updated = decode_task_row(&updated_row)?;
+
+        let _ = append_control_event_in_tx(
+            &tx,
+            self.pg_target(),
+            ControlEventAppend {
+                entity_key: &format!("task:{task_id}"),
+                event_type: "task.run_now_triggered",
+                project_id: Some(updated.project_id),
+                session_id: Some(updated.session_id),
+                task_id: Some(task_id),
+                correlation_id,
+                payload: json!({
+                    "task_id": task_id,
+                    "generation": updated.generation,
+                    "status": updated.status,
+                }),
+            },
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        self.spawn_task_execution(task_id, updated.generation, correlation_id.clone());
+        Ok(updated)
+    }
+
+    /// Manually pauses a scheduled or waiting task (`POST /v1/tasks/{task_id}/pause`), suspending
+    /// its pending timers without erasing its schedule definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn pause_task(
+        &self,
+        task_id: TaskId,
+        correlation_id: &CorrelationId,
+    ) -> Result<TaskRecord, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
+        let Some(row) = tx
+            .query_opt(&lock_sql, &[&task_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("task"),
+                id: task_id.to_string(),
+            });
+        };
+        let existing = decode_task_row(&row)?;
+        if matches!(
+            existing.status,
+            TaskStatus::Cancelled | TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::UnknownExternal
+        ) {
+            return Err(DennettError::Conflict {
+                resource: String::from("task"),
+                expected_revision: Some(existing.generation),
+                actual_revision: Some(existing.generation),
+                reason: format!(
+                    "cannot pause task `{task_id}` in terminal/unknown state `{}`",
+                    existing.status
+                ),
+            });
+        }
+
+        tx.execute(
+            "UPDATE task_timers
+             SET status = 'paused',
+                 pause_reason = NULL
+             WHERE task_id = $1 AND status = 'pending'",
+            &[&task_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let next_status = if existing.status == TaskStatus::Queued {
+            TaskStatus::WaitingTimer
+        } else {
+            existing.status
+        };
+        let update_sql = format!(
+            "UPDATE tasks
+             SET paused_manually = TRUE,
+                 status = $2,
+                 wait_detail = 'Приостановлено владельцем',
+                 updated_at = now()
+             WHERE task_id = $1
+             RETURNING {TASK_SELECT_COLS}"
+        );
+        let updated_row = tx
+            .query_one(&update_sql, &[&task_id.as_uuid(), &next_status.as_str()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let updated = decode_task_row(&updated_row)?;
+
+        let _ = append_control_event_in_tx(
+            &tx,
+            self.pg_target(),
+            ControlEventAppend {
+                entity_key: &format!("task:{task_id}"),
+                event_type: "task.paused",
+                project_id: Some(updated.project_id),
+                session_id: Some(updated.session_id),
+                task_id: Some(task_id),
+                correlation_id,
+                payload: json!({
+                    "task_id": task_id,
+                    "status": updated.status,
+                }),
+            },
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        Ok(updated)
+    }
+
+    /// Resumes a manually paused task (`POST /v1/tasks/{task_id}/resume`), re-arming its pending
+    /// schedule timers (or queuing it when unscheduled).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "resuming a task restores manually paused timers or recomputes next future schedule atomically"
+    )]
+    pub async fn resume_task(
+        &self,
+        task_id: TaskId,
+        correlation_id: &CorrelationId,
+    ) -> Result<TaskRecord, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
+        let Some(row) = tx
+            .query_opt(&lock_sql, &[&task_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("task"),
+                id: task_id.to_string(),
+            });
+        };
+        let existing = decode_task_row(&row)?;
+        let _ = ensure_project_active_in_tx(
+            &tx,
+            existing.project_id,
+            "resume task",
+            self.pg_target(),
+        )
+        .await?;
+        if matches!(
+            existing.status,
+            TaskStatus::Cancelled | TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::UnknownExternal
+        ) {
+            return Err(DennettError::Conflict {
+                resource: String::from("task"),
+                expected_revision: Some(existing.generation),
+                actual_revision: Some(existing.generation),
+                reason: format!(
+                    "cannot resume task `{task_id}` in terminal/unknown state `{}`",
+                    existing.status
+                ),
+            });
+        }
+
+        let restored = tx
+            .execute(
+                "UPDATE task_timers
+                 SET status = 'pending'
+                 WHERE task_id = $1
+                   AND status = 'paused'
+                   AND pause_reason IS NULL",
+                &[&task_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let has_pending_timer: bool = restored > 0
+            || tx
+                .query_one(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM task_timers
+                        WHERE task_id = $1 AND status = 'pending'
+                    )",
+                    &[&task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                .get(0);
+
+        let mut next_sched_opt = existing.schedule.clone();
+        let mut armed_timer = has_pending_timer;
+        if !armed_timer
+            && let Some(ref mut sched) = next_sched_opt
+            && let Some(next_fire) =
+                compute_next_fire_at_pg(&tx, sched, TimestampMs::now(), self.pg_target()).await?
+        {
+            sched.next_fire_at = Some(next_fire);
+            let next_key = format!("gen:{}:resume:{}", existing.generation, next_fire.as_millis());
+            self.insert_task_timer_in_tx(
+                &tx,
+                task_id,
+                existing.generation,
+                &next_key,
+                sched,
+                next_fire,
+            )
+            .await?;
+            armed_timer = true;
+        }
+
+        let (next_status, next_wait_detail) = if armed_timer {
+            let tz = next_sched_opt
+                .as_ref()
+                .map_or("UTC", |s| s.timezone.as_str());
+            (
+                TaskStatus::WaitingTimer,
+                Some(format!("Ожидает расписания ({tz})")),
+            )
+        } else if existing.status == TaskStatus::WaitingSignal
+            || existing.status == TaskStatus::WaitingClarification
+            || existing.status == TaskStatus::WaitingApproval
+        {
+            (existing.status, existing.wait_detail.clone())
+        } else {
+            (TaskStatus::Queued, None)
+        };
+
+        let sched_json = next_sched_opt
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|err| DennettError::Internal {
+                detail: format!("failed serializing resumed schedule: {err}"),
+            })?;
+        let update_sql = format!(
+            "UPDATE tasks
+             SET paused_manually = FALSE,
+                 status = $2,
+                 wait_detail = $3,
+                 schedule_json = COALESCE($4, schedule_json),
+                 updated_at = now()
+             WHERE task_id = $1
+             RETURNING {TASK_SELECT_COLS}"
+        );
+        let updated_row = tx
+            .query_one(
+                &update_sql,
+                &[
+                    &task_id.as_uuid(),
+                    &next_status.as_str(),
+                    &next_wait_detail.as_deref(),
+                    &sched_json,
+                ],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        let updated = decode_task_row(&updated_row)?;
+
+        let _ = append_control_event_in_tx(
+            &tx,
+            self.pg_target(),
+            ControlEventAppend {
+                entity_key: &format!("task:{task_id}"),
+                event_type: "task.resumed",
+                project_id: Some(updated.project_id),
+                session_id: Some(updated.session_id),
+                task_id: Some(task_id),
+                correlation_id,
+                payload: json!({
+                    "task_id": task_id,
+                    "status": updated.status,
+                }),
+            },
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        if updated.status == TaskStatus::Queued {
+            self.spawn_task_execution(task_id, updated.generation, correlation_id.clone());
+        }
+        Ok(updated)
+    }
+
+    /// Soft-deletes a non-running durable task (`DELETE /v1/tasks/{task_id}`), rejecting active
+    /// `running` or `unknown_external` tasks with `409 Conflict`, cancelling pending timers and
+    /// open non-effect inbox cards, and preserving V15 append-only audit/journal invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "soft-deletes task atomically while rejecting active runs, cleaning open inbox/permissions, and emitting journal + audit events"
+    )]
+    pub async fn delete_task(
+        &self,
+        task_id: TaskId,
+        correlation_id: &CorrelationId,
+    ) -> Result<(), DennettError> {
+        let _ = self.ensure_migrated().await?;
+        {
+            let active = self.active_tasks_map();
+            let guard = active.lock().await;
+            if guard.contains_key(&task_id) {
+                return Err(DennettError::Conflict {
+                    resource: String::from("task"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "cannot delete task `{task_id}` while it is actively running; cancel it first"
+                    ),
+                });
+            }
+        }
+
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let lock_sql = format!(
+            "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
+        let Some(row) = tx
+            .query_opt(&lock_sql, &[&task_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("task"),
+                id: task_id.to_string(),
+            });
+        };
+        let existing = decode_task_row(&row)?;
+        if matches!(
+            existing.status,
+            TaskStatus::Running | TaskStatus::UnknownExternal
+        ) {
+            return Err(DennettError::Conflict {
+                resource: String::from("task"),
+                expected_revision: Some(existing.generation),
+                actual_revision: Some(existing.generation),
+                reason: format!(
+                    "cannot delete task `{task_id}` while status is `{}`",
+                    existing.status
+                ),
+            });
+        }
+
+        tx.execute(
+            "UPDATE task_timers
+             SET status = 'cancelled'
+             WHERE task_id = $1 AND status IN ('pending', 'claimed', 'paused')",
+            &[&task_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        tx.execute(
+            "UPDATE inbox_cards
+             SET status = 'withdrawn',
+                 resolution_summary = 'Поручение удалено владельцем',
+                 revision = revision + 1,
+                 resolved_at = now(),
+                 updated_at = now()
+             WHERE task_id = $1 AND status = 'open' AND kind <> 'unknown_effect'",
+            &[&task_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        tx.execute(
+            "UPDATE tasks
+             SET deleted_at = now(),
+                 status = CASE
+                     WHEN status IN ('succeeded', 'failed', 'cancelled') THEN status
+                     ELSE 'cancelled'
+                 END,
+                 finished_at = COALESCE(finished_at, now()),
+                 updated_at = now()
+             WHERE task_id = $1",
+            &[&task_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        let _ = append_audit_event(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            Some(existing.session_id),
+            None,
+            "head",
+            "task_deleted",
+            &format!("deleted task `{}` ({task_id})", existing.title),
+        )
+        .await?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            self.pg_target(),
+            ControlEventAppend {
+                entity_key: &format!("task:{task_id}"),
+                event_type: "task.deleted",
+                project_id: Some(existing.project_id),
+                session_id: Some(existing.session_id),
+                task_id: Some(task_id),
+                correlation_id,
+                payload: json!({ "task_id": task_id }),
+            },
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        Ok(())
+    }
+
+    /// Wakes any non-deleted tasks parked in `WaitingSignal` with
+    /// `trigger = TaskTrigger::OnRunCompleted { run_id }` right after `run_id` finishes.
+    pub(crate) async fn wake_tasks_waiting_for_run(
+        &self,
+        completed_run_id: RunId,
+        correlation_id: &CorrelationId,
+    ) {
+        let Ok(mut conn) = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await else {
+            return;
+        };
+        let Ok(tx) = conn.transaction().await else {
+            return;
+        };
+        let sql = format!(
+            "SELECT {TASK_SELECT_COLS}
+             FROM tasks
+             WHERE deleted_at IS NULL
+               AND NOT paused_manually
+               AND status = 'waiting_signal'
+               AND trigger_json IS NOT NULL
+             FOR UPDATE SKIP LOCKED"
+        );
+        let Ok(rows) = tx.query(&sql, &[]).await else {
+            return;
+        };
+
+        let mut to_spawn: Vec<(TaskId, i64)> = Vec::new();
+        let mut pending_events: Vec<PendingControlEvent> = Vec::new();
+        for row in &rows {
+            let Ok(task) = decode_task_row(row) else {
+                continue;
+            };
+            let matches_run = matches!(
+                task.trigger,
+                Some(TaskTrigger::OnRunCompleted { run_id }) if run_id == completed_run_id
+            );
+            if !matches_run {
+                continue;
+            }
+            if tx
+                .execute(
+                    "UPDATE tasks
+                     SET status = 'queued',
+                         wait_detail = NULL,
+                         updated_at = now()
+                     WHERE task_id = $1",
+                    &[&task.task_id.as_uuid()],
+                )
+                .await
+                .is_ok()
+            {
+                pending_events.push(PendingControlEvent {
+                    entity_key: format!("task:{}", task.task_id),
+                    event_type: "task.woke_on_run_completed",
+                    project_id: Some(task.project_id),
+                    session_id: Some(task.session_id),
+                    task_id: Some(task.task_id),
+                    payload: json!({
+                        "task_id": task.task_id,
+                        "completed_run_id": completed_run_id,
+                        "generation": task.generation,
+                    }),
+                });
+                to_spawn.push((task.task_id, task.generation));
+            }
+        }
+
+        if to_spawn.is_empty() {
+            let _ = tx.commit().await;
+            return;
+        }
+        let _ = append_control_events_batch_in_tx(
+            &tx,
+            self.pg_target(),
+            correlation_id,
+            &pending_events,
+        )
+        .await;
+        if tx.commit().await.is_ok() {
+            for (tid, gen_num) in to_spawn {
+                self.spawn_task_execution(tid, gen_num, correlation_id.clone());
+            }
+        }
+    }
+
     /// Executes one deterministic scheduler pass at `now` (`HeadScheduler`), claiming due
     /// `task_timers` strictly via `FOR UPDATE OF t SKIP LOCKED`, applying `missed_run_policy`
     /// (`execute_once | skip | ask`), advancing recurring schedules via PostgreSQL 16 IANA TZ,
@@ -1442,7 +2208,9 @@ impl HeadService {
                 FROM task_timers t
                 JOIN tasks tk ON tk.task_id = t.task_id
                 JOIN projects p ON p.project_id = tk.project_id
-                WHERE p.lifecycle_state IN ('active', 'detached')
+                WHERE tk.deleted_at IS NULL
+                  AND NOT tk.paused_manually
+                  AND p.lifecycle_state IN ('active', 'detached')
                   AND t.fire_at <= to_timestamp($1::double precision)
                   AND (
                       t.status = 'pending'
@@ -1704,7 +2472,9 @@ impl HeadService {
                 "SELECT tk.task_id, tk.generation
                  FROM tasks tk
                  JOIN projects p ON p.project_id = tk.project_id
-                 WHERE tk.status = 'queued'
+                 WHERE tk.deleted_at IS NULL
+                   AND NOT tk.paused_manually
+                   AND tk.status = 'queued'
                    AND p.lifecycle_state IN ('active', 'detached')
                  ORDER BY tk.updated_at ASC
                  LIMIT 16",
@@ -1932,7 +2702,8 @@ impl HeadService {
         let interrupted_sql = format!(
             "SELECT {TASK_SELECT_COLS}
              FROM tasks
-             WHERE status IN ('running', 'waiting_approval')
+             WHERE deleted_at IS NULL
+               AND status IN ('running', 'waiting_approval')
                AND NOT (task_id = ANY($1))
              FOR UPDATE"
         );
@@ -2342,12 +3113,12 @@ impl HeadService {
     ) -> Result<(), DennettError> {
         let _ = self.ensure_migrated().await?;
 
-        // Look up session_id first so we serialize turns on the same session cleanly without 409 races
-        // when generation N+1 queues right behind generation N!
+        // Look up execution session_id first (`target_session_id` if targeting an existing chat,
+        // else the task's dedicated `session_id`) so we serialize turns cleanly without 409 races!
         let session_id = {
             let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
             let task = fetch_task(&conn, task_id, self.pg_target()).await?;
-            task.session_id
+            task.target_session_id.unwrap_or(task.session_id)
         };
         let session_lock = self.session_exec_lock(session_id).await;
         let session_guard = session_lock.lock().await;
@@ -2355,6 +3126,7 @@ impl HeadService {
         let run_id = RunId::new();
         let (
             task,
+            exec_session_id,
             session,
             agent,
             project,
@@ -2371,13 +3143,23 @@ impl HeadService {
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
-            let lock_sql =
-                format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 FOR UPDATE");
-            let task_row = tx
-                .query_one(&lock_sql, &[&task_id.as_uuid()])
+            let lock_sql = format!(
+                "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL FOR UPDATE"
+            );
+            let Some(task_row) = tx
+                .query_opt(&lock_sql, &[&task_id.as_uuid()])
                 .await
-                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+            else {
+                tx.commit()
+                    .await
+                    .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                drop(session_guard);
+                self.prune_session_lock(session_id).await;
+                return Ok(());
+            };
             let task = decode_task_row(&task_row)?;
+            let exec_session_id = task.target_session_id.unwrap_or(task.session_id);
 
             // Only start if still queued for THIS exact generation and not cancelled/unknown!
             if task.generation != expected_generation || task.status != TaskStatus::Queued {
@@ -2422,13 +3204,14 @@ impl HeadService {
                 return Ok(());
             }
 
-            let session = fetch_session(&tx, task.session_id, self.pg_target()).await?;
+            let session = fetch_session(&tx, exec_session_id, self.pg_target()).await?;
             let agent = fetch_agent(&tx, task.agent_id, self.pg_target()).await?;
 
             // 2. Runtime & auth profile separation check (A09/A10/M: fail closed without silent fallback!).
             let resolved_runtime = match self
                 .resolve_runtime_for_turn(
-                    agent.current_config.preferred_connection_id,
+                    task.connection_override_id
+                        .or(agent.current_config.preferred_connection_id),
                     task.auth_profile_override,
                 )
                 .await
@@ -2476,8 +3259,8 @@ impl HeadService {
                 }
             };
 
-            let binding = fetch_runtime_binding(&tx, task.session_id, self.pg_target()).await?;
-            let history = fetch_session_messages(&tx, task.session_id, self.pg_target()).await?;
+            let binding = fetch_runtime_binding(&tx, exec_session_id, self.pg_target()).await?;
+            let history = fetch_session_messages(&tx, exec_session_id, self.pg_target()).await?;
             let rules = fetch_policy_rules(&tx, self.pg_target()).await?;
 
             // D2-BUG-01: Atomically fetch & clear durable `pending_continuation_input` plus any
@@ -2561,7 +3344,7 @@ impl HeadService {
             let full_prompt = prompt_sections.join("\n");
 
             let user_msg_id = MessageId::new();
-            let stream_id = format!("session:{}:messages", task.session_id);
+            let stream_id = format!("session:{exec_session_id}:messages");
             let msg_seq = next_stream_seq(&tx, &stream_id, self.pg_target()).await?;
 
             tx.execute(
@@ -2571,7 +3354,7 @@ impl HeadService {
                  ) VALUES ($1, $2, $3, $4, $5, 'running', $6, $7, $8)",
                 &[
                     &run_id.as_uuid(),
-                    &task.session_id.as_uuid(),
+                    &exec_session_id.as_uuid(),
                     &agent.agent_id.as_uuid(),
                     &agent.current_config_version_id.as_uuid(),
                     &user_msg_id.as_uuid(),
@@ -2589,7 +3372,7 @@ impl HeadService {
                  ) VALUES ($1, $2, $3, 'user', $4, $5, $6)",
                 &[
                     &user_msg_id.as_uuid(),
-                    &task.session_id.as_uuid(),
+                    &exec_session_id.as_uuid(),
                     &msg_seq,
                     &full_prompt,
                     &run_id.as_uuid(),
@@ -2649,6 +3432,7 @@ impl HeadService {
 
             (
                 task,
+                exec_session_id,
                 session,
                 agent,
                 project,
@@ -2665,7 +3449,7 @@ impl HeadService {
         let (slot_released_tx, slot_released_rx) = watch::channel(false);
         let _slot_released = crate::service::SlotReleasedNotifier::new(slot_released_tx);
         self.try_register_active_session_run(
-            task.session_id,
+            exec_session_id,
             ActiveRunHandle {
                 run_id,
                 client_message_id: None,
@@ -2678,7 +3462,7 @@ impl HeadService {
         .await?;
         let mut run_guard = ActiveRunGuard::new(
             self.clone(),
-            task.session_id,
+            exec_session_id,
             run_id,
             cancel_tx.clone(),
             correlation_id.clone(),
@@ -2688,7 +3472,7 @@ impl HeadService {
             task_id,
             ActiveTaskHandle {
                 generation: expected_generation,
-                session_id: task.session_id,
+                session_id: exec_session_id,
                 run_id,
                 cancel_tx,
             },
@@ -2705,22 +3489,31 @@ impl HeadService {
                 Duration::from_millis(rem_ms).min(DEFAULT_TURN_TIMEOUT)
             });
 
+        let core_project = if project.project_id == crate::policy::standalone_system_project_id() {
+            None
+        } else {
+            Some(project)
+        };
+
         // D2-BUG-03: Give interactive human approval the full `DEFAULT_APPROVAL_WAIT_TIMEOUT`,
         // independent of `max_wall_secs` — RPC deadline & wall_ms budget pause while human decides!
         let core_res = self
             .execute_session_turn_core(CoreTurnInput {
                 trigger: TurnTrigger::TaskGeneration { task_id },
-                session_id: task.session_id,
+                session_id: exec_session_id,
                 session_kind: session.session_kind,
                 run_id,
                 agent,
-                project: Some(project),
+                project: core_project,
                 existing_binding,
                 prior_history,
                 policy_rules,
                 prompt_text,
                 runtime: resolved_runtime.runtime,
                 connection_id: resolved_runtime.connection_id,
+                model_override: task.model_override.clone(),
+                thinking_override: task.thinking_override,
+                skill_slugs_override: task.skill_slugs_override.clone(),
                 turn_timeout,
                 approval_timeout: DEFAULT_APPROVAL_WAIT_TIMEOUT,
                 cancel_rx,
@@ -2742,7 +3535,7 @@ impl HeadService {
                 )
                 .await;
                 run_guard.mark_completed();
-                self.unregister_active_session_run(task.session_id, run_id)
+                self.unregister_active_session_run(exec_session_id, run_id)
                     .await;
                 drop(session_guard);
                 self.prune_session_lock(session_id).await;
@@ -2780,7 +3573,7 @@ impl HeadService {
             .await;
         }
         run_guard.mark_completed();
-        self.unregister_active_session_run(task.session_id, run_id)
+        self.unregister_active_session_run(exec_session_id, run_id)
             .await;
         drop(session_guard);
         self.prune_session_lock(session_id).await;
@@ -2934,13 +3727,16 @@ impl HeadService {
             return Ok(RunStatus::Superseded);
         }
 
-        // Persist assistant message into session timeline when non-empty.
+        // Persist assistant message into the execution session timeline when non-empty.
+        let exec_session_id = current_task
+            .target_session_id
+            .unwrap_or(current_task.session_id);
         let safe_text = self.redact(&outcome.assistant_text);
         let assistant_msg_id = if safe_text.trim().is_empty() {
             None
         } else {
             let mid = MessageId::new();
-            let stream_id = format!("session:{}:messages", current_task.session_id);
+            let stream_id = format!("session:{exec_session_id}:messages");
             let seq = next_stream_seq(&tx, &stream_id, self.pg_target()).await?;
             tx.execute(
                 "INSERT INTO messages (
@@ -2948,7 +3744,7 @@ impl HeadService {
                  ) VALUES ($1, $2, $3, 'assistant', $4, $5, $6)",
                 &[
                     &mid.as_uuid(),
-                    &current_task.session_id.as_uuid(),
+                    &exec_session_id.as_uuid(),
                     &seq,
                     &safe_text,
                     &run_id.as_uuid(),
@@ -3341,6 +4137,32 @@ impl HeadService {
                     "tokens_used": next_usage.tokens_used,
                 }),
             });
+
+            // Deliver concise system completion summary into `notify_session_id` when running
+            // isolated from the caller session (e.g., delegated subagent or isolated reminder).
+            if let Some(notify_sid) = current_task.notify_session_id
+                && notify_sid != exec_session_id
+            {
+                let summary_snippet = if safe_text.trim().is_empty() {
+                    String::from("(без текстового ответа)")
+                } else {
+                    truncate_utf8(safe_text.trim(), 1500).to_owned()
+                };
+                let notice = format!(
+                    "[Поручение завершено: {} (task_id={task_id}, status={next_status})]\n{summary_snippet}",
+                    current_task.title
+                );
+                let _ = self
+                    .deliver_task_completion_notice_in_tx(
+                        &tx,
+                        notify_sid,
+                        &current_task,
+                        &notice,
+                        correlation_id,
+                        &mut pending_events,
+                    )
+                    .await;
+            }
         }
 
         let expired_perms = self
@@ -3372,12 +4194,14 @@ impl HeadService {
         if !expired_perms.is_empty() {
             self.wake_expired_approval_waiters(
                 &expired_perms,
-                current_task.session_id,
+                exec_session_id,
                 "task run completed",
             )
             .await;
         }
         self.clear_stopped_task(task_id).await;
+        self.wake_tasks_waiting_for_run(run_id, correlation_id)
+            .await;
         Ok(final_run_status)
     }
 
@@ -3477,6 +4301,26 @@ impl HeadService {
                             "error_summary": safe_err,
                         }),
                     });
+                    let exec_sid = task.target_session_id.unwrap_or(task.session_id);
+                    if let Some(notify_sid) = task.notify_session_id
+                        && notify_sid != exec_sid
+                    {
+                        let notice = format!(
+                            "[Поручение завершилось ошибкой: {} (task_id={task_id}, code={})]\n{safe_err}",
+                            task.title,
+                            err.code()
+                        );
+                        let _ = self
+                            .deliver_task_completion_notice_in_tx(
+                                &tx,
+                                notify_sid,
+                                &task,
+                                &notice,
+                                correlation_id,
+                                &mut pending_events,
+                            )
+                            .await;
+                    }
                 }
             } else {
                 let _ = tx
@@ -3519,6 +4363,8 @@ impl HeadService {
                     .await;
             }
             self.clear_stopped_task(task_id).await;
+            self.wake_tasks_waiting_for_run(run_id, correlation_id)
+                .await;
             return;
         }
         let _ = self
@@ -3852,8 +4698,14 @@ impl HeadService {
         Ok(ListAgentMessagesResponse { messages })
     }
 
-    /// Enforces `child_scope ⊆ parent_scope` (A07) when an agent delegates work to another agent
-    /// via `dennett-control-mcp` (even when `parent_task_id` is omitted in an interactive chat).
+    /// Enforces `child ⊆ parent` (A07, A10) when an agent delegates work to another agent
+    /// via `dennett-control-mcp` or `parent_task_id`:
+    /// - `allowed_memory_scopes`: `child ⊆ parent`
+    /// - `workspace_write_policy`: `child ⊆ parent`
+    /// - `autonomy_mode`: `child` cannot escalate to `FullAccess` when `parent` is `Auto`
+    /// - Agent-scoped MCP/plugin capabilities: `child ⊆ parent`
+    /// - Provider connections: child cannot escalate from local/free connection to a paid/cloud
+    ///   connection (`GeminiApiKey` / `AntigravityAcp`) that differs from parent's connection.
     ///
     /// # Errors
     ///
@@ -3862,14 +4714,37 @@ impl HeadService {
         &self,
         parent_agent_id: AgentId,
         child_agent_id: AgentId,
+        connection_override_id: Option<ProviderConnectionId>,
     ) -> Result<(), DennettError> {
-        if parent_agent_id == child_agent_id {
-            return Ok(());
-        }
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
-        let parent = fetch_agent(&conn, parent_agent_id, self.pg_target()).await?;
-        let child = fetch_agent(&conn, child_agent_id, self.pg_target()).await?;
+        self.enforce_delegated_agent_scope_subset_on_client(
+            &conn,
+            parent_agent_id,
+            child_agent_id,
+            connection_override_id,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "enforces full A10 child <= parent delegation ceiling across memory scopes, write policy, autonomy mode, agent-scoped MCPs, and paid connections"
+    )]
+    pub(crate) async fn enforce_delegated_agent_scope_subset_on_client<C: GenericClient>(
+        &self,
+        client: &C,
+        parent_agent_id: AgentId,
+        child_agent_id: AgentId,
+        connection_override_id: Option<ProviderConnectionId>,
+    ) -> Result<(), DennettError> {
+        let parent = fetch_agent(client, parent_agent_id, self.pg_target()).await?;
+        let child = if parent_agent_id == child_agent_id {
+            parent.clone()
+        } else {
+            fetch_agent(client, child_agent_id, self.pg_target()).await?
+        };
+
         if !child
             .current_config
             .allowed_memory_scopes
@@ -3893,6 +4768,173 @@ impl HeadService {
                 ),
             });
         }
+        if child.current_config.autonomy_mode == AutonomyMode::FullAccess
+            && parent.current_config.autonomy_mode != AutonomyMode::FullAccess
+        {
+            return Err(DennettError::AccessDenied {
+                scope: format!("agent:{child_agent_id}"),
+                reason: String::from(
+                    "delegated helper agent cannot escalate autonomy_mode to `full_access` above parent agent's `auto` ceiling",
+                ),
+            });
+        }
+
+        // A10: Verify child's agent-scoped executable MCP/plugin capabilities ⊆ parent's.
+        if parent_agent_id != child_agent_id {
+            let child_cap_rows = client
+                .query(
+                    "SELECT slug FROM capability_records
+                     WHERE scope_kind = 'agent'
+                       AND agent_id = $1
+                       AND kind IN ('mcp_server', 'plugin')
+                       AND activation_state = 'enabled'",
+                    &[&child_agent_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            if !child_cap_rows.is_empty() {
+                let parent_cap_rows = client
+                    .query(
+                        "SELECT slug FROM capability_records
+                         WHERE scope_kind = 'agent'
+                           AND agent_id = $1
+                           AND kind IN ('mcp_server', 'plugin')
+                           AND activation_state = 'enabled'",
+                        &[&parent_agent_id.as_uuid()],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                let parent_slugs: BTreeSet<String> =
+                    parent_cap_rows.iter().map(|r| r.get(0)).collect();
+                for row in &child_cap_rows {
+                    let slug: String = row.get(0);
+                    if !parent_slugs.contains(&slug) {
+                        return Err(DennettError::AccessDenied {
+                            scope: format!("agent:{child_agent_id}"),
+                            reason: format!(
+                                "delegated helper agent has agent-scoped MCP/plugin capability `{slug}` not granted to parent agent"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // A10: Verify effective child provider connection does not escalate to a paid/cloud
+        // connection beyond parent's connection ceiling.
+        let child_conn_id = connection_override_id.or(child.current_config.preferred_connection_id);
+        let parent_conn_id = parent.current_config.preferred_connection_id;
+        if let Some(c_id) = child_conn_id
+            && Some(c_id) != parent_conn_id
+        {
+            let child_conn_row = client
+                .query_opt(
+                    "SELECT provider_kind, auth_profile FROM provider_connections WHERE connection_id = $1",
+                    &[&c_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            if let Some(row) = child_conn_row {
+                let child_kind = ProviderKind::from_str(&row.get::<_, String>(0))?;
+                let child_profile =
+                    dennett_contracts::RuntimeAuthProfile::from_str(&row.get::<_, String>(1))?;
+                let child_is_paid_cloud = matches!(child_kind, ProviderKind::AntigravityAcp)
+                    || child_profile == dennett_contracts::RuntimeAuthProfile::GeminiApiKey;
+                if child_is_paid_cloud {
+                    let parent_allows_paid = match parent_conn_id {
+                        Some(p_id) => {
+                            let p_row = client
+                                .query_opt(
+                                    "SELECT provider_kind, auth_profile FROM provider_connections WHERE connection_id = $1",
+                                    &[&p_id.as_uuid()],
+                                )
+                                .await
+                                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                            p_row.is_some_and(|r| {
+                                ProviderKind::from_str(&r.get::<_, String>(0)).ok()
+                                    == Some(child_kind)
+                                    && dennett_contracts::RuntimeAuthProfile::from_str(
+                                        &r.get::<_, String>(1),
+                                    )
+                                    .ok()
+                                        == Some(child_profile)
+                            })
+                        }
+                        None => false,
+                    };
+                    if !parent_allows_paid {
+                        return Err(DennettError::AccessDenied {
+                            scope: format!("agent:{child_agent_id}"),
+                            reason: format!(
+                                "delegated helper task cannot escalate to paid/cloud provider connection `{c_id}` ({child_kind}/{child_profile}) above parent agent's connection ceiling"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn deliver_task_completion_notice_in_tx<C: GenericClient>(
+        &self,
+        tx: &C,
+        notify_session_id: SessionId,
+        task: &TaskRecord,
+        notice_text: &str,
+        correlation_id: &CorrelationId,
+        pending_events: &mut Vec<PendingControlEvent>,
+    ) -> Result<(), DennettError> {
+        let exists: bool = tx
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = $1 AND deleted_at IS NULL)",
+                &[&notify_session_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+            .get(0);
+        if !exists {
+            return Ok(());
+        }
+        let msg_id = MessageId::new();
+        let stream_id = format!("session:{notify_session_id}:messages");
+        let seq = next_stream_seq(tx, &stream_id, self.pg_target()).await?;
+        let safe_notice = self.redact(notice_text);
+        tx.execute(
+            "INSERT INTO messages (
+                message_id, session_id, stream_seq, role, content, run_id, correlation_id
+             ) VALUES ($1, $2, $3, 'system', $4, NULL, $5)",
+            &[
+                &msg_id.as_uuid(),
+                &notify_session_id.as_uuid(),
+                &seq,
+                &safe_notice,
+                &correlation_id.as_str(),
+            ],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        tx.execute(
+            "UPDATE sessions SET updated_at = now() WHERE session_id = $1",
+            &[&notify_session_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+
+        pending_events.push(PendingControlEvent {
+            entity_key: format!("session:{notify_session_id}"),
+            event_type: "task.notified_parent_session",
+            project_id: Some(task.project_id),
+            session_id: Some(notify_session_id),
+            task_id: Some(task.task_id),
+            payload: json!({
+                "task_id": task.task_id,
+                "notify_session_id": notify_session_id,
+                "message_id": msg_id,
+                "title": task.title,
+            }),
+        });
         Ok(())
     }
 }

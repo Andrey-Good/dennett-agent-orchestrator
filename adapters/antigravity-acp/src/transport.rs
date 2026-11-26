@@ -45,21 +45,102 @@ const SHUTDOWN_GRACE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Asynchronous reap budget after `start_kill` when an `AcpProcess` is dropped.
 const DROP_REAP_BUDGET: Duration = Duration::from_millis(500);
 
-/// Sensitive host environment variables scrubbed from spawned `agy acp` processes by default.
-const DEFAULT_SCRUBBED_ENV_VARS: [&str; 12] = [
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
+/// Strict allowlist of OS essential environment variable names inherited by spawned `agy acp`
+/// child processes (`A-SEC-3`). Every non-allowlisted host variable (including cloud keys,
+/// DB URLs, `DENNETT_HEAD_TOKEN`, `DENNETT_MEMORY_*`, etc.) is cleared before spawn.
+const ALLOWED_CHILD_ENV_VARS: &[&str] = &[
+    "PATH",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "PATHEXT",
+    "SYSTEMDRIVE",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)",
+    "USER",
+    "USERNAME",
+    "USERDOMAIN",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "TERM",
+    "COLORTERM",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "TZ",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+];
+
+/// Environment variable names that MUST NEVER be passed into spawned `agy acp` child processes,
+/// even if accidentally supplied in `env_overrides`.
+const FORBIDDEN_CHILD_ENV_VARS: &[&str] = &[
+    "DENNETT_HEAD_TOKEN",
+    "DENNETT_VAULT_MASTER_KEY",
+    "DENNETT_MEMORY_HMAC_SECRET",
     "DENNETT_MEMORY_PG_URL",
     "DENNETT_CONTROL_PG_URL",
     "DENNETT_TEST_MEMORY_PG_URL",
     "DENNETT_TEST_CONTROL_PG_URL",
     "PGPASSWORD",
-    "DENNETT_MEMORY_TOKEN",
-    "DENNETT_MEMORY_HMAC_SECRET",
-    "DENNETT_MEMORY_AUTH_CONFIG",
-    "DENNETT_HEAD_TOKEN",
-    "DENNETT_CONTROL_TOKEN",
 ];
+
+fn is_allowlisted_host_env(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    if ALLOWED_CHILD_ENV_VARS.contains(&upper.as_str()) {
+        return true;
+    }
+    upper.starts_with("LC_") || upper.starts_with("XDG_")
+}
+
+fn is_forbidden_child_env(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    FORBIDDEN_CHILD_ENV_VARS.contains(&upper.as_str())
+}
+
+/// Builds the scrubbed child process environment from parent env vars using a strict OS allowlist
+/// plus explicit non-forbidden `overrides`.
+#[must_use]
+pub(crate) fn build_scrubbed_child_env<I>(
+    parent_env: I,
+    overrides: &[(String, String)],
+) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let mut out: Vec<(String, String)> = parent_env
+        .into_iter()
+        .filter(|(k, _)| is_allowlisted_host_env(k) && !is_forbidden_child_env(k))
+        .collect();
+
+    for (k, v) in overrides {
+        if is_forbidden_child_env(k) {
+            continue;
+        }
+        out.retain(|(existing, _)| {
+            if cfg!(windows) {
+                !existing.eq_ignore_ascii_case(k)
+            } else {
+                existing != k
+            }
+        });
+        out.push((k.clone(), v.clone()));
+    }
+    out
+}
 
 /// Spawn configuration for a single isolated `agy acp` child process.
 #[derive(Debug, Clone)]
@@ -207,10 +288,8 @@ impl AcpProcess {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        for sensitive in DEFAULT_SCRUBBED_ENV_VARS {
-            cmd.env_remove(sensitive);
-        }
-        for (k, v) in &config.env_overrides {
+        cmd.env_clear();
+        for (k, v) in build_scrubbed_child_env(std::env::vars(), &config.env_overrides) {
             cmd.env(k, v);
         }
         ProcessTreeGuard::configure_command(&mut cmd);
@@ -3010,5 +3089,47 @@ mod tests {
             infer_tool_name("other", "dennett_skill_list", &json!({})),
             "dennett_skill_list"
         );
+    }
+
+    #[test]
+    fn a_sec_3_child_env_uses_strict_allowlist_and_never_leaks_host_secrets() {
+        let parent = vec![
+            (String::from("PATH"), String::from("/usr/bin")),
+            (String::from("TEMP"), String::from("C:\\Temp")),
+            (String::from("HOME"), String::from("/home/user")),
+            (String::from("LC_ALL"), String::from("en_US.UTF-8")),
+            (String::from("AWS_SECRET_ACCESS_KEY"), String::from("aws-secret")),
+            (String::from("OPENAI_API_KEY"), String::from("sk-openai")),
+            (String::from("GITHUB_TOKEN"), String::from("ghp_secret")),
+            (String::from("DENNETT_HEAD_TOKEN"), String::from("owner-secret-token")),
+            (String::from("DENNETT_MEMORY_HMAC_SECRET"), String::from("hmac-secret")),
+            (String::from("PGPASSWORD"), String::from("pg-secret")),
+            (String::from("RANDOM_SECRET_VAR"), String::from("leak-me-not")),
+        ];
+        let overrides = vec![
+            (String::from("GEMINI_API_KEY"), String::from("explicit-gemini-key")),
+            (String::from("DENNETT_HEAD_TOKEN"), String::from("must-still-be-blocked")),
+        ];
+        let scrubbed = build_scrubbed_child_env(parent, &overrides);
+        let keys: Vec<&str> = scrubbed.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"PATH"));
+        assert!(keys.contains(&"TEMP"));
+        assert!(keys.contains(&"HOME"));
+        assert!(keys.contains(&"LC_ALL"));
+        assert!(keys.contains(&"GEMINI_API_KEY"));
+        for forbidden in [
+            "AWS_SECRET_ACCESS_KEY",
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "DENNETT_HEAD_TOKEN",
+            "DENNETT_MEMORY_HMAC_SECRET",
+            "PGPASSWORD",
+            "RANDOM_SECRET_VAR",
+        ] {
+            assert!(
+                !keys.contains(&forbidden),
+                "host secret `{forbidden}` must not reach spawned child env: {keys:?}"
+            );
+        }
     }
 }

@@ -200,6 +200,10 @@ pub fn compute_skills_fingerprint(active_skills: &[ActiveSkillPayload]) -> u64 {
         mix_bytes(&mut hash, skill.version.as_bytes());
         mix_bytes(&mut hash, skill.content_sha256.as_bytes());
         mix_bytes(&mut hash, skill.skill_markdown.as_bytes());
+        if let Some(ref src_dir) = skill.source_dir {
+            mix_bytes(&mut hash, b"src_dir");
+            mix_bytes(&mut hash, src_dir.to_string_lossy().as_bytes());
+        }
     }
     hash
 }
@@ -1564,6 +1568,7 @@ mod tests {
             version: String::from("1.0.0"),
             content_sha256: "a".repeat(64),
             skill_markdown: String::from("# v1"),
+            source_dir: None,
         };
         let s2 = ActiveSkillPayload {
             version: String::from("1.0.1"),

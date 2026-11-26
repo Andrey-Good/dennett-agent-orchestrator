@@ -12,11 +12,11 @@ use std::time::Duration;
 use axum::body::{Body, Bytes};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
-use axum::http::header::{CONTENT_TYPE, HOST, ORIGIN};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
@@ -27,22 +27,25 @@ use dennett_contracts::{
     CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
     CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
     DennettError, DiscoverCapabilitiesRequest, DispatchEffectRequest, DocumentId, EffectClaimId,
-    EnqueueFollowupRequest, ExportRequest, FollowupId, ForgetRequest, HeadHealth,
-    HeadMemorySearchRequest, ImportRequest, InboxCardId, MemoryNoteId, MemoryScope, MemoryStatus,
-    PermissionRequestId, ProfileMode, ProjectId, ProviderConnectionId, RebindProjectRequest,
-    ReconcileEffectRequest, ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest,
-    ResolvePermissionRequest, RevokeGrantRequest, SchedulerTickRequest, SendAgentMessageRequest,
-    SendMessageRequest, ServiceKind, SessionId, SessionKind, SetProjectCapabilityBindingRequest,
-    SetSecretRequest, SteerSessionRequest, SupersedeClaimRequest, TaskId, TaskSignalRequest,
-    TimestampMs, TriggerIndexRebuildRequest, UpdateAgentConfigRequest, UpdateCapabilityRequest,
-    UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest,
-    UpdateTaskRequest, UpsertProviderConnectionRequest,
+    EnqueueFollowupRequest, ExportRequest, FollowupId, ForgetRequest, ForkSessionRequest,
+    HeadHealth, HeadMemorySearchRequest, ImportRequest, InboxCardId, MemoryNoteId, MemoryScope,
+    MemoryStatus, PermissionRequestId, PolicyRuleId, ProfileMode, ProjectId, ProviderConnectionId,
+    RebindProjectRequest, ReconcileEffectRequest, ReplyTaskRequest, ResolveConflictRequest,
+    ResolveInboxCardRequest, ResolvePermissionRequest, RevokeGrantRequest, SchedulerTickRequest,
+    SendAgentMessageRequest, SendMessageRequest, ServiceKind, SessionId, SessionKind,
+    SetProjectCapabilityBindingRequest, SetSecretRequest, SteerSessionRequest,
+    SupersedeClaimRequest, TaskId, TaskSignalRequest, TimestampMs, TriggerIndexRebuildRequest,
+    UpdateAgentConfigRequest, UpdateCapabilityRequest, UpdateDocumentRequest,
+    UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    UpdateUserPreferencesRequest, UpsertProviderConnectionRequest,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, watch};
 use tokio::time;
+use zeroize::Zeroizing;
 
 use crate::memory_auth::ControlTokenClaims;
+use crate::policy::standalone_system_project_id;
 use crate::service::{HEAD_STAGE_LABEL, HeadService, d3_head_capabilities};
 
 /// Maximum incoming HTTP request body size (1 MiB).
@@ -74,6 +77,8 @@ pub struct HeadAppState {
     pub runtime_is_simulated: bool,
     /// Whether operator explicitly opted into `--allow-non-loopback` binding.
     pub allow_non_loopback: bool,
+    /// Mandatory owner Bearer token authenticating all non-`/healthz` owner HTTP routes (`A-SEC-1`).
+    pub owner_token: Zeroizing<String>,
     /// Graceful shutdown trigger channel.
     pub shutdown_tx: watch::Sender<bool>,
     /// Bounded concurrency permit pool.
@@ -109,6 +114,11 @@ struct RuntimeCatalogQuery {
 struct ProjectFilesQuery {
     #[serde(default)]
     subpath: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectFileContentQuery {
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,6 +276,10 @@ pub fn build_head_router(state: HeadAppState) -> Router {
             get(handle_list_project_files),
         )
         .route(
+            "/v1/projects/{project_id}/file",
+            get(handle_get_project_file),
+        )
+        .route(
             "/v1/projects/{project_id}/rebind",
             post(handle_rebind_project),
         )
@@ -291,7 +305,13 @@ pub fn build_head_router(state: HeadAppState) -> Router {
         )
         .route(
             "/v1/sessions/{session_id}",
-            get(handle_get_session_detail).patch(handle_update_session),
+            get(handle_get_session_detail)
+                .patch(handle_update_session)
+                .delete(handle_delete_session),
+        )
+        .route(
+            "/v1/sessions/{session_id}/fork",
+            post(handle_fork_session),
         )
         .route(
             "/v1/sessions/{session_id}/messages",
@@ -337,8 +357,13 @@ pub fn build_head_router(state: HeadAppState) -> Router {
         .route("/v1/tasks", post(handle_create_task).get(handle_list_tasks))
         .route(
             "/v1/tasks/{task_id}",
-            get(handle_get_task_detail).patch(handle_update_task),
+            get(handle_get_task_detail)
+                .patch(handle_update_task)
+                .delete(handle_delete_task),
         )
+        .route("/v1/tasks/{task_id}/run-now", post(handle_run_task_now))
+        .route("/v1/tasks/{task_id}/pause", post(handle_pause_task))
+        .route("/v1/tasks/{task_id}/resume", post(handle_resume_task))
         .route("/v1/tasks/{task_id}/signals", post(handle_send_task_signal))
         .route("/v1/tasks/{task_id}/reply", post(handle_reply_to_task))
         .route("/v1/tasks/{task_id}/cancel", post(handle_cancel_task))
@@ -374,6 +399,12 @@ pub fn build_head_router(state: HeadAppState) -> Router {
             "/v1/policies",
             post(handle_create_policy_rule).get(handle_list_policy_rules),
         )
+        .route("/v1/policies/{rule_id}", delete(handle_delete_policy_rule))
+        .route(
+            "/v1/preferences",
+            get(handle_get_preferences).patch(handle_update_preferences),
+        )
+        .route("/v1/runs/emergency-stop", post(handle_emergency_stop))
         .route("/v1/memory/commits", post(handle_commit_memory_note))
         .route("/v1/memory/outbox", get(handle_list_outbox))
         .route("/v1/memory/outbox/flush", post(handle_flush_outbox))
@@ -473,6 +504,10 @@ pub fn build_head_router(state: HeadAppState) -> Router {
             post(handle_import_memory).layer(DefaultBodyLimit::max(MAX_MEMORY_IMPORT_BODY_BYTES)),
         )
         .route(
+            "/v1/memory/index/status",
+            get(handle_get_memory_index_status),
+        )
+        .route(
             "/v1/memory/index/rebuild",
             post(handle_trigger_memory_index_rebuild),
         )
@@ -519,20 +554,47 @@ async fn enforce_limits_and_timeout(
         return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
     }
 
-    // Fail-closed route scope check when a `dct1.` control token is presented: restrict it
-    // exclusively to the narrow event/task MCP route surface!
-    if request.headers().contains_key(&HEADER_CONTROL_TOKEN)
-        && !is_control_token_allowed_route(request.method(), request.uri().path())
-    {
-        let err = DennettError::AccessDenied {
-            scope: String::from("http.control_token"),
-            reason: format!(
-                "control MCP token is not permitted to invoke {} {}",
-                request.method(),
-                request.uri().path()
-            ),
-        };
-        return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
+    let path = request.uri().path();
+    let is_healthz = request.method() == Method::GET && path == "/healthz";
+
+    // A-SEC-1: Mandatory Owner Bearer authentication on ALL routes except `GET /healthz`, with
+    // scoped `X-Dennett-Control-Token` (`dct1.`) permitted ONLY on the narrow control-MCP route surface.
+    if !is_healthz {
+        if request.headers().contains_key(&HEADER_CONTROL_TOKEN) {
+            if !is_control_token_allowed_route(request.method(), path) {
+                let err = DennettError::AccessDenied {
+                    scope: String::from("http.control_token"),
+                    reason: format!(
+                        "control MCP token is not permitted to invoke {} {}",
+                        request.method(),
+                        path
+                    ),
+                };
+                return json_api_error(StatusCode::FORBIDDEN, err, &correlation_id);
+            }
+            let Some(ref svc) = state.service else {
+                return json_api_error(
+                    StatusCode::UNAUTHORIZED,
+                    DennettError::Unauthorized {
+                        reason: String::from(
+                            "control token verification unavailable without configured HeadService",
+                        ),
+                    },
+                    &correlation_id,
+                );
+            };
+            if let Err(err) = verify_optional_control_token(svc, request.headers()) {
+                return domain_error_response(err, &correlation_id);
+            }
+        } else {
+            let expected_owner_token = state
+                .service
+                .as_ref()
+                .map_or(state.owner_token.as_str(), HeadService::owner_token);
+            if let Err(err) = verify_owner_bearer_token(request.headers(), expected_owner_token) {
+                return json_api_error(StatusCode::UNAUTHORIZED, err, &correlation_id);
+            }
+        }
     }
 
     let Ok(_permit) = Arc::clone(&state.request_limit).try_acquire_owned() else {
@@ -545,7 +607,6 @@ async fn enforce_limits_and_timeout(
     // D2-ARCH-01 / D2-BUG-03 / D3+: Exempt session turn endpoints (`/messages`, `/steer`,
     // `/followups/resume`) from the fixed 180s HTTP layer timeout so interactive human approvals
     // (paused RPC deadline) and live turns are never spuriously aborted by a 504!
-    let path = request.uri().path();
     let is_session_turn_endpoint = request.method() == Method::POST
         && path.starts_with("/v1/sessions/")
         && (path.ends_with("/messages")
@@ -563,6 +624,51 @@ async fn enforce_limits_and_timeout(
         };
         json_api_error(StatusCode::GATEWAY_TIMEOUT, err, &correlation_id)
     }
+}
+
+fn ct_eq_str(a: &str, b: &str) -> bool {
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    if ab.is_empty() || bb.is_empty() {
+        return false;
+    }
+    let mut diff = ab.len() ^ bb.len();
+    let max_len = ab.len().max(bb.len());
+    for i in 0..max_len {
+        let ca = ab.get(i).copied().unwrap_or(0);
+        let cb = bb.get(i).copied().unwrap_or(0);
+        diff |= usize::from(ca ^ cb);
+    }
+    diff == 0
+}
+
+fn verify_owner_bearer_token(
+    headers: &HeaderMap,
+    expected_token: &str,
+) -> Result<(), DennettError> {
+    let Some(raw_header) = headers.get(AUTHORIZATION) else {
+        return Err(DennettError::Unauthorized {
+            reason: String::from(
+                "missing `Authorization: Bearer <DENNETT_HEAD_TOKEN>` header",
+            ),
+        });
+    };
+    let raw = raw_header
+        .to_str()
+        .map_err(|_| DennettError::Unauthorized {
+            reason: String::from("Authorization header must be valid ASCII"),
+        })?;
+    let Some((scheme, token)) = raw.trim().split_once(' ') else {
+        return Err(DennettError::Unauthorized {
+            reason: String::from("Authorization header must use `Bearer <token>` scheme"),
+        });
+    };
+    if !scheme.eq_ignore_ascii_case("bearer") || !ct_eq_str(token.trim(), expected_token) {
+        return Err(DennettError::Unauthorized {
+            reason: String::from("invalid owner bearer token"),
+        });
+    }
+    Ok(())
 }
 
 fn is_control_token_allowed_route(method: &Method, path: &str) -> bool {
@@ -588,7 +694,18 @@ fn is_control_token_allowed_route(method: &Method, path: &str) -> bool {
             return true;
         }
     }
+    if method == Method::GET && path == "/v1/agents" {
+        return true;
+    }
     if method == Method::POST && path == "/v1/sessions" {
+        return true;
+    }
+    if let Some(rest) = path.strip_prefix("/v1/sessions/")
+        && let Some(sess_seg) = rest.strip_suffix("/artifacts")
+        && !sess_seg.is_empty()
+        && !sess_seg.contains('/')
+        && matches!(*method, Method::GET | Method::POST)
+    {
         return true;
     }
     if path == "/v1/tasks" && matches!(*method, Method::GET | Method::POST) {
@@ -599,6 +716,13 @@ fn is_control_token_allowed_route(method: &Method, path: &str) -> bool {
             return true;
         }
         if let Some(task_seg) = rest.strip_suffix("/cancel")
+            && !task_seg.is_empty()
+            && !task_seg.contains('/')
+            && method == Method::POST
+        {
+            return true;
+        }
+        if let Some(task_seg) = rest.strip_suffix("/signals")
             && !task_seg.is_empty()
             && !task_seg.contains('/')
             && method == Method::POST
@@ -801,6 +925,15 @@ async fn handle_list_agents(State(state): State<HeadAppState>, headers: HeaderMa
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    if let Some(ref claims) = control_claims
+        && let Err(err) = require_control_token_project(claims, "list project agents")
+    {
+        return domain_error_response(err, &cid);
+    }
     match svc.list_agents().await {
         Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
         Err(err) => domain_error_response(err, &cid),
@@ -983,6 +1116,26 @@ async fn handle_list_project_files(
     }
 }
 
+async fn handle_get_project_file(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    Query(query): Query<ProjectFileContentQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let project_id = match ProjectId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.get_project_file_content(project_id, query.path).await {
+        Ok(preview) => json_with_correlation(StatusCode::OK, &preview, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
 async fn handle_update_session(
     State(state): State<HeadAppState>,
     headers: HeaderMap,
@@ -1007,6 +1160,49 @@ async fn handle_update_session(
     }
 }
 
+async fn handle_fork_session(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+    payload: Result<Json<ForkSessionRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let session_id = match SessionId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.fork_session(session_id, req, &cid).await {
+        Ok(session) => json_with_correlation(StatusCode::CREATED, &session, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_delete_session(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let session_id = match SessionId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.delete_session(session_id, &cid).await {
+        Ok(()) => empty_with_correlation(StatusCode::NO_CONTENT, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
 async fn handle_create_session(
     State(state): State<HeadAppState>,
     headers: HeaderMap,
@@ -1025,14 +1221,13 @@ async fn handle_create_session(
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
     if let Some(claims) = control_claims {
-        let token_project_id = match require_control_token_project(&claims, "create sessions") {
-            Ok(pid) => pid,
-            Err(err) => return domain_error_response(err, &cid),
-        };
-        if req.project_id != Some(token_project_id) {
+        let allowed_project_id = claims
+            .project_id
+            .unwrap_or_else(standalone_system_project_id);
+        if req.project_id != Some(allowed_project_id) {
             return domain_error_response(
                 DennettError::AccessDenied {
-                    scope: format!("project:{token_project_id}"),
+                    scope: format!("project:{allowed_project_id}"),
                     reason: String::from(
                         "control MCP token cannot create sessions in another project",
                     ),
@@ -1043,7 +1238,7 @@ async fn handle_create_session(
         if req.session_kind != SessionKind::TaskRun {
             return domain_error_response(
                 DennettError::AccessDenied {
-                    scope: format!("project:{token_project_id}"),
+                    scope: format!("project:{allowed_project_id}"),
                     reason: String::from(
                         "control MCP token may only create dedicated `task_run` sessions",
                     ),
@@ -1300,10 +1495,27 @@ async fn handle_create_artifact(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let session_id = match SessionId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
+    if let Some(claims) = control_claims
+        && claims.session_id != session_id
+    {
+        return domain_error_response(
+            DennettError::AccessDenied {
+                scope: format!("session:{}", claims.session_id),
+                reason: String::from(
+                    "control MCP token can only register artifacts in its own session",
+                ),
+            },
+            &cid,
+        );
+    }
     let Json(req) = match payload {
         Ok(j) => j,
         Err(rej) => return json_rejection_response(&rej, &cid),
@@ -1323,10 +1535,27 @@ async fn handle_list_artifacts(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let session_id = match SessionId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
+    if let Some(claims) = control_claims
+        && claims.session_id != session_id
+    {
+        return domain_error_response(
+            DennettError::AccessDenied {
+                scope: format!("session:{}", claims.session_id),
+                reason: String::from(
+                    "control MCP token can only list artifacts in its own session",
+                ),
+            },
+            &cid,
+        );
+    }
     match svc.list_artifacts(session_id).await {
         Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
         Err(err) => domain_error_response(err, &cid),
@@ -1404,6 +1633,66 @@ async fn handle_list_policy_rules(
     };
     match svc.list_policy_rules().await {
         Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_delete_policy_rule(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let rule_id = match PolicyRuleId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.delete_policy_rule(rule_id, &cid).await {
+        Ok(()) => empty_with_correlation(StatusCode::NO_CONTENT, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_get_preferences(State(state): State<HeadAppState>, headers: HeaderMap) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    match svc.get_preferences().await {
+        Ok(prefs) => json_with_correlation(StatusCode::OK, &prefs, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_update_preferences(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    payload: Result<Json<UpdateUserPreferencesRequest>, JsonRejection>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let Json(req) = match payload {
+        Ok(j) => j,
+        Err(rej) => return json_rejection_response(&rej, &cid),
+    };
+    match svc.update_preferences(req, &cid).await {
+        Ok(prefs) => json_with_correlation(StatusCode::OK, &prefs, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_emergency_stop(State(state): State<HeadAppState>, headers: HeaderMap) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    match svc.emergency_stop_all(&cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
         Err(err) => domain_error_response(err, &cid),
     }
 }
@@ -1561,46 +1850,82 @@ async fn handle_create_task(
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
     if let Some(claims) = control_claims {
-        let token_project_id = match require_control_token_project(&claims, "create tasks/events") {
-            Ok(pid) => pid,
-            Err(err) => return domain_error_response(err, &cid),
-        };
-        if req.project_id != token_project_id {
-            return domain_error_response(
-                DennettError::AccessDenied {
-                    scope: format!("project:{token_project_id}"),
-                    reason: String::from(
-                        "control MCP token cannot create tasks/events in another project",
-                    ),
-                },
-                &cid,
-            );
-        }
-        if claims.session_kind == SessionKind::TaskRun
-            && (req.parent_task_id.is_none() || req.schedule.is_some())
-        {
-            return domain_error_response(
-                DennettError::AccessDenied {
-                    scope: format!("session:{}", claims.session_id),
-                    reason: String::from(
-                        "background task_run session cannot create new scheduled events via control MCP",
-                    ),
-                },
-                &cid,
-            );
-        }
-        if req.agent_id != claims.agent_id
-            && let Err(err) = svc
-                .enforce_delegated_agent_scope_subset(claims.agent_id, req.agent_id)
-                .await
-        {
-            return domain_error_response(err, &cid);
+        let standalone_pid = standalone_system_project_id();
+        if let Some(token_project_id) = claims.project_id {
+            if req.project_id != token_project_id {
+                return domain_error_response(
+                    DennettError::AccessDenied {
+                        scope: format!("project:{token_project_id}"),
+                        reason: String::from(
+                            "control MCP token cannot create tasks/events in another project",
+                        ),
+                    },
+                    &cid,
+                );
+            }
+            if claims.session_kind == SessionKind::TaskRun
+                && req.parent_task_id.is_none()
+                && req.schedule.is_none()
+            {
+                return domain_error_response(
+                    DennettError::AccessDenied {
+                        scope: format!("session:{}", claims.session_id),
+                        reason: String::from(
+                            "background task_run session cannot create unscheduled top-level tasks via control MCP",
+                        ),
+                    },
+                    &cid,
+                );
+            }
+            if (req.agent_id != claims.agent_id || req.connection_override_id.is_some())
+                && let Err(err) = svc
+                    .enforce_delegated_agent_scope_subset(
+                        claims.agent_id,
+                        req.agent_id,
+                        req.connection_override_id,
+                    )
+                    .await
+            {
+                return domain_error_response(err, &cid);
+            }
+        } else {
+            // Standalone chat (`project_id == None`): permit ONLY standalone session reminders
+            // backed by `STANDALONE_SYSTEM_PROJECT_UUID` for this exact session & agent.
+            let scoped_to_caller = req.session_id == Some(claims.session_id)
+                || req.target_session_id == Some(claims.session_id)
+                || req.notify_session_id == Some(claims.session_id);
+            if req.project_id != standalone_pid
+                || req.parent_task_id.is_some()
+                || req.agent_id != claims.agent_id
+                || !scoped_to_caller
+                || (req.schedule.is_none() && req.trigger.is_none())
+            {
+                return domain_error_response(
+                    DennettError::AccessDenied {
+                        scope: format!("session:{}", claims.session_id),
+                        reason: String::from(
+                            "standalone chat control MCP token may only create scheduled reminders bound to its own session",
+                        ),
+                    },
+                    &cid,
+                );
+            }
         }
     }
     match svc.create_task(req, &cid).await {
         Ok(task) => json_with_correlation(StatusCode::CREATED, &task, &cid),
         Err(err) => domain_error_response(err, &cid),
     }
+}
+
+fn task_visible_to_standalone_claims(
+    task: &dennett_contracts::TaskRecord,
+    claims: &ControlTokenClaims,
+) -> bool {
+    task.project_id == standalone_system_project_id()
+        && (task.session_id == claims.session_id
+            || task.target_session_id == Some(claims.session_id)
+            || task.notify_session_id == Some(claims.session_id))
 }
 
 async fn handle_list_tasks(
@@ -1620,17 +1945,16 @@ async fn handle_list_tasks(
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
-    if let Some(claims) = control_claims {
-        let token_project_id = match require_control_token_project(&claims, "list tasks/events") {
-            Ok(pid) => pid,
-            Err(err) => return domain_error_response(err, &cid),
-        };
+    if let Some(ref claims) = control_claims {
+        let allowed_pid = claims
+            .project_id
+            .unwrap_or_else(standalone_system_project_id);
         if let Some(requested_pid) = project_id
-            && requested_pid != token_project_id
+            && requested_pid != allowed_pid
         {
             return domain_error_response(
                 DennettError::AccessDenied {
-                    scope: format!("project:{token_project_id}"),
+                    scope: format!("project:{allowed_pid}"),
                     reason: String::from(
                         "control MCP token cannot list tasks belonging to another project",
                     ),
@@ -1638,10 +1962,18 @@ async fn handle_list_tasks(
                 &cid,
             );
         }
-        project_id = Some(token_project_id);
+        project_id = Some(allowed_pid);
     }
     match svc.list_tasks(project_id, query.status.as_deref()).await {
-        Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
+        Ok(mut list) => {
+            if let Some(ref claims) = control_claims
+                && claims.project_id.is_none()
+            {
+                list.tasks
+                    .retain(|t| task_visible_to_standalone_claims(t, claims));
+            }
+            json_with_correlation(StatusCode::OK, &list, &cid)
+        }
         Err(err) => domain_error_response(err, &cid),
     }
 }
@@ -1666,17 +1998,16 @@ async fn handle_get_task_detail(
     match svc.get_task_detail(task_id).await {
         Ok(detail) => {
             if let Some(claims) = control_claims {
-                let token_project_id =
-                    match require_control_token_project(&claims, "inspect tasks/events") {
-                        Ok(pid) => pid,
-                        Err(err) => return domain_error_response(err, &cid),
-                    };
-                if detail.task.project_id != token_project_id {
+                let allowed = match claims.project_id {
+                    Some(token_pid) => detail.task.project_id == token_pid,
+                    None => task_visible_to_standalone_claims(&detail.task, &claims),
+                };
+                if !allowed {
                     return domain_error_response(
                         DennettError::AccessDenied {
-                            scope: format!("project:{token_project_id}"),
+                            scope: format!("session:{}", claims.session_id),
                             reason: String::from(
-                                "control MCP token cannot inspect a task in another project",
+                                "control MCP token cannot inspect a task outside its scope",
                             ),
                         },
                         &cid,
@@ -1712,22 +2043,23 @@ async fn handle_update_task(
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
     if let Some(claims) = control_claims {
-        let token_project_id = match require_control_token_project(&claims, "modify tasks/events") {
-            Ok(pid) => pid,
-            Err(err) => return domain_error_response(err, &cid),
-        };
         match svc.get_task_detail(task_id).await {
-            Ok(detail) if detail.task.project_id == token_project_id => {}
-            Ok(_) => {
-                return domain_error_response(
-                    DennettError::AccessDenied {
-                        scope: format!("project:{token_project_id}"),
-                        reason: String::from(
-                            "control MCP token cannot modify a task in another project",
-                        ),
-                    },
-                    &cid,
-                );
+            Ok(detail) => {
+                let allowed = match claims.project_id {
+                    Some(token_pid) => detail.task.project_id == token_pid,
+                    None => task_visible_to_standalone_claims(&detail.task, &claims),
+                };
+                if !allowed {
+                    return domain_error_response(
+                        DennettError::AccessDenied {
+                            scope: format!("session:{}", claims.session_id),
+                            reason: String::from(
+                                "control MCP token cannot modify a task outside its scope",
+                            ),
+                        },
+                        &cid,
+                    );
+                }
             }
             Err(err) => return domain_error_response(err, &cid),
         }
@@ -1748,10 +2080,35 @@ async fn handle_send_task_signal(
         Ok(pair) => pair,
         Err(resp) => return *resp,
     };
+    let control_claims = match verify_optional_control_token(&svc, &headers) {
+        Ok(c) => c,
+        Err(err) => return domain_error_response(err, &cid),
+    };
     let task_id = match TaskId::from_str(&raw_id) {
         Ok(id) => id,
         Err(err) => return domain_error_response(err, &cid),
     };
+    if let Some(claims) = control_claims {
+        let token_project_id = match require_control_token_project(&claims, "send task signals") {
+            Ok(pid) => pid,
+            Err(err) => return domain_error_response(err, &cid),
+        };
+        match svc.get_task_detail(task_id).await {
+            Ok(detail) if detail.task.project_id == token_project_id => {}
+            Ok(_) => {
+                return domain_error_response(
+                    DennettError::AccessDenied {
+                        scope: format!("project:{token_project_id}"),
+                        reason: String::from(
+                            "control MCP token cannot send signals to a task in another project",
+                        ),
+                    },
+                    &cid,
+                );
+            }
+            Err(err) => return domain_error_response(err, &cid),
+        }
+    }
     let Json(req) = match payload {
         Ok(j) => j,
         Err(rej) => return json_rejection_response(&rej, &cid),
@@ -1765,6 +2122,82 @@ async fn handle_send_task_signal(
             };
             json_with_correlation(status, &resp, &cid)
         }
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_run_task_now(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let task_id = match TaskId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.run_task_now(task_id, &cid).await {
+        Ok(task) => json_with_correlation(StatusCode::OK, &task, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_pause_task(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let task_id = match TaskId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.pause_task(task_id, &cid).await {
+        Ok(task) => json_with_correlation(StatusCode::OK, &task, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_resume_task(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let task_id = match TaskId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.resume_task(task_id, &cid).await {
+        Ok(task) => json_with_correlation(StatusCode::OK, &task, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_delete_task(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path(raw_id): Path<String>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let task_id = match TaskId::from_str(&raw_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.delete_task(task_id, &cid).await {
+        Ok(()) => empty_with_correlation(StatusCode::NO_CONTENT, &cid),
         Err(err) => domain_error_response(err, &cid),
     }
 }
@@ -1811,22 +2244,23 @@ async fn handle_cancel_task(
         Err(err) => return domain_error_response(err, &cid),
     };
     if let Some(claims) = control_claims {
-        let token_project_id = match require_control_token_project(&claims, "cancel tasks/events") {
-            Ok(pid) => pid,
-            Err(err) => return domain_error_response(err, &cid),
-        };
         match svc.get_task_detail(task_id).await {
-            Ok(detail) if detail.task.project_id == token_project_id => {}
-            Ok(_) => {
-                return domain_error_response(
-                    DennettError::AccessDenied {
-                        scope: format!("project:{token_project_id}"),
-                        reason: String::from(
-                            "control MCP token cannot cancel a task in another project",
-                        ),
-                    },
-                    &cid,
-                );
+            Ok(detail) => {
+                let allowed = match claims.project_id {
+                    Some(token_pid) => detail.task.project_id == token_pid,
+                    None => task_visible_to_standalone_claims(&detail.task, &claims),
+                };
+                if !allowed {
+                    return domain_error_response(
+                        DennettError::AccessDenied {
+                            scope: format!("session:{}", claims.session_id),
+                            reason: String::from(
+                                "control MCP token cannot cancel a task outside its scope",
+                            ),
+                        },
+                        &cid,
+                    );
+                }
             }
             Err(err) => return domain_error_response(err, &cid),
         }
@@ -3168,6 +3602,25 @@ async fn handle_import_memory(
         Err(rej) => return json_rejection_response(&rej, &cid),
     };
     match svc.proxy_import_memory_package(&req, &cid).await {
+        Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_get_memory_index_status(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryScopeQuery>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let scope = match parse_optional_memory_scope(query.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.proxy_get_memory_index_status(scope.as_ref(), &cid).await {
         Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
         Err(err) => domain_error_response(err, &cid),
     }

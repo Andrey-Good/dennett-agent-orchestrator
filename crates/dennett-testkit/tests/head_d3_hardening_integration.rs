@@ -104,9 +104,22 @@ struct RunningDaemon {
     child: Child,
     addr: String,
     base_url: String,
+    owner_token: Option<String>,
 }
 
 impl RunningDaemon {
+    fn head_client(&self) -> HeadClient {
+        HeadClient::new(&self.base_url)
+            .expect("head client")
+            .with_optional_owner_token(self.owner_token.clone())
+    }
+
+    fn owner_token(&self) -> &str {
+        self.owner_token
+            .as_deref()
+            .expect("head daemon must have owner_token")
+    }
+
     async fn spawn_memoryd(mem_pg_url: &str, auth_config_json: &str) -> Self {
         let bin = locate_binary("dennett-memoryd", "dennett-memoryd");
         let mut child = Command::new(&bin)
@@ -123,7 +136,7 @@ impl RunningDaemon {
             .spawn()
             .expect("spawn dennett-memoryd");
 
-        Self::wait_listening(&mut child, "dennett-memoryd").await
+        Self::wait_listening(&mut child, "dennett-memoryd", None).await
     }
 
     async fn spawn_head_simulated(
@@ -134,6 +147,7 @@ impl RunningDaemon {
         memory_hmac_secret: Option<&str>,
     ) -> Self {
         let bin = locate_binary("dennett-head", "dennett-head");
+        let owner_token = format!("d3-hardening-tok-{}", Uuid::new_v4().simple());
         let mut cmd = Command::new(&bin);
         cmd.args([
             "--serve",
@@ -148,6 +162,7 @@ impl RunningDaemon {
         }
         cmd.env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_CONTROL_PG_URL", ctrl_pg_url)
+            .env("DENNETT_HEAD_TOKEN", &owner_token)
             .env_remove("DENNETT_CONTROL_PG_URL")
             .env_remove("DENNETT_MEMORY_TOKEN")
             .env_remove("DENNETT_MEMORY_HMAC_SECRET");
@@ -165,10 +180,14 @@ impl RunningDaemon {
             .spawn()
             .expect("spawn dennett-head");
 
-        Self::wait_listening(&mut child, "dennett-head").await
+        Self::wait_listening(&mut child, "dennett-head", Some(owner_token)).await
     }
 
-    async fn wait_listening(child: &mut Child, name: &str) -> Self {
+    async fn wait_listening(
+        child: &mut Child,
+        name: &str,
+        owner_token: Option<String>,
+    ) -> Self {
         let stdout = child.stdout.take().expect("stdout piped");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -207,12 +226,17 @@ impl RunningDaemon {
             ),
             base_url: format!("http://{addr}"),
             addr,
+            owner_token,
         }
     }
 
     async fn shutdown(mut self) {
+        let auth_hdr = self
+            .owner_token
+            .as_deref()
+            .map_or_else(String::new, |tok| format!("Authorization: Bearer {tok}\r\n"));
         let req = format!(
-            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "POST /shutdown HTTP/1.1\r\nHost: {}\r\n{auth_hdr}X-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             self.addr
         );
         if let Ok(mut stream) = TcpStream::connect(&self.addr).await {
@@ -285,10 +309,10 @@ async fn d3_artifact_immutable_snapshots_survive_overwrite_delete_and_worktree_r
 
     let head =
         RunningDaemon::spawn_head_simulated(&ctrl_pg, profile.data_dir(), None, None, None).await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.head_client();
 
     let health = client.healthz(None).await.expect("healthz");
-    assert_eq!(health.schema_version, Some(10));
+    assert_eq!(health.schema_version, Some(11));
 
     let scope = unique_scope("artblob");
     let project = client
@@ -404,8 +428,11 @@ async fn d3_artifact_immutable_snapshots_survive_overwrite_delete_and_worktree_r
 
     // Verify raw HTTP response headers include `X-Content-Type-Options: nosniff` & `X-Dennett-Artifact-Sha256`.
     let raw_req = format!(
-        "GET /v1/sessions/{}/artifacts/{}/content HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        session.session_id, bin_art.artifact_id, head.addr
+        "GET /v1/sessions/{}/artifacts/{}/content HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+        session.session_id,
+        bin_art.artifact_id,
+        head.addr,
+        head.owner_token()
     );
     let mut stream = TcpStream::connect(&head.addr).await.expect("connect head");
     stream
@@ -511,7 +538,7 @@ async fn d3_outbox_zero_leak_scrubbing_tombstone_sync_and_lost_ack_no_resurrecti
     )
     .await;
 
-    let head_client = HeadClient::new(&head.base_url).expect("head client");
+    let head_client = head.head_client();
     let mem_client = MemoryClient::new(&memoryd.base_url, direct_token).expect("memory client");
     let (ctrl_conn, ctrl_handle) = connect_pg(&ctrl_pg).await;
 

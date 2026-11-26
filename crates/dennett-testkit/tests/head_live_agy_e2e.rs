@@ -86,9 +86,16 @@ struct LiveDaemon {
     child: Child,
     addr: String,
     base_url: String,
+    owner_token: Option<String>,
 }
 
 impl LiveDaemon {
+    fn head_client(&self) -> HeadClient {
+        HeadClient::new(&self.base_url)
+            .expect("head client")
+            .with_optional_owner_token(self.owner_token.clone())
+    }
+
     async fn spawn_memoryd(pg_url: &str, auth_config: &AuthConfig) -> Self {
         let bin = locate_binary("dennett-memoryd");
         let auth_json = serde_json::to_string(auth_config).expect("serialize auth");
@@ -105,7 +112,7 @@ impl LiveDaemon {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn dennett-memoryd");
-        Self::await_listening(child, "dennett-memoryd").await
+        Self::await_listening(child, "dennett-memoryd", None).await
     }
 
     async fn spawn_head_antigravity(
@@ -117,6 +124,7 @@ impl LiveDaemon {
     ) -> Self {
         let bin = locate_binary("dennett-head");
         let mcp_bin = locate_binary("dennett-memory-mcp");
+        let owner_token = format!("live-head-tok-{}", Uuid::new_v4().simple());
         let mut cmd = Command::new(&bin);
         cmd.args([
             "--serve",
@@ -134,6 +142,7 @@ impl LiveDaemon {
         ])
         .env(TEST_PROFILE_ENV, "1")
         .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
+        .env("DENNETT_HEAD_TOKEN", &owner_token)
         .env("DENNETT_MEMORY_TOKEN", memory_token)
         .env_remove("DENNETT_CONTROL_PG_URL")
         .env_remove("GEMINI_API_KEY")
@@ -145,10 +154,14 @@ impl LiveDaemon {
         .kill_on_drop(true);
 
         let child = cmd.spawn().expect("spawn live dennett-head");
-        Self::await_listening(child, "dennett-head").await
+        Self::await_listening(child, "dennett-head", Some(owner_token)).await
     }
 
-    async fn await_listening(mut child: Child, label: &str) -> Self {
+    async fn await_listening(
+        mut child: Child,
+        label: &str,
+        owner_token: Option<String>,
+    ) -> Self {
         let stdout = child.stdout.take().expect("stdout piped");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -166,12 +179,17 @@ impl LiveDaemon {
             child,
             addr,
             base_url,
+            owner_token,
         }
     }
 
     async fn shutdown(mut self) {
+        let auth_hdr = self
+            .owner_token
+            .as_deref()
+            .map_or_else(String::new, |tok| format!("Authorization: Bearer {tok}\r\n"));
         let req = format!(
-            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "POST /shutdown HTTP/1.1\r\nHost: {}\r\n{auth_hdr}X-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             self.addr
         );
         if let Ok(Ok(mut stream)) =
@@ -262,7 +280,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
         &acp_profile_root,
     )
     .await;
-    let head_client = HeadClient::new(&head.base_url).expect("head client");
+    let head_client = head.head_client();
 
     let health = head_client.healthz(None).await.expect("live head healthz");
     assert!(health.postgres_connected);
@@ -480,7 +498,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
         &acp_profile_root,
     )
     .await;
-    let head_client2 = HeadClient::new(&head2.base_url).expect("head client 2");
+    let head_client2 = head2.head_client();
     let mem_client2 = MemoryClient::new(&memoryd2.base_url, &mem_token).expect("mem client 2");
 
     let detail = head_client2
@@ -658,7 +676,7 @@ async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
         &acp_profile_root,
     )
     .await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.head_client();
 
     let project = client
         .create_project(

@@ -57,6 +57,10 @@ pub struct ActiveSkillPayload {
     pub content_sha256: String,
     /// Full UTF-8 `SKILL.md` markdown document.
     pub skill_markdown: String,
+    /// Optional read-only source skill directory on disk for safely copying companion
+    /// `scripts/` and `references/` subdirectories into the isolated runtime overlay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dir: Option<std::path::PathBuf>,
 }
 
 /// Runtime descriptor returned by [`AgentRuntimePort::probe`].

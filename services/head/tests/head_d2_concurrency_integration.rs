@@ -972,13 +972,13 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
         .await
         .expect("session");
 
-    // Part A: Short turn timeout while paused in ask_before_write -> approval expires cleanly,
-    // zero orphaned pending requests or open inbox cards remain, and file is NOT written!
+    // Part A: Short turn timeout while paused in interactive shell approval -> approval expires cleanly,
+    // zero orphaned pending requests or open inbox cards remain!
     let _timeout_or_denied = svc
         .send_message(
             session.session_id,
             SendMessageRequest {
-                content: String::from("[SIM:TOOL:write_file:note.txt|hello]"),
+                content: String::from("[SIM:TOOL:run_command:git push origin main]"),
                 timeout_ms: Some(1_200),
                 client_message_id: None,
             },
@@ -986,17 +986,13 @@ async fn h2_01_approval_timeout_abandoned_drop_and_idempotent_deny() {
         )
         .await;
 
-    assert!(
-        !ws_dir.join("note.txt").exists(),
-        "unapproved write_file must NEVER write to disk"
-    );
     let all_perms_after_a = svc
         .list_permission_requests(None, Some(session.session_id))
         .await
         .expect("list all permissions");
     assert!(
         !all_perms_after_a.requests.is_empty(),
-        "H2-01 test must genuinely exercise a real ask_before_write permission request"
+        "H2-01 test must genuinely exercise a real interactive permission request"
     );
     assert!(
         all_perms_after_a
