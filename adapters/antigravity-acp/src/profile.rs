@@ -551,7 +551,10 @@ fn copy_companion_tree_bounded(
     Ok(())
 }
 
-fn copy_skill_companion_subdirs(src_skill_dir: &Path, dst_skill_dir: &Path) -> Result<(), DennettError> {
+fn copy_skill_companion_subdirs(
+    src_skill_dir: &Path,
+    dst_skill_dir: &Path,
+) -> Result<(), DennettError> {
     let root_meta = match fs::symlink_metadata(src_skill_dir) {
         Ok(m) => m,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),

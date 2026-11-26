@@ -1800,8 +1800,7 @@ impl HeadService {
                     }
                     // A-CAP-1: Materialize `Plugin.skills` when activating a plugin!
                     for skill_slug in skills {
-                        if filter_components
-                            && !enabled_components.iter().any(|c| c == &skill_slug)
+                        if filter_components && !enabled_components.iter().any(|c| c == &skill_slug)
                         {
                             continue;
                         }
@@ -1872,8 +1871,7 @@ impl HeadService {
         // If a task explicitly supplied `skill_slugs_override`, filter session skills strictly to
         // that override list (while keeping built-in `dennett-guide` available on demand).
         if let Some(override_list) = skill_slugs_override {
-            let override_set: BTreeSet<&str> =
-                override_list.iter().map(String::as_str).collect();
+            let override_set: BTreeSet<&str> = override_list.iter().map(String::as_str).collect();
             session_skills.retain(|s| {
                 override_set.contains(s.summary.slug.as_str())
                     || s.summary.slug == BUILTIN_DENNETT_GUIDE_SLUG

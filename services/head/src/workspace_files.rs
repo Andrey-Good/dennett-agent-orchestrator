@@ -521,10 +521,11 @@ pub fn read_project_workspace_file(
         });
     }
 
-    let file_meta = fs::symlink_metadata(&canonical_target).map_err(|err| DennettError::AccessDenied {
-        scope: scope_label.clone(),
-        reason: format!("failed inspecting target file: {err}"),
-    })?;
+    let file_meta =
+        fs::symlink_metadata(&canonical_target).map_err(|err| DennettError::AccessDenied {
+            scope: scope_label.clone(),
+            reason: format!("failed inspecting target file: {err}"),
+        })?;
     if is_symlink_or_reparse_point(&file_meta) || !file_meta.is_file() {
         return Err(DennettError::AccessDenied {
             scope: scope_label,
@@ -803,8 +804,11 @@ mod tests {
         let root = make_temp_dir("file-preview");
         let outside = make_temp_dir("file-outside");
         fs::create_dir_all(root.join("src")).expect("src dir");
-        fs::write(root.join("src/hello.rs"), "fn main() { println!(\"привет\"); }\n")
-            .expect("write rust");
+        fs::write(
+            root.join("src/hello.rs"),
+            "fn main() { println!(\"привет\"); }\n",
+        )
+        .expect("write rust");
         fs::write(root.join("bin.dat"), [0_u8, 1, 2, 255, 0, 42]).expect("write binary");
         // Oversized UTF-8 Cyrillic file (> 256 KiB) to verify boundary-safe truncation.
         let big_text = "Я".repeat(MAX_FILE_PREVIEW_BYTES);
@@ -827,11 +831,23 @@ mod tests {
         assert_eq!(bin.byte_size, 6);
 
         let big = read_project_workspace_file(pid, Some(&ws), "big.txt").expect("read big");
-        assert!(!big.is_binary, "truncated multi-byte UTF-8 must NOT be classified binary");
+        assert!(
+            !big.is_binary,
+            "truncated multi-byte UTF-8 must NOT be classified binary"
+        );
         assert!(big.truncated);
-        assert!(big.content.as_ref().is_some_and(|s| s.len() <= MAX_FILE_PREVIEW_BYTES && !s.is_empty()));
+        assert!(
+            big.content
+                .as_ref()
+                .is_some_and(|s| s.len() <= MAX_FILE_PREVIEW_BYTES && !s.is_empty())
+        );
 
-        for bad in ["../outside/secret.txt", "/etc/passwd", "C:\\Windows\\win.ini", "a\0b"] {
+        for bad in [
+            "../outside/secret.txt",
+            "/etc/passwd",
+            "C:\\Windows\\win.ini",
+            "a\0b",
+        ] {
             let err = read_project_workspace_file(pid, Some(&ws), bad);
             assert!(
                 matches!(err, Err(DennettError::AccessDenied { .. })),

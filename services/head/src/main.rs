@@ -582,7 +582,10 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         None
     };
     let antigravity_profile_root = opts.profile_root.clone();
-    let token_data_dir = opts.profile_root.clone().unwrap_or_else(default_head_data_dir);
+    let token_data_dir = opts
+        .profile_root
+        .clone()
+        .unwrap_or_else(default_head_data_dir);
     let env_head_token = env::var("DENNETT_HEAD_TOKEN")
         .ok()
         .map(|s| s.trim().to_owned())
@@ -776,7 +779,10 @@ fn default_head_data_dir() -> PathBuf {
         .or_else(|| env::var_os("USERPROFILE"))
         .filter(|v| !v.is_empty())
     {
-        return PathBuf::from(home).join(".local").join("share").join("dennett");
+        return PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("dennett");
     }
     env::temp_dir().join("dennett-head")
 }

@@ -292,7 +292,12 @@ pub fn resolve_owner_token() -> Option<String> {
         if let Ok(home) = env::var("HOME")
             && !home.trim().is_empty()
         {
-            candidate_dirs.push(PathBuf::from(home).join(".local").join("share").join("dennett"));
+            candidate_dirs.push(
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("dennett"),
+            );
         }
     }
 
@@ -400,8 +405,8 @@ impl HeadBridge {
     pub fn new(base_url: &str, policy: HeadEndpointPolicy) -> Result<Self, BridgeError> {
         let normalized = validate_head_url(base_url, policy)?;
         let client = HeadClient::new(&normalized)?.with_owner_token_from_env();
-        let health_client =
-            HeadClient::with_timeout(&normalized, HEALTH_PROBE_TIMEOUT)?.with_owner_token_from_env();
+        let health_client = HeadClient::with_timeout(&normalized, HEALTH_PROBE_TIMEOUT)?
+            .with_owner_token_from_env();
         Ok(Self {
             client,
             health_client,

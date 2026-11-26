@@ -293,10 +293,12 @@ fn parse_consolidation_interval_secs(raw: Option<&str>) -> Result<u64, DennettEr
     let Some(trimmed) = non_empty(raw) else {
         return Ok(DEFAULT_CONSOLIDATION_INTERVAL_SECS);
     };
-    trimmed.parse::<u64>().map_err(|_| DennettError::InvalidInput {
-        field: String::from(ENV_CONSOLIDATION_INTERVAL_SECS),
-        reason: String::from("must be a non-negative integer number of seconds (`0` disables)"),
-    })
+    trimmed
+        .parse::<u64>()
+        .map_err(|_| DennettError::InvalidInput {
+            field: String::from(ENV_CONSOLIDATION_INTERVAL_SECS),
+            reason: String::from("must be a non-negative integer number of seconds (`0` disables)"),
+        })
 }
 
 fn spawn_background_consolidation_worker(
@@ -450,14 +452,15 @@ async fn run_serve(
         }
     };
 
-    let consolidation_interval_secs =
-        match parse_consolidation_interval_secs(env::var(ENV_CONSOLIDATION_INTERVAL_SECS).ok().as_deref()) {
-            Ok(secs) => secs,
-            Err(err) => {
-                emit_stderr_error(&err);
-                return ExitCode::from(2);
-            }
-        };
+    let consolidation_interval_secs = match parse_consolidation_interval_secs(
+        env::var(ENV_CONSOLIDATION_INTERVAL_SECS).ok().as_deref(),
+    ) {
+        Ok(secs) => secs,
+        Err(err) => {
+            emit_stderr_error(&err);
+            return ExitCode::from(2);
+        }
+    };
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let ctrl_c_tx = shutdown_tx.clone();

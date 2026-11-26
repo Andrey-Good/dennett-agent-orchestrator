@@ -23,7 +23,9 @@ use dennett_contracts::{
     MemoryNoteId, MemoryScope, PrincipalId, ResolveConflictRequest, SearchNotesRequest,
     SupersedeClaimRequest, TimestampMs, UpdateDocumentRequest,
 };
-use dennett_memory_client::{DEFAULT_CLIENT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT, MAX_RESPONSE_BODY_BYTES, MemoryClient};
+use dennett_memory_client::{
+    DEFAULT_CLIENT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT, MAX_RESPONSE_BODY_BYTES, MemoryClient,
+};
 use hmac::{Hmac, Mac};
 use reqwest::StatusCode;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
@@ -160,7 +162,10 @@ impl HmacTokenMinter {
     /// # Errors
     ///
     /// Returns [`DennettError::Internal`] on serialization or HMAC signing errors.
-    pub fn mint_for_scope(&self, requested_scope: Option<&MemoryScope>) -> Result<String, DennettError> {
+    pub fn mint_for_scope(
+        &self,
+        requested_scope: Option<&MemoryScope>,
+    ) -> Result<String, DennettError> {
         let effective_scopes = if !self.allowed_scopes.is_empty() {
             self.allowed_scopes.clone()
         } else if let Some(sc) = requested_scope {
@@ -1356,11 +1361,13 @@ impl MemoryMcpServer {
 
         let status = resp.status();
         let mut body_bytes = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|err| {
-            DennettError::DatabaseUnavailable {
-                detail: self.redact_text(&format!("memoryd response read failed: {err}")),
-            }
-        })? {
+        while let Some(chunk) =
+            resp.chunk()
+                .await
+                .map_err(|err| DennettError::DatabaseUnavailable {
+                    detail: self.redact_text(&format!("memoryd response read failed: {err}")),
+                })?
+        {
             if body_bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
                 return Err(DennettError::Internal {
                     detail: format!(

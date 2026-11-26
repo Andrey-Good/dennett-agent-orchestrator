@@ -20,33 +20,33 @@ use dennett_contracts::{
     CreateTaskRequest, DeleteCapabilityResponse, DeleteProviderConnectionResponse, DennettError,
     DiagnosticsResponse, DiscoverCapabilitiesRequest, DiscoverCapabilitiesResponse,
     DispatchEffectRequest, DispatchEffectResponse, DocumentId, EffectClaimId,
-    EnqueueFollowupRequest, EventStreamResponse, ExportRequest, ExportResponse,
-    FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse, GetDocumentVersionsResponse,
-    HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse, ImportRequest, ImportResponse,
-    InboxCardId, ListAgentMessagesResponse, ListAgentsResponse, ListArtifactsResponse,
-    ListCapabilitiesResponse, ListCapabilityGrantsResponse, ListClaimsResponse,
-    ListConflictsResponse, ListConsolidationJobsResponse, ListDocumentsResponse,
-    ListEffectsResponse, ListInboxResponse, ListOutboxResponse, ListPermissionRequestsResponse,
-    ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
-    ListProviderConnectionsResponse, ListSecretsResponse, ListSessionsResponse, ListTasksResponse,
-    ListTombstonesResponse, LiveRunResponse, MemoryClaim, MemoryConflict, MemoryDocument,
-    MemoryNoteId, MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
-    PermissionRequestId, PolicyRule, ProbeConnectionResponse, ProjectId, ProjectLifecycleResponse,
-    ProjectRecord, ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest,
-    ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest,
-    ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
-    ResolvePermissionResponse, ResumeFollowupsResponse, RevokeGrantRequest, RuntimeCatalogResponse,
-    SchedulerTickRequest, SchedulerTickResponse, SecretMetadataRecord, SendAgentMessageRequest,
-    SendAgentMessageResponse, SendMessageRequest, SendMessageResponse, SessionDetailResponse,
-    SessionFollowupRecord, SessionId, SessionRecord, SessionSkillDetailResponse,
-    SessionSkillSummary, SetProjectCapabilityBindingRequest, SetSecretRequest, Sha256Hex,
-    StateSnapshotResponse, SteerSessionRequest, SupersedeClaimRequest, TaskDetailResponse, TaskId,
-    TaskRecord, TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest,
-    TriggerIndexRebuildResponse, UpdateAgentConfigRequest, UpdateCapabilityRequest,
-    UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest,
-    UpdateTaskRequest, UpdateUserPreferencesRequest, UpsertProviderConnectionRequest,
-    UserPreferences, EmergencyStopResponse, ForkSessionRequest, IndexState, PolicyRuleId,
-    ProjectFileContentResponse,
+    EmergencyStopResponse, EnqueueFollowupRequest, EventStreamResponse, ExportRequest,
+    ExportResponse, FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse,
+    ForkSessionRequest, GetDocumentVersionsResponse, HeadHealth, HeadMemorySearchRequest,
+    HeadMemorySearchResponse, ImportRequest, ImportResponse, InboxCardId, IndexState,
+    ListAgentMessagesResponse, ListAgentsResponse, ListArtifactsResponse, ListCapabilitiesResponse,
+    ListCapabilityGrantsResponse, ListClaimsResponse, ListConflictsResponse,
+    ListConsolidationJobsResponse, ListDocumentsResponse, ListEffectsResponse, ListInboxResponse,
+    ListOutboxResponse, ListPermissionRequestsResponse, ListPolicyRulesResponse,
+    ListProjectFilesResponse, ListProjectsResponse, ListProviderConnectionsResponse,
+    ListSecretsResponse, ListSessionsResponse, ListTasksResponse, ListTombstonesResponse,
+    LiveRunResponse, MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId,
+    MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
+    PermissionRequestId, PolicyRule, PolicyRuleId, ProbeConnectionResponse,
+    ProjectFileContentResponse, ProjectId, ProjectLifecycleResponse, ProjectRecord,
+    ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest, ReconcileEffectRequest,
+    ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest,
+    ResolveInboxCardResponse, ResolvePermissionRequest, ResolvePermissionResponse,
+    ResumeFollowupsResponse, RevokeGrantRequest, RuntimeCatalogResponse, SchedulerTickRequest,
+    SchedulerTickResponse, SecretMetadataRecord, SendAgentMessageRequest, SendAgentMessageResponse,
+    SendMessageRequest, SendMessageResponse, SessionDetailResponse, SessionFollowupRecord,
+    SessionId, SessionRecord, SessionSkillDetailResponse, SessionSkillSummary,
+    SetProjectCapabilityBindingRequest, SetSecretRequest, Sha256Hex, StateSnapshotResponse,
+    SteerSessionRequest, SupersedeClaimRequest, TaskDetailResponse, TaskId, TaskRecord,
+    TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest, TriggerIndexRebuildResponse,
+    UpdateAgentConfigRequest, UpdateCapabilityRequest, UpdateDocumentRequest,
+    UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    UpdateUserPreferencesRequest, UpsertProviderConnectionRequest, UserPreferences,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
@@ -174,9 +174,7 @@ impl HeadClient {
     /// previous token when `None` or blank.
     #[must_use]
     pub fn with_optional_owner_token(mut self, token: Option<String>) -> Self {
-        self.owner_token = token
-            .map(|t| t.trim().to_owned())
-            .filter(|t| !t.is_empty());
+        self.owner_token = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
         self
     }
 
@@ -195,9 +193,7 @@ impl HeadClient {
 
     /// Updates or clears the configured owner bearer token in place.
     pub fn set_owner_token(&mut self, token: Option<String>) {
-        self.owner_token = token
-            .map(|t| t.trim().to_owned())
-            .filter(|t| !t.is_empty());
+        self.owner_token = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     }
 
     /// Returns the currently configured owner bearer token, when present.
@@ -2516,13 +2512,12 @@ fn build_headers(
         headers.insert(HEADER_CONTROL_TOKEN.clone(), tok_val);
     }
     if let Some(token) = owner_token {
-        let auth_val =
-            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
-                DennettError::InvalidInput {
-                    field: String::from("owner_token"),
-                    reason: String::from("invalid owner token HTTP header value"),
-                }
-            })?;
+        let auth_val = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
+            DennettError::InvalidInput {
+                field: String::from("owner_token"),
+                reason: String::from("invalid owner token HTTP header value"),
+            }
+        })?;
         headers.insert(AUTHORIZATION, auth_val);
     }
     Ok(headers)
@@ -2816,11 +2811,14 @@ mod tests {
                     "expected `{expected_prefix}`, got `{req}`"
                 );
                 assert!(
-                    req.to_ascii_lowercase().contains(&expected_auth.to_ascii_lowercase()),
+                    req.to_ascii_lowercase()
+                        .contains(&expected_auth.to_ascii_lowercase()),
                     "missing Authorization Bearer header in request: {req}"
                 );
                 let raw_resp = if body.is_empty() {
-                    String::from("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    String::from(
+                        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
                 } else {
                     format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

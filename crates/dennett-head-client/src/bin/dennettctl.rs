@@ -1275,9 +1275,7 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
         }
         Action::EmergencyStop(g) => {
             let client = build_head_client(&g)?;
-            let resp = client
-                .emergency_stop_all(g.correlation_id.as_ref())
-                .await?;
+            let resp = client.emergency_stop_all(g.correlation_id.as_ref()).await?;
             print_output(&resp, g.json)
         }
         Action::MemoryCommit { g, req } => {
@@ -3568,9 +3566,7 @@ fn parse_prefs_subcommand(
                             other => {
                                 return Err(DennettError::InvalidInput {
                                     field: String::from("--enter-to-send"),
-                                    reason: format!(
-                                        "expected boolean true|false, got `{other}`"
-                                    ),
+                                    reason: format!("expected boolean true|false, got `{other}`"),
                                 });
                             }
                         });

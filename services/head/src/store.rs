@@ -624,9 +624,8 @@ pub(crate) async fn fetch_task<C: GenericClient>(
     task_id: TaskId,
     target: &ValidatedControlPgTarget,
 ) -> Result<TaskRecord, DennettError> {
-    let sql = format!(
-        "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL"
-    );
+    let sql =
+        format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL");
     let row = client
         .query_opt(&sql, &[&task_id.as_uuid()])
         .await

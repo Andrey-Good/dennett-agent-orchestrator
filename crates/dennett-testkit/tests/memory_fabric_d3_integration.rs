@@ -2506,7 +2506,7 @@ async fn d3_tombstone_stream_v15_commit_barrier_and_lost_ack_no_resurrection() {
     reason = "end-to-end PG16 unified search test seeds notes, claims, documents, tombstones, superseded/retracted claims, and Cyrillic records"
 )]
 async fn a_mem_1_unified_ranked_search_returns_notes_claims_documents_excludes_forgotten_superseded_and_handles_cyrillic()
-{
+ {
     let target = pg_target();
     let svc = MemoryService::new(target).expect("service");
     svc.ensure_migrated().await.expect("migrate");
@@ -2629,11 +2629,8 @@ async fn a_mem_1_unified_ranked_search_returns_notes_claims_documents_excludes_f
         .await
         .expect("supersede c_old");
 
-    let mut c_retracted_req = make_claim_req(
-        &scope,
-        "crypto-ret",
-        "Quantum cryptography retracted rumor",
-    );
+    let mut c_retracted_req =
+        make_claim_req(&scope, "crypto-ret", "Quantum cryptography retracted rumor");
     c_retracted_req.epistemic_status = EpistemicStatus::Retracted;
     let c_retracted = svc
         .create_claim(&principal, &cid, c_retracted_req)
@@ -2644,11 +2641,7 @@ async fn a_mem_1_unified_ranked_search_returns_notes_claims_documents_excludes_f
         .create_claim(
             &principal,
             &cid,
-            make_claim_req(
-                &scope,
-                "crypto-fgt",
-                "Quantum cryptography forgotten claim",
-            ),
+            make_claim_req(&scope, "crypto-fgt", "Quantum cryptography forgotten claim"),
         )
         .await
         .expect("c_forgot");
@@ -2854,10 +2847,7 @@ async fn a_mem_1_background_consolidation_tick_executes_pending_and_respects_pau
 
     let scope_run = unique_scope("a-mem-bg-run");
     let scope_paused = unique_scope("a-mem-bg-paused");
-    let principal = full_principal(
-        "agent:a-mem-bg",
-        &[scope_run.clone(), scope_paused.clone()],
-    );
+    let principal = full_principal("agent:a-mem-bg", &[scope_run.clone(), scope_paused.clone()]);
     let cid = CorrelationId::generate();
 
     // Seed one active claim in each scope so DossierUpdate has concrete work to materialize.
@@ -3191,17 +3181,17 @@ async fn a_mem_1_memory_mcp_hmac_env_evidence_tools_index_status_and_unified_sea
     let mut mcp = McpSession::spawn_with_hmac_env(&daemon.base_url, hmac_secret, scope.as_str());
 
     let init_resp = mcp.request("initialize", json!({})).await;
-    assert_eq!(init_resp["result"]["serverInfo"]["name"], "dennett-memory-mcp");
+    assert_eq!(
+        init_resp["result"]["serverInfo"]["name"],
+        "dennett-memory-mcp"
+    );
 
     let tools_resp = mcp.request("tools/list", json!({})).await;
     let tools = tools_resp["result"]["tools"]
         .as_array()
         .expect("tools array");
     assert_eq!(tools.len(), 18);
-    let tool_names: BTreeSet<&str> = tools
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
+    let tool_names: BTreeSet<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert!(tool_names.contains("memory_evidence_create"));
     assert!(tool_names.contains("memory_evidence_list"));
     assert!(tool_names.contains("memory_index_status"));

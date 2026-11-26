@@ -188,11 +188,7 @@ impl RunningDaemon {
         Self::await_listening(child, "dennett-head", Some(owner_token)).await
     }
 
-    async fn await_listening(
-        mut child: Child,
-        label: &str,
-        owner_token: Option<String>,
-    ) -> Self {
+    async fn await_listening(mut child: Child, label: &str, owner_token: Option<String>) -> Self {
         let stdout = child.stdout.take().expect("daemon stdout piped");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -215,10 +211,9 @@ impl RunningDaemon {
     }
 
     async fn shutdown(mut self) {
-        let auth_hdr = self
-            .owner_token
-            .as_deref()
-            .map_or_else(String::new, |tok| format!("Authorization: Bearer {tok}\r\n"));
+        let auth_hdr = self.owner_token.as_deref().map_or_else(String::new, |tok| {
+            format!("Authorization: Bearer {tok}\r\n")
+        });
         let req = format!(
             "POST /shutdown HTTP/1.1\r\nHost: {}\r\n{auth_hdr}X-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             self.addr
@@ -1918,11 +1913,8 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
     );
     assert!(proj_upd_out.contains("Renamed Via CLI"));
 
-    let (files_code, files_out, files_err) = run_dennettctl(
-        &head,
-        &["--json", "project", "files", "--id", &pid_str],
-    )
-    .await;
+    let (files_code, files_out, files_err) =
+        run_dennettctl(&head, &["--json", "project", "files", "--id", &pid_str]).await;
     assert_eq!(
         files_code, 0,
         "dennettctl project files failed: {files_err}"

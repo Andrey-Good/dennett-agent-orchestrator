@@ -1341,7 +1341,12 @@ pub fn tool_definitions_for_scope(has_project: bool) -> Value {
     Value::Array(defs)
 }
 
-type ParsedEventSchedule = (Option<TaskSchedule>, Option<String>, Option<TaskTrigger>, String);
+type ParsedEventSchedule = (
+    Option<TaskSchedule>,
+    Option<String>,
+    Option<TaskTrigger>,
+    String,
+);
 
 #[expect(
     clippy::too_many_lines,
@@ -1429,14 +1434,14 @@ fn parse_event_schedule_or_trigger(
         }
         "weekly_local_time" | "weekly_wall_time" | "weekly_wall" => {
             let (hour, minute) = extract_hour_minute(args)?;
-            let weekdays_val =
-                args.get("weekdays")
-                    .ok_or_else(|| DennettError::InvalidInput {
-                        field: String::from("weekdays"),
-                        reason: String::from(
-                            "weekly_local_time requires non-empty `weekdays` array (mon..sun)",
-                        ),
-                    })?;
+            let weekdays_val = args
+                .get("weekdays")
+                .ok_or_else(|| DennettError::InvalidInput {
+                    field: String::from("weekdays"),
+                    reason: String::from(
+                        "weekly_local_time requires non-empty `weekdays` array (mon..sun)",
+                    ),
+                })?;
             let weekdays_mask = parse_weekdays_json(weekdays_val)?;
             let sched = TaskSchedule {
                 kind: ScheduleKind::WeeklyWallTime {
@@ -1486,7 +1491,12 @@ fn parse_event_schedule_or_trigger(
         }
         "wait_for_signal" => {
             let sig = required_trimmed_str(args, "expected_signal_name")?;
-            Ok((None, Some(sig.clone()), None, format!("wait_for_signal `{sig}`")))
+            Ok((
+                None,
+                Some(sig.clone()),
+                None,
+                format!("wait_for_signal `{sig}`"),
+            ))
         }
         "on_run_completed" => {
             let raw_run_id = required_trimmed_str(args, "run_id")?;

@@ -351,7 +351,10 @@ pub fn write_owner_only_file(path: &Path, content: &[u8]) -> Result<(), DennettE
             })?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
             DennettError::Internal {
-                detail: format!("failed tightening permissions on `{}`: {err}", path.display()),
+                detail: format!(
+                    "failed tightening permissions on `{}`: {err}",
+                    path.display()
+                ),
             }
         })?;
         Ok(())
@@ -391,9 +394,7 @@ fn resolve_current_windows_principal() -> Option<String> {
                 {
                     let sid = sid_part.trim().trim_matches('"');
                     if sid.starts_with("S-1-")
-                        && sid
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                        && sid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
                     {
                         return Some(format!("*{sid}"));
                     }

@@ -777,8 +777,8 @@ pub(crate) async fn execute_search_notes(
         let total_matched = notes_total
             .saturating_add(claims_total)
             .saturating_add(docs_total);
-        let returned_count = u64::try_from(notes.len() + claims.len() + documents.len())
-            .unwrap_or(u64::MAX);
+        let returned_count =
+            u64::try_from(notes.len() + claims.len() + documents.len()).unwrap_or(u64::MAX);
         Ok(SearchNotesResponse {
             notes,
             claims,

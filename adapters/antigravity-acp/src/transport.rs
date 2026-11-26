@@ -3098,17 +3098,35 @@ mod tests {
             (String::from("TEMP"), String::from("C:\\Temp")),
             (String::from("HOME"), String::from("/home/user")),
             (String::from("LC_ALL"), String::from("en_US.UTF-8")),
-            (String::from("AWS_SECRET_ACCESS_KEY"), String::from("aws-secret")),
+            (
+                String::from("AWS_SECRET_ACCESS_KEY"),
+                String::from("aws-secret"),
+            ),
             (String::from("OPENAI_API_KEY"), String::from("sk-openai")),
             (String::from("GITHUB_TOKEN"), String::from("ghp_secret")),
-            (String::from("DENNETT_HEAD_TOKEN"), String::from("owner-secret-token")),
-            (String::from("DENNETT_MEMORY_HMAC_SECRET"), String::from("hmac-secret")),
+            (
+                String::from("DENNETT_HEAD_TOKEN"),
+                String::from("owner-secret-token"),
+            ),
+            (
+                String::from("DENNETT_MEMORY_HMAC_SECRET"),
+                String::from("hmac-secret"),
+            ),
             (String::from("PGPASSWORD"), String::from("pg-secret")),
-            (String::from("RANDOM_SECRET_VAR"), String::from("leak-me-not")),
+            (
+                String::from("RANDOM_SECRET_VAR"),
+                String::from("leak-me-not"),
+            ),
         ];
         let overrides = vec![
-            (String::from("GEMINI_API_KEY"), String::from("explicit-gemini-key")),
-            (String::from("DENNETT_HEAD_TOKEN"), String::from("must-still-be-blocked")),
+            (
+                String::from("GEMINI_API_KEY"),
+                String::from("explicit-gemini-key"),
+            ),
+            (
+                String::from("DENNETT_HEAD_TOKEN"),
+                String::from("must-still-be-blocked"),
+            ),
         ];
         let scrubbed = build_scrubbed_child_env(parent, &overrides);
         let keys: Vec<&str> = scrubbed.iter().map(|(k, _)| k.as_str()).collect();
