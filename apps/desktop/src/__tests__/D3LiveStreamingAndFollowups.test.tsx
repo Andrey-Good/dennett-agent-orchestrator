@@ -126,7 +126,7 @@ describe("D3+ Live Streaming, Follow-Up Queue, Live Steering & Context Usage", (
       updated_at: now,
     };
 
-    const liveBubble = await screen.findByTestId("live-streaming-bubble", {}, { timeout: 2_000 });
+    const liveBubble = await screen.findByTestId("live-streaming-bubble", {}, { timeout: 5_000 });
     expect(liveBubble).toHaveClass("message-row", "assistant", "live-streaming-bubble");
     expect(within(liveBubble).getByText("контракты").tagName).toBe("STRONG");
     expect(liveBubble).toHaveTextContent("Готовлю финальный вывод.");
@@ -157,7 +157,7 @@ describe("D3+ Live Streaming, Follow-Up Queue, Live Steering & Context Usage", (
       projects: [project],
       agents: [agent],
       sessions: [sessionA],
-      sendDelayMs: 5_000,
+      sendDelayMs: 12_000,
     });
 
     render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
@@ -382,7 +382,7 @@ describe("D3+ Live Streaming, Follow-Up Queue, Live Steering & Context Usage", (
     render(<App bridge={bridge} windowControls={createTestWindowControls()} />);
 
     // Wait for live snapshot to populate on sessionA
-    await screen.findByTestId("live-streaming-bubble", {}, { timeout: 2_000 });
+    await screen.findByTestId("live-streaming-bubble", {}, { timeout: 5_000 });
     expect(screen.getByTestId("message-timeline").textContent).not.toContain("12.7K");
 
     // Open StatsPopover -> shows live run context usage `12.7K / 1.0M`

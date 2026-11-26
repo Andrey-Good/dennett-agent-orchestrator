@@ -326,11 +326,14 @@ mod platform {
                 let _ = kill(-pgid_i32, SIGKILL);
             }
 
-            let deadline = Instant::now() + budget;
+            // Note: on Unix, `kill(-pgid, 0)` still reports 0 while the direct child awaits `wait()`
+            // as a zombie, so cap the pre-reap drain wait cleanly instead of spinning the full budget.
+            let short_wait = budget.min(Duration::from_millis(150));
+            let deadline = Instant::now() + short_wait;
             loop {
-                // SAFETY: Signal `0` probes whether any process remains alive in the group without sending a signal.
-                let still_alive = unsafe { kill(-pgid_i32, 0) } == 0;
-                if !still_alive || Instant::now() >= deadline {
+                // SAFETY: Signal `0` probes whether any process remains in the group without signaling.
+                let still_present = unsafe { kill(-pgid_i32, 0) } == 0;
+                if !still_present || Instant::now() >= deadline {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -495,15 +498,19 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
         drop(guard);
 
-        // Both parent and grandchild MUST be dead now.
+        // Both parent and grandchild MUST be dead now (allow brief init-reap window on Unix).
         assert!(
             matches!(child.try_wait(), Ok(Some(_))),
             "parent shell process must have exited after ProcessTreeGuard termination"
         );
-        assert!(
-            !is_pid_alive(grandchild_pid),
-            "grandchild process {grandchild_pid} must be dead after ProcessTreeGuard termination"
-        );
+        let reap_deadline = Instant::now() + Duration::from_secs(3);
+        while is_pid_alive(grandchild_pid) {
+            assert!(
+                Instant::now() < reap_deadline,
+                "grandchild process {grandchild_pid} must be dead after ProcessTreeGuard termination"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
 
         // Prove the locked file AND its parent directory can be deleted immediately with zero os error 32!
         // Also verify we can open the file exclusively/delete it right away.
@@ -606,10 +613,16 @@ mod tests {
         lock_file: &std::path::Path,
         pid_file: &std::path::Path,
     ) -> Command {
-        // Parent: `sh -c` -> Grandchild: backgrounded subshell/sleep holding open writable fd.
-        let script = format!("(exec 3>\"$1\"; echo $$ > \"$2\"; sleep 30) & wait");
+        // Parent: outer `sh -c` -> Grandchild: distinct child `sh` process with its own `$$` PID
+        // holding an open writable file descriptor on `lock_file` for 30s.
         let mut cmd = Command::new("sh");
-        cmd.args(["-c", &script, "sh"]).arg(lock_file).arg(pid_file);
+        cmd.args([
+            "-c",
+            "sh -c 'exec 3>\"$1\"; echo $$ > \"$2\"; sleep 30' sh \"$1\" \"$2\" & wait",
+            "sh",
+        ])
+        .arg(lock_file)
+        .arg(pid_file);
         cmd
     }
 
@@ -627,6 +640,12 @@ mod tests {
 
     #[cfg(unix)]
     fn is_pid_alive(pid: u32) -> bool {
+        if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat"))
+            && let Some(after_comm) = stat.rsplit_once(") ").map(|(_, rest)| rest)
+            && after_comm.starts_with('Z')
+        {
+            return false;
+        }
         std::process::Command::new("kill")
             .args(["-0", &pid.to_string()])
             .status()

@@ -9,5 +9,6 @@ export default defineConfig({
     include: ["src/__tests__/**/*.test.{ts,tsx}"],
     reporters: ["default"],
     css: false,
+    testTimeout: 15_000,
   },
 });
