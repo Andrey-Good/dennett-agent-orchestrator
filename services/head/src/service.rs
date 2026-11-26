@@ -6236,6 +6236,37 @@ impl HeadService {
             ));
         };
 
+        if envelope.forgotten {
+            scrub_note_request(&mut envelope.note_request, OUTBOX_SCRUBBED_FORGOTTEN);
+            let updated_payload =
+                serde_json::to_value(&envelope).map_err(|err| DennettError::Internal {
+                    detail: format!("failed serializing forgotten outbox envelope: {err}"),
+                })?;
+            let updated_ordered = self
+                .nack_ordered_outbox_item_with_payload(
+                    leased.item_id,
+                    leased.lease_generation,
+                    "note was previously forgotten; delivery aborted and scrubbed",
+                    1,
+                    0,
+                    TimestampMs::now(),
+                    Some(&updated_payload),
+                )
+                .await?;
+            self.record_memory_outbox_audit(
+                leased.item_id,
+                MemoryOutboxStatus::Failed,
+                envelope.session_id,
+                envelope.run_id,
+                correlation_id,
+            )
+            .await;
+            return Ok((
+                ordered_item_to_memory_outbox_item(&updated_ordered)?,
+                MemoryStatus::Healthy,
+            ));
+        }
+
         // Ensure fingerprint is recorded before delivery scrubbing so idempotent replays still validate.
         if envelope.payload_sha256.is_none() {
             envelope.payload_sha256 = Some(note_request_fingerprint(&envelope.note_request)?);
