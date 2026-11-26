@@ -39,7 +39,8 @@ use crate::events::{
 };
 use crate::migrations::sha256_hex;
 use crate::policy::{
-    PolicyContext, PolicyEngine, PolicyEvaluationDecision, is_workspace_write_tool,
+    PolicyContext, PolicyEngine, PolicyEvaluationDecision, is_git_metadata_path,
+    is_shell_execute_tool, is_workspace_write_tool, normalize_shell_grant_signature,
     resolve_within_workspace,
 };
 use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService, insert_permission_decision};
@@ -1426,8 +1427,7 @@ impl HeadService {
                         || matches!(
                             perm.tool_name.to_ascii_lowercase().as_str(),
                             "run_command" | "bash" | "sh" | "shell" | "powershell" | "pwsh" | "cmd"
-                        )
-                    {
+                        ) {
                         json!({ "command": perm.target_summary })
                     } else {
                         json!({})
@@ -1575,15 +1575,28 @@ impl HeadService {
                 ms_to_pg_epoch_secs(target_ms)
             });
             let safe_grant_reason = truncate_utf8(&self.redact(&effective_reason), 1000).to_owned();
-            let empty_prefixes = json!([]);
+            let target_prefixes: Vec<String> =
+                if is_shell_execute_tool(&perm.tool_name, &perm.tool_kind) {
+                    vec![normalize_shell_grant_signature(&perm.target_summary)]
+                } else if is_workspace_write_tool(&perm.tool_name, &perm.tool_kind)
+                    && perm
+                        .normalized_targets
+                        .iter()
+                        .any(|rel| is_git_metadata_path(rel))
+                {
+                    perm.normalized_targets.clone()
+                } else {
+                    Vec::new()
+                };
+            let target_prefixes_json = json!(target_prefixes);
             let grant_sql = format!(
                 "INSERT INTO capability_grants (
                     grant_id, scope, project_id, agent_id, session_id, task_id,
                     tool_pattern, target_prefixes, max_uses, uses_consumed, reason, expires_at
                  ) VALUES (
-                    $1, $2, $3, NULL, $4, $5,
-                    $6, $7, $8, 1, $9,
-                    CASE WHEN $10::double precision IS NULL THEN NULL ELSE to_timestamp($10) END
+                    $1, $2, $3, $4, $5, $6,
+                    $7, $8, $9, 1, $10,
+                    CASE WHEN $11::double precision IS NULL THEN NULL ELSE to_timestamp($11) END
                  )
                  RETURNING {CAPABILITY_GRANT_SELECT_COLS}"
             );
@@ -1594,10 +1607,11 @@ impl HeadService {
                         &grant_id.as_uuid(),
                         &grant_scope,
                         &perm.project_id.as_uuid(),
+                        &perm.agent_id.as_uuid(),
                         &grant_session_id.map(SessionId::as_uuid),
                         &grant_task_id.map(TaskId::as_uuid),
                         &tool_pattern,
-                        &empty_prefixes,
+                        &target_prefixes_json,
                         &req.max_uses,
                         &safe_grant_reason,
                         &expires_at_secs,

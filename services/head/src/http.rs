@@ -309,10 +309,7 @@ pub fn build_head_router(state: HeadAppState) -> Router {
                 .patch(handle_update_session)
                 .delete(handle_delete_session),
         )
-        .route(
-            "/v1/sessions/{session_id}/fork",
-            post(handle_fork_session),
-        )
+        .route("/v1/sessions/{session_id}/fork", post(handle_fork_session))
         .route(
             "/v1/sessions/{session_id}/messages",
             post(handle_send_message),
@@ -648,9 +645,7 @@ fn verify_owner_bearer_token(
 ) -> Result<(), DennettError> {
     let Some(raw_header) = headers.get(AUTHORIZATION) else {
         return Err(DennettError::Unauthorized {
-            reason: String::from(
-                "missing `Authorization: Bearer <DENNETT_HEAD_TOKEN>` header",
-            ),
+            reason: String::from("missing `Authorization: Bearer <DENNETT_HEAD_TOKEN>` header"),
         });
     };
     let raw = raw_header
@@ -929,10 +924,18 @@ async fn handle_list_agents(State(state): State<HeadAppState>, headers: HeaderMa
         Ok(c) => c,
         Err(err) => return domain_error_response(err, &cid),
     };
-    if let Some(ref claims) = control_claims
-        && let Err(err) = require_control_token_project(claims, "list project agents")
-    {
-        return domain_error_response(err, &cid);
+    if let Some(ref claims) = control_claims {
+        let token_pid = match require_control_token_project(claims, "list project agents") {
+            Ok(pid) => pid,
+            Err(err) => return domain_error_response(err, &cid),
+        };
+        return match svc
+            .list_agents_for_project(token_pid, claims.agent_id)
+            .await
+        {
+            Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
+            Err(err) => domain_error_response(err, &cid),
+        };
     }
     match svc.list_agents().await {
         Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
@@ -2020,6 +2023,28 @@ async fn handle_get_task_detail(
     }
 }
 
+async fn enforce_control_token_task_agent_ceiling(
+    svc: &HeadService,
+    claims: &ControlTokenClaims,
+    task: &dennett_contracts::TaskRecord,
+) -> Result<(), DennettError> {
+    if task.agent_id == claims.agent_id {
+        return Ok(());
+    }
+    svc.enforce_delegated_agent_scope_subset(
+        claims.agent_id,
+        task.agent_id,
+        task.connection_override_id,
+    )
+    .await
+    .map_err(|err| match err {
+        DennettError::ForbiddenScope { scope, reason } => {
+            DennettError::AccessDenied { scope, reason }
+        }
+        other => other,
+    })
+}
+
 async fn handle_update_task(
     State(state): State<HeadAppState>,
     headers: HeaderMap,
@@ -2060,6 +2085,33 @@ async fn handle_update_task(
                         &cid,
                     );
                 }
+                if let Err(err) =
+                    enforce_control_token_task_agent_ceiling(&svc, &claims, &detail.task).await
+                {
+                    return domain_error_response(err, &cid);
+                }
+                let is_foreign_task_from_task_run = match claims.task_id {
+                    Some(caller_tid) => detail.task.task_id != caller_tid,
+                    None => {
+                        claims.session_kind == SessionKind::TaskRun
+                            && detail.task.session_id != claims.session_id
+                    }
+                };
+                if is_foreign_task_from_task_run
+                    && (req.goal.is_some()
+                        || req.execute_immediately == Some(true)
+                        || (req.clear_schedule && req.execute_immediately != Some(false)))
+                {
+                    return domain_error_response(
+                        DennettError::AccessDenied {
+                            scope: format!("session:{}", claims.session_id),
+                            reason: String::from(
+                                "background task_run control token cannot rewrite goal or trigger immediate execution on another task",
+                            ),
+                        },
+                        &cid,
+                    );
+                }
             }
             Err(err) => return domain_error_response(err, &cid),
         }
@@ -2094,7 +2146,13 @@ async fn handle_send_task_signal(
             Err(err) => return domain_error_response(err, &cid),
         };
         match svc.get_task_detail(task_id).await {
-            Ok(detail) if detail.task.project_id == token_project_id => {}
+            Ok(detail) if detail.task.project_id == token_project_id => {
+                if let Err(err) =
+                    enforce_control_token_task_agent_ceiling(&svc, &claims, &detail.task).await
+                {
+                    return domain_error_response(err, &cid);
+                }
+            }
             Ok(_) => {
                 return domain_error_response(
                     DennettError::AccessDenied {
@@ -2260,6 +2318,11 @@ async fn handle_cancel_task(
                         },
                         &cid,
                     );
+                }
+                if let Err(err) =
+                    enforce_control_token_task_agent_ceiling(&svc, &claims, &detail.task).await
+                {
+                    return domain_error_response(err, &cid);
                 }
             }
             Err(err) => return domain_error_response(err, &cid),
@@ -3620,7 +3683,10 @@ async fn handle_get_memory_index_status(
         Ok(s) => s,
         Err(err) => return domain_error_response(err, &cid),
     };
-    match svc.proxy_get_memory_index_status(scope.as_ref(), &cid).await {
+    match svc
+        .proxy_get_memory_index_status(scope.as_ref(), &cid)
+        .await
+    {
         Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
         Err(err) => domain_error_response(err, &cid),
     }

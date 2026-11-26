@@ -12,7 +12,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use dennett_contracts::redact::REDACTED_PLACEHOLDER;
 use dennett_contracts::{
     AgentId, DennettError, MemoryCapability, MemoryScope, PrincipalId, ProjectId, SessionId,
-    SessionKind, TimestampMs,
+    SessionKind, TaskId, TimestampMs,
 };
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -159,6 +159,9 @@ pub struct ControlTokenClaims {
     pub session_id: SessionId,
     /// Semantic kind of the originating session (`user_chat` vs `task_run`).
     pub session_kind: SessionKind,
+    /// Originating durable task identifier when minted for a background `task_run` turn (`None` for interactive chats).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<TaskId>,
     /// UTC issuance timestamp in epoch milliseconds.
     pub issued_at: TimestampMs,
     /// UTC expiry timestamp in epoch milliseconds.
@@ -217,6 +220,23 @@ impl ControlTokenSigner {
         session_id: SessionId,
         session_kind: SessionKind,
     ) -> Result<String, DennettError> {
+        self.mint_control_token_with_task(project_id, agent_id, session_id, session_kind, None)
+    }
+
+    /// Mints a short-lived signed `dct1.` token strictly bound to
+    /// `(project_id, agent_id, session_id, session_kind, task_id)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::Internal`] on serialization or HMAC initialization failure.
+    pub fn mint_control_token_with_task(
+        &self,
+        project_id: Option<ProjectId>,
+        agent_id: AgentId,
+        session_id: SessionId,
+        session_kind: SessionKind,
+        task_id: Option<TaskId>,
+    ) -> Result<String, DennettError> {
         let issued_at = TimestampMs::now();
         let expires_at =
             TimestampMs::from_millis(issued_at.as_millis().saturating_add(DEFAULT_TOKEN_TTL_MS));
@@ -226,6 +246,7 @@ impl ControlTokenSigner {
             agent_id,
             session_id,
             session_kind,
+            task_id,
             issued_at,
             expires_at,
         };
@@ -396,6 +417,17 @@ mod tests {
             .expect("verify standalone dct1");
         assert_eq!(standalone_verified.project_id, None);
         assert_eq!(standalone_verified.session_id, sid);
+        assert_eq!(standalone_verified.task_id, None);
+
+        let tid = TaskId::new();
+        let task_tok = signer
+            .mint_control_token_with_task(Some(pid), aid, sid, SessionKind::TaskRun, Some(tid))
+            .expect("mint task_run dct1");
+        let task_verified = signer
+            .verify_control_token(&task_tok, TimestampMs::now())
+            .expect("verify task_run dct1");
+        assert_eq!(task_verified.session_kind, SessionKind::TaskRun);
+        assert_eq!(task_verified.task_id, Some(tid));
 
         // Tampering with signature MUST fail closed.
         let mut tampered = tok.clone();

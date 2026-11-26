@@ -418,7 +418,10 @@ impl HeadService {
                     None,
                     fire_at,
                 )
-            } else if let Some(TaskTrigger::OnRunCompleted { run_id: watch_run_id }) = req.trigger {
+            } else if let Some(TaskTrigger::OnRunCompleted {
+                run_id: watch_run_id,
+            }) = req.trigger
+            {
                 let run_row = tx
                     .query_opt(
                         "SELECT status FROM runs WHERE run_id = $1",
@@ -1687,6 +1690,18 @@ impl HeadService {
         task_id: TaskId,
         correlation_id: &CorrelationId,
     ) -> Result<TaskRecord, DennettError> {
+        self.pause_task_with_detail(task_id, "Приостановлено владельцем", correlation_id)
+            .await
+    }
+
+    /// Pauses a non-terminal task with a caller-specified localized `wait_detail` (used by both
+    /// manual `POST /v1/tasks/{task_id}/pause` and non-destructive `POST /v1/runs/emergency-stop`).
+    pub(crate) async fn pause_task_with_detail(
+        &self,
+        task_id: TaskId,
+        wait_detail: &str,
+        correlation_id: &CorrelationId,
+    ) -> Result<TaskRecord, DennettError> {
         let _ = self.ensure_migrated().await?;
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let tx = conn
@@ -1710,7 +1725,10 @@ impl HeadService {
         let existing = decode_task_row(&row)?;
         if matches!(
             existing.status,
-            TaskStatus::Cancelled | TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::UnknownExternal
+            TaskStatus::Cancelled
+                | TaskStatus::Succeeded
+                | TaskStatus::Failed
+                | TaskStatus::UnknownExternal
         ) {
             return Err(DennettError::Conflict {
                 resource: String::from("task"),
@@ -1738,17 +1756,21 @@ impl HeadService {
         } else {
             existing.status
         };
+        let safe_wait_detail = truncate_utf8(wait_detail, 2048);
         let update_sql = format!(
             "UPDATE tasks
              SET paused_manually = TRUE,
                  status = $2,
-                 wait_detail = 'Приостановлено владельцем',
+                 wait_detail = $3,
                  updated_at = now()
              WHERE task_id = $1
              RETURNING {TASK_SELECT_COLS}"
         );
         let updated_row = tx
-            .query_one(&update_sql, &[&task_id.as_uuid(), &next_status.as_str()])
+            .query_one(
+                &update_sql,
+                &[&task_id.as_uuid(), &next_status.as_str(), &safe_wait_detail],
+            )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_task_row(&updated_row)?;
@@ -1812,16 +1834,15 @@ impl HeadService {
             });
         };
         let existing = decode_task_row(&row)?;
-        let _ = ensure_project_active_in_tx(
-            &tx,
-            existing.project_id,
-            "resume task",
-            self.pg_target(),
-        )
-        .await?;
+        let _ =
+            ensure_project_active_in_tx(&tx, existing.project_id, "resume task", self.pg_target())
+                .await?;
         if matches!(
             existing.status,
-            TaskStatus::Cancelled | TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::UnknownExternal
+            TaskStatus::Cancelled
+                | TaskStatus::Succeeded
+                | TaskStatus::Failed
+                | TaskStatus::UnknownExternal
         ) {
             return Err(DennettError::Conflict {
                 resource: String::from("task"),
@@ -1867,7 +1888,11 @@ impl HeadService {
                 compute_next_fire_at_pg(&tx, sched, TimestampMs::now(), self.pg_target()).await?
         {
             sched.next_fire_at = Some(next_fire);
-            let next_key = format!("gen:{}:resume:{}", existing.generation, next_fire.as_millis());
+            let next_key = format!(
+                "gen:{}:resume:{}",
+                existing.generation,
+                next_fire.as_millis()
+            );
             self.insert_task_timer_in_tx(
                 &tx,
                 task_id,
@@ -2253,6 +2278,26 @@ impl HeadService {
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?;
             let task = decode_task_row(&task_row)?;
+            let is_paused: bool = tx
+                .query_one(
+                    "SELECT paused_manually FROM tasks WHERE task_id = $1",
+                    &[&timer.task_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?
+                .get(0);
+            if is_paused {
+                tx.execute(
+                    "UPDATE task_timers
+                     SET status = 'paused',
+                         pause_reason = NULL
+                     WHERE timer_id = $1",
+                    &[&timer.timer_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+                continue;
+            }
 
             // Fence stale generation or stopped/unknown tasks!
             if timer.task_generation != task.generation
