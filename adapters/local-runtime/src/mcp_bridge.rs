@@ -37,23 +37,6 @@ const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
 /// Built-in local workspace tool names that MCP raw-name fallback must never shadow.
 const BUILTIN_LOCAL_TOOL_NAMES: [&str; 4] = ["read_file", "write_file", "list_dir", "run_command"];
 
-/// Sensitive host environment variables scrubbed from spawned MCP child processes before
-/// applying explicitly scoped `RuntimeMcpServerSpec.env` entries.
-const DEFAULT_SCRUBBED_ENV_VARS: [&str; 12] = [
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "DENNETT_MEMORY_PG_URL",
-    "DENNETT_CONTROL_PG_URL",
-    "DENNETT_TEST_MEMORY_PG_URL",
-    "DENNETT_TEST_CONTROL_PG_URL",
-    "PGPASSWORD",
-    "DENNETT_MEMORY_TOKEN",
-    "DENNETT_MEMORY_HMAC_SECRET",
-    "DENNETT_MEMORY_AUTH_CONFIG",
-    "DENNETT_HEAD_TOKEN",
-    "DENNETT_CONTROL_TOKEN",
-];
-
 /// Metadata and `OpenAI` function descriptor for one discovered stdio MCP tool.
 #[derive(Debug, Clone)]
 pub(crate) struct DiscoveredMcpTool {
@@ -134,12 +117,12 @@ impl McpStdioClient {
         if workspace_cwd.is_dir() {
             cmd.current_dir(workspace_cwd);
         }
-        for key in DEFAULT_SCRUBBED_ENV_VARS {
-            cmd.env_remove(key);
-        }
-        for entry in &spec.env {
-            cmd.env(&entry.name, &entry.value);
-        }
+        let explicit_env: Vec<(String, String)> = spec
+            .env
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.value.clone()))
+            .collect();
+        crate::apply_scrubbed_child_env(&mut cmd, &explicit_env);
         ProcessTreeGuard::configure_command(&mut cmd);
 
         let mut child = cmd.spawn().map_err(|err| DennettError::RuntimeProtocol {
@@ -155,7 +138,9 @@ impl McpStdioClient {
         let process_tree = ProcessTreeGuard::attach(&child);
 
         let Some(stdin) = child.stdin.take() else {
-            process_tree.terminate_and_drain(MCP_TREE_DRAIN_BUDGET).await;
+            process_tree
+                .terminate_and_drain(MCP_TREE_DRAIN_BUDGET)
+                .await;
             let _ = child.start_kill();
             let _ = time::timeout(MCP_TREE_DRAIN_BUDGET, child.wait()).await;
             return Err(DennettError::RuntimeProtocol {
@@ -164,7 +149,9 @@ impl McpStdioClient {
             });
         };
         let Some(stdout) = child.stdout.take() else {
-            process_tree.terminate_and_drain(MCP_TREE_DRAIN_BUDGET).await;
+            process_tree
+                .terminate_and_drain(MCP_TREE_DRAIN_BUDGET)
+                .await;
             let _ = child.start_kill();
             let _ = time::timeout(MCP_TREE_DRAIN_BUDGET, child.wait()).await;
             return Err(DennettError::RuntimeProtocol {
@@ -224,10 +211,7 @@ impl McpStdioClient {
         {
             RpcReadOutcome::Cancelled => {
                 return Err(DennettError::Cancelled {
-                    operation: format!(
-                        "mcp.initialize({})",
-                        self.server_name
-                    ),
+                    operation: format!("mcp.initialize({})", self.server_name),
                 });
             }
             RpcReadOutcome::Response(val) => val,
@@ -268,10 +252,7 @@ impl McpStdioClient {
         {
             RpcReadOutcome::Cancelled => {
                 return Err(DennettError::Cancelled {
-                    operation: format!(
-                        "mcp.tools_list({})",
-                        self.server_name
-                    ),
+                    operation: format!("mcp.tools_list({})", self.server_name),
                 });
             }
             RpcReadOutcome::Response(val) => val,
@@ -745,11 +726,7 @@ fn fnv1a_32(input: &str) -> u32 {
     hash
 }
 
-fn make_unique_wire_name(
-    server_name: &str,
-    tool_name: &str,
-    used: &HashSet<String>,
-) -> String {
+fn make_unique_wire_name(server_name: &str, tool_name: &str, used: &HashSet<String>) -> String {
     let srv = sanitize_ident_segment(server_name);
     let tool = sanitize_ident_segment(tool_name);
     let direct = format!("mcp__{srv}__{tool}");

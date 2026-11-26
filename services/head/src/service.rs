@@ -177,10 +177,16 @@ impl fmt::Debug for HeadServiceExtras {
             )
             .field("antigravity_profile_root", &self.antigravity_profile_root)
             .field("antigravity_binary", &self.antigravity_binary)
-            .field("antigravity_enable_sandbox", &self.antigravity_enable_sandbox)
+            .field(
+                "antigravity_enable_sandbox",
+                &self.antigravity_enable_sandbox,
+            )
             .field(
                 "owner_token_override",
-                &self.owner_token_override.as_ref().map(|_| REDACTED_PLACEHOLDER),
+                &self
+                    .owner_token_override
+                    .as_ref()
+                    .map(|_| REDACTED_PLACEHOLDER),
             )
             .field(
                 "gemini_api_key_env_override",
@@ -1387,6 +1393,62 @@ impl HeadService {
         Ok(ListAgentsResponse { agents })
     }
 
+    /// Lists only agents scoped to `project_id` (matching the project's `memory_scope`,
+    /// existing non-deleted sessions/tasks in `project_id`, or `caller_agent_id` itself).
+    ///
+    /// Used on `GET /v1/agents` when authenticated via a project-scoped `dct1.` control token so
+    /// foreign-project agents are never leaked across project boundaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn list_agents_for_project(
+        &self,
+        project_id: ProjectId,
+        caller_agent_id: AgentId,
+    ) -> Result<ListAgentsResponse, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let project = fetch_project(&conn, project_id, &self.inner.pg_target).await?;
+
+        let assoc_rows = conn
+            .query(
+                "SELECT DISTINCT agent_id FROM (
+                    SELECT agent_id FROM sessions WHERE project_id = $1 AND deleted_at IS NULL
+                    UNION
+                    SELECT agent_id FROM tasks WHERE project_id = $1 AND deleted_at IS NULL
+                 ) AS scoped_agents",
+                &[&project_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let associated_ids: BTreeSet<AgentId> = assoc_rows
+            .iter()
+            .map(|r| AgentId::from_uuid(r.get(0)))
+            .collect();
+
+        let sql = format!("{AGENT_JOIN_SELECT} ORDER BY a.created_at DESC");
+        let rows = conn
+            .query(&sql, &[])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let mut agents = Vec::new();
+        for row in &rows {
+            let agent = decode_agent_join_row(row)?;
+            let in_scope = agent.agent_id == caller_agent_id
+                || agent
+                    .current_config
+                    .allowed_memory_scopes
+                    .contains(&project.memory_scope)
+                || associated_ids.contains(&agent.agent_id);
+            if in_scope {
+                agents.push(agent);
+            }
+        }
+        Ok(ListAgentsResponse { agents })
+    }
+
     /// Fetches a single [`AgentRecord`] by stable [`AgentId`].
     ///
     /// # Errors
@@ -2289,10 +2351,7 @@ impl HeadService {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map_or_else(
-                || format!("{} (ветка)", source.title),
-                ToOwned::to_owned,
-            );
+            .map_or_else(|| format!("{} (ветка)", source.title), ToOwned::to_owned);
         let fork_title = truncate_utf8(&fork_title_raw, 256);
 
         let new_session_id = SessionId::new();
@@ -2781,7 +2840,10 @@ impl HeadService {
             "user_preferences_updated",
             &format!(
                 "updated user preferences (ui={}, agent={}, tz={}, enter_to_send={})",
-                updated.ui_language, updated.agent_language, updated.timezone, updated.enter_to_send
+                updated.ui_language,
+                updated.agent_language,
+                updated.timezone,
+                updated.enter_to_send
             ),
         )
         .await?;
@@ -2811,8 +2873,10 @@ impl HeadService {
     }
 
     /// Global emergency stop (`POST /v1/runs/emergency-stop`): immediately cancels every active
-    /// session run AND every `running`/`queued`/`waiting_approval` durable task without blocking on
-    /// `memoryd`.
+    /// session run AND every `running` durable task, and non-destructively **pauses** all
+    /// `queued`/`waiting_approval`/scheduled (`waiting_timer`/`waiting_signal`/`waiting_clarification`)
+    /// tasks so recurring schedules do not keep firing and the owner can cleanly resume them later,
+    /// without blocking on `memoryd`.
     ///
     /// # Errors
     ///
@@ -2827,10 +2891,11 @@ impl HeadService {
             let guard = self.inner.active_runs.lock().await;
             guard.keys().copied().collect()
         };
-        let mut task_ids: BTreeSet<TaskId> = {
+        let mut running_task_ids: BTreeSet<TaskId> = {
             let guard = self.inner.active_tasks.lock().await;
             guard.keys().copied().collect()
         };
+        let mut pausable_task_ids: BTreeSet<TaskId> = BTreeSet::new();
 
         {
             let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
@@ -2845,23 +2910,56 @@ impl HeadService {
                 session_ids.insert(SessionId::from_uuid(row.get(0)));
             }
 
-            let active_task_rows = conn
+            let running_task_rows = conn
                 .query(
                     "SELECT task_id FROM tasks
                      WHERE deleted_at IS NULL
-                       AND status IN ('running', 'queued', 'waiting_approval')",
+                       AND status = 'running'",
                     &[],
                 )
                 .await
                 .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-            for row in active_task_rows {
-                task_ids.insert(TaskId::from_uuid(row.get(0)));
+            for row in running_task_rows {
+                running_task_ids.insert(TaskId::from_uuid(row.get(0)));
+            }
+
+            let pausable_task_rows = conn
+                .query(
+                    "SELECT task_id FROM tasks
+                     WHERE deleted_at IS NULL
+                       AND NOT paused_manually
+                       AND status IN (
+                           'queued',
+                           'waiting_approval',
+                           'waiting_timer',
+                           'waiting_signal',
+                           'waiting_clarification'
+                       )",
+                    &[],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            for row in pausable_task_rows {
+                let tid = TaskId::from_uuid(row.get(0));
+                if !running_task_ids.contains(&tid) {
+                    pausable_task_ids.insert(tid);
+                }
             }
         }
 
-        let mut cancelled_task_ids = Vec::with_capacity(task_ids.len());
-        for tid in task_ids {
+        let mut cancelled_task_ids =
+            Vec::with_capacity(running_task_ids.len() + pausable_task_ids.len());
+        for tid in running_task_ids {
             if self.cancel_task(tid, correlation_id).await.is_ok() {
+                cancelled_task_ids.push(tid);
+            }
+        }
+        for tid in pausable_task_ids {
+            if self
+                .pause_task_with_detail(tid, "Остановлено аварийным стопом", correlation_id)
+                .await
+                .is_ok()
+            {
                 cancelled_task_ids.push(tid);
             }
         }
@@ -3315,6 +3413,7 @@ impl HeadService {
             input.agent.agent_id,
             input.session_id,
             input.session_kind,
+            task_id,
         ) {
             Ok(Some(ctrl_spec)) => mcp_servers.push(ctrl_spec),
             Ok(None) => {}
@@ -7891,6 +7990,7 @@ impl HeadService {
         agent_id: AgentId,
         session_id: SessionId,
         session_kind: SessionKind,
+        task_id: Option<TaskId>,
     ) -> Result<Option<RuntimeMcpServerSpec>, DennettError> {
         let Some(ref bin) = self.inner.control_mcp_bin else {
             return Ok(None);
@@ -7898,12 +7998,16 @@ impl HeadService {
         let Some(head_url) = self.self_http_url() else {
             return Ok(None);
         };
-        let token = self.inner.control_token_signer.mint_control_token(
-            project_id,
-            agent_id,
-            session_id,
-            session_kind,
-        )?;
+        let token = self
+            .inner
+            .control_token_signer
+            .mint_control_token_with_task(
+                project_id,
+                agent_id,
+                session_id,
+                session_kind,
+                task_id,
+            )?;
         let mut env = vec![
             RuntimeMcpEnvEntry {
                 name: String::from("DENNETT_HEAD_URL"),
@@ -8557,10 +8661,7 @@ fn format_runtime_context_block(
          timezone: {}\n\
          active_skills: {skill_slugs}\n\
          Tip: call `dennett_skill_read` with slug `dennett-guide` for Dennett tools, memory, reminders, subagents, and artifacts.",
-        agent.agent_id,
-        agent.current_config.autonomy_mode,
-        prefs.agent_language,
-        prefs.timezone,
+        agent.agent_id, agent.current_config.autonomy_mode, prefs.agent_language, prefs.timezone,
     )
 }
 

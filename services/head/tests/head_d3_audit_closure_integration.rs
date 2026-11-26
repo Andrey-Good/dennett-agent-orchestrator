@@ -29,12 +29,11 @@ use dennett_contracts::{
     CreateAgentRequest, CreateArtifactRequest, CreateCapabilityRequest, CreatePolicyRuleRequest,
     CreateProjectRequest, CreateSessionRequest, CreateTaskRequest, DennettError,
     ForkSessionRequest, IdempotencyKey, MemoryScope, MessageRole, MissedRunPolicy,
-    PermissionRequestStatus, PermissionResolutionDecision, PolicyEffect, ProfileMode,
-    ProviderKind, ResolvePermissionRequest, RunStatus, RuntimeAuthProfile, ScheduleKind,
-    SendMessageRequest, SessionKind, SessionStatus, SetSecretRequest, TaskSchedule,
-    TaskSignalRequest, TaskStatus, TaskTrigger, ThinkingLevel, TimestampMs,
-    UpdateAgentConfigRequest, UpdateUserPreferencesRequest, UpsertProviderConnectionRequest,
-    WorkspaceWritePolicy,
+    PermissionRequestStatus, PermissionResolutionDecision, PolicyEffect, ProfileMode, ProviderKind,
+    ResolvePermissionRequest, RunStatus, RuntimeAuthProfile, ScheduleKind, SendMessageRequest,
+    SessionKind, SessionStatus, SetSecretRequest, TaskSchedule, TaskSignalRequest, TaskStatus,
+    TaskTrigger, ThinkingLevel, TimestampMs, UpdateAgentConfigRequest,
+    UpdateUserPreferencesRequest, UpsertProviderConnectionRequest, WorkspaceWritePolicy,
 };
 use dennett_head::{
     HeadAppState, HeadService, HeadServiceExtras, LATEST_CONTROL_SCHEMA_VERSION,
@@ -396,11 +395,18 @@ async fn a_sec_1_owner_auth_bearer_and_scoped_control_token_boundary() {
         .list_artifacts(sess.session_id, None)
         .await
         .expect("dct1 lists own session artifacts");
-    assert!(listed.artifacts.iter().any(|a| a.artifact_id == art.artifact_id));
+    assert!(
+        listed
+            .artifacts
+            .iter()
+            .any(|a| a.artifact_id == art.artifact_id)
+    );
 
     // Cross-session artifact access with dct1 MUST fail closed!
     assert!(matches!(
-        ctrl_client.list_artifacts(other_sess.session_id, None).await,
+        ctrl_client
+            .list_artifacts(other_sess.session_id, None)
+            .await,
         Err(DennettError::AccessDenied { .. })
     ));
 
@@ -913,9 +919,18 @@ async fn a_core_1_two_mode_autonomy_shell_guard_and_runtime_context() {
         .await
         .expect("echo system prompt");
     let sys_prompt = echo_resp.assistant_message.expect("sys prompt").content;
-    assert!(sys_prompt.contains("[Dennett Runtime Context]"), "{sys_prompt}");
-    assert!(sys_prompt.contains(&sess1.session_id.to_string()), "{sys_prompt}");
-    assert!(sys_prompt.contains(&agent.agent_id.to_string()), "{sys_prompt}");
+    assert!(
+        sys_prompt.contains("[Dennett Runtime Context]"),
+        "{sys_prompt}"
+    );
+    assert!(
+        sys_prompt.contains(&sess1.session_id.to_string()),
+        "{sys_prompt}"
+    );
+    assert!(
+        sys_prompt.contains(&agent.agent_id.to_string()),
+        "{sys_prompt}"
+    );
     assert!(sys_prompt.contains("autonomy_mode: auto"), "{sys_prompt}");
     assert!(sys_prompt.contains("Asia/Yekaterinburg"), "{sys_prompt}");
 
@@ -944,7 +959,9 @@ async fn a_core_1_two_mode_autonomy_shell_guard_and_runtime_context() {
         .send_message(
             sess1.session_id,
             &SendMessageRequest {
-                content: String::from("[SIM:TOOL:run_command:cargo test --workspace && git status]"),
+                content: String::from(
+                    "[SIM:TOOL:run_command:cargo test --workspace && git status]",
+                ),
                 timeout_ms: Some(10_000),
                 client_message_id: None,
             },
@@ -1011,7 +1028,10 @@ async fn a_core_1_two_mode_autonomy_shell_guard_and_runtime_context() {
             if let Some(p) = list.requests.first().cloned() {
                 break p;
             }
-            assert!(time::Instant::now() < deadline, "expected interactive Ask on risky compound shell");
+            assert!(
+                time::Instant::now() < deadline,
+                "expected interactive Ask on risky compound shell"
+            );
             time::sleep(Duration::from_millis(40)).await;
         }
     };
@@ -1042,20 +1062,22 @@ async fn a_core_1_two_mode_autonomy_shell_guard_and_runtime_context() {
             .contains("ALLOWED")
     );
 
-    // Same session reuses session grant immediately without prompting!
+    // Same session reuses session grant immediately for the SAME command signature without prompting!
     let reuse_resp = h
         .client
         .send_message(
             sid1,
             &SendMessageRequest {
-                content: String::from("[SIM:TOOL:run_command:git push origin feature]"),
+                content: String::from(
+                    "[SIM:TOOL:run_command:cargo test && curl https://example.invalid/v2]",
+                ),
                 timeout_ms: Some(10_000),
                 client_message_id: None,
             },
             None,
         )
         .await
-        .expect("session grant reuse");
+        .expect("session grant reuse for matching signature");
     assert!(
         reuse_resp
             .assistant_message
@@ -1063,6 +1085,56 @@ async fn a_core_1_two_mode_autonomy_shell_guard_and_runtime_context() {
             .content
             .contains("ALLOWED")
     );
+
+    // Unrelated command (`git push origin feature`) MUST NOT reuse the `cargo test && curl` grant!
+    let c_unrelated = h.client.clone();
+    let unrelated_handle = tokio::spawn(async move {
+        c_unrelated
+            .send_message(
+                sid1,
+                &SendMessageRequest {
+                    content: String::from("[SIM:TOOL:run_command:git push origin feature]"),
+                    timeout_ms: Some(15_000),
+                    client_message_id: None,
+                },
+                None,
+            )
+            .await
+    });
+    let unrelated_perm = {
+        let deadline = time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let list = h
+                .client
+                .list_permission_requests(Some("pending"), Some(sid1), None)
+                .await
+                .expect("poll unrelated pending");
+            if let Some(p) = list.requests.first().cloned() {
+                break p;
+            }
+            assert!(
+                time::Instant::now() < deadline,
+                "expected unrelated `git push` to still ask for approval"
+            );
+            time::sleep(Duration::from_millis(40)).await;
+        }
+    };
+    let _ = h
+        .client
+        .resolve_permission_request(
+            unrelated_perm.request_id,
+            &ResolvePermissionRequest {
+                expected_revision: Some(unrelated_perm.revision),
+                decision: PermissionResolutionDecision::Deny,
+                reason: Some(String::from("reject unrelated command")),
+                max_uses: None,
+                expires_in_secs: None,
+            },
+            None,
+        )
+        .await
+        .expect("deny unrelated command");
+    let _ = unrelated_handle.await.expect("join unrelated");
 
     // 4. Upgrade agent to `AutonomyMode::FullAccess` -> persists in get/list/history and allows risky shell without prompt!
     let upgraded = h
@@ -1084,7 +1156,10 @@ async fn a_core_1_two_mode_autonomy_shell_guard_and_runtime_context() {
         )
         .await
         .expect("upgrade to full_access");
-    assert_eq!(upgraded.current_config.autonomy_mode, AutonomyMode::FullAccess);
+    assert_eq!(
+        upgraded.current_config.autonomy_mode,
+        AutonomyMode::FullAccess
+    );
     let history = h
         .client
         .get_agent_config_history(agent.agent_id, None)
@@ -1140,8 +1215,11 @@ async fn api_parity_preferences_file_preview_fork_delete_policy_and_emergency_st
     let h = AuditHarness::start("parity", HeadServiceExtras::default()).await;
     let ws_dir = h.temp_root.join("ws");
     fs::create_dir_all(ws_dir.join("src")).expect("ws src");
-    fs::write(ws_dir.join("src").join("hello.rs"), "fn main() { println!(\"hi\"); }\n")
-        .expect("write hello.rs");
+    fs::write(
+        ws_dir.join("src").join("hello.rs"),
+        "fn main() { println!(\"hi\"); }\n",
+    )
+    .expect("write hello.rs");
 
     // 1. GET/PATCH /v1/preferences + invalid IANA timezone rejection.
     let prefs_default = h.client.get_preferences(None).await.expect("default prefs");
@@ -1199,7 +1277,13 @@ async fn api_parity_preferences_file_preview_fork_delete_policy_and_emergency_st
     assert_eq!(preview.relative_path, "src/hello.rs");
     assert!(!preview.is_binary);
     assert!(!preview.truncated);
-    assert!(preview.content.as_deref().unwrap_or("").contains("fn main()"));
+    assert!(
+        preview
+            .content
+            .as_deref()
+            .unwrap_or("")
+            .contains("fn main()")
+    );
     assert!(matches!(
         h.client
             .get_project_file_content(proj.project_id, "../outside.txt", None)
@@ -1424,16 +1508,83 @@ async fn api_parity_preferences_file_preview_fork_delete_policy_and_emergency_st
             .get_task_detail(bg_task.task_id, None)
             .await
             .expect("poll bg task");
-        if matches!(d.task.status, TaskStatus::Running | TaskStatus::Queued) {
+        if d.task.status == TaskStatus::Running {
             break;
         }
         assert!(
             time::Instant::now() < task_start_deadline,
-            "bg task did not enter active state: {:?}",
+            "bg task did not enter running state: {:?}",
             d.task
         );
         time::sleep(Duration::from_millis(25)).await;
     }
+
+    // Create both a queued task AND a recurring scheduled task to verify P1-3 non-destructive pause!
+    let queued_task = h
+        .client
+        .create_task(
+            &CreateTaskRequest {
+                project_id: proj.project_id,
+                agent_id: agent.agent_id,
+                session_id: None,
+                parent_task_id: None,
+                title: Some(String::from("Queued Task To Pause")),
+                goal: String::from("Wait in queue"),
+                schedule: None,
+                wait_for_signal: None,
+                budget: None,
+                attached_skills: Vec::new(),
+                auth_profile_override: None,
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("queued task");
+    assert_eq!(queued_task.status, TaskStatus::Queued);
+
+    let sched_task = h
+        .client
+        .create_task(
+            &CreateTaskRequest {
+                project_id: proj.project_id,
+                agent_id: agent.agent_id,
+                session_id: None,
+                parent_task_id: None,
+                title: Some(String::from("Recurring Task To Pause")),
+                goal: String::from("Recurring heartbeat"),
+                schedule: Some(TaskSchedule {
+                    kind: ScheduleKind::Interval { interval_secs: 60 },
+                    timezone: String::from("UTC"),
+                    original_expression: Some(String::from("every 1 minute")),
+                    missed_run_policy: MissedRunPolicy::ExecuteOnce,
+                    next_fire_at: None,
+                }),
+                wait_for_signal: None,
+                budget: None,
+                attached_skills: Vec::new(),
+                auth_profile_override: None,
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("scheduled task");
+    assert_eq!(sched_task.status, TaskStatus::WaitingTimer);
 
     let estop = h
         .client
@@ -1442,15 +1593,69 @@ async fn api_parity_preferences_file_preview_fork_delete_policy_and_emergency_st
         .expect("emergency stop all");
     assert!(estop.cancelled_session_ids.contains(&sid));
     assert!(estop.cancelled_task_ids.contains(&bg_task.task_id));
+    assert!(estop.cancelled_task_ids.contains(&queued_task.task_id));
+    assert!(estop.cancelled_task_ids.contains(&sched_task.task_id));
 
-    let slow_res = slow_handle.await.expect("join slow").expect("cancelled run");
+    let slow_res = slow_handle
+        .await
+        .expect("join slow")
+        .expect("cancelled run");
     assert_eq!(slow_res.run.status, RunStatus::Cancelled);
+
+    // Running task MUST be cancelled!
     let bg_detail = h
         .client
         .get_task_detail(bg_task.task_id, None)
         .await
         .expect("bg detail");
     assert_eq!(bg_detail.task.status, TaskStatus::Cancelled);
+
+    // Queued & scheduled tasks MUST be non-destructively PAUSED (never cancelled!) with emergency-stop wait_detail!
+    let queued_detail = h
+        .client
+        .get_task_detail(queued_task.task_id, None)
+        .await
+        .expect("queued detail");
+    assert_eq!(queued_detail.task.status, TaskStatus::WaitingTimer);
+    assert_eq!(
+        queued_detail.task.wait_detail.as_deref(),
+        Some("Остановлено аварийным стопом")
+    );
+
+    let sched_detail = h
+        .client
+        .get_task_detail(sched_task.task_id, None)
+        .await
+        .expect("sched detail");
+    assert_eq!(sched_detail.task.status, TaskStatus::WaitingTimer);
+    assert_eq!(
+        sched_detail.task.wait_detail.as_deref(),
+        Some("Остановлено аварийным стопом")
+    );
+
+    // Scheduler tick far in the future MUST NOT fire the paused recurring task!
+    let future_now = TimestampMs::from_millis(TimestampMs::now().as_millis() + 3_600_000);
+    let tick_while_paused = h
+        .service
+        .tick_scheduler_at(future_now, &CorrelationId::generate())
+        .await
+        .expect("scheduler tick while paused");
+    assert_eq!(
+        tick_while_paused.woken_tasks, 0,
+        "emergency-stopped recurring task must stay paused and NOT fire on future ticks"
+    );
+
+    // Owner can cleanly resume the paused recurring task afterwards!
+    let resumed_sched = h
+        .client
+        .resume_task(sched_task.task_id, None)
+        .await
+        .expect("resume emergency-stopped recurring task");
+    assert_eq!(resumed_sched.status, TaskStatus::WaitingTimer);
+    assert_ne!(
+        resumed_sched.wait_detail.as_deref(),
+        Some("Остановлено аварийным стопом")
+    );
 
     h.cleanup().await;
 }
@@ -1472,7 +1677,10 @@ async fn scheduling_yearly_on_run_completed_task_controls_and_a10_delegation_cei
             recycling_method: RecyclingMethod::Fast,
         },
     );
-    let pool = Pool::builder(mgr).max_size(2).build().expect("build PG pool");
+    let pool = Pool::builder(mgr)
+        .max_size(2)
+        .build()
+        .expect("build PG pool");
     let pg = pool.get().await.expect("checkout PG client");
     let yearly_leap = TaskSchedule {
         kind: ScheduleKind::YearlyWallTime {
@@ -1606,7 +1814,10 @@ async fn scheduling_yearly_on_run_completed_task_controls_and_a10_delegation_cei
         .await
         .expect("pause task");
     assert!(
-        paused.wait_detail.as_deref().is_some_and(|w| !w.trim().is_empty()),
+        paused
+            .wait_detail
+            .as_deref()
+            .is_some_and(|w| !w.trim().is_empty()),
         "paused task must carry explicit wait_detail: {paused:?}"
     );
     let resumed = h
@@ -1631,7 +1842,10 @@ async fn scheduling_yearly_on_run_completed_task_controls_and_a10_delegation_cei
         if d.task.usage.turns_used >= 1 && d.task.status != TaskStatus::Running {
             break;
         }
-        assert!(time::Instant::now() < done_deadline, "run-now did not finish");
+        assert!(
+            time::Instant::now() < done_deadline,
+            "run-now did not finish"
+        );
         time::sleep(Duration::from_millis(40)).await;
     }
     h.client
@@ -1691,7 +1905,9 @@ async fn scheduling_yearly_on_run_completed_task_controls_and_a10_delegation_cei
                 thinking_override: Some(ThinkingLevel::High),
                 connection_override_id: None,
                 skill_slugs_override: None,
-                trigger: Some(TaskTrigger::OnRunCompleted { run_id: lead_run_id }),
+                trigger: Some(TaskTrigger::OnRunCompleted {
+                    run_id: lead_run_id,
+                }),
                 execute_immediately: Some(false),
             },
             None,
@@ -1743,9 +1959,10 @@ async fn scheduling_yearly_on_run_completed_task_controls_and_a10_delegation_cei
         .await
         .expect("main sess detail");
     assert!(
-        main_detail.messages.iter().any(|m| {
-            m.role == MessageRole::System && m.content.contains("After Build Notify")
-        }),
+        main_detail
+            .messages
+            .iter()
+            .any(|m| { m.role == MessageRole::System && m.content.contains("After Build Notify") }),
         "expected system completion notice in notify_session_id: {:?}",
         main_detail.messages
     );
@@ -1912,5 +2129,702 @@ async fn scheduling_yearly_on_run_completed_task_controls_and_a10_delegation_cei
     );
 
     let _ = CorrelationId::generate();
+    h.cleanup().await;
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies P0-1 dct1 cross-agent task mutation ceiling (PATCH/cancel/signal), task_run cross-task goal/execute guard, and project-scoped GET /v1/agents filtering"
+)]
+async fn p0_1_control_token_task_privilege_ceiling_and_project_agent_filtering() {
+    let h = AuditHarness::start("p01", HeadServiceExtras::default()).await;
+
+    let scope_a = unique_scope("p01-a");
+    let scope_b = unique_scope("p01-b");
+    let proj_a = h
+        .client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Project A"),
+                workspace_path: None,
+                memory_scope: Some(scope_a.clone()),
+            },
+            None,
+        )
+        .await
+        .expect("proj A");
+    let proj_b = h
+        .client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Project B"),
+                workspace_path: None,
+                memory_scope: Some(scope_b.clone()),
+            },
+            None,
+        )
+        .await
+        .expect("proj B");
+
+    let low_agent = h
+        .client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("Low Privilege Agent"),
+                description: String::from("DenyAll + Auto"),
+                system_prompt: String::from("Low."),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::from([scope_a.clone()]),
+                workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                autonomy_mode: Some(AutonomyMode::Auto),
+                default_budget: None,
+                attached_skills: Vec::new(),
+                preferred_connection_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("low agent");
+    let high_agent = h
+        .client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("High Privilege Agent"),
+                description: String::from("AllowWorkspace + FullAccess"),
+                system_prompt: String::from("High."),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::from([scope_a.clone()]),
+                workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+                autonomy_mode: Some(AutonomyMode::FullAccess),
+                default_budget: None,
+                attached_skills: Vec::new(),
+                preferred_connection_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("high agent");
+    let foreign_agent = h
+        .client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("Foreign Project B Agent"),
+                description: String::from("Scoped solely to Project B"),
+                system_prompt: String::from("Foreign."),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::from([scope_b]),
+                workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                autonomy_mode: Some(AutonomyMode::Auto),
+                default_budget: None,
+                attached_skills: Vec::new(),
+                preferred_connection_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("foreign agent");
+    let _foreign_sess = h
+        .client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: foreign_agent.agent_id,
+                project_id: Some(proj_b.project_id),
+                title: String::from("Project B Chat"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("foreign sess");
+
+    let low_sess = h
+        .client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: low_agent.agent_id,
+                project_id: Some(proj_a.project_id),
+                title: String::from("Low Chat"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("low sess");
+
+    let high_task = h
+        .client
+        .create_task(
+            &CreateTaskRequest {
+                project_id: proj_a.project_id,
+                agent_id: high_agent.agent_id,
+                session_id: None,
+                parent_task_id: None,
+                title: Some(String::from("Privileged FullAccess Task")),
+                goal: String::from("Privileged goal"),
+                schedule: None,
+                wait_for_signal: Some(String::from("deploy.go")),
+                budget: None,
+                attached_skills: Vec::new(),
+                auth_profile_override: None,
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("high task");
+
+    let low_dct = h
+        .service
+        .control_token_signer()
+        .mint_control_token(
+            Some(proj_a.project_id),
+            low_agent.agent_id,
+            low_sess.session_id,
+            SessionKind::UserChat,
+        )
+        .expect("mint low dct");
+    let low_ctrl = HeadClient::new(&h.head_url)
+        .expect("low ctrl client")
+        .with_control_token(low_dct);
+
+    // 1. GET /v1/agents with dct1 MUST NOT leak foreign_agent belonging to Project B!
+    let visible_agents = low_ctrl
+        .list_agents(None)
+        .await
+        .expect("list project agents");
+    assert!(
+        visible_agents
+            .agents
+            .iter()
+            .any(|a| a.agent_id == low_agent.agent_id),
+        "caller agent must be visible"
+    );
+    assert!(
+        !visible_agents
+            .agents
+            .iter()
+            .any(|a| a.agent_id == foreign_agent.agent_id),
+        "foreign project B agent MUST NOT leak through project A dct1 GET /v1/agents"
+    );
+
+    // 2. Low-privilege dct1 MUST get AccessDenied trying to PATCH, cancel, or signal high_agent's task!
+    let patch_err = low_ctrl
+        .update_task(
+            high_task.task_id,
+            &dennett_contracts::UpdateTaskRequest {
+                title: None,
+                goal: Some(String::from("Hijacked privileged goal")),
+                schedule: None,
+                clear_schedule: false,
+                budget: None,
+                execute_immediately: Some(true),
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(patch_err, Err(DennettError::AccessDenied { .. })),
+        "low-priv dct1 PATCH on high-priv task must return AccessDenied, got: {patch_err:?}"
+    );
+
+    let cancel_err = low_ctrl.cancel_task(high_task.task_id, None).await;
+    assert!(
+        matches!(cancel_err, Err(DennettError::AccessDenied { .. })),
+        "low-priv dct1 cancel on high-priv task must return AccessDenied, got: {cancel_err:?}"
+    );
+
+    let signal_err = low_ctrl
+        .send_task_signal(
+            high_task.task_id,
+            &TaskSignalRequest {
+                signal_name: String::from("deploy.go"),
+                payload_text: String::from("hijack"),
+                idempotency_key: IdempotencyKey::generate(),
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(signal_err, Err(DennettError::AccessDenied { .. })),
+        "low-priv dct1 signal on high-priv task must return AccessDenied, got: {signal_err:?}"
+    );
+
+    // 3. Background `task_run` dct1 (with `task_id = Some(task_1)`) MUST NOT rewrite `goal` or
+    //    set `execute_immediately = Some(true)` on a different task `task_2` (even for SAME agent)!
+    let low_task_1 = h
+        .client
+        .create_task(
+            &CreateTaskRequest {
+                project_id: proj_a.project_id,
+                agent_id: low_agent.agent_id,
+                session_id: None,
+                parent_task_id: None,
+                title: Some(String::from("Task 1")),
+                goal: String::from("Task 1 goal"),
+                schedule: None,
+                wait_for_signal: Some(String::from("sig1")),
+                budget: None,
+                attached_skills: Vec::new(),
+                auth_profile_override: None,
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("low task 1");
+    let low_task_2 = h
+        .client
+        .create_task(
+            &CreateTaskRequest {
+                project_id: proj_a.project_id,
+                agent_id: low_agent.agent_id,
+                session_id: None,
+                parent_task_id: None,
+                title: Some(String::from("Task 2")),
+                goal: String::from("Task 2 goal"),
+                schedule: None,
+                wait_for_signal: Some(String::from("sig2")),
+                budget: None,
+                attached_skills: Vec::new(),
+                auth_profile_override: None,
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("low task 2");
+
+    let task_run_dct = h
+        .service
+        .control_token_signer()
+        .mint_control_token_with_task(
+            Some(proj_a.project_id),
+            low_agent.agent_id,
+            low_task_1.session_id,
+            SessionKind::TaskRun,
+            Some(low_task_1.task_id),
+        )
+        .expect("mint task_run dct");
+    let task_run_ctrl = HeadClient::new(&h.head_url)
+        .expect("task_run ctrl")
+        .with_control_token(task_run_dct);
+
+    let cross_goal_err = task_run_ctrl
+        .update_task(
+            low_task_2.task_id,
+            &dennett_contracts::UpdateTaskRequest {
+                title: None,
+                goal: Some(String::from("Rewritten by another task_run")),
+                schedule: None,
+                clear_schedule: false,
+                budget: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(cross_goal_err, Err(DennettError::AccessDenied { .. })),
+        "task_run dct1 must not rewrite goal on another task: {cross_goal_err:?}"
+    );
+    let cross_exec_err = task_run_ctrl
+        .update_task(
+            low_task_2.task_id,
+            &dennett_contracts::UpdateTaskRequest {
+                title: Some(String::from("Renamed")),
+                goal: None,
+                schedule: None,
+                clear_schedule: false,
+                budget: None,
+                execute_immediately: Some(true),
+            },
+            None,
+        )
+        .await;
+    assert!(
+        matches!(cross_exec_err, Err(DennettError::AccessDenied { .. })),
+        "task_run dct1 must not trigger execute_immediately on another task: {cross_exec_err:?}"
+    );
+    // Updating its OWN task_1 title/goal stays permitted.
+    let self_upd = task_run_ctrl
+        .update_task(
+            low_task_1.task_id,
+            &dennett_contracts::UpdateTaskRequest {
+                title: Some(String::from("Task 1 Updated")),
+                goal: None,
+                schedule: None,
+                clear_schedule: false,
+                budget: None,
+                execute_immediately: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("task_run may update its own task");
+    assert_eq!(self_upd.title, "Task 1 Updated");
+
+    h.cleanup().await;
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "verifies P1-1 shell grant signature + agent_id isolation and P0-2 .git/hooks write protection end-to-end against PostgreSQL 16"
+)]
+async fn p1_1_shell_grant_scopes_to_signature_and_agent_id_and_blocks_git_hooks_pg() {
+    let h = AuditHarness::start("p11", HeadServiceExtras::default()).await;
+    let ws_dir = h.temp_root.join("ws");
+    fs::create_dir_all(ws_dir.join(".git").join("hooks")).expect("ws .git/hooks");
+
+    let scope = unique_scope("p11");
+    let proj = h
+        .client
+        .create_project(
+            &CreateProjectRequest {
+                name: String::from("Grant Scope Project"),
+                workspace_path: Some(ws_dir.to_string_lossy().into_owned()),
+                memory_scope: Some(scope.clone()),
+            },
+            None,
+        )
+        .await
+        .expect("proj");
+
+    let agent_a = h
+        .client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("Agent A"),
+                description: String::from("First agent"),
+                system_prompt: String::from("Run commands."),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::from([scope.clone()]),
+                workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+                autonomy_mode: Some(AutonomyMode::Auto),
+                default_budget: None,
+                attached_skills: Vec::new(),
+                preferred_connection_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("agent A");
+    let agent_b = h
+        .client
+        .create_agent(
+            &CreateAgentRequest {
+                name: String::from("Agent B"),
+                description: String::from("Second agent"),
+                system_prompt: String::from("Run commands."),
+                model_preference: None,
+                thinking_level: None,
+                allowed_memory_scopes: BTreeSet::from([scope]),
+                workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+                autonomy_mode: Some(AutonomyMode::Auto),
+                default_budget: None,
+                attached_skills: Vec::new(),
+                preferred_connection_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("agent B");
+
+    let sess_a = h
+        .client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: agent_a.agent_id,
+                project_id: Some(proj.project_id),
+                title: String::from("Agent A Chat"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("sess A");
+    let sess_b = h
+        .client
+        .create_session(
+            &CreateSessionRequest {
+                agent_id: agent_b.agent_id,
+                project_id: Some(proj.project_id),
+                title: String::from("Agent B Chat"),
+                session_kind: SessionKind::UserChat,
+            },
+            None,
+        )
+        .await
+        .expect("sess B");
+
+    // 1. Agent A runs `git push origin branch-a` -> owner approves via ApproveProject.
+    let c1 = h.client.clone();
+    let sid_a = sess_a.session_id;
+    let h1 = tokio::spawn(async move {
+        c1.send_message(
+            sid_a,
+            &SendMessageRequest {
+                content: String::from("[SIM:TOOL:run_command:git push origin branch-a]"),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+    });
+    let perm1 = {
+        let dl = time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let list = h
+                .client
+                .list_permission_requests(Some("pending"), Some(sid_a), None)
+                .await
+                .expect("poll perm1");
+            if let Some(p) = list.requests.first().cloned() {
+                break p;
+            }
+            assert!(time::Instant::now() < dl, "expected pending perm1");
+            time::sleep(Duration::from_millis(40)).await;
+        }
+    };
+    let resolved1 = h
+        .client
+        .resolve_permission_request(
+            perm1.request_id,
+            &ResolvePermissionRequest {
+                expected_revision: Some(perm1.revision),
+                decision: PermissionResolutionDecision::ApproveProject,
+                reason: Some(String::from("Allow git push for Agent A")),
+                max_uses: Some(5),
+                expires_in_secs: Some(300),
+            },
+            None,
+        )
+        .await
+        .expect("approve_project git push");
+    let grant = resolved1.issued_grant.expect("issued grant");
+    assert_eq!(
+        grant.agent_id,
+        Some(agent_a.agent_id),
+        "capability_grants.agent_id MUST be pinned to approving agent_a"
+    );
+    assert_eq!(
+        grant.target_prefixes,
+        vec![String::from("git push")],
+        "shell capability grant MUST store normalized command signature"
+    );
+    let r1 = h1.await.expect("join h1").expect("h1 ok");
+    assert!(
+        r1.assistant_message
+            .expect("m1")
+            .content
+            .contains("ALLOWED")
+    );
+
+    // 2. Same Agent A runs `git push origin branch-b` -> allowed immediately by grant!
+    let r2 = h
+        .client
+        .send_message(
+            sid_a,
+            &SendMessageRequest {
+                content: String::from("[SIM:TOOL:run_command:git push origin branch-b]"),
+                timeout_ms: Some(10_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("same agent git push branch-b");
+    assert!(
+        r2.assistant_message
+            .expect("m2")
+            .content
+            .contains("ALLOWED")
+    );
+
+    // 3. Same Agent A running `curl https://evil.example` MUST STILL prompt for approval!
+    let c3 = h.client.clone();
+    let h3 = tokio::spawn(async move {
+        c3.send_message(
+            sid_a,
+            &SendMessageRequest {
+                content: String::from("[SIM:TOOL:run_command:curl https://evil.example]"),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+    });
+    let perm3 = {
+        let dl = time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let list = h
+                .client
+                .list_permission_requests(Some("pending"), Some(sid_a), None)
+                .await
+                .expect("poll perm3");
+            if let Some(p) = list.requests.first().cloned() {
+                break p;
+            }
+            assert!(
+                time::Instant::now() < dl,
+                "expected curl to require fresh approval despite git push grant"
+            );
+            time::sleep(Duration::from_millis(40)).await;
+        }
+    };
+    let _ = h
+        .client
+        .resolve_permission_request(
+            perm3.request_id,
+            &ResolvePermissionRequest {
+                expected_revision: Some(perm3.revision),
+                decision: PermissionResolutionDecision::Deny,
+                reason: Some(String::from("deny curl")),
+                max_uses: None,
+                expires_in_secs: None,
+            },
+            None,
+        )
+        .await
+        .expect("deny perm3");
+    let _ = h3.await.expect("join h3");
+
+    // 4. Different Agent B running `git push origin branch-c` MUST STILL prompt for approval!
+    let c4 = h.client.clone();
+    let sid_b = sess_b.session_id;
+    let h4 = tokio::spawn(async move {
+        c4.send_message(
+            sid_b,
+            &SendMessageRequest {
+                content: String::from("[SIM:TOOL:run_command:git push origin branch-c]"),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+    });
+    let perm4 = {
+        let dl = time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let list = h
+                .client
+                .list_permission_requests(Some("pending"), Some(sid_b), None)
+                .await
+                .expect("poll perm4");
+            if let Some(p) = list.requests.first().cloned() {
+                break p;
+            }
+            assert!(
+                time::Instant::now() < dl,
+                "expected Agent B git push to require approval (must not inherit Agent A's grant)"
+            );
+            time::sleep(Duration::from_millis(40)).await;
+        }
+    };
+    let _ = h
+        .client
+        .resolve_permission_request(
+            perm4.request_id,
+            &ResolvePermissionRequest {
+                expected_revision: Some(perm4.revision),
+                decision: PermissionResolutionDecision::Deny,
+                reason: Some(String::from("deny agent B")),
+                max_uses: None,
+                expires_in_secs: None,
+            },
+            None,
+        )
+        .await
+        .expect("deny perm4");
+    let _ = h4.await.expect("join h4");
+
+    // 5. P0-2: Writing `.git/hooks/pre-commit` under Auto MUST trigger interactive approval!
+    let c5 = h.client.clone();
+    let h5 = tokio::spawn(async move {
+        c5.send_message(
+            sid_a,
+            &SendMessageRequest {
+                content: String::from(
+                    "[SIM:TOOL:write_file:.git/hooks/pre-commit|#!/bin/sh\necho pwned]",
+                ),
+                timeout_ms: Some(15_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+    });
+    let perm5 = {
+        let dl = time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let list = h
+                .client
+                .list_permission_requests(Some("pending"), Some(sid_a), None)
+                .await
+                .expect("poll perm5");
+            if let Some(p) = list.requests.first().cloned() {
+                break p;
+            }
+            assert!(
+                time::Instant::now() < dl,
+                "expected .git/hooks/pre-commit write under Auto to require interactive approval"
+            );
+            time::sleep(Duration::from_millis(40)).await;
+        }
+    };
+    let _ = h
+        .client
+        .resolve_permission_request(
+            perm5.request_id,
+            &ResolvePermissionRequest {
+                expected_revision: Some(perm5.revision),
+                decision: PermissionResolutionDecision::Deny,
+                reason: Some(String::from("block hook planting")),
+                max_uses: None,
+                expires_in_secs: None,
+            },
+            None,
+        )
+        .await
+        .expect("deny perm5");
+    let _ = h5.await.expect("join h5");
+    assert!(
+        !ws_dir
+            .join(".git")
+            .join("hooks")
+            .join("pre-commit")
+            .exists(),
+        "denied .git/hooks/pre-commit write must NOT create file on disk"
+    );
+
     h.cleanup().await;
 }

@@ -2131,6 +2131,7 @@ async fn execute_local_tool(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
+            apply_scrubbed_child_env(&mut cmd, &[]);
             ProcessTreeGuard::configure_command(&mut cmd);
             let child = cmd.spawn().map_err(|err| DennettError::Internal {
                 detail: redact_secrets_owned(
@@ -2170,6 +2171,114 @@ async fn execute_local_tool(
             field: String::from("tool_name"),
             reason: format!("unsupported local runtime tool `{other}`"),
         }),
+    }
+}
+
+/// Strict allowlist of OS essential environment variable names inherited by local shell tools
+/// (`run_command`) and stdio MCP server child processes (matching `antigravity-acp` `A-SEC-3`).
+/// Every non-allowlisted host variable (including `DENNETT_HEAD_TOKEN`, `DENNETT_VAULT_MASTER_KEY`,
+/// `AWS_*`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, DB URLs, etc.) is cleared before spawn.
+const ALLOWED_CHILD_ENV_VARS: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "SYSTEMDRIVE",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "USER",
+    "USERNAME",
+    "USERDOMAIN",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "COLORTERM",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "LANG",
+    "TZ",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+];
+
+/// Host master secret variables that MUST NEVER be passed into child processes even via overrides.
+const FORBIDDEN_CHILD_ENV_VARS: &[&str] = &[
+    "DENNETT_HEAD_TOKEN",
+    "DENNETT_VAULT_MASTER_KEY",
+    "DENNETT_MEMORY_HMAC_SECRET",
+    "DENNETT_MEMORY_PG_URL",
+    "DENNETT_CONTROL_PG_URL",
+    "DENNETT_TEST_MEMORY_PG_URL",
+    "DENNETT_TEST_CONTROL_PG_URL",
+    "PGPASSWORD",
+];
+
+fn is_allowlisted_host_env(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    if ALLOWED_CHILD_ENV_VARS.contains(&upper.as_str()) {
+        return true;
+    }
+    upper.starts_with("LC_") || upper.starts_with("XDG_")
+}
+
+fn is_forbidden_child_env(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    FORBIDDEN_CHILD_ENV_VARS.contains(&upper.as_str())
+}
+
+/// Builds a scrubbed child environment from parent env vars using a strict OS-essentials allowlist
+/// plus explicit non-forbidden `overrides`.
+#[must_use]
+pub(crate) fn build_scrubbed_child_env<I>(
+    parent_env: I,
+    overrides: &[(String, String)],
+) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let mut out: Vec<(String, String)> = parent_env
+        .into_iter()
+        .filter(|(k, _)| is_allowlisted_host_env(k) && !is_forbidden_child_env(k))
+        .collect();
+
+    for (k, v) in overrides {
+        if is_forbidden_child_env(k) {
+            continue;
+        }
+        out.retain(|(existing, _)| {
+            if cfg!(windows) {
+                !existing.eq_ignore_ascii_case(k)
+            } else {
+                existing != k
+            }
+        });
+        out.push((k.clone(), v.clone()));
+    }
+    out
+}
+
+/// Clears inherited host environment on `cmd` and applies ONLY allowlisted OS essentials plus
+/// explicit non-forbidden `overrides`.
+pub(crate) fn apply_scrubbed_child_env(cmd: &mut Command, overrides: &[(String, String)]) {
+    cmd.env_clear();
+    for (k, v) in build_scrubbed_child_env(std::env::vars(), overrides) {
+        cmd.env(k, v);
     }
 }
 
@@ -2309,7 +2418,10 @@ fn is_symlink_or_reparse_point(meta: &fs::Metadata) -> bool {
     false
 }
 
-fn decompose_abs_path(path: &Path, allow_verbatim_disk: bool) -> Option<(Option<char>, Vec<OsString>)> {
+fn decompose_abs_path(
+    path: &Path,
+    allow_verbatim_disk: bool,
+) -> Option<(Option<char>, Vec<OsString>)> {
     let mut drive: Option<char> = None;
     let mut segs = Vec::new();
     let mut saw_root = false;
@@ -2347,7 +2459,8 @@ fn strip_workspace_prefix(candidate: &Path, root: &Path) -> Option<Vec<OsString>
     }
     for (c, r) in cand_segs.iter().zip(root_segs.iter()) {
         let eq = if cfg!(windows) {
-            c.to_string_lossy().eq_ignore_ascii_case(&r.to_string_lossy())
+            c.to_string_lossy()
+                .eq_ignore_ascii_case(&r.to_string_lossy())
         } else {
             c == r
         };
@@ -2837,10 +2950,8 @@ mod tests {
         reason = "comprehensive A-SEC-2 containment test exercises traversal, device, ADS, symlink/junction escapes across read_file, write_file, and list_dir"
     )]
     async fn a_sec_2_path_containment_blocks_traversal_device_ads_and_symlink_junction_escapes() {
-        let base = std::env::temp_dir().join(format!(
-            "dennett-local-asec2-{}",
-            Uuid::new_v4().simple()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("dennett-local-asec2-{}", Uuid::new_v4().simple()));
         let ws = base.join("workspace");
         let outside = base.join("outside");
         fs::create_dir_all(ws.join("nested")).expect("create workspace");
@@ -2950,38 +3061,23 @@ mod tests {
             "outside subdir must never be created through junction/symlink"
         );
 
-        let list_escape = execute_local_tool(
-            "list_dir",
-            &json!({ "path": "escape_link" }),
-            &ws,
-            &[],
-        )
-        .await;
+        let list_escape =
+            execute_local_tool("list_dir", &json!({ "path": "escape_link" }), &ws, &[]).await;
         assert!(
             matches!(list_escape, Err(DennettError::AccessDenied { .. })),
             "list_dir on junction/symlink must be denied: {list_escape:?}"
         );
 
         // Legitimate in-workspace operations must succeed cleanly.
-        let ok_read = execute_local_tool(
-            "read_file",
-            &json!({ "path": "inside.txt" }),
-            &ws,
-            &[],
-        )
-        .await
-        .expect("read inside.txt");
+        let ok_read = execute_local_tool("read_file", &json!({ "path": "inside.txt" }), &ws, &[])
+            .await
+            .expect("read inside.txt");
         assert_eq!(ok_read, "inside-ok");
 
         let in_ws_abs = ws.join("inside.txt").to_string_lossy().into_owned();
-        let ok_abs_read = execute_local_tool(
-            "read_file",
-            &json!({ "path": in_ws_abs }),
-            &ws,
-            &[],
-        )
-        .await
-        .expect("read in-workspace absolute path");
+        let ok_abs_read = execute_local_tool("read_file", &json!({ "path": in_ws_abs }), &ws, &[])
+            .await
+            .expect("read in-workspace absolute path");
         assert_eq!(ok_abs_read, "inside-ok");
 
         let ok_write = execute_local_tool(
@@ -3082,19 +3178,19 @@ mod tests {
         State(state): State<McpMockServerState>,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
-        let tool_names: Vec<String> = body
-            .get("tools")
-            .and_then(Value::as_array)
-            .map_or_default(|arr| {
-                arr.iter()
-                    .filter_map(|t| {
-                        t.get("function")
-                            .and_then(|f| f.get("name"))
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .collect()
-            });
+        let tool_names: Vec<String> =
+            body.get("tools")
+                .and_then(Value::as_array)
+                .map_or_default(|arr| {
+                    arr.iter()
+                        .filter_map(|t| {
+                            t.get("function")
+                                .and_then(|f| f.get("name"))
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        })
+                        .collect()
+                });
         state.seen_tools.lock().await.push(tool_names);
 
         let messages = body
@@ -3511,7 +3607,9 @@ fi
             .expect("deny turn");
         assert_eq!(turn_deny.status, RunStatus::Succeeded);
         assert!(
-            turn_deny.assistant_text.contains("DENIED by Dennett policy"),
+            turn_deny
+                .assistant_text
+                .contains("DENIED by Dennett policy"),
             "denied MCP call must return policy denial to model: {}",
             turn_deny.assistant_text
         );
@@ -3575,6 +3673,7 @@ fi
                     skill_markdown: String::from(
                         "# Alpha Skill\nAlways include SECRET_SKILL_MARKER_42 when summarizing.",
                     ),
+                    source_dir: None,
                 }],
                 existing_binding: None,
                 history_for_rehydrate: Vec::new(),
@@ -3603,7 +3702,8 @@ fi
 
         assert_eq!(turn.status, RunStatus::Succeeded);
         assert!(
-            turn.assistant_text.contains("PLAIN_OK:has_skill_marker=true"),
+            turn.assistant_text
+                .contains("PLAIN_OK:has_skill_marker=true"),
             "fallback without tools must keep active skill instructions inline in system prompt: {}",
             turn.assistant_text
         );
@@ -3616,6 +3716,263 @@ fi
         );
 
         server_handle.abort();
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "verifies P0-3 strict child env allowlist via both unit matrix and live subprocess run_command + stdio MCP probes without unsafe env mutation"
+    )]
+    async fn p0_3_scrubbed_env_unit_and_live_subprocess_isolation() {
+        const HEAD_SECRET: &str = "PARENT_HEAD_SECRET_TOKEN_991122";
+        const VAULT_SECRET: &str = "PARENT_VAULT_MASTER_KEY_883344";
+
+        // 1. Pure unit matrix on `build_scrubbed_child_env`.
+        let parent = vec![
+            (String::from("PATH"), String::from("/usr/bin")),
+            (String::from("TEMP"), String::from("/tmp")),
+            (String::from("HOME"), String::from("/home/u")),
+            (String::from("LC_ALL"), String::from("C.UTF-8")),
+            (String::from("CARGO_HOME"), String::from("/home/u/.cargo")),
+            (String::from("RUSTUP_HOME"), String::from("/home/u/.rustup")),
+            (
+                String::from("DENNETT_HEAD_TOKEN"),
+                String::from(HEAD_SECRET),
+            ),
+            (
+                String::from("DENNETT_VAULT_MASTER_KEY"),
+                String::from(VAULT_SECRET),
+            ),
+            (
+                String::from("AWS_SECRET_ACCESS_KEY"),
+                String::from("aws-secret"),
+            ),
+            (String::from("GITHUB_TOKEN"), String::from("ghp-secret")),
+            (String::from("OPENAI_API_KEY"), String::from("sk-secret")),
+            (
+                String::from("DENNETT_CONTROL_PG_URL"),
+                String::from("postgres://secret"),
+            ),
+        ];
+        let overrides = vec![
+            (
+                String::from("EXPLICIT_MCP_VAR"),
+                String::from("explicit-ok"),
+            ),
+            (
+                String::from("DENNETT_HEAD_TOKEN"),
+                String::from("must-not-override"),
+            ),
+            (
+                String::from("DENNETT_VAULT_MASTER_KEY"),
+                String::from("must-not-override"),
+            ),
+        ];
+        let scrubbed = build_scrubbed_child_env(parent, &overrides);
+        let keys: Vec<&str> = scrubbed.iter().map(|(k, _)| k.as_str()).collect();
+        for expected in [
+            "PATH",
+            "TEMP",
+            "HOME",
+            "LC_ALL",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "EXPLICIT_MCP_VAR",
+        ] {
+            assert!(
+                keys.contains(&expected),
+                "expected allowlisted/explicit env `{expected}` in {keys:?}"
+            );
+        }
+        for forbidden in [
+            "DENNETT_HEAD_TOKEN",
+            "DENNETT_VAULT_MASTER_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "GITHUB_TOKEN",
+            "OPENAI_API_KEY",
+            "DENNETT_CONTROL_PG_URL",
+        ] {
+            assert!(
+                !keys.contains(&forbidden),
+                "forbidden host secret `{forbidden}` leaked into child env: {keys:?}"
+            );
+        }
+
+        // 2. Live child probe: re-exec this test once with `DENNETT_HEAD_TOKEN` &
+        //    `DENNETT_VAULT_MASTER_KEY` injected into the parent process env (zero `unsafe`!).
+        if std::env::var_os("DENNETT_P0_3_IN_CHILD").is_none() {
+            let exe = std::env::current_exe().expect("current test executable");
+            let out = std::process::Command::new(exe)
+                .env("DENNETT_P0_3_IN_CHILD", "1")
+                .env("DENNETT_HEAD_TOKEN", HEAD_SECRET)
+                .env("DENNETT_VAULT_MASTER_KEY", VAULT_SECRET)
+                .env("AWS_SECRET_ACCESS_KEY", "AWS_SECRET_LEAK_PROBE")
+                .args([
+                    "--exact",
+                    "tests::p0_3_scrubbed_env_unit_and_live_subprocess_isolation",
+                    "--nocapture",
+                ])
+                .output()
+                .expect("spawn P0-3 subprocess probe");
+            assert!(
+                out.status.success(),
+                "P0-3 live env probe subprocess failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            return;
+        }
+
+        // Inside the child probe: verify parent process DOES have the secrets set!
+        assert_eq!(
+            std::env::var("DENNETT_HEAD_TOKEN").ok().as_deref(),
+            Some(HEAD_SECRET)
+        );
+        assert_eq!(
+            std::env::var("DENNETT_VAULT_MASTER_KEY").ok().as_deref(),
+            Some(VAULT_SECRET)
+        );
+
+        let base =
+            std::env::temp_dir().join(format!("dennett-local-p03-env-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(&base).expect("create temp dir");
+
+        // 2a. `execute_local_tool("run_command")` MUST NOT see parent secrets!
+        let inspect_cmd = if cfg!(windows) {
+            "echo HEAD=[%DENNETT_HEAD_TOKEN%] VAULT=[%DENNETT_VAULT_MASTER_KEY%] AWS=[%AWS_SECRET_ACCESS_KEY%]"
+        } else {
+            "printf 'HEAD=[%s] VAULT=[%s] AWS=[%s]' \"$DENNETT_HEAD_TOKEN\" \"$DENNETT_VAULT_MASTER_KEY\" \"$AWS_SECRET_ACCESS_KEY\""
+        };
+        let cmd_out = execute_local_tool(
+            "run_command",
+            &json!({ "command": inspect_cmd }),
+            &base,
+            &[],
+        )
+        .await
+        .expect("run_command env probe");
+        assert!(
+            !cmd_out.contains(HEAD_SECRET),
+            "run_command leaked DENNETT_HEAD_TOKEN: {cmd_out}"
+        );
+        assert!(
+            !cmd_out.contains(VAULT_SECRET),
+            "run_command leaked DENNETT_VAULT_MASTER_KEY: {cmd_out}"
+        );
+        assert!(
+            !cmd_out.contains("AWS_SECRET_LEAK_PROBE"),
+            "run_command leaked AWS_SECRET_ACCESS_KEY: {cmd_out}"
+        );
+
+        // 2b. Stdio MCP child (`McpBridgePool`) MUST NOT see parent secrets, while STILL receiving
+        //     its explicitly configured `spec.env` entries!
+        let mcp_spec = {
+            #[cfg(windows)]
+            {
+                let script_path = base.join("env_probe_mcp.ps1");
+                let script = r#"
+$ErrorActionPreference = "Stop"
+while ($true) {
+    $line = [Console]::In.ReadLine()
+    if ($null -eq $line) { break }
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $req = $line | ConvertFrom-Json
+    $id = $req.id
+    $method = $req.method
+    if ($method -eq "initialize") {
+        $resp = @{ jsonrpc = "2.0"; id = $id; result = @{ protocolVersion = "2024-11-05"; capabilities = @{ tools = @{} }; serverInfo = @{ name = "env-probe"; version = "0.1.0" } } } | ConvertTo-Json -Depth 10 -Compress
+        [Console]::Out.WriteLine($resp); [Console]::Out.Flush()
+    } elseif ($method -eq "tools/list") {
+        $resp = @{ jsonrpc = "2.0"; id = $id; result = @{ tools = @(@{ name = "dump_env"; description = "Probe env"; inputSchema = @{ type = "object"; properties = @{} } }) } } | ConvertTo-Json -Depth 10 -Compress
+        [Console]::Out.WriteLine($resp); [Console]::Out.Flush()
+    } elseif ($method -eq "tools/call") {
+        $txt = "HEAD=$($env:DENNETT_HEAD_TOKEN)|VAULT=$($env:DENNETT_VAULT_MASTER_KEY)|AWS=$($env:AWS_SECRET_ACCESS_KEY)|EXPLICIT=$($env:DENNETT_EXPLICIT_PROBE)"
+        $resp = @{ jsonrpc = "2.0"; id = $id; result = @{ content = @(@{ type = "text"; text = $txt }); isError = $false } } | ConvertTo-Json -Depth 10 -Compress
+        [Console]::Out.WriteLine($resp); [Console]::Out.Flush()
+    }
+}
+"#;
+                fs::write(&script_path, script).expect("write env_probe_mcp.ps1");
+                RuntimeMcpServerSpec {
+                    name: String::from("env-probe"),
+                    command: String::from("powershell.exe"),
+                    args: vec![
+                        String::from("-NoProfile"),
+                        String::from("-NonInteractive"),
+                        String::from("-ExecutionPolicy"),
+                        String::from("Bypass"),
+                        String::from("-File"),
+                        script_path.to_string_lossy().into_owned(),
+                    ],
+                    env: vec![RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_EXPLICIT_PROBE"),
+                        value: String::from("explicit-mcp-ok"),
+                    }],
+                }
+            }
+            #[cfg(unix)]
+            {
+                let script_path = base.join("env_probe_mcp.sh");
+                let script = r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"env-probe","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *'"method":"tools/list"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"dump_env","description":"Probe env","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
+      ;;
+    *'"method":"tools/call"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"HEAD=%s|VAULT=%s|AWS=%s|EXPLICIT=%s"}],"isError":false}}\n' "$id" "$DENNETT_HEAD_TOKEN" "$DENNETT_VAULT_MASTER_KEY" "$AWS_SECRET_ACCESS_KEY" "$DENNETT_EXPLICIT_PROBE"
+      ;;
+  esac
+done
+"#;
+                fs::write(&script_path, script).expect("write env_probe_mcp.sh");
+                RuntimeMcpServerSpec {
+                    name: String::from("env-probe"),
+                    command: String::from("sh"),
+                    args: vec![script_path.to_string_lossy().into_owned()],
+                    env: vec![RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_EXPLICIT_PROBE"),
+                        value: String::from("explicit-mcp-ok"),
+                    }],
+                }
+            }
+        };
+
+        let (_tx, mut cancel_rx) = watch::channel(false);
+        let mut pool =
+            crate::mcp_bridge::McpBridgePool::start_all(&[mcp_spec], &base, &[], &mut cancel_rx)
+                .await
+                .expect("start env-probe MCP pool");
+        let (tool_idx, _) = pool
+            .resolve_tool("mcp__env-probe__dump_env")
+            .expect("resolve dump_env");
+        let call_res = pool
+            .call_tool(
+                tool_idx,
+                &json!({}),
+                &[],
+                Duration::from_secs(10),
+                &mut cancel_rx,
+            )
+            .await
+            .expect("call dump_env");
+        pool.shutdown().await;
+
+        let crate::mcp_bridge::McpCallResult::Completed { text, .. } = call_res else {
+            panic!("expected Completed MCP env probe, got {call_res:?}");
+        };
+        assert_eq!(
+            text, "HEAD=|VAULT=|AWS=|EXPLICIT=explicit-mcp-ok",
+            "stdio MCP child must never inherit host secrets and must preserve explicit spec.env: {text}"
+        );
+
         let _ = fs::remove_dir_all(&base);
     }
 }

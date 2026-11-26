@@ -382,6 +382,46 @@ impl PolicyEngine {
                             scope: format!("agent:{}", self.ctx.agent_id),
                         });
                     }
+                    if self.ctx.autonomy_mode != AutonomyMode::FullAccess
+                        && let Some(git_target) = targets_git_metadata(&normalized_rel_targets)
+                    {
+                        if let Some(grant) = self.find_matching_grant(
+                            active_grants,
+                            now,
+                            GrantMatchQuery {
+                                tool_lower: &tool_lower,
+                                is_file_write: true,
+                                is_execute: false,
+                                shell_signature: None,
+                                normalized_rel_targets: &normalized_rel_targets,
+                                require_non_empty_prefixes: true,
+                            },
+                        ) {
+                            return PolicyEvaluationDecision::AllowedByGrant {
+                                grant_id: grant.grant_id,
+                                outcome: PolicyEvaluationOutcome {
+                                    effect: PolicyEffect::Allow,
+                                    matched_rule_id: None,
+                                    reason: format!(
+                                        "allowed Git metadata write by active capability grant {} ({})",
+                                        grant.grant_id, grant.reason
+                                    ),
+                                    scope: grant.scope.clone(),
+                                },
+                            };
+                        }
+                        let joined_rel = normalized_rel_targets.join(", ");
+                        let reason = format!(
+                            "write targeting Git metadata (`{git_target}`) requires explicit owner approval under autonomy_mode={}",
+                            self.ctx.autonomy_mode
+                        );
+                        return PolicyEvaluationDecision::NeedsInteractiveApproval {
+                            normalized_targets: normalized_rel_targets,
+                            target_summary: joined_rel,
+                            scope: self.primary_scope_label(),
+                            reason,
+                        };
+                    }
                     let joined_rel = normalized_rel_targets.join(", ");
                     return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Allow,
@@ -393,10 +433,52 @@ impl PolicyEngine {
                     });
                 }
                 WorkspaceWritePolicy::AllowWorkspace | WorkspaceWritePolicy::AskBeforeWrite => {
+                    // Protect `.git` / `.git/**` (hooks, config, refs) against silent writes under
+                    // non-FullAccess autonomy (prevents planting `.git/hooks/pre-commit` or `config`).
+                    if self.ctx.autonomy_mode != AutonomyMode::FullAccess
+                        && let Some(git_target) = targets_git_metadata(&normalized_rel_targets)
+                    {
+                        if let Some(grant) = self.find_matching_grant(
+                            active_grants,
+                            now,
+                            GrantMatchQuery {
+                                tool_lower: &tool_lower,
+                                is_file_write: true,
+                                is_execute: false,
+                                shell_signature: None,
+                                normalized_rel_targets: &normalized_rel_targets,
+                                require_non_empty_prefixes: true,
+                            },
+                        ) {
+                            return PolicyEvaluationDecision::AllowedByGrant {
+                                grant_id: grant.grant_id,
+                                outcome: PolicyEvaluationOutcome {
+                                    effect: PolicyEffect::Allow,
+                                    matched_rule_id: None,
+                                    reason: format!(
+                                        "allowed Git metadata write by active capability grant {} ({})",
+                                        grant.grant_id, grant.reason
+                                    ),
+                                    scope: grant.scope.clone(),
+                                },
+                            };
+                        }
+                        let joined_rel = normalized_rel_targets.join(", ");
+                        let reason = format!(
+                            "write targeting Git metadata (`{git_target}`) requires explicit owner approval under autonomy_mode={}",
+                            self.ctx.autonomy_mode
+                        );
+                        return PolicyEvaluationDecision::NeedsInteractiveApproval {
+                            normalized_targets: normalized_rel_targets,
+                            target_summary: joined_rel,
+                            scope: self.primary_scope_label(),
+                            reason,
+                        };
+                    }
                     // Owner 2-Mode Autonomy (`A-CORE-1`): BOTH `AutonomyMode::Auto` and
                     // `AutonomyMode::FullAccess` allow canonical in-workspace file edits without
                     // tedious manual approval prompts (while DenyAll / AllowPaths / parent ceiling
-                    // / explicit Deny rules / workspace containment remain strictly enforced!).
+                    // / explicit Deny rules / `.git/**` guard / workspace containment remain strictly enforced!).
                     let joined_rel = normalized_rel_targets.join(", ");
                     return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Allow,
@@ -596,14 +678,33 @@ impl PolicyEngine {
             }
 
             if ctrl_op == "dennett_event_create" && self.ctx.task_id.is_some() {
-                let has_explicit_schedule = req.raw_input.get("schedule").is_some_and(|v| !v.is_null())
-                    || req.raw_input.get("schedule_kind").is_some_and(|v| !v.is_null())
-                    || req.raw_input.get("fire_at").is_some_and(|v| !v.is_null())
-                    || req.raw_input.get("fire_at_ms").is_some_and(|v| !v.is_null())
-                    || req.raw_input.get("in_seconds").is_some_and(|v| !v.is_null())
-                    || req.raw_input.get("interval_secs").is_some_and(|v| !v.is_null())
-                    || req.raw_input.get("daily_hour").is_some_and(|v| !v.is_null())
-                    || req.raw_input.get("yearly_month").is_some_and(|v| !v.is_null());
+                let has_explicit_schedule =
+                    req.raw_input.get("schedule").is_some_and(|v| !v.is_null())
+                        || req
+                            .raw_input
+                            .get("schedule_kind")
+                            .is_some_and(|v| !v.is_null())
+                        || req.raw_input.get("fire_at").is_some_and(|v| !v.is_null())
+                        || req
+                            .raw_input
+                            .get("fire_at_ms")
+                            .is_some_and(|v| !v.is_null())
+                        || req
+                            .raw_input
+                            .get("in_seconds")
+                            .is_some_and(|v| !v.is_null())
+                        || req
+                            .raw_input
+                            .get("interval_secs")
+                            .is_some_and(|v| !v.is_null())
+                        || req
+                            .raw_input
+                            .get("daily_hour")
+                            .is_some_and(|v| !v.is_null())
+                        || req
+                            .raw_input
+                            .get("yearly_month")
+                            .is_some_and(|v| !v.is_null());
                 if has_explicit_schedule {
                     return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Allow,
@@ -724,9 +825,18 @@ impl PolicyEngine {
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect();
-            if let Some(grant) =
-                self.find_matching_grant(active_grants, now, &tool_lower, false, &grant_targets)
-            {
+            if let Some(grant) = self.find_matching_grant(
+                active_grants,
+                now,
+                GrantMatchQuery {
+                    tool_lower: &tool_lower,
+                    is_file_write: false,
+                    is_execute: false,
+                    shell_signature: None,
+                    normalized_rel_targets: &grant_targets,
+                    require_non_empty_prefixes: false,
+                },
+            ) {
                 return PolicyEvaluationDecision::AllowedByGrant {
                     grant_id: grant.grant_id,
                     outcome: PolicyEvaluationOutcome {
@@ -775,9 +885,24 @@ impl PolicyEngine {
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect();
-            if let Some(grant) =
-                self.find_matching_grant(active_grants, now, &tool_lower, false, &grant_targets)
-            {
+            let shell_sig = if is_execute {
+                let cmd = extract_shell_command(req);
+                Some(normalize_shell_grant_signature(&cmd))
+            } else {
+                None
+            };
+            if let Some(grant) = self.find_matching_grant(
+                active_grants,
+                now,
+                GrantMatchQuery {
+                    tool_lower: &tool_lower,
+                    is_file_write: false,
+                    is_execute,
+                    shell_signature: shell_sig.as_deref(),
+                    normalized_rel_targets: &grant_targets,
+                    require_non_empty_prefixes: false,
+                },
+            ) {
                 return PolicyEvaluationDecision::AllowedByGrant {
                     grant_id: grant.grant_id,
                     outcome: PolicyEvaluationOutcome {
@@ -856,7 +981,11 @@ impl PolicyEngine {
         // 5c. Critical E3/E4 external operations (external effects, messaging, email, payments):
         //     `FullAccess` auto-allows (Step 2 explicit Deny rules already enforced); `Auto`
         //     requests interactive owner approval via InboxCard (with approve_once/session/project).
-        if !is_execute && !is_file_write && !is_file_read && is_external_e3_e4_op(&tool_lower, &req.tool_kind) {
+        if !is_execute
+            && !is_file_write
+            && !is_file_read
+            && is_external_e3_e4_op(&tool_lower, &req.tool_kind)
+        {
             if self.ctx.autonomy_mode == AutonomyMode::FullAccess {
                 return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                     effect: PolicyEffect::Allow,
@@ -921,9 +1050,7 @@ impl PolicyEngine {
         &self,
         grants: &'a [CapabilityGrantRecord],
         now: TimestampMs,
-        tool_lower: &str,
-        is_file_write: bool,
-        normalized_rel_targets: &[String],
+        query: GrantMatchQuery<'_>,
     ) -> Option<&'a CapabilityGrantRecord> {
         let owning_project_id = self
             .ctx
@@ -949,14 +1076,24 @@ impl PolicyEngine {
             if grant.task_id.is_some_and(|t| Some(t) != self.ctx.task_id) {
                 return false;
             }
-            if !grant_matches_tool(&grant.tool_pattern, tool_lower, is_file_write) {
+            if !grant_matches_tool(&grant.tool_pattern, query.tool_lower, query.is_file_write) {
                 return false;
             }
             if grant.target_prefixes.is_empty() {
-                return true;
+                return !query.require_non_empty_prefixes;
             }
-            !normalized_rel_targets.is_empty()
-                && normalized_rel_targets
+            if query.is_execute {
+                let Some(sig) = query.shell_signature.filter(|s| !s.is_empty()) else {
+                    return false;
+                };
+                return grant
+                    .target_prefixes
+                    .iter()
+                    .any(|allowed| allowed.trim().eq_ignore_ascii_case(sig));
+            }
+            !query.normalized_rel_targets.is_empty()
+                && query
+                    .normalized_rel_targets
                     .iter()
                     .all(|rel| matches_any_prefix(rel, &grant.target_prefixes))
         })
@@ -972,6 +1109,16 @@ impl PolicyEngine {
         scopes.push(String::from("global"));
         scopes
     }
+}
+
+#[derive(Clone, Copy)]
+struct GrantMatchQuery<'a> {
+    tool_lower: &'a str,
+    is_file_write: bool,
+    is_execute: bool,
+    shell_signature: Option<&'a str>,
+    normalized_rel_targets: &'a [String],
+    require_non_empty_prefixes: bool,
 }
 
 /// Returns `true` when `pattern` permits `tool_lower` without escalating write grants to shell tools.
@@ -992,6 +1139,33 @@ pub fn grant_matches_tool(pattern: &str, tool_lower: &str, is_file_write: bool) 
 #[must_use]
 pub fn is_workspace_write_tool(tool_name: &str, tool_kind: &str) -> bool {
     is_write_tool(&tool_name.trim().to_ascii_lowercase(), tool_kind)
+}
+
+/// Returns `true` when `tool_name` / `tool_kind` classifies as a shell command execution tool.
+#[must_use]
+pub fn is_shell_execute_tool(tool_name: &str, tool_kind: &str) -> bool {
+    is_execute_tool(
+        &tool_name.trim().to_ascii_lowercase(),
+        tool_kind,
+        &serde_json::Value::Null,
+    )
+}
+
+/// Returns `true` when normalized workspace-relative `rel_path` targets `.git` or any path under `.git/**`
+/// (case-insensitive segment check).
+#[must_use]
+pub fn is_git_metadata_path(rel_path: &str) -> bool {
+    rel_path
+        .replace('\\', "/")
+        .split('/')
+        .any(|seg| seg.eq_ignore_ascii_case(".git"))
+}
+
+fn targets_git_metadata(normalized_rel_targets: &[String]) -> Option<&str> {
+    normalized_rel_targets
+        .iter()
+        .map(String::as_str)
+        .find(|rel| is_git_metadata_path(rel))
 }
 
 /// Recording [`PolicyEvaluator`] adapter used during a single Head turn so every external
@@ -1119,16 +1293,31 @@ const BUILTIN_WEB_TOOLS: [&str; 6] = [
 /// Safe local dev/build/test command basenames allowed without prompting in `AutonomyMode::Auto`
 /// strictly inside a bound project workspace (`A-CORE-1`).
 const SAFE_LOCAL_SHELL_COMMANDS: &[&str] = &[
-    "cargo", "rustc", "rustfmt", "npm", "npx", "pnpm", "yarn", "node", "uv", "python", "python3",
+    "cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "node", "uv", "python", "python3",
     "pytest", "rg", "fd", "ls", "dir", "cat", "type", "head", "tail", "find", "grep", "wc", "sort",
-    "echo", "pwd", "mkdir", "cp", "mv", "tsc", "vitest", "eslint", "prettier", "cmake", "make",
-    "go", "dotnet",
+    "echo", "pwd", "mkdir", "cp", "mv", "tsc", "vitest", "eslint", "prettier", "go", "dotnet",
 ];
 
 /// Safe local `git` subcommands allowed without prompting in `AutonomyMode::Auto`.
 const SAFE_LOCAL_GIT_SUBCOMMANDS: &[&str] = &[
-    "status", "diff", "log", "show", "add", "commit", "branch", "checkout", "switch", "rev-parse",
-    "stash", "tag", "blame", "ls-files", "grep", "merge-base", "describe", "shortlog",
+    "status",
+    "diff",
+    "log",
+    "show",
+    "add",
+    "commit",
+    "branch",
+    "checkout",
+    "switch",
+    "rev-parse",
+    "stash",
+    "tag",
+    "blame",
+    "ls-files",
+    "grep",
+    "merge-base",
+    "describe",
+    "shortlog",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1149,7 +1338,10 @@ fn is_builtin_web_tool(tool_lower: &str, tool_kind: &str, raw_input: &serde_json
 
 fn is_mutating_or_external_mcp_tool(tool_lower: &str, tool_kind: &str) -> bool {
     let kind_lower = tool_kind.trim().to_ascii_lowercase();
-    if matches!(kind_lower.as_str(), "edit" | "delete" | "move" | "execute" | "external_effect") {
+    if matches!(
+        kind_lower.as_str(),
+        "edit" | "delete" | "move" | "execute" | "external_effect"
+    ) {
         return true;
     }
     // Extract trailing operation token after server separator (`__`, `:`, `/`, `.`) if present.
@@ -1214,45 +1406,57 @@ fn extract_shell_command(req: &PolicyEvaluationRequest) -> String {
         .to_owned()
 }
 
-fn contains_subshell_or_escape_syntax(cmd: &str) -> Option<&'static str> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellToken {
+    text: String,
+    has_unquoted_redir: bool,
+}
+
+fn contains_subshell_or_escape_syntax(cmd: &str, is_windows: bool) -> Option<&'static str> {
+    if cmd.contains('\0') {
+        return Some("NUL byte in shell command");
+    }
+    // Reject environment-variable and home-directory expansions (`$`, `%`, `~`) unconditionally
+    // across platforms (cmd.exe expands `%VAR%` even inside double quotes; POSIX/PowerShell
+    // expand `$VAR` inside double quotes; `~` escapes workspace to user home).
+    if cmd.contains('$') || cmd.contains('%') || cmd.contains('~') {
+        return Some("environment variable or home expansion (`$`/`%`/`~`)");
+    }
+    if is_windows && (cmd.contains('^') || cmd.contains('!')) {
+        return Some("Windows shell escape or delayed expansion (`^`/`!`)");
+    }
+
     let mut in_single = false;
+    let mut in_double = false;
     let mut escaped = false;
-    let bytes = cmd.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
+    for c in cmd.chars() {
         if escaped {
             escaped = false;
-            i += 1;
             continue;
         }
-        if b == b'\\' && !in_single {
+        if !is_windows && c == '\\' && !in_single {
             escaped = true;
-            i += 1;
             continue;
         }
-        if b == b'\'' {
+        if !is_windows && c == '\'' && !in_double {
             in_single = !in_single;
-            i += 1;
             continue;
         }
-        if !in_single {
-            if b == b'`' {
-                return Some("backtick command substitution");
-            }
-            if b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
-                return Some("subshell `$()` expansion");
-            }
-            if (b == b'<' || b == b'>') && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
-                return Some("process substitution");
-            }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            continue;
         }
-        i += 1;
+        if !in_single && c == '`' {
+            return Some("backtick command substitution");
+        }
+        if !in_single && !in_double && (c == '(' || c == ')') {
+            return Some("parenthesized subexpression");
+        }
     }
     None
 }
 
-fn split_shell_segments(cmd: &str) -> Result<Vec<String>, String> {
+fn split_shell_segments(cmd: &str, is_windows: bool) -> Result<Vec<String>, String> {
     let mut segments = Vec::new();
     let mut cur = String::new();
     let mut in_single = false;
@@ -1268,13 +1472,13 @@ fn split_shell_segments(cmd: &str) -> Result<Vec<String>, String> {
             i += 1;
             continue;
         }
-        if c == '\\' && !in_single {
+        if !is_windows && c == '\\' && !in_single {
             cur.push(c);
             escaped = true;
             i += 1;
             continue;
         }
-        if c == '\'' && !in_double {
+        if !is_windows && c == '\'' && !in_double {
             in_single = !in_single;
             cur.push(c);
             i += 1;
@@ -1341,9 +1545,10 @@ fn split_shell_segments(cmd: &str) -> Result<Vec<String>, String> {
     Ok(segments)
 }
 
-fn tokenize_shell_segment(seg: &str) -> Vec<String> {
+fn tokenize_shell_segment(seg: &str, is_windows: bool) -> Vec<ShellToken> {
     let mut tokens = Vec::new();
     let mut cur = String::new();
+    let mut has_unquoted_redir = false;
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
@@ -1353,11 +1558,11 @@ fn tokenize_shell_segment(seg: &str) -> Vec<String> {
             escaped = false;
             continue;
         }
-        if c == '\\' && !in_single && !cfg!(windows) {
+        if !is_windows && c == '\\' && !in_single {
             escaped = true;
             continue;
         }
-        if c == '\'' && !in_double {
+        if !is_windows && c == '\'' && !in_double {
             in_single = !in_single;
             continue;
         }
@@ -1365,26 +1570,51 @@ fn tokenize_shell_segment(seg: &str) -> Vec<String> {
             in_double = !in_double;
             continue;
         }
-        if !in_single && !in_double && c.is_whitespace() {
-            if !cur.is_empty() {
-                tokens.push(std::mem::take(&mut cur));
+        if !in_single && !in_double {
+            if c.is_whitespace() {
+                if !cur.is_empty() {
+                    tokens.push(ShellToken {
+                        text: std::mem::take(&mut cur),
+                        has_unquoted_redir,
+                    });
+                    has_unquoted_redir = false;
+                }
+                continue;
             }
-            continue;
+            if c == '<' || c == '>' {
+                has_unquoted_redir = true;
+            }
         }
         cur.push(c);
     }
     if !cur.is_empty() {
-        tokens.push(cur);
+        tokens.push(ShellToken {
+            text: cur,
+            has_unquoted_redir,
+        });
     }
     tokens
+}
+
+fn is_harmless_shell_redir(tok: &str) -> bool {
+    tok == "2>&1"
+        || tok == "1>&2"
+        || tok.eq_ignore_ascii_case(">/dev/null")
+        || tok.eq_ignore_ascii_case("1>/dev/null")
+        || tok.eq_ignore_ascii_case("2>/dev/null")
+        || tok.eq_ignore_ascii_case(">nul")
+        || tok.eq_ignore_ascii_case("1>nul")
+        || tok.eq_ignore_ascii_case("2>nul")
+}
+
+fn is_null_sink_path(tok: &str) -> bool {
+    tok.eq_ignore_ascii_case("/dev/null") || tok.eq_ignore_ascii_case("nul")
 }
 
 fn is_env_assignment_token(tok: &str) -> Option<&str> {
     let (name, _val) = tok.split_once('=')?;
     if !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
         && !name.as_bytes()[0].is_ascii_digit()
     {
         Some(name)
@@ -1393,32 +1623,70 @@ fn is_env_assignment_token(tok: &str) -> Option<&str> {
     }
 }
 
+fn is_dangerous_git_global_option(arg: &str) -> bool {
+    let lower = arg.to_ascii_lowercase();
+    arg == "-c"
+        || arg.starts_with("-c")
+        || arg == "-C"
+        || arg.starts_with("-C")
+        || lower == "--config-env"
+        || lower.starts_with("--config-env=")
+        || lower == "--exec-path"
+        || lower.starts_with("--exec-path=")
+        || lower == "--git-dir"
+        || lower.starts_with("--git-dir=")
+        || lower == "--work-tree"
+        || lower.starts_with("--work-tree=")
+}
+
+fn is_dangerous_git_long_option(arg: &str) -> bool {
+    let lower = arg.to_ascii_lowercase();
+    lower == "--config-env"
+        || lower.starts_with("--config-env=")
+        || lower == "--exec-path"
+        || lower.starts_with("--exec-path=")
+        || lower == "--git-dir"
+        || lower.starts_with("--git-dir=")
+        || lower == "--work-tree"
+        || lower.starts_with("--work-tree=")
+}
+
+fn is_python_inline_eval_flag(arg: &str) -> bool {
+    arg == "-"
+        || arg == "-c"
+        || arg.starts_with("-c")
+        || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('c'))
+}
+
+fn is_node_inline_eval_flag(arg: &str) -> bool {
+    let lower = arg.to_ascii_lowercase();
+    arg == "-e"
+        || arg == "-p"
+        || arg.starts_with("-e")
+        || arg.starts_with("-p")
+        || lower == "--eval"
+        || lower.starts_with("--eval=")
+        || lower == "--print"
+        || lower.starts_with("--print=")
+        || (arg.starts_with('-')
+            && !arg.starts_with("--")
+            && (arg.contains('e') || arg.contains('p')))
+}
+
 fn validate_shell_arg_within_workspace(arg: &str, workspace_root: &Path) -> Result<(), String> {
     let trimmed = arg.trim();
     if trimmed.is_empty() {
         return Ok(());
     }
-    // Check embedded redirection target (`>path`, `>>path`, `2>path`, `<path`)
-    let redir_target = trimmed
-        .strip_prefix(">>")
-        .or_else(|| trimmed.strip_prefix('>'))
-        .or_else(|| trimmed.strip_prefix("1>>"))
-        .or_else(|| trimmed.strip_prefix("1>"))
-        .or_else(|| trimmed.strip_prefix("2>>"))
-        .or_else(|| trimmed.strip_prefix("2>"));
-    if let Some(target) = redir_target {
-        if target.is_empty()
-            || target == "&1"
-            || target == "&2"
-            || target.eq_ignore_ascii_case("/dev/null")
-            || target.eq_ignore_ascii_case("NUL")
-        {
-            return Ok(());
-        }
-        resolve_within_workspace(workspace_root, target)
-            .map(|_| ())
-            .map_err(|_| format!("redirection target `{target}` escapes workspace"))?;
-        return Ok(());
+    if trimmed.contains('$') || trimmed.contains('%') || trimmed.contains('~') {
+        return Err(format!(
+            "argument `{trimmed}` contains environment or home expansion"
+        ));
+    }
+    if trimmed.starts_with('\\') {
+        return Err(format!(
+            "Windows drive-root or UNC path `{trimmed}` escapes workspace"
+        ));
     }
 
     // Reject path traversal (`..`) or home (`~`) escapes in any path-like argument.
@@ -1434,7 +1702,7 @@ fn validate_shell_arg_within_workspace(arg: &str, workspace_root: &Path) -> Resu
         return Err(format!("argument `{trimmed}` traverses outside workspace"));
     }
 
-    // Reject absolute paths (POSIX `/...` or Windows `C:/...` or `C:\...`) pointing outside workspace!
+    // Reject absolute paths (POSIX `/...` or Windows `C:/...` or `C:\...` or `C:foo`) pointing outside workspace!
     let looks_windows_abs = trimmed.len() >= 2
         && trimmed.as_bytes()[0].is_ascii_alphabetic()
         && trimmed.as_bytes()[1] == b':';
@@ -1444,37 +1712,87 @@ fn validate_shell_arg_within_workspace(arg: &str, workspace_root: &Path) -> Resu
     {
         return Err(format!("absolute path `{trimmed}` escapes workspace"));
     }
+
+    // Also inspect the right-hand side of `--flag=value` options so `--file=/etc/passwd` or
+    // `--out=..\escape` cannot smuggle outside paths past flag prefixes.
+    if trimmed.starts_with('-')
+        && let Some((_, rhs)) = trimmed.split_once('=')
+        && !rhs.is_empty()
+    {
+        validate_shell_arg_within_workspace(rhs, workspace_root)?;
+    }
+
     Ok(())
+}
+
+fn classify_workspace_shell_command(cmd: &str, workspace_root: &Path) -> ShellCommandClass {
+    classify_workspace_shell_command_for_platform(cmd, workspace_root, cfg!(windows))
 }
 
 #[expect(
     clippy::too_many_lines,
     reason = "shell command classification audits compound segments, redirections, allowlist, and subcommand rules in one place"
 )]
-fn classify_workspace_shell_command(cmd: &str, workspace_root: &Path) -> ShellCommandClass {
+fn classify_workspace_shell_command_for_platform(
+    cmd: &str,
+    workspace_root: &Path,
+    is_windows: bool,
+) -> ShellCommandClass {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
         return ShellCommandClass::RequiresAsk(String::from("empty command"));
     }
-    if let Some(why) = contains_subshell_or_escape_syntax(trimmed) {
+    if let Some(why) = contains_subshell_or_escape_syntax(trimmed, is_windows) {
         return ShellCommandClass::RequiresAsk(why.to_owned());
     }
-    let segments = match split_shell_segments(trimmed) {
+    let segments = match split_shell_segments(trimmed, is_windows) {
         Ok(s) if !s.is_empty() => s,
         Ok(_) => return ShellCommandClass::RequiresAsk(String::from("empty command")),
         Err(why) => return ShellCommandClass::RequiresAsk(why),
     };
 
     for seg in &segments {
-        let tokens = tokenize_shell_segment(seg);
+        let tokens = tokenize_shell_segment(seg, is_windows);
         if tokens.is_empty() {
             return ShellCommandClass::RequiresAsk(String::from("empty command segment"));
         }
 
-        // Skip safe leading `VAR=val` env assignments; reject linker/PATH hijacks.
+        // Vector (d): Reject ANY unquoted token containing `<` or `>` anywhere inside it
+        // (including attached forms like `echo evil>C:\x.bat`, `echo x>..\out`, `type<C:\secret`),
+        // permitting ONLY exact harmless fd-dup / null-sink redirections!
+        let mut clean_tokens: Vec<&str> = Vec::with_capacity(tokens.len());
+        let mut ti = 0;
+        while ti < tokens.len() {
+            let tok = &tokens[ti];
+            if tok.has_unquoted_redir {
+                if is_harmless_shell_redir(&tok.text) {
+                    ti += 1;
+                    continue;
+                }
+                if matches!(tok.text.as_str(), ">" | "1>" | "2>")
+                    && let Some(next) = tokens.get(ti + 1)
+                    && !next.has_unquoted_redir
+                    && is_null_sink_path(&next.text)
+                {
+                    ti += 2;
+                    continue;
+                }
+                return ShellCommandClass::RequiresAsk(format!(
+                    "shell redirection `{}` requires owner approval",
+                    tok.text
+                ));
+            }
+            clean_tokens.push(&tok.text);
+            ti += 1;
+        }
+        if clean_tokens.is_empty() {
+            return ShellCommandClass::RequiresAsk(String::from("empty command segment"));
+        }
+
+        // Skip safe leading `VAR=val` env assignments; reject linker/PATH/git hijacks.
         let mut idx = 0;
-        while idx < tokens.len()
-            && let Some(var_name) = is_env_assignment_token(&tokens[idx])
+        while idx < clean_tokens.len()
+            && let Some(var_name) = is_env_assignment_token(clean_tokens[idx])
         {
             let upper = var_name.to_ascii_uppercase();
             if matches!(
@@ -1486,19 +1804,27 @@ fn classify_workspace_shell_command(cmd: &str, workspace_root: &Path) -> ShellCo
                     | "PYTHONPATH"
                     | "NODE_OPTIONS"
                     | "RUSTFLAGS"
-            ) {
+                    | "RUSTC_WRAPPER"
+                    | "GIT_EXEC_PATH"
+                    | "GIT_DIR"
+                    | "GIT_WORK_TREE"
+                    | "GIT_SSH_COMMAND"
+                    | "GIT_CONFIG_GLOBAL"
+                    | "GIT_CONFIG_PARAMETERS"
+            ) || upper.starts_with("GIT_CONFIG_")
+            {
                 return ShellCommandClass::RequiresAsk(format!(
                     "sensitive env override `{var_name}`"
                 ));
             }
             idx += 1;
         }
-        if idx >= tokens.len() {
+        if idx >= clean_tokens.len() {
             return ShellCommandClass::RequiresAsk(String::from("assignment without command"));
         }
 
-        let raw_exe = &tokens[idx];
-        let args = &tokens[idx + 1..];
+        let raw_exe = clean_tokens[idx];
+        let args = &clean_tokens[idx + 1..];
 
         // Reject path-qualified executables pointing outside workspace or containing separators.
         if raw_exe.contains('/') || raw_exe.contains('\\') || raw_exe.contains(':') {
@@ -1514,41 +1840,29 @@ fn classify_workspace_shell_command(cmd: &str, workspace_root: &Path) -> ShellCo
             .or_else(|| exe_lower.strip_suffix(".bat"))
             .unwrap_or(&exe_lower);
 
-        // Validate every argument & redirection target against workspace boundaries!
-        let mut expect_redir_target = false;
+        // Validate every argument against workspace boundaries!
         for arg in args {
-            if expect_redir_target {
-                expect_redir_target = false;
-                if arg != "/dev/null"
-                    && !arg.eq_ignore_ascii_case("NUL")
-                    && resolve_within_workspace(workspace_root, arg).is_err()
-                {
-                    return ShellCommandClass::RequiresAsk(format!(
-                        "redirection target `{arg}` escapes workspace"
-                    ));
-                }
-                continue;
-            }
-            if matches!(arg.as_str(), ">" | ">>" | "1>" | "1>>" | "2>" | "2>>") {
-                expect_redir_target = true;
-                continue;
-            }
             if let Err(why) = validate_shell_arg_within_workspace(arg, workspace_root) {
                 return ShellCommandClass::RequiresAsk(why);
             }
         }
-        if expect_redir_target {
-            return ShellCommandClass::RequiresAsk(String::from("dangling shell redirection"));
-        }
 
-        // Special-case `git`: allow ONLY safe local subcommands!
+        // Special-case `git`: reject config/hook/dir-override flags and allow ONLY safe local subcommands!
         if exe_base == "git" {
+            for a in args {
+                if is_dangerous_git_long_option(a) {
+                    return ShellCommandClass::RequiresAsk(format!(
+                        "git option `{a}` can alter repository config, hooks, or execution path"
+                    ));
+                }
+            }
             let mut sub_idx = 0;
             while sub_idx < args.len() {
-                let a = args[sub_idx].as_str();
-                if a == "-C" || a == "-c" || a == "--git-dir" || a == "--work-tree" {
-                    sub_idx += 2;
-                    continue;
+                let a = args[sub_idx];
+                if is_dangerous_git_global_option(a) {
+                    return ShellCommandClass::RequiresAsk(format!(
+                        "git option `{a}` can alter repository config, hooks, or execution path"
+                    ));
                 }
                 if a.starts_with('-') {
                     sub_idx += 1;
@@ -1573,69 +1887,316 @@ fn classify_workspace_shell_command(cmd: &str, workspace_root: &Path) -> ShellCo
             ));
         }
 
-        // Guard destructive/network subcommands on otherwise-allowlisted toolchains.
-        if exe_base == "cargo"
-            && let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
-            && matches!(
-                sub.to_ascii_lowercase().as_str(),
-                "publish" | "login" | "logout" | "owner" | "yank" | "install"
-            )
+        // Defense-in-depth: prevent silent `.git/**` mutation via `cp`/`mv`/`mkdir`.
+        if matches!(exe_base, "cp" | "mv" | "mkdir")
+            && let Some(git_arg) = args.iter().find(|a| is_git_metadata_path(a))
         {
             return ShellCommandClass::RequiresAsk(format!(
-                "cargo subcommand `{sub}` accesses remote registry or global install"
+                "{exe_base} targeting Git metadata `{git_arg}` requires owner approval"
             ));
         }
 
-        if matches!(exe_base, "npm" | "pnpm" | "yarn")
-            && let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
-            && matches!(
-                sub.to_ascii_lowercase().as_str(),
-                "publish" | "login" | "adduser" | "unpublish" | "owner" | "token"
-            )
+        if exe_base == "find"
+            && let Some(bad) = args.iter().find(|a| {
+                matches!(
+                    a.to_ascii_lowercase().as_str(),
+                    "-exec"
+                        | "-execdir"
+                        | "-ok"
+                        | "-okdir"
+                        | "-delete"
+                        | "-fprint"
+                        | "-fprintf"
+                        | "-fls"
+                        | "-fprint0"
+                )
+            })
         {
             return ShellCommandClass::RequiresAsk(format!(
-                "{exe_base} subcommand `{sub}` accesses remote registry"
+                "find flag `{bad}` executes commands or modifies files"
             ));
         }
 
-        if matches!(exe_base, "python" | "python3" | "node") {
-            let joined_lower = args.join(" ").to_ascii_lowercase();
-            let has_inline_eval = args
+        if exe_base == "fd"
+            && let Some(bad) = args.iter().find(|a| {
+                let lower = a.to_ascii_lowercase();
+                matches!(lower.as_str(), "-x" | "--exec" | "--exec-batch")
+                    || **a == "-X"
+                    || lower.starts_with("--exec=")
+                    || lower.starts_with("--exec-batch=")
+            })
+        {
+            return ShellCommandClass::RequiresAsk(format!(
+                "fd flag `{bad}` executes arbitrary commands"
+            ));
+        }
+
+        // Guard network-fetching / global-mutation subcommands on allowlisted toolchains.
+        if exe_base == "cargo" {
+            if args.iter().any(|a| *a == "-C" || a.starts_with("-C")) {
+                return ShellCommandClass::RequiresAsk(String::from(
+                    "cargo `-C` directory override requires owner approval",
+                ));
+            }
+            if let Some(sub) = args
                 .iter()
-                .any(|a| matches!(a.as_str(), "-c" | "-e" | "--eval"));
-            if has_inline_eval
-                && [
-                    "urllib",
-                    "requests",
-                    "http.client",
-                    "httpx",
-                    "socket",
-                    "subprocess",
-                    "os.system",
-                    "shutil.rmtree",
-                    "child_process",
-                    "fetch(",
-                ]
-                .iter()
-                .any(|kw| joined_lower.contains(kw))
+                .find(|a| !a.starts_with('-') && !a.starts_with('+'))
+                && matches!(
+                    sub.to_ascii_lowercase().as_str(),
+                    "add"
+                        | "fetch"
+                        | "update"
+                        | "install"
+                        | "publish"
+                        | "login"
+                        | "logout"
+                        | "owner"
+                        | "yank"
+                )
             {
                 return ShellCommandClass::RequiresAsk(format!(
-                    "inline `{exe_base}` eval contains network or destructive API"
+                    "cargo subcommand `{sub}` accesses remote registry or modifies dependencies"
                 ));
             }
         }
 
-        if exe_base == "uv"
-            && let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
-            && matches!(sub.to_ascii_lowercase().as_str(), "publish" | "self")
+        if matches!(exe_base, "npm" | "pnpm" | "yarn") {
+            if args.iter().any(|a| {
+                let lower = a.to_ascii_lowercase();
+                *a == "-C"
+                    || a.starts_with("-C")
+                    || lower == "--prefix"
+                    || lower.starts_with("--prefix=")
+                    || lower == "--dir"
+                    || lower.starts_with("--dir=")
+            }) {
+                return ShellCommandClass::RequiresAsk(format!(
+                    "{exe_base} directory override flag requires owner approval"
+                ));
+            }
+            if let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
+                && matches!(
+                    sub.to_ascii_lowercase().as_str(),
+                    "install"
+                        | "i"
+                        | "ci"
+                        | "add"
+                        | "exec"
+                        | "dlx"
+                        | "create"
+                        | "init"
+                        | "publish"
+                        | "login"
+                        | "adduser"
+                        | "unpublish"
+                        | "owner"
+                        | "token"
+                        | "link"
+                        | "uninstall"
+                )
+            {
+                return ShellCommandClass::RequiresAsk(format!(
+                    "{exe_base} subcommand `{sub}` installs packages or executes remote code"
+                ));
+            }
+        }
+
+        if matches!(exe_base, "python" | "python3")
+            && args.iter().any(|a| is_python_inline_eval_flag(a))
         {
             return ShellCommandClass::RequiresAsk(format!(
-                "uv subcommand `{sub}` performs external/global mutation"
+                "inline `{exe_base}` script evaluation requires owner approval"
             ));
+        }
+
+        if exe_base == "node" && args.iter().any(|a| is_node_inline_eval_flag(a)) {
+            return ShellCommandClass::RequiresAsk(String::from(
+                "inline `node` script evaluation requires owner approval",
+            ));
+        }
+
+        if exe_base == "uv" {
+            if args.iter().any(|a| {
+                let lower = a.to_ascii_lowercase();
+                *a == "-C"
+                    || a.starts_with("-C")
+                    || lower == "--directory"
+                    || lower.starts_with("--directory=")
+                    || lower == "--project"
+                    || lower.starts_with("--project=")
+            }) {
+                return ShellCommandClass::RequiresAsk(String::from(
+                    "uv directory override flag requires owner approval",
+                ));
+            }
+            if let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
+                && matches!(
+                    sub.to_ascii_lowercase().as_str(),
+                    "pip" | "add" | "sync" | "tool" | "publish" | "self" | "uvx"
+                )
+            {
+                return ShellCommandClass::RequiresAsk(format!(
+                    "uv subcommand `{sub}` installs dependencies or performs external mutation"
+                ));
+            }
+        }
+
+        if exe_base == "go" {
+            if args.iter().any(|a| *a == "-C" || a.starts_with("-C")) {
+                return ShellCommandClass::RequiresAsk(String::from(
+                    "go `-C` directory override requires owner approval",
+                ));
+            }
+            if let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
+                && matches!(sub.to_ascii_lowercase().as_str(), "run" | "get" | "install")
+            {
+                return ShellCommandClass::RequiresAsk(format!(
+                    "go subcommand `{sub}` fetches packages or executes arbitrary programs"
+                ));
+            }
         }
     }
 
     ShellCommandClass::SafeLocal
+}
+
+/// Computes a stable, narrow command signature for scoping shell `CapabilityGrant` records
+/// (e.g., `"git push origin branch-a"` -> `"git push"`, `"cargo test && curl https://x"` ->
+/// `"cargo test && curl"`). Commands with subshells, redirections, inline script eval, or raw
+/// shell interpreters fall back to an exact normalized command signature so approving one
+/// sensitive command NEVER grants wildcard arbitrary execution.
+#[must_use]
+pub fn normalize_shell_grant_signature(cmd: &str) -> String {
+    normalize_shell_grant_signature_for_platform(cmd, cfg!(windows))
+}
+
+fn collapse_whitespace_lower(raw: &str) -> String {
+    raw.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "computes narrow shell grant signatures across compound segments, redirections, interpreters, and subcommand CLIs"
+)]
+fn normalize_shell_grant_signature_for_platform(cmd: &str, is_windows: bool) -> String {
+    let trimmed = cmd.trim();
+    if trimmed.is_empty() {
+        return String::from("__empty__");
+    }
+    if contains_subshell_or_escape_syntax(trimmed, is_windows).is_some() {
+        return collapse_whitespace_lower(trimmed);
+    }
+    let Ok(segments) = split_shell_segments(trimmed, is_windows) else {
+        return collapse_whitespace_lower(trimmed);
+    };
+    if segments.is_empty() {
+        return String::from("__empty__");
+    }
+
+    let mut sigs = Vec::with_capacity(segments.len());
+    for seg in &segments {
+        let tokens = tokenize_shell_segment(seg, is_windows);
+        if tokens.is_empty() {
+            return collapse_whitespace_lower(trimmed);
+        }
+        let mut has_non_harmless_redir = false;
+        let mut ti = 0;
+        while ti < tokens.len() {
+            let tok = &tokens[ti];
+            if tok.has_unquoted_redir {
+                if is_harmless_shell_redir(&tok.text) {
+                    ti += 1;
+                    continue;
+                }
+                if matches!(tok.text.as_str(), ">" | "1>" | "2>")
+                    && let Some(next) = tokens.get(ti + 1)
+                    && !next.has_unquoted_redir
+                    && is_null_sink_path(&next.text)
+                {
+                    ti += 2;
+                    continue;
+                }
+                has_non_harmless_redir = true;
+                break;
+            }
+            ti += 1;
+        }
+        if has_non_harmless_redir || is_env_assignment_token(&tokens[0].text).is_some() {
+            sigs.push(collapse_whitespace_lower(seg));
+            continue;
+        }
+
+        let raw_exe = &tokens[0].text;
+        let args: Vec<&str> = tokens[1..]
+            .iter()
+            .filter(|t| !t.has_unquoted_redir)
+            .map(|t| t.text.as_str())
+            .collect();
+        let exe_lower = raw_exe.to_ascii_lowercase();
+        let exe_norm = if exe_lower.contains('/') || exe_lower.contains('\\') {
+            exe_lower.replace('\\', "/")
+        } else {
+            exe_lower
+                .strip_suffix(".exe")
+                .or_else(|| exe_lower.strip_suffix(".cmd"))
+                .or_else(|| exe_lower.strip_suffix(".bat"))
+                .unwrap_or(&exe_lower)
+                .to_owned()
+        };
+
+        // Raw shell interpreters & inline script evals MUST be pinned to exact command text!
+        let force_exact = matches!(
+            exe_norm.as_str(),
+            "sh" | "bash" | "zsh" | "fish" | "cmd" | "powershell" | "pwsh"
+        ) || (matches!(exe_norm.as_str(), "python" | "python3")
+            && args.iter().any(|a| is_python_inline_eval_flag(a)))
+            || (exe_norm == "node" && args.iter().any(|a| is_node_inline_eval_flag(a)))
+            || (exe_norm == "git"
+                && args
+                    .iter()
+                    .any(|a| is_dangerous_git_global_option(a) || is_dangerous_git_long_option(a)));
+        if force_exact {
+            sigs.push(collapse_whitespace_lower(seg));
+            continue;
+        }
+
+        let is_subcommand_cli = matches!(
+            exe_norm.as_str(),
+            "git"
+                | "cargo"
+                | "npm"
+                | "pnpm"
+                | "yarn"
+                | "uv"
+                | "go"
+                | "docker"
+                | "kubectl"
+                | "gh"
+                | "dotnet"
+                | "pip"
+                | "pip3"
+                | "aws"
+                | "gcloud"
+                | "az"
+        );
+        if is_subcommand_cli {
+            let subcmd = args
+                .iter()
+                .find(|a| !a.starts_with('-') && (exe_norm != "cargo" || !a.starts_with('+')));
+            if let Some(sub) = subcmd {
+                sigs.push(format!("{exe_norm} {}", sub.to_ascii_lowercase()));
+            } else {
+                sigs.push(exe_norm);
+            }
+        } else {
+            sigs.push(exe_norm);
+        }
+    }
+
+    sigs.join(" && ")
 }
 
 fn has_any_json_key(raw_input: &serde_json::Value, keys: &[&str]) -> bool {
@@ -2699,7 +3260,11 @@ mod tests {
                 ..
             })
         ));
-        let ext_send = make_req("external_effect:send_email", "external_effect", Some("a@b.c"));
+        let ext_send = make_req(
+            "external_effect:send_email",
+            "external_effect",
+            Some("a@b.c"),
+        );
         assert!(matches!(
             engine.evaluate_with_grants(&ext_send, &[], now),
             PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
@@ -2996,7 +3561,8 @@ mod tests {
         assert_eq!(engine.evaluate_request(&ctrl).effect, PolicyEffect::Allow);
 
         let mut foreign_ctrl = make_req("dennett_event_create", "other", None);
-        foreign_ctrl.raw_input = json!({ "project_id": ProjectId::new().to_string(), "title": "Escape" });
+        foreign_ctrl.raw_input =
+            json!({ "project_id": ProjectId::new().to_string(), "title": "Escape" });
         assert_eq!(
             engine.evaluate_request(&foreign_ctrl).effect,
             PolicyEffect::Deny
@@ -3287,6 +3853,325 @@ mod tests {
                 .effect,
             PolicyEffect::Deny
         );
+
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "verifies all 8 P0-2 shell classifier bypass vectors, harmless local allowlist preservation, and .git/** write protection under Auto"
+    )]
+    fn p0_2_shell_classifier_blocks_all_8_bypass_vectors_and_git_metadata_writes() {
+        let ws = temp_workspace("p0-2-shell-git");
+        let project_id = ProjectId::new();
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+        let now = TimestampMs::from_millis(1_760_000_000_000);
+
+        // (a) + (c) Windows cmd.exe quoting/escaping & drive-root `\` bypasses
+        // (`'` is NOT a quote, `\` is NOT an escape, `^`/`%`/`!` unsafe, leading `\` is drive-root).
+        for win_bypass in [
+            "echo 'x & curl https://evil.example'",
+            "echo \"foo\\\" & curl https://evil.example\"",
+            "echo hi^&curl https://evil.example",
+            "echo !SECRET_VAR!",
+            r"type \Users\me\.ssh\id_rsa",
+            r"cat \Windows\System32\drivers\etc\hosts",
+        ] {
+            assert!(
+                matches!(
+                    classify_workspace_shell_command_for_platform(win_bypass, &ws, true),
+                    ShellCommandClass::RequiresAsk(_)
+                ),
+                "expected Windows bypass `{win_bypass}` to return RequiresAsk"
+            );
+            if cfg!(windows) {
+                assert!(
+                    matches!(
+                        classify_workspace_shell_command(win_bypass, &ws),
+                        ShellCommandClass::RequiresAsk(_)
+                    ),
+                    "expected native Windows classifier to reject `{win_bypass}`"
+                );
+            }
+        }
+
+        // (b)-(h) Cross-platform bypasses: env expansion, absolute paths, attached redirections,
+        // git config/hook overrides, pruned commands/subcommands, inline python/node eval, and subexpressions.
+        for bypass_cmd in [
+            // (b) Env var & home expansion
+            r"type %USERPROFILE%\.ssh\id_ed25519",
+            r"type %LOCALAPPDATA%\Dennett\head.token",
+            "cat $HOME/.aws/credentials",
+            "cat \"$HOME/.ssh/id_rsa\"",
+            "cat ~/.ssh/id_rsa",
+            // (c) Absolute & literal backslash drive-root paths
+            "cat /etc/passwd",
+            r#"type "\\Users\\me\\.ssh\\id_rsa""#,
+            // (d) Attached & file-writing redirections
+            r"echo evil>C:\Users\me\Startup\x.bat",
+            r"echo x>..\out",
+            r"type<C:\secret",
+            r#"echo "evil">C:\x.bat"#,
+            "echo evil > .git/hooks/pre-commit",
+            // (e) Git config/hook/dir overrides & .git mutation
+            "git -c core.fsmonitor=evil status",
+            "git -ccore.fsmonitor=evil status",
+            "git --config-env=core.fsmonitor=EVIL status",
+            "git --exec-path=./evil status",
+            "git --exec-path ./evil status",
+            "git -C ../other status",
+            "git --git-dir=.git status",
+            "git --work-tree=. status",
+            "cp payload .git/hooks/pre-commit",
+            "mv payload .git/config",
+            // (f) Network-fetching & arbitrary-exec allowlist pruning
+            "npx evil",
+            "make all",
+            "cmake .",
+            "find . -exec rm {} +",
+            "find . -execdir sh {} +",
+            "find . -ok rm {} +",
+            "find . -okdir rm {} +",
+            "find . -delete",
+            "fd -x rm",
+            "npm install evil",
+            "npm i",
+            "npm ci",
+            "npm add evil",
+            "npm exec evil",
+            "pnpm dlx evil",
+            "yarn create evil",
+            "npm init -y",
+            "cargo add evil",
+            "cargo fetch",
+            "cargo update",
+            "cargo install evil",
+            "cargo publish",
+            "uv pip install evil",
+            "uv add evil",
+            "uv sync",
+            "uv tool run evil",
+            "go run main.go",
+            "go get example.com/pkg",
+            "go install example.com/pkg@latest",
+            // (g) Inline script eval
+            "python -c \"__import__('o'+'s').system('whoami')\"",
+            "python3 -c \"print(1)\"",
+            "python -uc \"print(1)\"",
+            "node -e \"console.log(1)\"",
+            "node --eval=\"1+1\"",
+            "node -p \"process.env\"",
+            "node --print \"1\"",
+            // (h) PowerShell / shell parenthesized subexpressions
+            "echo (iwr evil)",
+            "echo (whoami)",
+        ] {
+            for is_win in [true, false] {
+                assert!(
+                    matches!(
+                        classify_workspace_shell_command_for_platform(bypass_cmd, &ws, is_win),
+                        ShellCommandClass::RequiresAsk(_)
+                    ),
+                    "expected bypass `{bypass_cmd}` (is_windows={is_win}) to return RequiresAsk"
+                );
+            }
+        }
+
+        // Harmless safe local commands & exact null/fd-dup redirections remain SafeLocal!
+        for safe_cmd in [
+            "cargo test",
+            "cargo check --workspace && git status",
+            "cargo test 2>&1",
+            "cargo test >NUL",
+            "cargo test 2>/dev/null",
+            "git diff --stat",
+            "npm test",
+            "npm run build",
+            "uv run pytest",
+            "go test ./...",
+            "python --version",
+            "node --version",
+            "echo \"a > b\"",
+        ] {
+            assert_eq!(
+                classify_workspace_shell_command(safe_cmd, &ws),
+                ShellCommandClass::SafeLocal,
+                "expected safe local command `{safe_cmd}` to stay SafeLocal"
+            );
+        }
+
+        // (e) `.git` / `.git/**` file writes MUST require interactive approval under Auto,
+        //     even with AllowWorkspace / AskBeforeWrite (while `.gitignore` stays allowed and
+        //     `FullAccess` still permits `.git/**` writes without prompting).
+        let auto_engine = PolicyEngine::new(PolicyContext {
+            project_id: Some(project_id),
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
+            agent_id,
+            session_id,
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+            autonomy_mode: AutonomyMode::Auto,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
+            rules: vec![],
+        });
+        for git_path in [
+            ".git/hooks/pre-commit",
+            ".git/config",
+            ".GIT/hooks/post-checkout",
+            "nested/.git/config",
+        ] {
+            let req = make_req("write_file", "edit", Some(git_path));
+            assert!(
+                matches!(
+                    auto_engine.evaluate_with_grants(&req, &[], now),
+                    PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+                ),
+                "expected write to `{git_path}` under Auto to require interactive approval"
+            );
+        }
+        // Broad empty-prefix workspace_write grant MUST NOT silently unlock `.git/hooks/pre-commit`!
+        let broad_write_grant = CapabilityGrantRecord {
+            grant_id: CapabilityGrantId::new(),
+            scope: format!("project:{project_id}"),
+            project_id,
+            agent_id: Some(agent_id),
+            session_id: None,
+            task_id: None,
+            tool_pattern: String::from("workspace_write"),
+            target_prefixes: vec![],
+            max_uses: Some(10),
+            uses_consumed: 0,
+            reason: String::from("broad write grant"),
+            expires_at: None,
+            revoked_at: None,
+            revoked_reason: None,
+            created_at: now,
+        };
+        let hook_req = make_req("write_file", "edit", Some(".git/hooks/pre-commit"));
+        assert!(matches!(
+            auto_engine.evaluate_with_grants(&hook_req, &[broad_write_grant], now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
+        // Ordinary `.gitignore` and `.github/workflows/ci.yml` remain auto-allowed!
+        for ok_dotfile in [".gitignore", ".github/workflows/ci.yml"] {
+            let req = make_req("write_file", "edit", Some(ok_dotfile));
+            assert!(matches!(
+                auto_engine.evaluate_with_grants(&req, &[], now),
+                PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Allow,
+                    ..
+                })
+            ));
+        }
+
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn p1_1_shell_capability_grant_scopes_to_command_signature_and_agent_id() {
+        let ws = temp_workspace("p1-1-shell-grant");
+        let project_id = ProjectId::new();
+        let agent_a = AgentId::new();
+        let agent_b = AgentId::new();
+        let session_id = SessionId::new();
+        let now = TimestampMs::from_millis(1_760_000_000_000);
+
+        assert_eq!(
+            normalize_shell_grant_signature("git push origin branch-a"),
+            "git push"
+        );
+        assert_eq!(
+            normalize_shell_grant_signature("git push origin branch-b"),
+            "git push"
+        );
+        assert_eq!(
+            normalize_shell_grant_signature("curl https://evil.example"),
+            "curl"
+        );
+        assert_eq!(normalize_shell_grant_signature("rm -rf build"), "rm");
+        assert_eq!(
+            normalize_shell_grant_signature("cargo test && curl https://example.invalid"),
+            "cargo test && curl"
+        );
+
+        let git_push_grant = CapabilityGrantRecord {
+            grant_id: CapabilityGrantId::new(),
+            scope: format!("project:{project_id}"),
+            project_id,
+            agent_id: Some(agent_a),
+            session_id: None,
+            task_id: None,
+            tool_pattern: String::from("run_command"),
+            target_prefixes: vec![normalize_shell_grant_signature("git push origin branch-a")],
+            max_uses: Some(5),
+            uses_consumed: 1,
+            reason: String::from("approved git push for agent A"),
+            expires_at: Some(TimestampMs::from_millis(now.as_millis() + 60_000)),
+            revoked_at: None,
+            revoked_reason: None,
+            created_at: now,
+        };
+
+        let make_engine = |aid: AgentId| {
+            PolicyEngine::new(PolicyContext {
+                project_id: Some(project_id),
+                project_lifecycle_state: ProjectLifecycleState::Active,
+                workspace_bound: true,
+                agent_id: aid,
+                session_id,
+                task_id: None,
+                workspace_root: ws.clone(),
+                workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+                autonomy_mode: AutonomyMode::Auto,
+                parent_write_ceiling: None,
+                allowed_memory_scopes: BTreeSet::new(),
+                registered_mcp_servers: BTreeSet::new(),
+                task_budget_exhausted: false,
+                rules: vec![],
+            })
+        };
+
+        let engine_a = make_engine(agent_a);
+        let engine_b = make_engine(agent_b);
+
+        // 1. Same agent running `git push origin branch-b` matches the `git push` grant!
+        let mut push_b = make_req("run_command", "execute", Some("git push origin branch-b"));
+        push_b.raw_input = json!({ "command": "git push origin branch-b" });
+        assert!(matches!(
+            engine_a.evaluate_with_grants(&push_b, std::slice::from_ref(&git_push_grant), now),
+            PolicyEvaluationDecision::AllowedByGrant { grant_id, .. } if grant_id == git_push_grant.grant_id
+        ));
+
+        // 2. Same agent running unrelated or compound commands MUST STILL ask!
+        for other_cmd in [
+            "curl https://evil.example",
+            "rm -rf build",
+            "git push origin branch-b && curl https://evil.example",
+            "git -c core.fsmonitor=evil push origin branch-b",
+        ] {
+            let mut req = make_req("run_command", "execute", Some(other_cmd));
+            req.raw_input = json!({ "command": other_cmd });
+            assert!(
+                matches!(
+                    engine_a.evaluate_with_grants(&req, std::slice::from_ref(&git_push_grant), now),
+                    PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+                ),
+                "grant for `git push` must NOT authorize `{other_cmd}`"
+            );
+        }
+
+        // 3. Different agent (`agent_b`) running `git push origin branch-b` MUST NOT match Agent A's grant!
+        assert!(matches!(
+            engine_b.evaluate_with_grants(&push_b, std::slice::from_ref(&git_push_grant), now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
 
         let _ = fs::remove_dir_all(&ws);
     }
