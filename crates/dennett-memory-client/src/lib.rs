@@ -520,7 +520,34 @@ impl MemoryClient {
         scope: Option<&MemoryScope>,
         correlation_id: Option<&CorrelationId>,
     ) -> Result<ListTombstonesResponse, DennettError> {
-        let path = scoped_query_path("/v1/memory/forget/tombstones", scope);
+        self.list_tombstones_since(scope, None, None, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/memory/forget/tombstones` with optional `scope`, monotonic `after_seq`
+    /// cursor (V15 commit-barrier stream), and `limit` query parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by `dennett-memoryd` or transport failure.
+    pub async fn list_tombstones_since(
+        &self,
+        scope: Option<&MemoryScope>,
+        after_seq: Option<i64>,
+        limit: Option<u32>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ListTombstonesResponse, DennettError> {
+        let mut params = Vec::new();
+        if let Some(sc) = scope {
+            params.push(format!("scope={}", encode_query_component(sc.as_str())));
+        }
+        if let Some(seq) = after_seq {
+            params.push(format!("after_seq={seq}"));
+        }
+        if let Some(lim) = limit {
+            params.push(format!("limit={lim}"));
+        }
+        let path = build_query_path("/v1/memory/forget/tombstones", &params);
         self.request_no_body(Method::GET, &path, correlation_id)
             .await
     }

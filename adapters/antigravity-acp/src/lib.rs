@@ -10,6 +10,7 @@
 pub mod antigravity;
 pub mod conformance;
 pub mod port;
+pub mod process_tree;
 pub mod profile;
 pub mod simulated;
 pub mod transport;
@@ -25,6 +26,7 @@ pub use port::{
     RuntimeMcpServerSpec, SessionStartOutcome, SessionStartRequest, TurnOutcome, TurnRequest,
     classify_provider_quota_error, evaluate_binding_resume_compatibility,
 };
+pub use process_tree::ProcessTreeGuard;
 pub use profile::{
     ISOLATED_APP_DATA_REL, IsolatedProfilePaths, MIN_AGY_VERSION, Semver,
     build_effective_system_prompt, build_effective_system_prompt_with_skills, build_settings_json,

@@ -492,42 +492,98 @@ async fn scrub_document_in_tx<C: GenericClient>(
     Ok(())
 }
 
-/// Lists content-free [`ForgetTombstone`] audit records across authorized scopes.
+/// Default maximum number of tombstones returned per page.
+const DEFAULT_TOMBSTONES_LIMIT: u32 = 200;
+/// Hard upper bound on tombstones returned per page.
+const MAX_TOMBSTONES_LIMIT: u32 = 500;
+
+/// Lists content-free [`ForgetTombstone`] audit records across authorized scopes with a strict
+/// V15 commit-visibility barrier (`commit_xid < pg_snapshot_xmin(pg_current_snapshot())`).
+///
+/// - When `after_seq` is `Some(seq)`: streams monotonically (`tombstone_seq > seq ORDER BY tombstone_seq ASC`)
+///   and returns `next_after_seq = Some(max_returned_seq.unwrap_or(seq))`.
+/// - When `after_seq` is `None`: returns newest-first (`ORDER BY tombstone_seq DESC`) and sets
+///   `next_after_seq` to the highest visible `tombstone_seq` (if any).
 pub(crate) async fn execute_list_tombstones(
     svc: &MemoryService,
     principal: &AuthPrincipal,
     scope: Option<&MemoryScope>,
+    after_seq: Option<i64>,
+    limit: Option<u32>,
 ) -> Result<ListTombstonesResponse, DennettError> {
+    if let Some(seq) = after_seq
+        && seq < 0
+    {
+        return Err(DennettError::InvalidInput {
+            field: String::from("after_seq"),
+            reason: String::from("must be >= 0"),
+        });
+    }
+    let capped_limit = i64::from(
+        limit
+            .unwrap_or(DEFAULT_TOMBSTONES_LIMIT)
+            .clamp(1, MAX_TOMBSTONES_LIMIT),
+    );
     let allowed_scopes = resolve_search_scopes(principal, scope)?;
     if allowed_scopes.is_empty() {
         return Ok(ListTombstonesResponse {
             tombstones: Vec::new(),
+            next_after_seq: after_seq,
         });
     }
     svc.ensure_migrated().await?;
 
     let op_fut = async {
         let conn = svc.get_conn(svc.op_timeout()).await?;
-        let rows = conn
-            .query(
+        let rows = if let Some(seq) = after_seq {
+            conn.query(
                 "SELECT tombstone_id, scope, target_type, target_id, forget_event_id,
                         principal_id, reason, residual_backup_notice, propagation_status,
-                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint
+                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+                        tombstone_seq
                  FROM memory_forget_tombstones
                  WHERE scope = ANY($1::text[])
-                 ORDER BY created_at DESC, tombstone_id ASC",
-                &[&allowed_scopes],
+                   AND commit_xid < pg_snapshot_xmin(pg_current_snapshot())
+                   AND tombstone_seq > $2
+                 ORDER BY tombstone_seq ASC
+                 LIMIT $3",
+                &[&allowed_scopes, &seq, &capped_limit],
             )
             .await
-            .map_err(|err| svc.map_pg_err(&err))?;
+            .map_err(|err| svc.map_pg_err(&err))?
+        } else {
+            conn.query(
+                "SELECT tombstone_id, scope, target_type, target_id, forget_event_id,
+                        principal_id, reason, residual_backup_notice, propagation_status,
+                        TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+                        tombstone_seq
+                 FROM memory_forget_tombstones
+                 WHERE scope = ANY($1::text[])
+                   AND commit_xid < pg_snapshot_xmin(pg_current_snapshot())
+                 ORDER BY tombstone_seq DESC
+                 LIMIT $2",
+                &[&allowed_scopes, &capped_limit],
+            )
+            .await
+            .map_err(|err| svc.map_pg_err(&err))?
+        };
 
         let mut tombstones = Vec::with_capacity(rows.len());
+        let mut max_seq: Option<i64> = None;
         for row in rows {
             let tomb = decode_tombstone_row(&row)?;
             require_scope_capability(principal, &tomb.scope, MemoryCapability::Read)?;
+            max_seq = Some(max_seq.map_or(tomb.tombstone_seq, |m| m.max(tomb.tombstone_seq)));
             tombstones.push(tomb);
         }
-        Ok(ListTombstonesResponse { tombstones })
+        let next_after_seq = match after_seq {
+            Some(seq) => Some(max_seq.unwrap_or(seq)),
+            None => max_seq,
+        };
+        Ok(ListTombstonesResponse {
+            tombstones,
+            next_after_seq,
+        })
     };
 
     time::timeout(svc.op_timeout(), op_fut)
@@ -598,6 +654,7 @@ async fn resolve_forget_replay<C: GenericClient>(
 fn decode_tombstone_row(row: &Row) -> Result<ForgetTombstone, DennettError> {
     Ok(ForgetTombstone {
         tombstone_id: TombstoneId::from_uuid(row.get(0)),
+        tombstone_seq: row.get(10),
         scope: MemoryScope::try_new(row.get::<_, String>(1))?,
         target_type: row.get::<_, String>(2).parse()?,
         target_id: row.get(3),

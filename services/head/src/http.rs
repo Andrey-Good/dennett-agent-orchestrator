@@ -9,10 +9,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
-use axum::http::header::{HOST, ORIGIN};
+use axum::http::header::{CONTENT_TYPE, HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -58,6 +58,8 @@ static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlatio
 static HEADER_SHUTDOWN: HeaderName = HeaderName::from_static("x-dennett-shutdown");
 static HEADER_SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
 static HEADER_CONTROL_TOKEN: HeaderName = HeaderName::from_static("x-dennett-control-token");
+static HEADER_ARTIFACT_SHA256: HeaderName = HeaderName::from_static("x-dennett-artifact-sha256");
+static HEADER_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
 
 /// Shared `axum` application state for `dennett-head`.
 #[derive(Clone)]
@@ -208,6 +210,16 @@ struct MemoryScopeQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct MemoryTombstonesQuery {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    after_seq: Option<i64>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ListMemoryClaimsQuery {
     #[serde(default)]
     scope: Option<String>,
@@ -313,6 +325,10 @@ pub fn build_head_router(state: HeadAppState) -> Router {
         .route(
             "/v1/sessions/{session_id}/artifacts/{artifact_key}/revisions",
             get(handle_list_artifact_revisions),
+        )
+        .route(
+            "/v1/sessions/{session_id}/artifacts/{artifact_id}/content",
+            get(handle_get_artifact_content),
         )
         .route(
             "/v1/sessions/{session_id}/artifacts/{artifact_id}/lifecycle",
@@ -1313,6 +1329,48 @@ async fn handle_list_artifacts(
     };
     match svc.list_artifacts(session_id).await {
         Ok(list) => json_with_correlation(StatusCode::OK, &list, &cid),
+        Err(err) => domain_error_response(err, &cid),
+    }
+}
+
+async fn handle_get_artifact_content(
+    State(state): State<HeadAppState>,
+    headers: HeaderMap,
+    Path((raw_session_id, raw_artifact_id)): Path<(String, String)>,
+) -> Response {
+    let (cid, svc) = match get_service(&state, &headers) {
+        Ok(pair) => pair,
+        Err(resp) => return *resp,
+    };
+    let session_id = match SessionId::from_str(&raw_session_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    let artifact_id = match ArtifactId::from_str(&raw_artifact_id) {
+        Ok(id) => id,
+        Err(err) => return domain_error_response(err, &cid),
+    };
+    match svc.get_artifact_content(session_id, artifact_id).await {
+        Ok(blob) => {
+            let mut resp = Response::new(Body::from(blob.bytes));
+            *resp.status_mut() = StatusCode::OK;
+            let content_type = HeaderValue::from_str(&blob.mime_type)
+                .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+            resp.headers_mut().insert(CONTENT_TYPE, content_type);
+            if let Ok(sha_hdr) = HeaderValue::from_str(blob.sha256.as_str()) {
+                resp.headers_mut()
+                    .insert(HEADER_ARTIFACT_SHA256.clone(), sha_hdr);
+            }
+            resp.headers_mut().insert(
+                HEADER_CONTENT_TYPE_OPTIONS.clone(),
+                HeaderValue::from_static("nosniff"),
+            );
+            if let Ok(cid_hdr) = HeaderValue::from_str(cid.as_str()) {
+                resp.headers_mut()
+                    .insert(HEADER_CORRELATION_ID.clone(), cid_hdr);
+            }
+            resp
+        }
         Err(err) => domain_error_response(err, &cid),
     }
 }
@@ -3058,7 +3116,7 @@ async fn handle_forget_memory(
 async fn handle_list_memory_tombstones(
     State(state): State<HeadAppState>,
     headers: HeaderMap,
-    Query(query): Query<MemoryScopeQuery>,
+    Query(query): Query<MemoryTombstonesQuery>,
 ) -> Response {
     let (cid, svc) = match get_service(&state, &headers) {
         Ok(pair) => pair,
@@ -3068,7 +3126,10 @@ async fn handle_list_memory_tombstones(
         Ok(s) => s,
         Err(err) => return domain_error_response(err, &cid),
     };
-    match svc.proxy_list_memory_tombstones(scope.as_ref(), &cid).await {
+    match svc
+        .proxy_list_memory_tombstones_since(scope.as_ref(), query.after_seq, query.limit, &cid)
+        .await
+    {
         Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &cid),
         Err(err) => domain_error_response(err, &cid),
     }

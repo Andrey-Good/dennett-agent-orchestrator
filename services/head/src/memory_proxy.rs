@@ -14,13 +14,13 @@ use std::collections::BTreeSet;
 use dennett_contracts::{
     ConsolidationJob, ConsolidationJobId, CorrectNoteRequest, CorrelationId, CreateClaimRequest,
     CreateConsolidationJobRequest, CreateDocumentRequest, DennettError, DocumentId, ExportRequest,
-    ExportResponse, ForgetRequest, ForgetResponse, GetDocumentVersionsResponse, ImportRequest,
-    ImportResponse, ListClaimsResponse, ListConflictsResponse, ListConsolidationJobsResponse,
-    ListDocumentsResponse, ListTombstonesResponse, MemoryCapability, MemoryClaim, MemoryConflict,
-    MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope, MemoryStatus,
-    NoteHistoryResponse, NoteMutationResponse, ResolveConflictRequest, SearchNotesRequest,
-    SupersedeClaimRequest, TriggerIndexRebuildRequest, TriggerIndexRebuildResponse,
-    UpdateDocumentRequest,
+    ExportResponse, ForgetRequest, ForgetResponse, ForgetTargetType, GetDocumentVersionsResponse,
+    ImportRequest, ImportResponse, ListClaimsResponse, ListConflictsResponse,
+    ListConsolidationJobsResponse, ListDocumentsResponse, ListTombstonesResponse, MemoryCapability,
+    MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope,
+    MemoryStatus, NoteHistoryResponse, NoteMutationResponse, ResolveConflictRequest,
+    SearchNotesRequest, SupersedeClaimRequest, TriggerIndexRebuildRequest,
+    TriggerIndexRebuildResponse, UpdateDocumentRequest,
 };
 
 use crate::service::HeadService;
@@ -386,7 +386,8 @@ impl HeadService {
         res
     }
 
-    /// Proxies `POST /v1/memory/forget` (`Forget`).
+    /// Proxies `POST /v1/memory/forget` (`Forget`) and immediately scrubs any matching
+    /// `ordered_outbox` rows for forgotten notes so zero plaintext lingers in `dennett_control`.
     ///
     /// # Errors
     ///
@@ -404,6 +405,9 @@ impl HeadService {
             .await?;
         let res = client.forget(req, Some(correlation_id)).await;
         self.observe_memory_proxy_result(&res);
+        if res.is_ok() && req.target_type == ForgetTargetType::Note {
+            let _ = self.scrub_forgotten_memory_outbox(&[req.target_id]).await;
+        }
         res
     }
 
@@ -417,10 +421,29 @@ impl HeadService {
         scope: Option<&MemoryScope>,
         correlation_id: &CorrelationId,
     ) -> Result<ListTombstonesResponse, DennettError> {
+        self.proxy_list_memory_tombstones_since(scope, None, None, correlation_id)
+            .await
+    }
+
+    /// Proxies `GET /v1/memory/forget/tombstones` (`Read`) with optional `after_seq` and `limit`
+    /// streaming cursor parameters.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`DennettError`] from `memoryd` or `503 DatabaseUnavailable` when unreachable.
+    pub async fn proxy_list_memory_tombstones_since(
+        &self,
+        scope: Option<&MemoryScope>,
+        after_seq: Option<i64>,
+        limit: Option<u32>,
+        correlation_id: &CorrelationId,
+    ) -> Result<ListTombstonesResponse, DennettError> {
         let client = self
             .owner_memory_client(scope, &[MemoryCapability::Read])
             .await?;
-        let res = client.list_tombstones(scope, Some(correlation_id)).await;
+        let res = client
+            .list_tombstones_since(scope, after_seq, limit, Some(correlation_id))
+            .await;
         self.observe_memory_proxy_result(&res);
         res
     }

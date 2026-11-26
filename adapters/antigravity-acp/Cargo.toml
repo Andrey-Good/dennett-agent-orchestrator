@@ -16,5 +16,15 @@ uuid.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+# Kept at `deny` (instead of workspace `forbid`) strictly so `src/process_tree.rs` can invoke
+# zero-dependency Win32 Job Object / POSIX `kill(2)` FFI under explicit `#[expect(unsafe_code)]`.
+unsafe_code = "deny"
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+module_name_repetitions = "allow"

@@ -27,6 +27,7 @@ use tokio::time;
 use crate::port::{
     PolicyEvaluationRequest, PolicyEvaluator, RuntimeEvent, RuntimeMcpServerSpec, TurnOutcome,
 };
+use crate::process_tree::ProcessTreeGuard;
 use crate::profile::normalize_workspace_path;
 
 /// Maximum size of a single JSON-RPC line accepted from `agy acp` stdout (4 MiB).
@@ -150,6 +151,7 @@ pub struct AcpPermissionRequest {
 /// Active stdio JSON-RPC 2.0 connection to one isolated `agy acp` subprocess.
 pub struct AcpProcess {
     child: Option<Child>,
+    process_tree: ProcessTreeGuard,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     stderr_buf: Arc<Mutex<String>>,
@@ -211,6 +213,7 @@ impl AcpProcess {
         for (k, v) in &config.env_overrides {
             cmd.env(k, v);
         }
+        ProcessTreeGuard::configure_command(&mut cmd);
 
         let mut child = cmd.spawn().map_err(|err| DennettError::RuntimeProtocol {
             code: None,
@@ -219,6 +222,7 @@ impl AcpProcess {
                 &config.secrets_to_redact,
             ),
         })?;
+        let process_tree = ProcessTreeGuard::attach(&child);
 
         let stdin = child
             .stdin
@@ -246,6 +250,7 @@ impl AcpProcess {
 
         Ok(Self {
             child: Some(child),
+            process_tree,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             stderr_buf,
@@ -457,9 +462,10 @@ impl AcpProcess {
     /// Executes one `session/prompt` turn with external [`PolicyEvaluator`], optional streaming
     /// event sink, and live cancellation via `cancel_rx`.
     ///
-    /// Returns `(TurnOutcome, needs_process_reset)` where `needs_process_reset == true` signals
-    /// that cancellation exceeded grace timeout and the child process should be killed to
-    /// guarantee no lingering background execution.
+    /// Returns `(TurnOutcome, needs_process_reset)` where `needs_process_reset == true` on ANY
+    /// [`RunStatus::Cancelled`] turn exit (both soft `session/cancel` and grace timeout) so the
+    /// cancelled process tree is cleanly terminated with zero lingering descendant subprocesses
+    /// or NTFS file locks.
     ///
     /// # Errors
     ///
@@ -499,16 +505,31 @@ impl AcpProcess {
         .await
     }
 
-    /// Gracefully closes stdin and waits briefly before forcefully killing `agy acp`.
-    pub async fn shutdown(mut self) {
+    /// Gracefully closes stdin, waits briefly for `agy acp` to exit, and atomically terminates
+    /// the entire contained OS process tree so zero descendant subprocesses survive.
+    pub async fn shutdown(&mut self) {
         drop(self.stdin.take());
-        if let Some(mut child) = self.child.take()
-            && time::timeout(SHUTDOWN_GRACE_TIMEOUT, child.wait())
+        if let Some(mut child) = self.child.take() {
+            if time::timeout(SHUTDOWN_GRACE_TIMEOUT, child.wait())
                 .await
                 .is_err()
-        {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            {
+                self.process_tree
+                    .terminate_and_drain(Duration::from_secs(2))
+                    .await;
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            } else {
+                // Even if the direct `agy` child exited cleanly, terminate any surviving
+                // descendant subprocesses in the Job Object / process group.
+                self.process_tree
+                    .terminate_and_drain(Duration::from_secs(2))
+                    .await;
+            }
+        } else {
+            self.process_tree
+                .terminate_and_drain(Duration::from_secs(2))
+                .await;
         }
     }
 
@@ -552,6 +573,9 @@ impl AcpProcess {
 impl Drop for AcpProcess {
     fn drop(&mut self) {
         drop(self.stdin.take());
+        // Atomically kill the entire process tree (Win32 Job Object / Unix process group)
+        // non-blockingly before reaping the direct child handle.
+        self.process_tree.terminate();
         let Some(mut child) = self.child.take() else {
             return;
         };
@@ -653,7 +677,7 @@ where
                 usage: None,
                 human_wait_ms: acc.human_wait_ms,
             },
-            false,
+            true,
         ));
     }
 
@@ -795,7 +819,7 @@ where
                                 usage: None,
                                 human_wait_ms: acc.human_wait_ms,
                             },
-                            false,
+                            true,
                         ));
                     }
                     return Err(err);
@@ -839,7 +863,7 @@ where
                         usage,
                         human_wait_ms: acc.human_wait_ms,
                     },
-                    false,
+                    true,
                 ));
             }
 
@@ -2390,7 +2414,10 @@ mod tests {
         server_task.await.expect("server assertions");
         trigger.await.expect("trigger task");
 
-        assert!(!needs_reset);
+        assert!(
+            needs_reset,
+            "any Cancelled turn exit must signal process-tree reset to prevent orphaned grandchildren"
+        );
         assert_eq!(outcome.status, RunStatus::Cancelled);
         assert_eq!(outcome.stop_reason, "cancelled");
         assert_eq!(

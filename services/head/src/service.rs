@@ -13,7 +13,7 @@
 use core::fmt::{self, Write as _};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -29,13 +29,13 @@ use dennett_contracts::{
     CreateNoteRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
     DennettError, DiagnosticsResponse, DispatchEffectRequest, EffectClaimRecord,
     EnqueueFollowupRequest, ExternalEffectStatus, FlushOutboxResponse, FollowupId, FollowupStatus,
-    HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse, IdempotencyKey,
-    ListAgentsResponse, ListArtifactsResponse, ListOutboxResponse, ListPolicyRulesResponse,
-    ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse, LiveRunResponse,
-    LiveRunSnapshot, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
-    MemoryStatus, MessageId, MessageRecord, MessageRole, OrderedOutboxItem, OrderedOutboxStatus,
-    OutboxItemId, PermissionDecisionRecord, PermissionRequestId, PolicyRule, PolicyRuleId,
-    PrincipalId, ProfileMode, ProjectId, ProjectLifecycleState, ProjectRecord,
+    ForgetTargetType, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
+    IdempotencyKey, ListAgentsResponse, ListArtifactsResponse, ListOutboxResponse,
+    ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse,
+    LiveRunResponse, LiveRunSnapshot, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus,
+    MemoryScope, MemoryStatus, MessageId, MessageRecord, MessageRole, OrderedOutboxItem,
+    OrderedOutboxStatus, OutboxItemId, PermissionDecisionRecord, PermissionRequestId, PolicyRule,
+    PolicyRuleId, PrincipalId, ProfileMode, ProjectId, ProjectLifecycleState, ProjectRecord,
     ProviderConnectionId, ResumeFollowupsResponse, RunId, RunRecord, RunStatus, RuntimeAuthProfile,
     RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
     SendMessageRequest, SendMessageResponse, ServiceKind, SessionDetailResponse,
@@ -50,7 +50,6 @@ use dennett_runtime_antigravity::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::time;
 use tokio_postgres::NoTls;
@@ -366,6 +365,22 @@ pub(crate) struct CoreTurnFailure {
     pub(crate) captured_decisions: Vec<CapturedPermissionDecision>,
 }
 
+/// Placeholder written into scrubbed `ordered_outbox` payloads after successful delivery to `memoryd`.
+const OUTBOX_SCRUBBED_DELIVERED: &str = "[delivered]";
+/// Placeholder written into scrubbed `ordered_outbox` payloads after the note is forgotten.
+const OUTBOX_SCRUBBED_FORGOTTEN: &str = "[forgotten]";
+
+/// Immutable content-addressed artifact payload returned by [`HeadService::get_artifact_content`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactContentBlob {
+    /// Exact immutable bytes captured when the artifact revision was registered.
+    pub bytes: Vec<u8>,
+    /// MIME media type associated with the artifact revision.
+    pub mime_type: String,
+    /// Verified lowercase SHA-256 hex digest matching `bytes`.
+    pub sha256: Sha256Hex,
+}
+
 /// Durable JSONB envelope stored in `ordered_outbox` (`destination = 'memoryd'`, `D2-OVER-01`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MemoryOutboxEnvelope {
@@ -375,10 +390,71 @@ struct MemoryOutboxEnvelope {
     session_id: Option<SessionId>,
     run_id: Option<RunId>,
     note_request: CreateNoteRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payload_sha256: Option<Sha256Hex>,
+    #[serde(default)]
+    forgotten: bool,
     #[serde(default)]
     delivered_event_id: Option<dennett_contracts::MemoryEventId>,
     #[serde(default)]
     delivered_note_id: Option<dennett_contracts::MemoryNoteId>,
+}
+
+fn note_request_fingerprint(req: &CreateNoteRequest) -> Result<Sha256Hex, DennettError> {
+    let bytes = serde_json::to_vec(req).map_err(|err| DennettError::Internal {
+        detail: format!("failed serializing memory note request for fingerprint: {err}"),
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn scrub_note_request(req: &mut CreateNoteRequest, marker: &str) {
+    marker.clone_into(&mut req.title);
+    marker.clone_into(&mut req.body);
+    req.tags.clear();
+    req.observed_at = None;
+    req.evidence_links.clear();
+    req.author_label = None;
+    req.admission_status = None;
+    req.salience = None;
+    req.topic_key = None;
+}
+
+fn verify_existing_outbox_envelope(
+    existing_env: &MemoryOutboxEnvelope,
+    create_note_req: &CreateNoteRequest,
+    incoming_fp: &Sha256Hex,
+) -> Result<(), DennettError> {
+    if existing_env.operation != "create_note" {
+        return Err(DennettError::IdempotencyMismatch {
+            idempotency_key: create_note_req.idempotency_key.to_string(),
+            reason: format!(
+                "reused idempotency key in scope `{}` with conflicting operation",
+                create_note_req.scope
+            ),
+        });
+    }
+    if existing_env.forgotten {
+        return Err(DennettError::Conflict {
+            resource: String::from("memory_note"),
+            expected_revision: None,
+            actual_revision: None,
+            reason: String::from("note was previously forgotten and cannot be resurrected"),
+        });
+    }
+    let payload_matches = match existing_env.payload_sha256.as_ref() {
+        Some(stored_fp) => stored_fp == incoming_fp,
+        None => existing_env.note_request == *create_note_req,
+    };
+    if !payload_matches {
+        return Err(DennettError::IdempotencyMismatch {
+            idempotency_key: create_note_req.idempotency_key.to_string(),
+            reason: format!(
+                "reused idempotency key in scope `{}` with conflicting note payload",
+                create_note_req.scope
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub(crate) const CANCEL_REASON_NONE: u8 = 0;
@@ -2228,7 +2304,11 @@ impl HeadService {
             }
         };
 
-        let (normalized_rel_path, digest) = if let Some(ref rel) = req.relative_path {
+        let (normalized_rel_path, blob_bytes, digest, stored_inline_content) = if let Some(
+            ref rel,
+        ) =
+            req.relative_path
+        {
             let Some(ws_path) = workspace_path else {
                 let reason = if project_id.is_none() {
                     String::from(
@@ -2250,37 +2330,57 @@ impl HeadService {
                 || format!("session:{session_id}"),
                 |pid| format!("project:{pid}"),
             );
-            let (safe_rel, file_digest) = tokio::task::spawn_blocking(move || {
-                let ws_root = PathBuf::from(&ws_path);
-                let safe_rel =
-                    resolve_within_workspace(&ws_root, &rel_owned).map_err(|reason| {
-                        DennettError::AccessDenied {
-                            scope: scope_label.clone(),
-                            reason,
-                        }
-                    })?;
-                let computed = if let Some(inline) = inline_owned {
-                    sha256_hex(inline.as_bytes())
-                } else {
-                    let full_path = ws_root.join(&safe_rel);
-                    stream_sha256_regular_file(
-                        &full_path,
-                        MAX_WORKSPACE_ARTIFACT_HASH_BYTES,
-                        &scope_label,
-                        &safe_rel,
-                    )?
-                };
-                Ok::<_, DennettError>((safe_rel, computed))
-            })
-            .await
-            .map_err(|err| DennettError::Internal {
-                detail: format!("artifact hashing task failed: {err}"),
-            })??;
-            (Some(safe_rel), file_digest)
+            let (safe_rel, snap_bytes, snap_digest, snap_inline) =
+                tokio::task::spawn_blocking(move || {
+                    let ws_root = PathBuf::from(&ws_path);
+                    let safe_rel =
+                        resolve_within_workspace(&ws_root, &rel_owned).map_err(|reason| {
+                            DennettError::AccessDenied {
+                                scope: scope_label.clone(),
+                                reason,
+                            }
+                        })?;
+                    if let Some(inline) = inline_owned {
+                        let bytes = inline.as_bytes().to_vec();
+                        let computed = sha256_hex(&bytes);
+                        Ok::<_, DennettError>((safe_rel, bytes, computed, Some(inline)))
+                    } else {
+                        let full_path = ws_root.join(&safe_rel);
+                        let (bytes, computed) = read_regular_file_snapshot(
+                            &full_path,
+                            MAX_ARTIFACT_SNAPSHOT_BYTES,
+                            &scope_label,
+                            &safe_rel,
+                        )?;
+                        let inline_preview = if bytes.len() <= MAX_ARTIFACT_INLINE_PREVIEW_BYTES {
+                            String::from_utf8(bytes.clone()).ok()
+                        } else {
+                            None
+                        };
+                        Ok::<_, DennettError>((safe_rel, bytes, computed, inline_preview))
+                    }
+                })
+                .await
+                .map_err(|err| DennettError::Internal {
+                    detail: format!("artifact snapshot task failed: {err}"),
+                })??;
+            (Some(safe_rel), snap_bytes, snap_digest, snap_inline)
         } else {
-            let computed = sha256_hex(req.content.as_deref().unwrap_or_default().as_bytes());
-            (None, computed)
+            let bytes = req
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes()
+                .to_vec();
+            let computed = sha256_hex(&bytes);
+            (None, bytes, computed, req.content)
         };
+
+        let content_byte_size =
+            i64::try_from(blob_bytes.len()).map_err(|_| DennettError::InvalidInput {
+                field: String::from("content"),
+                reason: String::from("artifact snapshot size exceeds representable range"),
+            })?;
 
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let tx = conn
@@ -2315,13 +2415,22 @@ impl HeadService {
         let revision = prev_rev + 1;
         let artifact_id = ArtifactId::new();
 
+        tx.execute(
+            "INSERT INTO artifact_blobs (sha256, bytes, byte_size)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (sha256) DO NOTHING",
+            &[&digest.as_str(), &blob_bytes, &content_byte_size],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
         let row = tx
             .query_one(
                 "INSERT INTO artifacts (
                     artifact_id, session_id, project_id, run_id, name, mime_type,
-                    revision, content, relative_path, sha256,
+                    revision, content, relative_path, sha256, content_byte_size,
                     completeness_status, lifecycle_state
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active')
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active')
                  RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
                 &[
                     &artifact_id.as_uuid(),
@@ -2331,9 +2440,10 @@ impl HeadService {
                     &req.name.trim(),
                     &req.mime_type.trim(),
                     &revision,
-                    &req.content,
+                    &stored_inline_content,
                     &normalized_rel_path,
                     &digest.as_str(),
+                    &content_byte_size,
                     &req.completeness_status.as_str(),
                 ],
             )
@@ -2390,12 +2500,82 @@ impl HeadService {
             name: req.name.trim().to_owned(),
             mime_type: req.mime_type.trim().to_owned(),
             revision,
-            content: req.content,
+            content: stored_inline_content,
             relative_path: normalized_rel_path,
             sha256: digest,
             completeness_status: req.completeness_status,
             lifecycle_state: ArtifactLifecycleState::Active,
             created_at: TimestampMs::from_millis(row.get(0)),
+        })
+    }
+
+    /// Retrieves the exact immutable content-addressed bytes for one persisted artifact revision,
+    /// verifying SHA-256 integrity against `artifacts.sha256` (Contract D §D.10).
+    ///
+    /// Falls back to legacy inline `artifacts.content` when `artifact_blobs` has no pre-v10 row,
+    /// and rejects `deleted` tombstones with [`DennettError::NotFound`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Internal`] (on digest mismatch), or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn get_artifact_content(
+        &self,
+        session_id: SessionId,
+        artifact_id: ArtifactId,
+    ) -> Result<ArtifactContentBlob, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let row = conn
+            .query_opt(
+                "SELECT a.mime_type, a.sha256, a.lifecycle_state, a.content, b.bytes
+                 FROM artifacts a
+                 LEFT JOIN artifact_blobs b ON b.sha256 = a.sha256
+                 WHERE a.session_id = $1 AND a.artifact_id = $2",
+                &[&session_id.as_uuid(), &artifact_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let Some(row) = row else {
+            return Err(DennettError::NotFound {
+                resource: String::from("artifact"),
+                id: artifact_id.to_string(),
+            });
+        };
+
+        let mime_type: String = row.get(0);
+        let expected_sha256 = Sha256Hex::try_new(row.get::<_, String>(1))?;
+        let lifecycle_state = ArtifactLifecycleState::from_str(&row.get::<_, String>(2))?;
+        if lifecycle_state == ArtifactLifecycleState::Deleted {
+            return Err(DennettError::NotFound {
+                resource: String::from("artifact_content"),
+                id: artifact_id.to_string(),
+            });
+        }
+
+        let legacy_content: Option<String> = row.get(3);
+        let blob_bytes: Option<Vec<u8>> = row.get(4);
+        let bytes = blob_bytes
+            .or_else(|| legacy_content.map(String::into_bytes))
+            .ok_or_else(|| DennettError::NotFound {
+                resource: String::from("artifact_content"),
+                id: artifact_id.to_string(),
+            })?;
+
+        let actual_sha256 = sha256_hex(&bytes);
+        if actual_sha256 != expected_sha256 {
+            return Err(DennettError::Internal {
+                detail: format!(
+                    "artifact {artifact_id} immutable blob integrity check failed: expected {expected_sha256}, computed {actual_sha256}"
+                ),
+            });
+        }
+
+        Ok(ArtifactContentBlob {
+            bytes,
+            mime_type,
+            sha256: expected_sha256,
         })
     }
 
@@ -5460,6 +5640,7 @@ impl HeadService {
              FROM ordered_outbox
              WHERE destination = $1 AND ordering_key = $2 AND idempotency_key = $3"
         );
+        let incoming_fp = note_request_fingerprint(create_note_req)?;
         if let Some(existing_row) = tx
             .query_opt(
                 &existing_sql,
@@ -5477,17 +5658,7 @@ impl HeadService {
                 .map_err(|err| DennettError::Internal {
                 detail: format!("corrupt ordered_outbox memory envelope JSON: {err}"),
             })?;
-            if existing_env.operation != "create_note"
-                || existing_env.note_request != *create_note_req
-            {
-                return Err(DennettError::IdempotencyMismatch {
-                    idempotency_key: create_note_req.idempotency_key.to_string(),
-                    reason: format!(
-                        "reused idempotency key in scope `{}` with conflicting note payload",
-                        create_note_req.scope
-                    ),
-                });
-            }
+            verify_existing_outbox_envelope(&existing_env, create_note_req, &incoming_fp)?;
             tx.commit()
                 .await
                 .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
@@ -5501,6 +5672,8 @@ impl HeadService {
             session_id,
             run_id,
             note_request: create_note_req.clone(),
+            payload_sha256: Some(incoming_fp),
+            forgotten: false,
             delivered_event_id: None,
             delivered_note_id: None,
         };
@@ -5574,6 +5747,183 @@ impl HeadService {
         .is_some()
     }
 
+    /// Reads the PostgreSQL clock and returns `max(host_now, pg_now + 1ms)` so freshly enqueued or
+    /// migrated `ordered_outbox` rows stamped with PG `now()` are immediately claimable even when
+    /// Docker/WSL2 PostgreSQL clocks sit slightly ahead of the host clock.
+    async fn effective_outbox_now(&self) -> Result<TimestampMs, DennettError> {
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let pg_now_ms: i64 = conn
+            .query_one(
+                "SELECT TRUNC(EXTRACT(EPOCH FROM now()) * 1000)::bigint",
+                &[],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+            .get(0);
+        let host_now_ms = TimestampMs::now().as_millis();
+        Ok(TimestampMs::from_millis(
+            host_now_ms.max(pg_now_ms.saturating_add(1)),
+        ))
+    }
+
+    /// Scrubs plaintext `note_request` fields to `[forgotten]` in any `ordered_outbox` rows
+    /// (`destination = 'memoryd'`) whose `delivered_note_id` matches one of `note_ids`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] on control PG failure.
+    pub async fn scrub_forgotten_memory_outbox(
+        &self,
+        note_ids: &[uuid::Uuid],
+    ) -> Result<u64, DennettError> {
+        if note_ids.is_empty() {
+            return Ok(0);
+        }
+        let _ = self.ensure_migrated().await?;
+        let id_strings: Vec<String> = note_ids.iter().map(ToString::to_string).collect();
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let rows = tx
+            .query(
+                "SELECT item_id, payload_json::text
+                 FROM ordered_outbox
+                 WHERE destination = $1
+                   AND (payload_json->>'delivered_note_id') = ANY($2::text[])
+                 FOR UPDATE",
+                &[&MEMORY_OUTBOX_DESTINATION, &id_strings],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let mut scrubbed: u64 = 0;
+        for row in rows {
+            let item_id: uuid::Uuid = row.get(0);
+            let raw_payload: String = row.get(1);
+            let Ok(mut env) = serde_json::from_str::<MemoryOutboxEnvelope>(&raw_payload) else {
+                continue;
+            };
+            scrub_note_request(&mut env.note_request, OUTBOX_SCRUBBED_FORGOTTEN);
+            env.payload_sha256 = None;
+            env.forgotten = true;
+            let updated_payload =
+                serde_json::to_value(&env).map_err(|err| DennettError::Internal {
+                    detail: format!("failed serializing forgotten outbox envelope: {err}"),
+                })?;
+            tx.execute(
+                "UPDATE ordered_outbox
+                 SET payload_json = $2,
+                     updated_at = now()
+                 WHERE item_id = $1",
+                &[&item_id, &updated_payload],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            scrubbed = scrubbed.saturating_add(1);
+        }
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(scrubbed)
+    }
+
+    /// Streams monotonic forget tombstones from standalone `dennett-memoryd` starting strictly
+    /// after `memory_tombstone_sync_state.last_tombstone_seq`, scrubs matching `ordered_outbox`
+    /// rows to `[forgotten]`, and persists the advanced watermark.
+    ///
+    /// Best-effort on `memoryd` outage (`DatabaseUnavailable`/`Timeout`): marks degraded status
+    /// and returns `Ok(scrubbed)` without failing or blocking `Stop`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError`] on control PG failures or unexpected non-transient `memoryd` errors.
+    pub async fn sync_memory_tombstones(
+        &self,
+        correlation_id: &CorrelationId,
+    ) -> Result<u64, DennettError> {
+        const PAGE_LIMIT: u32 = 200;
+        const MAX_PAGES_PER_SYNC: usize = 50;
+
+        let _ = self.ensure_migrated().await?;
+        let scopes = self.collect_all_known_memory_scopes().await?;
+        let mut caps = BTreeSet::new();
+        caps.insert(MemoryCapability::Read);
+        let Some(client) = self.memory_client_with_capabilities(scopes, caps)? else {
+            return Ok(0);
+        };
+
+        let mut cursor: i64 = {
+            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            conn.query_opt(
+                "SELECT last_tombstone_seq
+                 FROM memory_tombstone_sync_state
+                 WHERE singleton = TRUE",
+                &[],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+            .map_or(0, |row| row.get(0))
+        };
+
+        let mut total_scrubbed: u64 = 0;
+        for _ in 0..MAX_PAGES_PER_SYNC {
+            let page = match client
+                .list_tombstones_since(None, Some(cursor), Some(PAGE_LIMIT), Some(correlation_id))
+                .await
+            {
+                Ok(resp) => {
+                    self.record_memory_status(MemoryStatus::Healthy);
+                    resp
+                }
+                Err(DennettError::DatabaseUnavailable { .. } | DennettError::Timeout { .. }) => {
+                    self.record_memory_status(MemoryStatus::DegradedUnreachable);
+                    break;
+                }
+                Err(other) => return Err(other),
+            };
+
+            let note_ids: Vec<uuid::Uuid> = page
+                .tombstones
+                .iter()
+                .filter(|t| t.target_type == ForgetTargetType::Note)
+                .map(|t| t.target_id)
+                .collect();
+            if !note_ids.is_empty() {
+                total_scrubbed = total_scrubbed
+                    .saturating_add(self.scrub_forgotten_memory_outbox(&note_ids).await?);
+            }
+
+            let next_cursor = page.next_after_seq.unwrap_or(cursor).max(cursor);
+            if next_cursor > cursor {
+                let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+                conn.execute(
+                    "INSERT INTO memory_tombstone_sync_state (singleton, last_tombstone_seq, updated_at)
+                     VALUES (TRUE, $1, now())
+                     ON CONFLICT (singleton) DO UPDATE
+                     SET last_tombstone_seq = GREATEST(
+                             memory_tombstone_sync_state.last_tombstone_seq,
+                             EXCLUDED.last_tombstone_seq
+                         ),
+                         updated_at = now()",
+                    &[&next_cursor],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                cursor = next_cursor;
+            }
+
+            if page.tombstones.len() < usize::try_from(PAGE_LIMIT).unwrap_or(200) {
+                break;
+            }
+        }
+
+        Ok(total_scrubbed)
+    }
+
     /// Flushes all pending `ordered_outbox (destination = 'memoryd')` items to standalone
     /// `dennett-memoryd` in strict per-scope FIFO order (`D2-OVER-01`).
     ///
@@ -5589,6 +5939,10 @@ impl HeadService {
     ) -> Result<FlushOutboxResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
 
+        // Best-effort monotonic tombstone sync before draining outbox so forgotten notes are
+        // scrubbed promptly without blocking flush or `Stop` when `memoryd` is degraded.
+        let _ = self.sync_memory_tombstones(correlation_id).await;
+
         let worker_id = format!("head-mem-flush-{}", std::process::id());
         let mut attempted = 0_usize;
         let mut delivered = 0_usize;
@@ -5599,13 +5953,14 @@ impl HeadService {
         let mut visited: HashSet<dennett_contracts::OrderedOutboxItemId> = HashSet::new();
 
         loop {
+            let effective_now = self.effective_outbox_now().await?;
             let batch = self
                 .claim_ordered_outbox_batch(
                     MEMORY_OUTBOX_DESTINATION,
                     &worker_id,
                     32,
                     30_000,
-                    TimestampMs::now(),
+                    effective_now,
                 )
                 .await?;
             if batch.is_empty() {
@@ -5627,7 +5982,7 @@ impl HeadService {
                                 .unwrap_or("memoryd unreachable"),
                             MEMORY_OUTBOX_MAX_TRANSIENT_ATTEMPTS,
                             0,
-                            TimestampMs::now(),
+                            effective_now,
                         )
                         .await;
                     continue;
@@ -5636,7 +5991,7 @@ impl HeadService {
                 progressed_any = true;
                 attempted += 1;
                 let (updated, mem_status) = self
-                    .deliver_leased_memory_outbox_item(leased, correlation_id)
+                    .deliver_leased_memory_outbox_item(leased, effective_now, correlation_id)
                     .await?;
                 last_mem_status = mem_status;
                 match updated.status {
@@ -5843,6 +6198,7 @@ impl HeadService {
     async fn deliver_leased_memory_outbox_item(
         &self,
         leased: OrderedOutboxItem,
+        effective_now: TimestampMs,
         correlation_id: &CorrelationId,
     ) -> Result<(MemoryOutboxItem, MemoryStatus), DennettError> {
         let mut envelope: MemoryOutboxEnvelope = serde_json::from_str(&leased.payload_json)
@@ -5863,7 +6219,7 @@ impl HeadService {
                     &safe_err,
                     MEMORY_OUTBOX_MAX_TRANSIENT_ATTEMPTS,
                     0,
-                    TimestampMs::now(),
+                    effective_now,
                 )
                 .await?;
             self.record_memory_outbox_audit(
@@ -5880,6 +6236,11 @@ impl HeadService {
             ));
         };
 
+        // Ensure fingerprint is recorded before delivery scrubbing so idempotent replays still validate.
+        if envelope.payload_sha256.is_none() {
+            envelope.payload_sha256 = Some(note_request_fingerprint(&envelope.note_request)?);
+        }
+
         match client
             .create_note(&envelope.note_request, Some(correlation_id))
             .await
@@ -5888,6 +6249,9 @@ impl HeadService {
                 self.record_memory_status(MemoryStatus::Healthy);
                 envelope.delivered_event_id = Some(resp.event_id);
                 envelope.delivered_note_id = Some(resp.note.note_id);
+                // Immediately scrub plaintext note fields so ZERO secret/user prose lingers in
+                // `ordered_outbox.payload_json` after delivery to `memoryd`.
+                scrub_note_request(&mut envelope.note_request, OUTBOX_SCRUBBED_DELIVERED);
                 let updated_payload =
                     serde_json::to_value(&envelope).map_err(|err| DennettError::Internal {
                         detail: format!("failed serializing delivered outbox envelope: {err}"),
@@ -5925,7 +6289,7 @@ impl HeadService {
                         &safe_err,
                         MEMORY_OUTBOX_MAX_TRANSIENT_ATTEMPTS,
                         0,
-                        TimestampMs::now(),
+                        effective_now,
                     )
                     .await?;
                 self.record_memory_outbox_audit(
@@ -5944,14 +6308,32 @@ impl HeadService {
             Err(permanent_err) => {
                 self.record_memory_status(MemoryStatus::Healthy);
                 let safe_err = self.redact(&permanent_err.to_string());
+                let is_previously_forgotten = matches!(
+                    &permanent_err,
+                    DennettError::Conflict { reason, .. }
+                        if reason.to_ascii_lowercase().contains("forgotten")
+                );
+                let scrubbed_payload = if is_previously_forgotten {
+                    scrub_note_request(&mut envelope.note_request, OUTBOX_SCRUBBED_FORGOTTEN);
+                    envelope.payload_sha256 = None;
+                    envelope.forgotten = true;
+                    Some(
+                        serde_json::to_value(&envelope).map_err(|err| DennettError::Internal {
+                            detail: format!("failed serializing forgotten outbox envelope: {err}"),
+                        })?,
+                    )
+                } else {
+                    None
+                };
                 let updated_ordered = self
-                    .nack_ordered_outbox_item(
+                    .nack_ordered_outbox_item_with_payload(
                         leased.item_id,
                         leased.lease_generation,
                         &safe_err,
                         1,
                         0,
-                        TimestampMs::now(),
+                        effective_now,
+                        scrubbed_payload.as_ref(),
                     )
                     .await?;
                 self.record_memory_outbox_audit(
@@ -6621,6 +7003,19 @@ impl HeadService {
                 serde_json::from_value::<Vec<MemoryScope>>(row.get::<_, serde_json::Value>(0))
             {
                 scopes.extend(vec_scopes);
+            }
+        }
+        let outbox_rows = conn
+            .query(
+                "SELECT DISTINCT ordering_key FROM ordered_outbox WHERE destination = $1",
+                &[&MEMORY_OUTBOX_DESTINATION],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        for row in outbox_rows {
+            let raw: String = row.get(0);
+            if let Ok(scope) = MemoryScope::try_new(raw) {
+                scopes.insert(scope);
             }
         }
         Ok(scopes)
@@ -7346,16 +7741,19 @@ fn generate_project_memory_scope(
     MemoryScope::try_new(format!("project:{base}-{short_id}"))
 }
 
-/// Maximum workspace-backed file size hashed on-demand during `create_artifact` (128 MiB).
-const MAX_WORKSPACE_ARTIFACT_HASH_BYTES: u64 = 128 * 1024 * 1024;
+/// Maximum workspace-backed file size snapshotted into `artifact_blobs` during `create_artifact` (16 MiB).
+const MAX_ARTIFACT_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum UTF-8 workspace file size also mirrored into `artifacts.content` for instant UI preview (256 KiB).
+const MAX_ARTIFACT_INLINE_PREVIEW_BYTES: usize = 256 * 1024;
 
-/// Streams a regular (non-symlink, non-reparse-point) workspace file in O(1) RAM through SHA-256.
-fn stream_sha256_regular_file(
+/// Reads a regular (non-symlink, non-reparse-point) workspace file in a single pass (zero TOCTOU)
+/// up to `max_bytes` and returns `(exact_bytes, sha256_of_exact_bytes)`.
+fn read_regular_file_snapshot(
     full_path: &Path,
-    max_bytes: u64,
+    max_bytes: usize,
     scope_label: &str,
     display_rel: &str,
-) -> Result<Sha256Hex, DennettError> {
+) -> Result<(Vec<u8>, Sha256Hex), DennettError> {
     let meta = fs::symlink_metadata(full_path).map_err(|err| DennettError::NotFound {
         resource: String::from("workspace_file"),
         id: format!("{display_rel} ({err})"),
@@ -7374,11 +7772,12 @@ fn stream_sha256_regular_file(
             reason: String::from("workspace artifact target must be a regular file"),
         });
     }
-    if meta.len() > max_bytes {
+    let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if meta.len() > max_bytes_u64 {
         return Err(DennettError::InvalidInput {
             field: String::from("relative_path"),
             reason: format!(
-                "workspace artifact file exceeds maximum hashable size ({max_bytes} bytes)"
+                "workspace artifact file exceeds maximum snapshot size ({max_bytes} bytes)"
             ),
         });
     }
@@ -7387,33 +7786,35 @@ fn stream_sha256_regular_file(
         resource: String::from("workspace_file"),
         id: format!("{display_rel} ({err})"),
     })?;
-    let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut total_read: u64 = 0;
-
-    loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|err| DennettError::Internal {
-                detail: format!("failed reading workspace artifact `{display_rel}`: {err}"),
-            })?;
-        if n == 0 {
-            break;
-        }
-        total_read = total_read.saturating_add(n as u64);
-        if total_read > max_bytes {
-            return Err(DennettError::InvalidInput {
-                field: String::from("relative_path"),
-                reason: format!(
-                    "workspace artifact file grew beyond maximum hashable size ({max_bytes} bytes)"
-                ),
-            });
-        }
-        hasher.update(&buf[..n]);
+    let opened_meta = file.metadata().map_err(|err| DennettError::Internal {
+        detail: format!("failed inspecting workspace artifact `{display_rel}`: {err}"),
+    })?;
+    if !opened_meta.file_type().is_file() {
+        return Err(DennettError::InvalidInput {
+            field: String::from("relative_path"),
+            reason: String::from("workspace artifact target must be a regular file"),
+        });
     }
 
-    Ok(Sha256Hex::from_digest_bytes(hasher.finalize().into()))
+    let initial_cap = usize::try_from(opened_meta.len().min(max_bytes_u64)).unwrap_or(0);
+    let mut bytes = Vec::with_capacity(initial_cap);
+    let mut limited = file.take(max_bytes_u64.saturating_add(1));
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|err| DennettError::Internal {
+            detail: format!("failed reading workspace artifact `{display_rel}`: {err}"),
+        })?;
+    if bytes.len() > max_bytes {
+        return Err(DennettError::InvalidInput {
+            field: String::from("relative_path"),
+            reason: format!(
+                "workspace artifact file grew beyond maximum snapshot size ({max_bytes} bytes)"
+            ),
+        });
+    }
+
+    let digest = sha256_hex(&bytes);
+    Ok((bytes, digest))
 }
 
 fn is_default_session_title(title: &str) -> bool {
@@ -7479,5 +7880,31 @@ mod tests {
 
         let cyr_scope = generate_project_memory_scope("Новый проект", pid).expect("cyr scope");
         assert!(cyr_scope.as_str().starts_with("project:proj-"));
+    }
+
+    #[test]
+    fn read_regular_file_snapshot_rejects_oversized_and_hashes_exact_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "dennett-art-snap-unit-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let file_path = dir.join("sample.bin");
+        let payload = vec![0x00, 0xFF, 0xFE, b'O', b'K', 0xAB];
+        fs::write(&file_path, &payload).expect("write payload");
+
+        let (bytes, digest) =
+            read_regular_file_snapshot(&file_path, 16, "project:test", "sample.bin")
+                .expect("read within limit");
+        assert_eq!(bytes, payload);
+        assert_eq!(digest, sha256_hex(&payload));
+
+        let err = read_regular_file_snapshot(&file_path, 4, "project:test", "sample.bin");
+        assert!(
+            matches!(err, Err(DennettError::InvalidInput { ref field, .. }) if field == "relative_path"),
+            "oversized snapshot must fail closed with InvalidInput, got: {err:?}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

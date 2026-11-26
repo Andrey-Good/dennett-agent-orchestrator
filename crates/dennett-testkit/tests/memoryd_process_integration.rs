@@ -205,7 +205,7 @@ async fn memoryd_serve_healthz_and_graceful_loopback_shutdown() {
     assert_eq!(health.stage, "D3");
     assert!(health.memory_fabric_implemented);
     assert!(health.postgres_connected);
-    assert_eq!(health.schema_version, Some(2));
+    assert_eq!(health.schema_version, Some(3));
     assert_eq!(health.correlation_id.as_str(), "d0-live-healthz");
 
     let (shutdown_status, shutdown_body) = send_http_request(&addr, &shutdown_request(&addr)).await;

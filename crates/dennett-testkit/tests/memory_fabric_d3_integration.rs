@@ -1349,10 +1349,18 @@ async fn d3_forget_propagation_no_resurrection_and_content_free_tombstone() {
     assert_eq!(idx_leaks, 0, "search index must be purged immediately");
 
     // Audit tombstone has principal, reason, notice, and ZERO forgotten content.
-    let tombstones = svc
-        .list_tombstones(&principal, Some(&scope))
-        .await
-        .expect("list tombstones");
+    // Poll briefly so cluster-wide V15 `pg_snapshot_xmin` settles if sibling nextest tests hold a tx.
+    let tomb_deadline = time::Instant::now() + Duration::from_secs(5);
+    let tombstones = loop {
+        let resp = svc
+            .list_tombstones(&principal, Some(&scope))
+            .await
+            .expect("list tombstones");
+        if !resp.tombstones.is_empty() || time::Instant::now() >= tomb_deadline {
+            break resp;
+        }
+        time::sleep(Duration::from_millis(25)).await;
+    };
     assert_eq!(tombstones.tombstones.len(), 1);
     let tomb = &tombstones.tombstones[0];
     assert_eq!(tomb.tombstone_id, forgot.tombstone_id);
@@ -2239,10 +2247,22 @@ async fn d3_e2e_standalone_memoryd_http_cli_and_mcp_without_head() {
         client.get_document(doc_v1.document_id, None).await,
         Err(DennettError::NotFound { .. })
     ));
-    let tombstones = client
-        .list_tombstones(Some(&scope_a), None)
-        .await
-        .expect("list_tombstones over HTTP");
+    let tomb_deadline = time::Instant::now() + Duration::from_secs(5);
+    let tombstones = loop {
+        let resp = client
+            .list_tombstones(Some(&scope_a), None)
+            .await
+            .expect("list_tombstones over HTTP");
+        if resp
+            .tombstones
+            .iter()
+            .any(|t| t.target_id == doc_v1.document_id.as_uuid())
+            || time::Instant::now() >= tomb_deadline
+        {
+            break resp;
+        }
+        time::sleep(Duration::from_millis(25)).await;
+    };
     assert!(
         tombstones
             .tombstones
@@ -2252,6 +2272,192 @@ async fn d3_e2e_standalone_memoryd_http_cli_and_mcp_without_head() {
 
     mcp.close().await;
     daemon.shutdown().await;
+}
+
+/// Proves V15 commit-visibility barrier & monotonic cursor streaming on `memory_forget_tombstones`
+/// (`tombstone_seq ASC`, delayed uncommitted transaction never creates a skipped-tombstone hole),
+/// AND proves lost-ACK retry of a forgotten note's `idempotency_key` fails closed with `Conflict`
+/// instead of resurrecting the note.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end PG16 V15 commit-barrier test orchestrates concurrent uncommitted/committed transactions plus lost-ACK no-resurrection check"
+)]
+async fn d3_tombstone_stream_v15_commit_barrier_and_lost_ack_no_resurrection() {
+    let target = pg_target();
+    let svc = MemoryService::new(target.clone()).expect("connect service");
+    svc.ensure_migrated().await.expect("apply v3 migration");
+
+    let scope = unique_scope("v15-tomb");
+    let principal = full_principal("v15-owner", std::slice::from_ref(&scope));
+    let cid = CorrelationId::generate();
+
+    // Create two notes and record baseline tombstone cursor.
+    let n1_req = make_note_req(&scope, "V15 Note One", "Secret payload one");
+    let n1 = svc
+        .create_note(&principal, &cid, n1_req.clone())
+        .await
+        .expect("create n1");
+    let n2 = svc
+        .create_note(
+            &principal,
+            &cid,
+            make_note_req(&scope, "V15 Note Two", "Secret payload two"),
+        )
+        .await
+        .expect("create n2");
+
+    let initial = svc
+        .list_tombstones_since(&principal, Some(&scope), Some(0), Some(50))
+        .await
+        .expect("initial tombstone stream");
+    assert_eq!(initial.tombstones.len(), 0);
+    assert_eq!(initial.next_after_seq, Some(0));
+
+    // Open a raw PG transaction `tx1` that allocates an EARLIER `tombstone_seq` and holds it UNCOMMITTED.
+    // Reuses `n2.event_id` as the FK reference so `tx1` holds zero locks on `memory_stream_counters`
+    // while `tx2` (`svc.forget` for `n1`) executes and commits concurrently!
+    let (mut raw_pg, raw_handle) = connect_raw_pg(&target).await;
+    let tx1 = raw_pg.transaction().await.expect("begin tx1");
+    let tomb1_id = Uuid::new_v4();
+    let fake_target_1 = Uuid::new_v4();
+    let seq1: i64 = tx1
+        .query_one(
+            "INSERT INTO memory_forget_tombstones (
+                tombstone_id, scope, target_type, target_id, forget_event_id,
+                principal_id, reason, residual_backup_notice, propagation_status
+             ) VALUES ($1, $2, 'note', $3, $4, $5, 'delayed tx1 forget', 'backup notice', 'completed')
+             RETURNING tombstone_seq",
+            &[
+                &tomb1_id,
+                &scope.as_str(),
+                &fake_target_1,
+                &n2.event_id.as_uuid(),
+                &principal.principal_id.as_str(),
+            ],
+        )
+        .await
+        .expect("insert uncommitted tombstone")
+        .get(0);
+
+    // While `tx1` is STILL UNCOMMITTED, commit a LATER forget (`tx2`) for `n1` via `MemoryService`.
+    let forgot_n1 = svc
+        .forget(
+            &principal,
+            &cid,
+            ForgetRequest {
+                scope: scope.clone(),
+                target_type: ForgetTargetType::Note,
+                target_id: n1.note.note_id.as_uuid(),
+                reason: String::from("committed tx2 forget"),
+                idempotency_key: IdempotencyKey::generate(),
+            },
+        )
+        .await
+        .expect("forget n1 while tx1 is uncommitted");
+
+    // V15 BARRIER PROOF: streaming with `after_seq = 0` MUST NOT leapfrog past uncommitted `seq1`
+    // to deliver `forgot_n1` (which has `seq2 > seq1` and `commit_xid >= xmin(tx1)`)!
+    let during_uncommitted = svc
+        .list_tombstones_since(&principal, Some(&scope), Some(0), Some(50))
+        .await
+        .expect("poll during uncommitted tx1");
+    assert!(
+        during_uncommitted.tombstones.is_empty(),
+        "V15 commit barrier must withhold later committed tombstone while earlier xid is uncommitted, got: {:?}",
+        during_uncommitted.tombstones
+    );
+    assert_eq!(during_uncommitted.next_after_seq, Some(0));
+
+    // Commit `tx1` -> BOTH tombstones become visible immediately once cluster-wide xmin passes
+    // their commit_xids, in strict ascending `tombstone_seq` order!
+    tx1.commit().await.expect("commit tx1");
+    let after_commit_deadline = time::Instant::now() + Duration::from_secs(5);
+    let after_commit = loop {
+        let resp = svc
+            .list_tombstones_since(&principal, Some(&scope), Some(0), Some(50))
+            .await
+            .expect("poll after tx1 commit");
+        if resp.tombstones.len() == 2 || time::Instant::now() >= after_commit_deadline {
+            break resp;
+        }
+        time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(after_commit.tombstones.len(), 2);
+    assert_eq!(after_commit.tombstones[0].tombstone_id.as_uuid(), tomb1_id);
+    assert_eq!(after_commit.tombstones[0].tombstone_seq, seq1);
+    assert_eq!(
+        after_commit.tombstones[1].tombstone_id,
+        forgot_n1.tombstone_id
+    );
+    let seq2 = after_commit.tombstones[1].tombstone_seq;
+    assert!(seq2 > seq1, "tombstone_seq must increase monotonically");
+    assert_eq!(after_commit.next_after_seq, Some(seq2));
+
+    // Incremental pagination from `after_seq = seq1` returns ONLY `seq2`!
+    let page_after_1 = svc
+        .list_tombstones_since(&principal, Some(&scope), Some(seq1), Some(50))
+        .await
+        .expect("poll after seq1");
+    assert_eq!(page_after_1.tombstones.len(), 1);
+    assert_eq!(page_after_1.tombstones[0].tombstone_seq, seq2);
+    assert_eq!(page_after_1.next_after_seq, Some(seq2));
+
+    // Forget `n2` -> incremental poll from `seq2` yields ONLY `n2`'s tombstone!
+    let forgot_n2 = svc
+        .forget(
+            &principal,
+            &cid,
+            ForgetRequest {
+                scope: scope.clone(),
+                target_type: ForgetTargetType::Note,
+                target_id: n2.note.note_id.as_uuid(),
+                reason: String::from("incremental forget n2"),
+                idempotency_key: IdempotencyKey::generate(),
+            },
+        )
+        .await
+        .expect("forget n2");
+    let after_n2_deadline = time::Instant::now() + Duration::from_secs(5);
+    let page_after_2 = loop {
+        let resp = svc
+            .list_tombstones_since(&principal, Some(&scope), Some(seq2), Some(50))
+            .await
+            .expect("poll after seq2");
+        if !resp.tombstones.is_empty() || time::Instant::now() >= after_n2_deadline {
+            break resp;
+        }
+        time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(page_after_2.tombstones.len(), 1);
+    assert_eq!(
+        page_after_2.tombstones[0].tombstone_id,
+        forgot_n2.tombstone_id
+    );
+    assert!(page_after_2.tombstones[0].tombstone_seq > seq2);
+    assert_eq!(
+        page_after_2.next_after_seq,
+        Some(page_after_2.tombstones[0].tombstone_seq)
+    );
+
+    // LOST-ACK NO-RESURRECTION PROOF: retrying `create_note` with `n1`'s original `idempotency_key`
+    // MUST fail closed with `Conflict` and NEVER resurrect or return the forgotten note!
+    let replay_forgotten = svc.create_note(&principal, &cid, n1_req).await;
+    assert!(
+        matches!(
+            replay_forgotten,
+            Err(DennettError::Conflict { ref reason, .. })
+                if reason.contains("previously forgotten")
+        ),
+        "lost-ACK replay of forgotten note must return Conflict, got: {replay_forgotten:?}"
+    );
+    assert!(matches!(
+        svc.get_note_current(&principal, n1.note.note_id).await,
+        Err(DennettError::NotFound { .. })
+    ));
+
+    drop(raw_pg);
+    raw_handle.abort();
 }
 
 // ============================================================================

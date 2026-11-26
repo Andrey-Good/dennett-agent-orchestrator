@@ -1047,6 +1047,7 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 let mut active = slot.active_cancel_tx.lock().await;
                 *active = None;
             }
+            drop(slot);
 
             match turn_res {
                 Ok((outcome, needs_reset)) => {
@@ -1098,10 +1099,7 @@ impl AgentRuntimePort for AntigravityAcpRuntime {
                 if let Some(tx) = slot.active_cancel_tx.lock().await.take() {
                     let _ = tx.send(true);
                 }
-                // Drop lock and let Arc drop cleanly; explicit kill via inner process if sole owner.
-                if let Ok(inner) = Arc::try_unwrap(slot) {
-                    inner.process.into_inner().shutdown().await;
-                }
+                slot.process.lock().await.shutdown().await;
             }
             Ok(())
         })

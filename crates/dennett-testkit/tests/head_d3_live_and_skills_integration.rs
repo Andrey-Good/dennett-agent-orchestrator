@@ -257,7 +257,7 @@ async fn d3_live_streaming_text_tool_break_and_context_usage_persisted() {
     let client = HeadClient::new(&head.base_url).expect("client");
 
     let health = client.healthz(None).await.expect("health");
-    assert_eq!(health.schema_version, Some(9));
+    assert_eq!(health.schema_version, Some(10));
 
     let scope = unique_scope("live-stream");
     let project = client

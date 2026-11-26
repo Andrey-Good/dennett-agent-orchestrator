@@ -1337,7 +1337,24 @@ impl MemoryService {
         principal: &AuthPrincipal,
         scope: Option<&MemoryScope>,
     ) -> Result<ListTombstonesResponse, DennettError> {
-        execute_list_tombstones(self, principal, scope).await
+        execute_list_tombstones(self, principal, scope, None, None).await
+    }
+
+    /// Streams content-free [`dennett_contracts::ForgetTombstone`] records monotonically after
+    /// `after_seq` under the V15 commit-visibility barrier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn list_tombstones_since(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+        after_seq: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<ListTombstonesResponse, DennettError> {
+        execute_list_tombstones(self, principal, scope, after_seq, limit).await
     }
 
     /// Exports one authorized scope as a deterministic, secret-stripped Contract J package (`Export`).
@@ -1483,6 +1500,23 @@ impl MemoryService {
         }
 
         let note_id = MemoryNoteId::from_uuid(existing.target_entity_id);
+        let forgotten: Option<bool> = client
+            .query_opt(
+                "SELECT (forgotten_at IS NOT NULL) FROM memory_notes WHERE note_id = $1",
+                &[&note_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| self.map_pg_err(&err))?
+            .map(|row| row.get(0));
+        if forgotten == Some(true) {
+            return Err(DennettError::Conflict {
+                resource: String::from("memory_note"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: String::from("note was previously forgotten and cannot be resurrected"),
+            });
+        }
+
         let revision = existing.target_revision.unwrap_or(1);
         let note = fetch_note_at_revision(client, note_id, revision, self).await?;
         Ok(NoteMutationResponse {

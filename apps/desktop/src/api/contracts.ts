@@ -1048,6 +1048,7 @@ export interface ForgetResponse {
 
 export interface ForgetTombstone {
   tombstone_id: string;
+  tombstone_seq?: number;
   scope: string;
   target_type: ForgetTargetType;
   target_id: string;
@@ -1061,6 +1062,7 @@ export interface ForgetTombstone {
 
 export interface ListTombstonesResponse {
   tombstones: ForgetTombstone[];
+  next_after_seq?: number | null;
 }
 
 export interface ExportRequest {

@@ -12,7 +12,7 @@ use crate::fingerprint::sha256_hex;
 const MIGRATION_ADVISORY_LOCK_KEY: i64 = 728_391_045_123_456_789;
 
 /// Latest Memory Fabric schema migration version bundled in this build.
-pub const LATEST_SCHEMA_VERSION: i64 = 2;
+pub const LATEST_SCHEMA_VERSION: i64 = 3;
 /// Alias matching the architecture specification name for [`LATEST_SCHEMA_VERSION`].
 pub const LATEST_MEMORY_SCHEMA_VERSION: i64 = LATEST_SCHEMA_VERSION;
 
@@ -38,6 +38,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "0002_memory_fabric_v2",
         sql: include_str!("../migrations/0002_memory_fabric_v2.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "0003_tombstone_stream_cursor",
+        sql: include_str!("../migrations/0003_tombstone_stream_cursor.sql"),
     },
 ];
 

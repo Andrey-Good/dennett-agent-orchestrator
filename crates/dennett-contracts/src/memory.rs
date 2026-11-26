@@ -2649,6 +2649,9 @@ pub struct ForgetResponse {
 pub struct ForgetTombstone {
     /// Stable tombstone identifier.
     pub tombstone_id: TombstoneId,
+    /// Monotonic positive sequence number for V15-safe cursor-based tombstone streaming.
+    #[serde(default)]
+    pub tombstone_seq: i64,
     /// Scope from which the entity was forgotten.
     pub scope: MemoryScope,
     /// Entity kind that was forgotten.
@@ -2672,8 +2675,13 @@ pub struct ForgetTombstone {
 /// Response listing [`ForgetTombstone`] audit records for a scope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListTombstonesResponse {
-    /// Recorded content-free tombstones ordered newest first.
+    /// Recorded content-free tombstones (ordered `tombstone_seq DESC` by default, or
+    /// `tombstone_seq ASC` when streaming with `after_seq`).
     pub tombstones: Vec<ForgetTombstone>,
+    /// Highest monotonic `tombstone_seq` observed in this page (or echoed `after_seq` cursor),
+    /// used for incremental V15-safe tombstone polling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after_seq: Option<i64>,
 }
 
 /// Request to export a deterministic, secret-free memory package for one [`MemoryScope`] (Contract J).

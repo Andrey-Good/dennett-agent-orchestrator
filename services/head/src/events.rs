@@ -981,6 +981,39 @@ impl HeadService {
         retry_delay_ms: i64,
         now: TimestampMs,
     ) -> Result<OrderedOutboxItem, DennettError> {
+        self.nack_ordered_outbox_item_with_payload(
+            item_id,
+            expected_lease_generation,
+            error_detail,
+            max_attempts,
+            retry_delay_ms,
+            now,
+            None,
+        )
+        .await
+    }
+
+    /// Fails or parks a leased `ordered_outbox` item fenced by `expected_lease_generation`,
+    /// optionally atomically replacing `payload_json` (e.g. scrubbing a forgotten note's payload
+    /// when parking a lost-ACK retry).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::Conflict`] on stale lease generation or [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "fenced outbox nack carries lease generation, retry bounds, clock, and optional scrubbed payload"
+    )]
+    pub async fn nack_ordered_outbox_item_with_payload(
+        &self,
+        item_id: OrderedOutboxItemId,
+        expected_lease_generation: i64,
+        error_detail: &str,
+        max_attempts: i32,
+        retry_delay_ms: i64,
+        now: TimestampMs,
+        updated_payload: Option<&JsonValue>,
+    ) -> Result<OrderedOutboxItem, DennettError> {
         let _ = self.ensure_migrated().await?;
         let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let tx = conn
@@ -995,6 +1028,7 @@ impl HeadService {
         let sql = format!(
             "UPDATE ordered_outbox
              SET status = CASE WHEN attempts >= $3 THEN 'parked' ELSE 'pending' END,
+                 payload_json = COALESCE($7, payload_json),
                  last_error = $4,
                  available_at = to_timestamp($5),
                  lease_expires_at = NULL,
@@ -1014,6 +1048,7 @@ impl HeadService {
                     &safe_err,
                     &next_avail_secs,
                     &now_secs,
+                    &updated_payload,
                 ],
             )
             .await

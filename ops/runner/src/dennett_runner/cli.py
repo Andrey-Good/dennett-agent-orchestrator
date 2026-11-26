@@ -1782,8 +1782,8 @@ def run_demo_d2(
         plan = {
             "mode": "demo-d2-dry-run",
             "stage": "D2",
-            "control_schema_version": 9,
-            "memory_schema_version": 2,
+            "control_schema_version": 10,
+            "memory_schema_version": 3,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
             "compose_file": str(compose_file),
@@ -2134,8 +2134,8 @@ def run_demo_d3(
         plan = {
             "mode": "demo-d3-dry-run",
             "stage": "D3",
-            "control_schema_version": 9,
-            "memory_schema_version": 2,
+            "control_schema_version": 10,
+            "memory_schema_version": 3,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
             "compose_file": str(compose_file),

@@ -1250,6 +1250,7 @@ impl HeadService {
                  lifecycle_state = $4,
                  content = CASE WHEN $5 THEN NULL ELSE content END,
                  relative_path = CASE WHEN $5 THEN NULL ELSE relative_path END,
+                 content_byte_size = CASE WHEN $5 THEN NULL ELSE content_byte_size END,
                  updated_at = now()
              WHERE session_id = $1 AND artifact_id = $2
              RETURNING {ARTIFACT_SELECT_COLS}"
@@ -1268,6 +1269,21 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
         let updated = decode_artifact_row(&updated_row)?;
+
+        if scrub_payload {
+            // Garbage-collect the immutable blob once no non-deleted artifact references its SHA-256.
+            tx.execute(
+                "DELETE FROM artifact_blobs
+                 WHERE sha256 = $1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM artifacts
+                       WHERE sha256 = $1 AND lifecycle_state <> 'deleted'
+                   )",
+                &[&updated.sha256.as_str()],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+        }
 
         // H2-07: Removing from list hides all non-deleted revisions of this logical artifact name
         // in the session so multi-revision artifacts (`v1`+`v2`) vanish cleanly as one logical item

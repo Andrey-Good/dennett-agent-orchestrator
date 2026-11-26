@@ -910,6 +910,13 @@ struct ClaimsQuery {
     topic_key: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct TombstonesQuery {
+    scope: Option<String>,
+    after_seq: Option<i64>,
+    limit: Option<u32>,
+}
+
 fn parse_optional_scope(raw: Option<&str>) -> Result<Option<MemoryScope>, DennettError> {
     raw.map(str::trim)
         .filter(|s| !s.is_empty())
@@ -1275,7 +1282,7 @@ async fn handle_forget(
 async fn handle_list_tombstones(
     State(state): State<AppState>,
     headers: HeaderMap,
-    query: Result<Query<ScopeQuery>, QueryRejection>,
+    query: Result<Query<TombstonesQuery>, QueryRejection>,
 ) -> Response {
     let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
         Ok(tuple) => tuple,
@@ -1290,7 +1297,10 @@ async fn handle_list_tombstones(
         Err(err) => return domain_error_response(err, &correlation_id),
     };
 
-    match svc.list_tombstones(&principal, scope.as_ref()).await {
+    match svc
+        .list_tombstones_since(&principal, scope.as_ref(), q.after_seq, q.limit)
+        .await
+    {
         Ok(resp) => json_with_correlation(StatusCode::OK, &resp, &correlation_id),
         Err(err) => domain_error_response(err, &correlation_id),
     }

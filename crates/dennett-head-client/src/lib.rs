@@ -39,14 +39,14 @@ use dennett_contracts::{
     SchedulerTickRequest, SchedulerTickResponse, SecretMetadataRecord, SendAgentMessageRequest,
     SendAgentMessageResponse, SendMessageRequest, SendMessageResponse, SessionDetailResponse,
     SessionFollowupRecord, SessionId, SessionRecord, SessionSkillDetailResponse,
-    SessionSkillSummary, SetProjectCapabilityBindingRequest, SetSecretRequest,
+    SessionSkillSummary, SetProjectCapabilityBindingRequest, SetSecretRequest, Sha256Hex,
     StateSnapshotResponse, SteerSessionRequest, SupersedeClaimRequest, TaskDetailResponse, TaskId,
     TaskRecord, TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest,
     TriggerIndexRebuildResponse, UpdateAgentConfigRequest, UpdateCapabilityRequest,
     UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest,
     UpdateTaskRequest, UpsertProviderConnectionRequest,
 };
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -60,6 +60,18 @@ pub const MAX_RESPONSE_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
 static HEADER_CONTROL_TOKEN: HeaderName = HeaderName::from_static("x-dennett-control-token");
+static HEADER_ARTIFACT_SHA256: HeaderName = HeaderName::from_static("x-dennett-artifact-sha256");
+
+/// Immutable raw byte snapshot returned by `GET /v1/sessions/{session_id}/artifacts/{artifact_id}/content`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactContentResponse {
+    /// Exact immutable bytes captured when the artifact revision was registered.
+    pub bytes: Vec<u8>,
+    /// Reported MIME media type (`Content-Type` response header).
+    pub mime_type: String,
+    /// Lowercase SHA-256 hex digest (`X-Dennett-Artifact-Sha256` response header).
+    pub sha256: Sha256Hex,
+}
 
 /// Typed asynchronous HTTP client communicating with a `dennett-head` daemon.
 #[derive(Clone)]
@@ -488,6 +500,60 @@ impl HeadClient {
             correlation_id,
         )
         .await
+    }
+
+    /// Calls `GET /v1/sessions/{session_id}/artifacts/{artifact_id}/content` to download the exact
+    /// content-addressed immutable bytes of one artifact revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head (`NotFound` on missing/deleted artifacts)
+    /// or transport failure.
+    pub async fn get_artifact_content(
+        &self,
+        session_id: SessionId,
+        artifact_id: ArtifactId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ArtifactContentResponse, DennettError> {
+        let url = format!(
+            "{}/v1/sessions/{session_id}/artifacts/{artifact_id}/content",
+            self.base_url
+        );
+        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
+        let mut resp = self
+            .http
+            .request(Method::GET, &url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| map_transport_error(&err))?;
+        let status = resp.status();
+        let mime_type = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map_or_else(|| String::from("application/octet-stream"), str::to_owned);
+        let sha_header = resp
+            .headers()
+            .get(&HEADER_ARTIFACT_SHA256)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let bytes = read_bounded_body(&mut resp, MAX_RESPONSE_BODY_BYTES).await?;
+
+        if !status.is_success() {
+            return Err(decode_error_response(status, &bytes));
+        }
+        let sha_raw = sha_header.ok_or_else(|| DennettError::Internal {
+            detail: String::from(
+                "dennett-head artifact content response missing X-Dennett-Artifact-Sha256 header",
+            ),
+        })?;
+        let sha256 = Sha256Hex::try_new(sha_raw)?;
+        Ok(ArtifactContentResponse {
+            bytes,
+            mime_type,
+            sha256,
+        })
     }
 
     /// Calls `POST /v1/policies`.

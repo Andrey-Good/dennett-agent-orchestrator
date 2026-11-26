@@ -57,9 +57,9 @@ pub use secrets::{
     compute_secret_fingerprint,
 };
 pub use service::{
-    DEFAULT_CONTROL_POOL_SIZE, DEFAULT_PG_OP_TIMEOUT, DEFAULT_PROBE_TIMEOUT, DEFAULT_TURN_TIMEOUT,
-    HEAD_STAGE_LABEL, HeadService, HeadServiceExtras, MemoryMcpWiring, RUNTIME_CATALOG_CACHE_TTL,
-    d1_head_capabilities, d2_head_capabilities, d3_head_capabilities,
+    ArtifactContentBlob, DEFAULT_CONTROL_POOL_SIZE, DEFAULT_PG_OP_TIMEOUT, DEFAULT_PROBE_TIMEOUT,
+    DEFAULT_TURN_TIMEOUT, HEAD_STAGE_LABEL, HeadService, HeadServiceExtras, MemoryMcpWiring,
+    RUNTIME_CATALOG_CACHE_TTL, d1_head_capabilities, d2_head_capabilities, d3_head_capabilities,
 };
 pub use tasks::{
     BACKGROUND_SCHEDULER_POLL_INTERVAL, MISFIRE_GRACE_MS, TIMER_CLAIM_LEASE_SECS,
