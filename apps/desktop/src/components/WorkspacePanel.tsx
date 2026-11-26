@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   Archive,
   ArrowCounterClockwise,
   ArrowsClockwise,
+  At,
   CaretDown,
   CaretRight,
   ChatsCircle,
@@ -12,6 +18,7 @@ import {
   CheckCircle,
   Copy,
   DotsThree,
+  DownloadSimple,
   EyeSlash,
   FileCode,
   FileText,
@@ -20,11 +27,40 @@ import {
   Plus,
   Sidebar,
   Trash,
+  X,
 } from "@phosphor-icons/react";
 
-import type { ArtifactRecord, WorkspaceFileEntry } from "../api/contracts";
+import {
+  normalizeBridgeError,
+  type ArtifactContentResponse,
+  type ArtifactRecord,
+  type ProjectFileContentResponse,
+  type WorkspaceFileEntry,
+} from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PortalPopover } from "./PortalPopover";
+
+const PANEL_WIDTH_STORAGE_KEY = "dennett.desktop.workspacePanelWidth.v1";
+const MIN_PANEL_WIDTH = 260;
+const MAX_PANEL_WIDTH = 560;
+const DEFAULT_PANEL_WIDTH = 316;
+
+function loadSavedPanelWidth(): number {
+  if (typeof window === "undefined") {
+    return DEFAULT_PANEL_WIDTH;
+  }
+  try {
+    const raw = window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY);
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    if (Number.isFinite(parsed)) {
+      return Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, parsed));
+    }
+  } catch {
+    // Ignore storage access errors.
+  }
+  return DEFAULT_PANEL_WIDTH;
+}
 
 const MIME_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "text/markdown", label: "Markdown (text/markdown)" },
@@ -62,6 +98,15 @@ function compareEntries(a: WorkspaceFileEntry, b: WorkspaceFileEntry): number {
   return a.name.localeCompare(b.name, "ru");
 }
 
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 interface ArtifactGroup {
   name: string;
   revisions: ArtifactRecord[];
@@ -70,6 +115,7 @@ interface ArtifactGroup {
 
 export function WorkspacePanel() {
   const { state, actions, meta } = useWorkspace();
+  const [panelWidth, setPanelWidth] = useState<number>(loadSavedPanelWidth);
   const [filesExpanded, setFilesExpanded] = useState(true);
   const [artifactsExpanded, setArtifactsExpanded] = useState(true);
   const [archivedArtifactsOpen, setArchivedArtifactsOpen] = useState(false);
@@ -79,6 +125,17 @@ export function WorkspacePanel() {
   const [loadedSubdirs, setLoadedSubdirs] = useState<Record<string, WorkspaceFileEntry[]>>({});
   const [loadingSubdirs, setLoadingSubdirs] = useState<Record<string, boolean>>({});
 
+  // Clickable workspace file preview state
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [filePreview, setFilePreview] = useState<ProjectFileContentResponse | null>(null);
+  const [isLoadingFilePreview, setIsLoadingFilePreview] = useState(false);
+  const [filePreviewError, setFilePreviewError] = useState<string | null>(null);
+
+  // Artifact immutable snapshot content preview (A-UI-P0-3)
+  const [artifactContent, setArtifactContent] = useState<ArtifactContentResponse | null>(null);
+  const [isLoadingArtifactContent, setIsLoadingArtifactContent] = useState(false);
+  const [artifactContentError, setArtifactContentError] = useState<string | null>(null);
+
   const [creatingArtifact, setCreatingArtifact] = useState(false);
   const [artName, setArtName] = useState("");
   const [artMime, setArtMime] = useState("text/markdown");
@@ -87,21 +144,26 @@ export function WorkspacePanel() {
   const [artifactMenuOpen, setArtifactMenuOpen] = useState(false);
   const [confirmDeleteArtifactId, setConfirmDeleteArtifactId] = useState<string | null>(null);
   const [markdownViewMode, setMarkdownViewMode] = useState<"rendered" | "source">("rendered");
-  const [copiedField, setCopiedField] = useState<"content" | "sha256" | null>(null);
+  const [copiedField, setCopiedField] = useState<"content" | "sha256" | "file_path" | null>(null);
 
   const mimeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const artifactMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const resourceScrollRef = useRef<HTMLDivElement | null>(null);
+  const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const activeProject = meta.activeProject;
   const filesData = state.projectFiles;
   const selectedArt = meta.selectedArtifact;
+  const selectedLifecycle = selectedArt?.lifecycle_state ?? "active";
 
-  // Reset per-project folder tree cache when project or root files reload.
+  // Reset per-project folder tree cache & file preview when project or root files reload.
   useEffect(() => {
     setExpandedDirs({});
     setLoadedSubdirs({});
     setLoadingSubdirs({});
+    setSelectedFilePath(null);
+    setFilePreview(null);
+    setFilePreviewError(null);
   }, [activeProject?.project_id, filesData]);
 
   // Reset inline delete confirmation and copy badge when switching artifacts.
@@ -110,6 +172,85 @@ export function WorkspacePanel() {
     setArtifactMenuOpen(false);
     setCopiedField(null);
   }, [selectedArt?.artifact_id]);
+
+  // A-UI-P0-3: Fetch immutable snapshot content via /v1/sessions/{id}/artifacts/{aid}/content
+  useEffect(() => {
+    if (!selectedArt || selectedLifecycle === "deleted" || !state.healthSnapshot?.connected) {
+      setArtifactContent(null);
+      setArtifactContentError(null);
+      setIsLoadingArtifactContent(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingArtifactContent(true);
+    setArtifactContentError(null);
+
+    void meta.bridge
+      .getArtifactContent(selectedArt.session_id, selectedArt.artifact_id)
+      .then((resp) => {
+        if (!cancelled) {
+          setArtifactContent(resp);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setArtifactContent(null);
+          setArtifactContentError(normalizeBridgeError(err).message);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingArtifactContent(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    meta.bridge,
+    selectedArt?.artifact_id,
+    selectedArt?.session_id,
+    selectedLifecycle,
+    state.healthSnapshot?.connected,
+  ]);
+
+  // Drag resize handlers
+  const handleResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    resizeStateRef.current = { startX: e.clientX, startWidth: panelWidth };
+
+    const handleMove = (ev: PointerEvent) => {
+      const origin = resizeStateRef.current;
+      if (!origin) {
+        return;
+      }
+      const delta = origin.startX - ev.clientX;
+      const clamped = Math.max(
+        MIN_PANEL_WIDTH,
+        Math.min(MAX_PANEL_WIDTH, Math.round(origin.startWidth + delta)),
+      );
+      setPanelWidth(clamped);
+    };
+
+    const handleUp = () => {
+      resizeStateRef.current = null;
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      setPanelWidth((curr) => {
+        try {
+          window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(curr));
+        } catch {
+          // Ignore storage errors.
+        }
+        return curr;
+      });
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+  };
 
   // Build visible flat tree from root filesData + lazily loaded subdirectories.
   const visibleTreeRows = useMemo(() => {
@@ -248,6 +389,30 @@ export function WorkspacePanel() {
     }
   };
 
+  const handleSelectWorkspaceFile = async (relativePath: string) => {
+    if (!activeProject) {
+      return;
+    }
+    if (selectedFilePath === relativePath && filePreview) {
+      setSelectedFilePath(null);
+      setFilePreview(null);
+      setFilePreviewError(null);
+      return;
+    }
+    setSelectedFilePath(relativePath);
+    setFilePreview(null);
+    setFilePreviewError(null);
+    setIsLoadingFilePreview(true);
+    try {
+      const resp = await meta.bridge.getProjectFileContent(activeProject.project_id, relativePath);
+      setFilePreview(resp);
+    } catch (err) {
+      setFilePreviewError(normalizeBridgeError(err).message);
+    } finally {
+      setIsLoadingFilePreview(false);
+    }
+  };
+
   const handleCreateArtifact = async (event: FormEvent) => {
     event.preventDefault();
     if (!artName.trim() || !artContent.trim()) {
@@ -265,7 +430,7 @@ export function WorkspacePanel() {
     }
   };
 
-  const copyText = (field: "content" | "sha256", value: string) => {
+  const copyText = (field: "content" | "sha256" | "file_path", value: string) => {
     if (navigator.clipboard?.writeText) {
       void navigator.clipboard.writeText(value).catch(() => {});
     }
@@ -275,11 +440,39 @@ export function WorkspacePanel() {
     }, 1500);
   };
 
+  const handleDownloadArtifact = () => {
+    if (!selectedArt || selectedLifecycle === "deleted") {
+      return;
+    }
+    if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+      return;
+    }
+    let blob: Blob;
+    if (artifactContent?.base64) {
+      const bytes = base64ToUint8Array(artifactContent.base64);
+      blob = new Blob([bytes.buffer as ArrayBuffer], {
+        type: artifactContent.mime_type || selectedArt.mime_type || "application/octet-stream",
+      });
+    } else {
+      const fallbackText = artifactContent?.text ?? selectedArt.content ?? "";
+      blob = new Blob([fallbackText], {
+        type: selectedArt.mime_type || "text/plain;charset=utf-8",
+      });
+    }
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = selectedArt.name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const currentMimeLabel =
     MIME_OPTIONS.find((item) => item.value === artMime)?.label ?? artMime;
 
   const selectedCompleteness = selectedArt?.completeness_status ?? "final";
-  const selectedLifecycle = selectedArt?.lifecycle_state ?? "active";
   const canFinalize = selectedCompleteness === "partial" && selectedLifecycle !== "deleted";
   const canUnarchive = selectedLifecycle === "archived";
   const canArchive = selectedLifecycle !== "archived" && selectedLifecycle !== "deleted";
@@ -289,10 +482,19 @@ export function WorkspacePanel() {
     Boolean(selectedArt) &&
     (canFinalize || canUnarchive || canArchive || canRemove || canDelete);
 
+  const effectiveArtifactText =
+    selectedLifecycle === "deleted"
+      ? null
+      : (artifactContent?.text ?? selectedArt?.content ?? null);
+  const effectiveArtifactIsBinary = Boolean(artifactContent?.is_binary);
+  const effectiveArtifactSha256 = artifactContent?.sha256 || selectedArt?.sha256 || "";
+  const effectiveArtifactByteSize = artifactContent?.byte_size ?? null;
+
   const isMarkdownPreviewable = Boolean(
     selectedArt &&
       selectedLifecycle !== "deleted" &&
-      selectedArt.content &&
+      !effectiveArtifactIsBinary &&
+      effectiveArtifactText &&
       (selectedArt.mime_type.toLowerCase().includes("markdown") ||
         (/\.(md|markdown)$/i.test(selectedArt.name) &&
           !selectedArt.mime_type.toLowerCase().includes("json"))),
@@ -333,11 +535,21 @@ export function WorkspacePanel() {
   return (
     <aside
       className="workspace-panel"
-      aria-label="Рабочее пространство и артефакты"
+      style={{ width: `${panelWidth}px`, flex: `0 0 ${panelWidth}px` }}
+      aria-label="Проект, файлы и артефакты"
       data-testid="workspace-sibling-panel"
     >
+      <div
+        className="workspace-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Изменить ширину панели проекта"
+        data-testid="workspace-resize-handle"
+        onPointerDown={handleResizePointerDown}
+      />
+
       <header className="resource-header">
-        <h2>Workspace</h2>
+        <h2>Проект и файлы</h2>
         <div className="resource-header__actions">
           {isBound && (
             <button
@@ -356,7 +568,7 @@ export function WorkspacePanel() {
             className="icon-button resource-panel-toggle is-open"
             onClick={() => actions.setRightPanelOpen(false)}
             aria-label="Скрыть панель рабочего пространства"
-            title="Скрыть Workspace (Ctrl+\)"
+            title="Скрыть панель проекта (Ctrl+\)"
           >
             <Sidebar size={16} />
           </button>
@@ -397,7 +609,7 @@ export function WorkspacePanel() {
                 <p className="resource-empty">Нет активного проекта.</p>
               ) : !isBound ? (
                 <div className="workspace-unbound-card" data-testid="workspace-unbound-notice">
-                  <p>Папка не привязана. Проект работает в изолированном режиме чтения.</p>
+                  <p>Папка не привязана. Проект работает без локальной рабочей директории.</p>
                   <button
                     type="button"
                     className="popover-secondary-btn"
@@ -477,12 +689,18 @@ export function WorkspacePanel() {
                             </button>
                           );
                         }
+                        const isSelectedFile = selectedFilePath === entry.relative_path;
                         return (
-                          <div
+                          <button
                             key={entry.relative_path}
-                            className="resource-row is-static workspace-file-row"
+                            type="button"
+                            className={`resource-row workspace-file-row ${
+                              isSelectedFile ? "is-selected" : ""
+                            }`}
                             style={{ paddingLeft: `${22 + (depth - 1) * 14}px` }}
                             title={entry.relative_path}
+                            data-testid={`workspace-file-${entry.relative_path}`}
+                            onClick={() => void handleSelectWorkspaceFile(entry.relative_path)}
                           >
                             {isCodeFile(entry.name) ? (
                               <FileCode size={15} aria-hidden="true" />
@@ -495,7 +713,7 @@ export function WorkspacePanel() {
                             {entry.size_bytes !== null && entry.size_bytes !== undefined && (
                               <em>{formatBytes(entry.size_bytes)}</em>
                             )}
-                          </div>
+                          </button>
                         );
                       })}
                       {filesData.truncated && (
@@ -503,6 +721,76 @@ export function WorkspacePanel() {
                           Показаны первые {filesData.entries.length} элементов (лимит безопасности).
                         </p>
                       )}
+                    </div>
+                  )}
+
+                  {selectedFilePath && (
+                    <div className="workspace-file-preview" data-testid="workspace-file-preview">
+                      <div className="workspace-file-preview__head">
+                        <strong title={selectedFilePath}>{selectedFilePath}</strong>
+                        <div className="workspace-file-preview__actions">
+                          <button
+                            type="button"
+                            className="icon-button icon-button--xs"
+                            title={copiedField === "file_path" ? "Путь скопирован" : "Копировать путь"}
+                            aria-label="Копировать путь файла"
+                            data-testid="workspace-file-copy-path"
+                            onClick={() => copyText("file_path", selectedFilePath)}
+                          >
+                            {copiedField === "file_path" ? <Check size={12} /> : <Copy size={12} />}
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button icon-button--xs"
+                            title="Вставить @путь в чат"
+                            aria-label="Вставить файл в чат"
+                            data-testid="workspace-file-insert-chat"
+                            onClick={() => actions.insertIntoDraft(`@${selectedFilePath}`)}
+                          >
+                            <At size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button icon-button--xs"
+                            title="Закрыть просмотр файла"
+                            aria-label="Закрыть просмотр файла"
+                            onClick={() => {
+                              setSelectedFilePath(null);
+                              setFilePreview(null);
+                              setFilePreviewError(null);
+                            }}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {isLoadingFilePreview ? (
+                        <p className="resource-empty">Загрузка файла…</p>
+                      ) : filePreviewError ? (
+                        <p className="resource-empty">{filePreviewError}</p>
+                      ) : filePreview ? (
+                        <>
+                          <div className="workspace-file-preview__meta">
+                            <span>{filePreview.mime_type}</span>
+                            <span>{formatBytes(filePreview.byte_size)}</span>
+                            {filePreview.truncated && <span>· усечён</span>}
+                          </div>
+                          {filePreview.is_binary ? (
+                            <p className="resource-empty" data-testid="workspace-file-binary">
+                              Бинарный файл ({formatBytes(filePreview.byte_size)}) — текстовый
+                              просмотр недоступен.
+                            </p>
+                          ) : (
+                            <pre
+                              className="artifact-preview__body"
+                              data-testid="workspace-file-content"
+                            >
+                              {filePreview.content ?? "(пустой файл)"}
+                            </pre>
+                          )}
+                        </>
+                      ) : null}
                     </div>
                   )}
                 </>
@@ -712,18 +1000,34 @@ export function WorkspacePanel() {
 
                     <div className="artifact-preview__controls">
                       <span className="artifact-preview__rev">rev {selectedArt.revision}</span>
-                      {selectedLifecycle !== "deleted" && selectedArt.content && (
+                      {selectedLifecycle !== "deleted" && (
                         <button
                           type="button"
                           className="icon-button icon-button--xs"
-                          aria-label="Скопировать содержимое артефакта"
-                          title={copiedField === "content" ? "Скопировано" : "Копировать содержимое"}
-                          data-testid="artifact-copy-content"
-                          onClick={() => copyText("content", selectedArt.content ?? "")}
+                          aria-label={`Скачать артефакт ${selectedArt.name}`}
+                          title="Скачать артефакт"
+                          data-testid="artifact-download-btn"
+                          onClick={handleDownloadArtifact}
                         >
-                          {copiedField === "content" ? <Check size={13} /> : <Copy size={13} />}
+                          <DownloadSimple size={13} />
                         </button>
                       )}
+                      {selectedLifecycle !== "deleted" &&
+                        !effectiveArtifactIsBinary &&
+                        effectiveArtifactText && (
+                          <button
+                            type="button"
+                            className="icon-button icon-button--xs"
+                            aria-label="Скопировать содержимое артефакта"
+                            title={
+                              copiedField === "content" ? "Скопировано" : "Копировать содержимое"
+                            }
+                            data-testid="artifact-copy-content"
+                            onClick={() => copyText("content", effectiveArtifactText)}
+                          >
+                            {copiedField === "content" ? <Check size={13} /> : <Copy size={13} />}
+                          </button>
+                        )}
 
                       {hasLifecycleActions && (
                         <>
@@ -885,25 +1189,36 @@ export function WorkspacePanel() {
                     </div>
                   )}
 
-                  {selectedArt.sha256 && (
+                  {(effectiveArtifactSha256 || effectiveArtifactByteSize !== null) && (
                     <div className="artifact-sha-bar">
                       <code
                         className="artifact-sha-bar__hash"
-                        title={selectedArt.sha256}
+                        title={effectiveArtifactSha256 || undefined}
                         data-testid="artifact-sha256"
                       >
-                        SHA-256: {selectedArt.sha256.slice(0, 12)}…
+                        {effectiveArtifactSha256
+                          ? `SHA-256: ${effectiveArtifactSha256.slice(0, 12)}…`
+                          : ""}
+                        {effectiveArtifactByteSize !== null
+                          ? `${effectiveArtifactSha256 ? " · " : ""}${formatBytes(
+                              effectiveArtifactByteSize,
+                            )}`
+                          : ""}
                       </code>
-                      <button
-                        type="button"
-                        className="icon-button icon-button--xs"
-                        aria-label="Скопировать SHA-256"
-                        title={copiedField === "sha256" ? "Хеш скопирован" : "Скопировать SHA-256"}
-                        data-testid="artifact-copy-sha256"
-                        onClick={() => copyText("sha256", selectedArt.sha256 ?? "")}
-                      >
-                        {copiedField === "sha256" ? <Check size={12} /> : <Copy size={12} />}
-                      </button>
+                      {effectiveArtifactSha256 && (
+                        <button
+                          type="button"
+                          className="icon-button icon-button--xs"
+                          aria-label="Скопировать SHA-256"
+                          title={
+                            copiedField === "sha256" ? "Хеш скопирован" : "Скопировать SHA-256"
+                          }
+                          data-testid="artifact-copy-sha256"
+                          onClick={() => copyText("sha256", effectiveArtifactSha256)}
+                        >
+                          {copiedField === "sha256" ? <Check size={12} /> : <Copy size={12} />}
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -962,21 +1277,32 @@ export function WorkspacePanel() {
                     </div>
                   )}
 
-                  {isMarkdownPreviewable && markdownViewMode === "rendered" ? (
+                  {isLoadingArtifactContent && !effectiveArtifactText ? (
+                    <p className="resource-empty">Загрузка снимка артефакта…</p>
+                  ) : effectiveArtifactIsBinary && selectedLifecycle !== "deleted" ? (
+                    <div className="artifact-binary-box" data-testid="artifact-binary-indicator">
+                      <p className="resource-empty">
+                        Бинарный артефакт ({artifactContent?.mime_type ?? selectedArt.mime_type}
+                        {effectiveArtifactByteSize !== null
+                          ? `, ${formatBytes(effectiveArtifactByteSize)}`
+                          : ""}
+                        ). Используйте кнопку «Скачать» выше.
+                      </p>
+                    </div>
+                  ) : isMarkdownPreviewable && markdownViewMode === "rendered" ? (
                     <div
                       className="artifact-preview__markdown message-markdown"
                       data-testid="artifact-preview-markdown"
                     >
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-                        {selectedArt.content ?? ""}
-                      </ReactMarkdown>
+                      <MarkdownRenderer content={effectiveArtifactText ?? ""} />
                     </div>
                   ) : (
                     /* Strictly plain text child — zero innerHTML/XSS */
                     <pre className="artifact-preview__body" data-testid="artifact-preview-source">
                       {selectedLifecycle === "deleted"
                         ? "(Содержимое артефакта удалено в Dennett; файлы в рабочей папке не затронуты)"
-                        : (selectedArt.content ??
+                        : (effectiveArtifactText ??
+                          artifactContentError ??
                           (selectedArt.relative_path
                             ? `Файл рабочей области: ${selectedArt.relative_path}`
                             : "(пустой артефакт)"))}

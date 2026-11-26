@@ -175,10 +175,9 @@ describe("Standalone Chats, Two-Zone Split Sidebar, Pinning & Message Copy", () 
       "Задайте вопрос или обсудите идею без привязки к папке проекта",
     );
 
-    // Composer locks write policy to "Только чтение" while keeping live Model & Thinking popovers working
+    // Composer exposes 2-mode Autonomy (Авто default) while keeping live Model & Thinking popovers working
     const accessTrigger = screen.getByTestId("access-selector-trigger");
-    expect(accessTrigger).toBeDisabled();
-    expect(accessTrigger).toHaveTextContent("Только чтение");
+    expect(accessTrigger).toHaveTextContent("Авто");
 
     await user.click(screen.getByTestId("model-selector-trigger"));
     expect(await screen.findByTestId("model-popover")).toHaveTextContent("Gemini 4 Carbon");

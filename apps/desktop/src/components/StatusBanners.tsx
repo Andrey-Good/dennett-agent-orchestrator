@@ -33,7 +33,7 @@ export function StatusBanners() {
             <WarningCircle size={15} aria-hidden="true" />
             <span>
               <strong>Память memoryd недоступна</strong> — разговор сохраняется, отложенные записи
-              ждут в очереди, Stop доступен.
+              ждут в очереди, Стоп доступен.
               {pendingOutbox > 0 ? ` В очереди outbox: ${pendingOutbox}.` : ""}
             </span>
           </div>
@@ -94,7 +94,7 @@ export function StatusBanners() {
             data-testid="global-stop-button"
           >
             <Stop size={12} weight="fill" aria-hidden="true" />
-            {isCancelling ? "Остановка…" : "Stop"}
+            {isCancelling ? "Остановка…" : "Стоп"}
           </button>
         </div>
       )}

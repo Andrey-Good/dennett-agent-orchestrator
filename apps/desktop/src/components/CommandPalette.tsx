@@ -16,6 +16,7 @@ import {
   FolderPlus,
   FolderSimple,
   GearSix,
+  Keyboard,
   ListChecks,
   MagnifyingGlass,
   Plus,
@@ -240,7 +241,7 @@ export function CommandPalette() {
       {
         id: "action:toggle-workspace",
         section: "actions",
-        label: "Переключить панель Workspace",
+        label: "Переключить панель проекта и артефактов",
         kbd: "Ctrl \\",
         icon: <Browsers size={15} aria-hidden="true" />,
         run: () => {
@@ -249,13 +250,36 @@ export function CommandPalette() {
         },
       },
       {
+        id: "action:chat-search",
+        section: "actions",
+        label: "Поиск по сообщениям чата",
+        kbd: "Ctrl F",
+        icon: <MagnifyingGlass size={15} aria-hidden="true" />,
+        run: () => {
+          close();
+          actions.setActiveView("chat");
+          actions.setChatSearchOpen(true);
+        },
+      },
+      {
         id: "action:settings",
         section: "actions",
         label: "Настройки и подключения",
+        kbd: "Ctrl ,",
         icon: <GearSix size={15} aria-hidden="true" />,
         run: () => {
           close();
           actions.setSettingsOpen(true);
+        },
+      },
+      {
+        id: "action:shortcuts",
+        section: "actions",
+        label: "Горячие клавиши",
+        icon: <Keyboard size={15} aria-hidden="true" />,
+        run: () => {
+          close();
+          actions.setShortcutsOpen(true);
         },
       },
     ];

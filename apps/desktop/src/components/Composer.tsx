@@ -7,6 +7,8 @@ import {
   ChatCircleText,
   Check,
   Clock,
+  FileText,
+  FolderSimple,
   Lightning,
   ListChecks,
   PauseCircle,
@@ -21,60 +23,72 @@ import {
 } from "@phosphor-icons/react";
 
 import type {
+  AutonomyMode,
   SessionFollowupRecord,
   ThinkingLevel,
-  WorkspaceWritePolicy,
+  WorkspaceFileEntry,
 } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
 import { PortalPopover } from "./PortalPopover";
 
 type OpenComposerPopover = "access" | "model" | "thinking" | null;
 
-const THINKING_LABELS: Record<ThinkingLevel, string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra",
+const THINKING_LABELS_RU: Record<ThinkingLevel, string> = {
+  low: "Низкий",
+  medium: "Средний",
+  high: "Высокий",
+  xhigh: "Макс",
 };
 
-const WRITE_POLICY_ITEMS: Array<{
-  mode: "ask_before_write" | "allow_workspace" | "deny_all";
+function localizeThinkingLabel(level: ThinkingLevel, rawLabel?: string): string {
+  if (THINKING_LABELS_RU[level]) {
+    return THINKING_LABELS_RU[level];
+  }
+  const normalized = (rawLabel ?? "").trim().toLowerCase();
+  if (normalized === "low") return "Низкий";
+  if (normalized === "medium") return "Средний";
+  if (normalized === "high") return "Высокий";
+  if (normalized === "extra" || normalized === "xhigh") return "Макс";
+  return rawLabel || level;
+}
+
+const AUTONOMY_MODE_ITEMS: Array<{
+  mode: AutonomyMode;
   label: string;
   description: string;
 }> = [
   {
-    mode: "ask_before_write",
-    label: "Спрашивать запись",
-    description: "Запрашивать подтверждение в чате и Входящих перед изменением файла",
+    mode: "auto",
+    label: "Авто",
+    description:
+      "Свободная запись файлов и локальные команды проекта; запрос только на критичные внешние, платёжные и разрушительные действия",
   },
   {
-    mode: "allow_workspace",
-    label: "Запись в папку",
-    description: "Разрешить запись строго внутри корневой папки проекта",
-  },
-  {
-    mode: "deny_all",
-    label: "Только чтение",
-    description: "Запретить любые файловые изменения в этом проекте",
+    mode: "full_access",
+    label: "Полный доступ",
+    description: "Автономная работа без интерактивных подтверждений в рамках границ проекта",
   },
 ];
 
-function policyLabel(policy: WorkspaceWritePolicy | undefined, isFolderless: boolean): string {
-  if (isFolderless) {
-    return "Только чтение";
+function autonomyLabel(mode: AutonomyMode | null | undefined): string {
+  return mode === "full_access" ? "Полный доступ" : "Авто";
+}
+
+interface AtMentionMatch {
+  start: number;
+  end: number;
+  query: string;
+}
+
+function findAtMention(text: string, cursorPos: number): AtMentionMatch | null {
+  const before = text.slice(0, cursorPos);
+  const match = /(?:^|\s)@([^\s@]*)$/.exec(before);
+  if (!match) {
+    return null;
   }
-  switch (policy?.mode) {
-    case "allow_workspace":
-      return "Запись в папку";
-    case "ask_before_write":
-      return "Спрашивать запись";
-    case "deny_all":
-      return "Только чтение";
-    case "allow_paths":
-      return "Ограниченная запись (CLI)";
-    default:
-      return "Запись в папку";
-  }
+  const query = match[1] ?? "";
+  const start = cursorPos - query.length - 1;
+  return { start, end: cursorPos, query };
 }
 
 export function Composer() {
@@ -86,10 +100,13 @@ export function Composer() {
   const [editingText, setEditingText] = useState("");
   const [busyFollowupId, setBusyFollowupId] = useState<string | null>(null);
   const [isBulkFollowupBusy, setIsBulkFollowupBusy] = useState(false);
+  const [atMention, setAtMention] = useState<AtMentionMatch | null>(null);
+  const [atSelectedIndex, setAtSelectedIndex] = useState(0);
 
   const accessTriggerRef = useRef<HTMLButtonElement | null>(null);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
   const thinkingTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const composerBoxRef = useRef<HTMLDivElement | null>(null);
 
   const sessionId = state.selectedSessionId;
   const activeAgent = meta.activeAgent;
@@ -98,23 +115,72 @@ export function Composer() {
   const isStandaloneSession = meta.isStandaloneActiveSession;
   const isTaskRunSession = (meta.activeSession?.session_kind ?? "user_chat") === "task_run";
   const clarificationCard = meta.activeClarificationCard;
-  const isFolderless = isStandaloneSession || (activeProject ? !activeProject.workspace_path : true);
   const isConnected = Boolean(state.healthSnapshot?.connected);
   const isRunning = meta.isRunningActiveSession;
   const isCancelling = meta.isCancellingActiveSession;
   const hasDraft = meta.currentDraft.trim().length > 0;
   const activeFollowups = meta.activeFollowups ?? [];
   const hasPausedFollowups = activeFollowups.some((item) => item.status === "paused");
+  const enterToSend = state.userPreferences.enter_to_send ?? true;
+
+  const currentAutonomy: AutonomyMode = activeAgent?.current_config.autonomy_mode ?? "auto";
 
   useEffect(() => {
     setEditingFollowupId(null);
     setEditingText("");
+    setAtMention(null);
   }, [sessionId]);
 
-  // Clarification reply routes through this single composer; otherwise normal send/offline queue.
-  const canSend = Boolean(sessionId) && hasDraft && (
-    clarificationCard ? isConnected && !submittingClarification : !isRunning
+  // Lazily load project workspace files when @-autocomplete opens and files aren't loaded yet.
+  useEffect(() => {
+    if (
+      atMention &&
+      activeProject?.workspace_path &&
+      isConnected &&
+      (!state.projectFiles || state.projectFiles.project_id !== activeProject.project_id) &&
+      !state.isLoadingFiles
+    ) {
+      void actions.refreshProjectFiles();
+    }
+  }, [
+    actions,
+    activeProject?.project_id,
+    activeProject?.workspace_path,
+    atMention,
+    isConnected,
+    state.isLoadingFiles,
+    state.projectFiles,
+  ]);
+
+  const atFileSuggestions: WorkspaceFileEntry[] = useMemo(() => {
+    if (!atMention || !activeProject?.workspace_path) {
+      return [];
+    }
+    const entries = state.projectFiles?.entries ?? [];
+    const q = atMention.query.trim().toLowerCase();
+    return entries
+      .filter(
+        (entry) =>
+          !q ||
+          entry.relative_path.toLowerCase().includes(q) ||
+          entry.name.toLowerCase().includes(q),
+      )
+      .slice(0, 12);
+  }, [activeProject?.workspace_path, atMention, state.projectFiles?.entries]);
+
+  const showAtPopover = Boolean(
+    atMention && activeProject?.workspace_path && atFileSuggestions.length > 0,
   );
+
+  useEffect(() => {
+    setAtSelectedIndex(0);
+  }, [atMention?.query]);
+
+  // Clarification reply routes through this single composer; otherwise normal send/offline queue.
+  const canSend =
+    Boolean(sessionId) &&
+    hasDraft &&
+    (clarificationCard ? isConnected && !submittingClarification : !isRunning);
 
   const catalog = state.runtimeCatalog;
   const models = catalog?.models ?? [];
@@ -155,9 +221,9 @@ export function Composer() {
   ]);
 
   const thinkingLabelMap = useMemo(() => {
-    const map: Record<string, string> = { ...THINKING_LABELS };
+    const map: Record<string, string> = { ...THINKING_LABELS_RU };
     for (const opt of catalog?.thinking_options ?? []) {
-      map[opt.value] = opt.label;
+      map[opt.value] = localizeThinkingLabel(opt.value, opt.label);
     }
     return map;
   }, [catalog?.thinking_options]);
@@ -172,10 +238,30 @@ export function Composer() {
     el.style.height = `${nextHeight}px`;
   }, [meta.composerInputRef, meta.currentDraft, sessionId]);
 
+  const applyAtSelection = (entry: WorkspaceFileEntry) => {
+    if (!sessionId || !atMention) {
+      return;
+    }
+    const current = meta.currentDraft;
+    const inserted = `@${entry.relative_path} `;
+    const nextValue = current.slice(0, atMention.start) + inserted + current.slice(atMention.end);
+    actions.updateDraft(sessionId, nextValue);
+    setAtMention(null);
+    const nextCursor = atMention.start + inserted.length;
+    window.setTimeout(() => {
+      const el = meta.composerInputRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    }, 0);
+  };
+
   const submitCurrentInput = async () => {
     if (!sessionId || !canSend) {
       return;
     }
+    setAtMention(null);
     if (clarificationCard) {
       const answerText = meta.currentDraft.trim();
       if (!answerText) {
@@ -205,6 +291,7 @@ export function Composer() {
     if (!trimmed) {
       return;
     }
+    setAtMention(null);
     setIsSubmittingFollowup(true);
     actions.updateDraft(sessionId, "");
     try {
@@ -226,6 +313,7 @@ export function Composer() {
     if (!trimmed) {
       return;
     }
+    setAtMention(null);
     setIsSubmittingFollowup(true);
     actions.updateDraft(sessionId, "");
     try {
@@ -260,17 +348,19 @@ export function Composer() {
       return;
     }
     setBusyFollowupId(item.followup_id);
+    let deleted = false;
     try {
-      const deleted = await actions.deleteFollowup(item.followup_id);
-      if (deleted) {
-        if (editingFollowupId === item.followup_id) {
-          setEditingFollowupId(null);
-          setEditingText("");
-        }
-        await actions.steerSession(item.content);
+      deleted = await actions.deleteFollowup(item.followup_id);
+      if (deleted && editingFollowupId === item.followup_id) {
+        setEditingFollowupId(null);
+        setEditingText("");
       }
     } finally {
       setBusyFollowupId(null);
+    }
+    if (deleted) {
+      // Trigger steering immediately without keeping queue controls wedged across a long turn.
+      void actions.steerSession(item.content);
     }
   };
 
@@ -317,9 +407,41 @@ export function Composer() {
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showAtPopover) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setAtSelectedIndex((idx) => (idx + 1) % atFileSuggestions.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setAtSelectedIndex(
+          (idx) => (idx - 1 + atFileSuggestions.length) % atFileSuggestions.length,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const chosen = atFileSuggestions[atSelectedIndex] ?? atFileSuggestions[0];
+        if (chosen) {
+          applyAtSelection(chosen);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setAtMention(null);
+        return;
+      }
+    }
+
     if (event.key === "Enter" && !event.shiftKey) {
       const isModEnter = event.ctrlKey || event.metaKey;
       if (isRunning && !clarificationCard) {
+        if (!enterToSend && !isModEnter) {
+          return;
+        }
         event.preventDefault();
         if (!sessionId || !hasDraft || !isConnected || isSubmittingFollowup) {
           return;
@@ -331,9 +453,11 @@ export function Composer() {
         }
         return;
       }
-      event.preventDefault();
-      if (canSend) {
-        void submitCurrentInput();
+      if (enterToSend || isModEnter) {
+        event.preventDefault();
+        if (canSend) {
+          void submitCurrentInput();
+        }
       }
     } else if (
       event.key === "Escape" &&
@@ -372,7 +496,7 @@ export function Composer() {
     selectedModelOption?.label ?? currentModelId ?? (isConnected ? "Модель движка" : "Офлайн");
   const thinkingButtonLabel = currentThinking
     ? (thinkingLabelMap[currentThinking] ?? currentThinking)
-    : "Thinking";
+    : "Размышление";
 
   // D2-UX-03: Archived project is strictly read-only until unarchived.
   if (isArchivedProject && activeProject) {
@@ -413,7 +537,7 @@ export function Composer() {
                 data-testid="composer-stop-button"
               >
                 <Stop size={12} weight="fill" aria-hidden="true" />
-                Stop
+                Стоп
               </button>
             )}
             <button
@@ -434,28 +558,21 @@ export function Composer() {
     <div className="composer-region">
       <div className="composer-shell">
         <PortalPopover
-          isOpen={openPopover === "access" && Boolean(activeAgent) && !isFolderless}
+          isOpen={openPopover === "access" && Boolean(activeAgent)}
           anchorEl={accessTriggerRef.current}
           onClose={() => setOpenPopover(null)}
           placement="top-start"
           className="composer-popover"
           role="menu"
-          ariaLabel="Доступ к файлам проекта"
+          ariaLabel="Режим автономности агента"
           testId="access-popover"
         >
           {activeAgent && (
             <>
-              <strong>Доступ к файлам</strong>
-              <p>Политика проверяется внешним PolicyEngine до выполнения инструмента.</p>
-              {activeAgent.current_config.workspace_write_policy.mode === "allow_paths" && (
-                <p className="popover-readonly-note" data-testid="cli-write-policy-note">
-                  Активна политика из CLI: <strong>Ограниченная запись (CLI)</strong>. Выберите режим
-                  ниже, если хотите изменить доступ.
-                </p>
-              )}
-              {WRITE_POLICY_ITEMS.map((item) => {
-                const isSelected =
-                  activeAgent.current_config.workspace_write_policy.mode === item.mode;
+              <strong>Автономность агента</strong>
+              <p>Контроль выполняется внешним PolicyEngine до запуска инструментов.</p>
+              {AUTONOMY_MODE_ITEMS.map((item) => {
+                const isSelected = currentAutonomy === item.mode;
                 return (
                   <button
                     key={item.mode}
@@ -463,10 +580,10 @@ export function Composer() {
                     role="menuitemradio"
                     aria-checked={isSelected}
                     className={isSelected ? "is-selected" : ""}
-                    data-testid={`write-policy-option-${item.mode}`}
+                    data-testid={`autonomy-option-${item.mode}`}
                     onClick={() => {
                       setOpenPopover(null);
-                      void actions.updateActiveAgentWritePolicy({ mode: item.mode });
+                      void actions.updateActiveAgentAutonomy(item.mode);
                     }}
                   >
                     <span className="popover-option-copy">
@@ -479,6 +596,44 @@ export function Composer() {
               })}
             </>
           )}
+        </PortalPopover>
+
+        <PortalPopover
+          isOpen={showAtPopover}
+          anchorEl={composerBoxRef.current}
+          onClose={() => setAtMention(null)}
+          placement="top-start"
+          className="composer-popover at-file-popover"
+          role="listbox"
+          ariaLabel="Упомянуть файл проекта"
+          testId="at-file-popover"
+        >
+          <strong>Файлы проекта</strong>
+          <div className="popover-scroll-list">
+            {atFileSuggestions.map((entry, idx) => (
+              <button
+                key={entry.relative_path}
+                type="button"
+                role="option"
+                aria-selected={idx === atSelectedIndex}
+                className={idx === atSelectedIndex ? "is-selected" : ""}
+                data-testid={`at-file-option-${entry.relative_path}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  applyAtSelection(entry);
+                }}
+              >
+                <span className="at-file-option-copy">
+                  {entry.kind === "directory" ? (
+                    <FolderSimple size={13} aria-hidden="true" />
+                  ) : (
+                    <FileText size={13} aria-hidden="true" />
+                  )}
+                  <code>{entry.relative_path}</code>
+                </span>
+              </button>
+            ))}
+          </div>
         </PortalPopover>
 
         <PortalPopover
@@ -502,7 +657,8 @@ export function Composer() {
               <p className="popover-empty">Список моделей загружается…</p>
             ) : (
               models.map((opt) => {
-                const isSelected = opt.model_id === (selectedModelOption?.model_id ?? currentModelId);
+                const isSelected =
+                  opt.model_id === (selectedModelOption?.model_id ?? currentModelId);
                 return (
                   <button
                     key={opt.model_id}
@@ -689,8 +845,8 @@ export function Composer() {
                           <button
                             type="button"
                             className="followup-item-btn followup-item-btn--steer"
-                            aria-label="Прервать и уточнить сейчас"
-                            title="Уточнить сейчас"
+                            aria-label="Отправить немедленно"
+                            title="Отправить немедленно"
                             data-testid={`followup-promote-btn-${item.followup_id}`}
                             disabled={!isConnected || isItemBusy}
                             onClick={() => void handlePromoteFollowup(item)}
@@ -718,7 +874,7 @@ export function Composer() {
           </div>
         )}
 
-        <div className="composer" data-testid="chat-composer">
+        <div className="composer" ref={composerBoxRef} data-testid="chat-composer">
           <textarea
             ref={meta.composerInputRef}
             className="composer__input"
@@ -731,7 +887,7 @@ export function Composer() {
                   : isConnected
                     ? isStandaloneSession
                       ? "Напишите сообщение…"
-                      : "Напишите поручение агенту…"
+                      : "Напишите поручение агенту… (@ для выбора файла)"
                     : "Офлайн-черновик — нажмите Enter, чтобы поставить в очередь отправки…"
             }
             aria-label={
@@ -742,9 +898,16 @@ export function Composer() {
             value={meta.currentDraft}
             disabled={!sessionId}
             onChange={(e) => {
+              const nextVal = e.target.value;
               if (sessionId) {
-                actions.updateDraft(sessionId, e.target.value);
+                actions.updateDraft(sessionId, nextVal);
               }
+              const cursor = e.target.selectionStart ?? nextVal.length;
+              setAtMention(findAtMention(nextVal, cursor));
+            }}
+            onClick={(e) => {
+              const cursor = e.currentTarget.selectionStart ?? meta.currentDraft.length;
+              setAtMention(findAtMention(meta.currentDraft, cursor));
             }}
             onKeyDown={handleKeyDown}
           />
@@ -755,28 +918,24 @@ export function Composer() {
                 <button
                   ref={accessTriggerRef}
                   type="button"
-                  className={`composer-setting ${isFolderless ? "is-static" : ""}`}
-                  disabled={isFolderless || state.isUpdatingModel || !isConnected}
+                  className="composer-setting"
+                  disabled={state.isUpdatingModel || !isConnected}
                   aria-expanded={openPopover === "access"}
                   aria-haspopup="menu"
-                  aria-label="Доступ к файлам проекта"
+                  aria-label="Режим автономности агента"
                   data-testid="access-selector-trigger"
                   title={
-                    isStandaloneSession
-                      ? "Одиночный чат работает в режиме только чтение без привязки к папке"
-                      : isFolderless
-                        ? "Проект без папки работает в режиме только чтение до привязки папки"
-                        : "Политика записи в рабочую папку"
+                    currentAutonomy === "full_access"
+                      ? "Полный доступ — без интерактивных подтверждений"
+                      : "Авто — свободная работа в проекте, запрос только на критичные действия"
                   }
                   onClick={() =>
                     setOpenPopover((prev) => (prev === "access" ? null : "access"))
                   }
                 >
                   <ShieldCheck size={15} aria-hidden="true" />
-                  <span>
-                    {policyLabel(activeAgent.current_config.workspace_write_policy, isFolderless)}
-                  </span>
-                  {!isFolderless && <CaretDown size={11} aria-hidden="true" />}
+                  <span>{autonomyLabel(currentAutonomy)}</span>
+                  <CaretDown size={11} aria-hidden="true" />
                 </button>
               )}
             </div>
@@ -827,7 +986,7 @@ export function Composer() {
                       title="Уровень размышления встроен в эту модель"
                     >
                       <Brain size={14} aria-hidden="true" />
-                      <small>Thinking</small>
+                      <small>Размышление</small>
                     </span>
                   )}
                 </>
@@ -889,10 +1048,10 @@ export function Composer() {
                   data-testid="send-button"
                   title={
                     clarificationCard
-                      ? "Ответить агенту (Enter)"
+                      ? `Ответить агенту (${enterToSend ? "Enter" : "Ctrl+Enter"})`
                       : isConnected
-                        ? "Отправить (Enter)"
-                        : "Поставить в очередь до восстановления сети (Enter)"
+                        ? `Отправить (${enterToSend ? "Enter" : "Ctrl+Enter"})`
+                        : "Поставить в очередь до восстановления сети"
                   }
                 >
                   {isConnected || clarificationCard ? (

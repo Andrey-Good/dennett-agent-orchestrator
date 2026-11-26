@@ -1,7 +1,9 @@
 import type { DesktopBridge } from "./bridge";
 import type {
   ActivateConnectionRequest,
+  AgentConfigHistoryResponse,
   AgentRecord,
+  ArtifactContentResponse,
   ArtifactLifecycleRequest,
   ArtifactLifecycleResponse,
   ArtifactRecord,
@@ -22,6 +24,7 @@ import type {
   CreateClaimRequest,
   CreateConsolidationJobRequest,
   CreateDocumentRequest,
+  CreatePolicyRuleRequest,
   CreateProjectRequest,
   CreateSessionRequest,
   CreateTaskRequest,
@@ -33,6 +36,7 @@ import type {
   DiscoverCapabilitiesResponse,
   DispatchEffectRequest,
   DispatchEffectResponse,
+  EmergencyStopResponse,
   EnqueueFollowupRequest,
   EventStreamResponse,
   ExportRequest,
@@ -40,12 +44,14 @@ import type {
   FlushOutboxResponse,
   ForgetRequest,
   ForgetResponse,
+  ForkSessionRequest,
   GetDocumentVersionsResponse,
   HeadHealth,
   HeadMemorySearchRequest,
   HeadMemorySearchResponse,
   ImportRequest,
   ImportResponse,
+  IndexState,
   ListAgentMessagesResponse,
   ListAgentsResponse,
   ListArtifactsResponse,
@@ -58,6 +64,7 @@ import type {
   ListEffectsResponse,
   ListInboxResponse,
   ListPermissionRequestsResponse,
+  ListPolicyRulesResponse,
   ListProjectFilesResponse,
   ListProjectsResponse,
   ListProviderConnectionsResponse,
@@ -72,7 +79,9 @@ import type {
   MemoryOverviewResponse,
   NoteHistoryResponse,
   NoteMutationResponse,
+  PolicyRule,
   ProbeConnectionResponse,
+  ProjectFileContentResponse,
   ProjectLifecycleResponse,
   ProjectRecord,
   ProviderConnectionRecord,
@@ -114,7 +123,9 @@ import type {
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateTaskRequest,
+  UpdateUserPreferencesRequest,
   UpsertProviderConnectionRequest,
+  UserPreferences,
 } from "./contracts";
 
 async function parseErrorResponse(resp: Response): Promise<{ code: string; message: string }> {
@@ -170,6 +181,36 @@ function buildQuery(entries: Array<[string, string | number | boolean | null | u
   return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
 
+function resolveDevOwnerToken(): string | null {
+  const envToken = (import.meta.env as Record<string, string | undefined> | undefined)
+    ?.VITE_DENNETT_HEAD_TOKEN;
+  if (typeof envToken === "string" && envToken.trim().length > 0) {
+    return envToken.trim();
+  }
+  if (typeof window !== "undefined") {
+    const winToken = (window as unknown as { __DENNETT_HEAD_TOKEN__?: unknown })
+      .__DENNETT_HEAD_TOKEN__;
+    if (typeof winToken === "string" && winToken.trim().length > 0) {
+      return winToken.trim();
+    }
+  }
+  return null;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, i + chunkSize);
+    let chunk = "";
+    for (let j = 0; j < slice.length; j += 1) {
+      chunk += String.fromCharCode(slice[j]!);
+    }
+    binary += chunk;
+  }
+  return btoa(binary);
+}
+
 /**
  * Dev-only HTTP bridge talking to a live local `dennett-head` through the Vite dev server proxy
  * (`/__dennett_dev_head`). Strictly instantiated ONLY when `import.meta.env.DEV && !isTauriRuntime()`.
@@ -177,6 +218,18 @@ function buildQuery(entries: Array<[string, string | number | boolean | null | u
 export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): DesktopBridge {
   const base = proxyPrefix.replace(/\/+$/, "");
   let displayedUrl = "http://127.0.0.1:41771 (Vite dev proxy)";
+
+  function buildHeaders(hasJsonBody: boolean): Record<string, string> | undefined {
+    const headers: Record<string, string> = {};
+    if (hasJsonBody) {
+      headers["Content-Type"] = "application/json";
+    }
+    const token = resolveDevOwnerToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return Object.keys(headers).length > 0 ? headers : undefined;
+  }
 
   async function requestJson<T>(
     method: string,
@@ -187,7 +240,7 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
     try {
       resp = await fetch(`${base}${path}`, {
         method,
-        headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+        headers: buildHeaders(body !== undefined),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
     } catch (err) {
@@ -209,7 +262,10 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
   async function requestEmpty(method: string, path: string): Promise<void> {
     let resp: Response;
     try {
-      resp = await fetch(`${base}${path}`, { method });
+      resp = await fetch(`${base}${path}`, {
+        method,
+        headers: buildHeaders(false),
+      });
     } catch (err) {
       throw {
         code: "HEAD_UNREACHABLE",
@@ -231,7 +287,10 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
 
     async getHeadHealth(): Promise<DesktopHealthSnapshot> {
       try {
-        const resp = await fetch(`${base}/healthz`, { method: "GET" });
+        const resp = await fetch(`${base}/healthz`, {
+          method: "GET",
+          headers: buildHeaders(false),
+        });
         if (!resp.ok) {
           const parsed = await parseErrorResponse(resp);
           return {
@@ -737,5 +796,92 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
 
     steerSession: (sessionId: string, request: SteerSessionRequest) =>
       requestJson<SendMessageResponse>("POST", `/v1/sessions/${sessionId}/steer`, request),
+
+    async getArtifactContent(
+      sessionId: string,
+      artifactId: string,
+    ): Promise<ArtifactContentResponse> {
+      let resp: Response;
+      try {
+        resp = await fetch(`${base}/v1/sessions/${sessionId}/artifacts/${artifactId}/content`, {
+          method: "GET",
+          headers: buildHeaders(false),
+        });
+      } catch (err) {
+        throw {
+          code: "HEAD_UNREACHABLE",
+          message:
+            err instanceof Error
+              ? `Не удалось подключиться к dennett-head: ${err.message}`
+              : "Не удалось подключиться к dennett-head",
+        };
+      }
+      if (!resp.ok) {
+        throw await parseErrorResponse(resp);
+      }
+      const buf = await resp.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      const mimeType = resp.headers.get("content-type") ?? "application/octet-stream";
+      const sha256 = resp.headers.get("x-dennett-artifact-sha256") ?? "";
+      const hasNul = bytes.includes(0);
+      let text: string | null = null;
+      if (!hasNul) {
+        try {
+          text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        } catch {
+          text = null;
+        }
+      }
+      return {
+        mime_type: mimeType,
+        sha256,
+        byte_size: bytes.byteLength,
+        text,
+        base64: bytesToBase64(bytes),
+        is_binary: text === null,
+      };
+    },
+
+    getAgentConfigHistory: (agentId: string) =>
+      requestJson<AgentConfigHistoryResponse>("GET", `/v1/agents/${agentId}/config-versions`),
+
+    listPolicyRules: () => requestJson<ListPolicyRulesResponse>("GET", "/v1/policies"),
+
+    createPolicyRule: (request: CreatePolicyRuleRequest) =>
+      requestJson<PolicyRule>("POST", "/v1/policies", request),
+
+    deletePolicyRule: (ruleId: string) => requestEmpty("DELETE", `/v1/policies/${ruleId}`),
+
+    forkSession: (sessionId: string, request: ForkSessionRequest) =>
+      requestJson<SessionRecord>("POST", `/v1/sessions/${sessionId}/fork`, request),
+
+    deleteSession: (sessionId: string) => requestEmpty("DELETE", `/v1/sessions/${sessionId}`),
+
+    getPreferences: () => requestJson<UserPreferences>("GET", "/v1/preferences"),
+
+    updatePreferences: (request: UpdateUserPreferencesRequest) =>
+      requestJson<UserPreferences>("PATCH", "/v1/preferences", request),
+
+    getProjectFileContent: (projectId: string, relativePath: string) =>
+      requestJson<ProjectFileContentResponse>(
+        "GET",
+        `/v1/projects/${projectId}/file${buildQuery([["path", relativePath]])}`,
+      ),
+
+    emergencyStopAll: () =>
+      requestJson<EmergencyStopResponse>("POST", "/v1/runs/emergency-stop"),
+
+    runTaskNow: (taskId: string) =>
+      requestJson<TaskRecord>("POST", `/v1/tasks/${taskId}/run-now`),
+
+    pauseTask: (taskId: string) => requestJson<TaskRecord>("POST", `/v1/tasks/${taskId}/pause`),
+
+    resumeTask: (taskId: string) =>
+      requestJson<TaskRecord>("POST", `/v1/tasks/${taskId}/resume`),
+
+    deleteTask: (taskId: string) => requestEmpty("DELETE", `/v1/tasks/${taskId}`),
+
+    getMemoryIndexStatus: (scope?: string | null) =>
+      requestJson<IndexState>("GET", `/v1/memory/index/status${buildQuery([["scope", scope]])}`),
   };
 }
