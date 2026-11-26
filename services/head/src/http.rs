@@ -560,8 +560,17 @@ fn is_control_token_allowed_route(method: &Method, path: &str) -> bool {
         && let Some(slug) = path.strip_prefix("/v1/capabilities/session-skills/")
         && !slug.is_empty()
         && !slug.contains('/')
+        && !slug.contains('\\')
+        && !slug.contains("..")
     {
-        return true;
+        let lower = slug.to_ascii_lowercase();
+        if !lower.contains("%2f")
+            && !lower.contains("%5c")
+            && !lower.contains("%00")
+            && !lower.contains("%2e%2e")
+        {
+            return true;
+        }
     }
     if method == Method::POST && path == "/v1/sessions" {
         return true;

@@ -411,18 +411,22 @@ struct SteeringSessionGuard {
 
 impl SteeringSessionGuard {
     fn acquire(map: Arc<StdMutex<HashMap<SessionId, usize>>>, session_id: SessionId) -> Self {
-        if let Ok(mut guard) = map.lock() {
-            *guard.entry(session_id).or_insert(0) += 1;
-        }
+        let mut guard = map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard.entry(session_id).or_insert(0) += 1;
+        drop(guard);
         Self { map, session_id }
     }
 }
 
 impl Drop for SteeringSessionGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.map.lock()
-            && let Some(count) = guard.get_mut(&self.session_id)
-        {
+        let mut guard = self
+            .map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(count) = guard.get_mut(&self.session_id) {
             *count = count.saturating_sub(1);
             if *count == 0 {
                 guard.remove(&self.session_id);
@@ -6953,9 +6957,12 @@ impl HeadService {
             updated_at: now,
         };
         active.insert(session_id, handle);
-        if let Ok(mut snaps) = self.inner.live_snapshots.lock() {
-            snaps.insert(session_id, initial_snapshot);
-        }
+        let mut snaps = self
+            .inner
+            .live_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        snaps.insert(session_id, initial_snapshot);
         Ok(())
     }
 
@@ -6968,11 +6975,12 @@ impl HeadService {
     }
 
     pub(crate) fn get_live_snapshot(&self, session_id: SessionId) -> Option<LiveRunSnapshot> {
-        self.inner
+        let snaps = self
+            .inner
             .live_snapshots
             .lock()
-            .ok()
-            .and_then(|snaps| snaps.get(&session_id).cloned())
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        snaps.get(&session_id).cloned()
     }
 
     pub(crate) fn mutate_live_snapshot(
@@ -6981,8 +6989,12 @@ impl HeadService {
         run_id: RunId,
         f: impl FnOnce(&mut LiveRunSnapshot),
     ) {
-        if let Ok(mut snaps) = self.inner.live_snapshots.lock()
-            && let Some(snap) = snaps.get_mut(&session_id)
+        let mut snaps = self
+            .inner
+            .live_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(snap) = snaps.get_mut(&session_id)
             && snap.run_id == run_id
         {
             f(snap);
@@ -6990,18 +7002,23 @@ impl HeadService {
     }
 
     pub(crate) fn remove_live_snapshot(&self, session_id: SessionId, run_id: RunId) {
-        if let Ok(mut snaps) = self.inner.live_snapshots.lock()
-            && snaps.get(&session_id).is_some_and(|s| s.run_id == run_id)
-        {
+        let mut snaps = self
+            .inner
+            .live_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if snaps.get(&session_id).is_some_and(|s| s.run_id == run_id) {
             snaps.remove(&session_id);
         }
     }
 
     pub(crate) fn is_session_steering(&self, session_id: SessionId) -> bool {
-        self.inner
+        let map = self
+            .inner
             .steering_sessions
             .lock()
-            .is_ok_and(|m| m.get(&session_id).copied().unwrap_or(0) > 0)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.get(&session_id).copied().unwrap_or(0) > 0
     }
 
     pub(crate) async fn is_session_active_or_steering(&self, session_id: SessionId) -> bool {
