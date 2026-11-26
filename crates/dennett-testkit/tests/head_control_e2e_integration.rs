@@ -482,6 +482,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -813,6 +814,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1137,6 +1139,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1213,6 +1216,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1518,6 +1522,7 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1565,6 +1570,7 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
             &UpdateSessionRequest {
                 title: Some(String::from("Переименованный чат")),
                 pinned: None,
+                status: None,
             },
             None,
         )

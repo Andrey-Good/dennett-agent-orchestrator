@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::control::{
-    MAX_ADAPTER_ID_LEN, MAX_MESSAGE_CONTENT_BYTES, MAX_WORKSPACE_PATH_LEN, MemoryStatus, ProjectId,
-    RunId, RuntimeCatalogResponse, SendMessageResponse, SessionId,
+    AgentId, MAX_ADAPTER_ID_LEN, MAX_MESSAGE_CONTENT_BYTES, MAX_WORKSPACE_PATH_LEN, MemoryStatus,
+    ProjectId, RunId, RuntimeCatalogResponse, SendMessageResponse, SessionId,
 };
 use crate::d2::validate_client_message_id;
 use crate::memory::{
@@ -792,6 +792,8 @@ pub enum CapabilityScopeKind {
     Global,
     /// Scoped strictly to a single [`ProjectId`].
     Project,
+    /// Scoped strictly to a single [`AgentId`].
+    Agent,
     /// Discovered candidate not yet attached to any project or global pool (e.g. `~/.gemini/` read-only scan).
     #[default]
     CandidateUnattached,
@@ -804,6 +806,7 @@ impl CapabilityScopeKind {
         match self {
             Self::Global => "global",
             Self::Project => "project",
+            Self::Agent => "agent",
             Self::CandidateUnattached => "candidate_unattached",
         }
     }
@@ -822,6 +825,7 @@ impl FromStr for CapabilityScopeKind {
         match s.trim() {
             "global" => Ok(Self::Global),
             "project" => Ok(Self::Project),
+            "agent" => Ok(Self::Agent),
             "candidate_unattached" => Ok(Self::CandidateUnattached),
             other => Err(DennettError::InvalidInput {
                 field: String::from("scope_kind"),
@@ -1223,11 +1227,14 @@ pub struct CapabilityRecord {
     pub origin_kind: CapabilityOrigin,
     /// Ownership boundary (`user`, `project`, `provider`, `dennett`).
     pub ownership: CapabilityOwnership,
-    /// Scope visibility (`global`, `project`, or `candidate_unattached`).
+    /// Scope visibility (`global`, `project`, `agent`, or `candidate_unattached`).
     pub scope_kind: CapabilityScopeKind,
     /// Owning project identifier when `scope_kind == CapabilityScopeKind::Project`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
+    /// Owning agent identifier when `scope_kind == CapabilityScopeKind::Agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
     /// Possession lifecycle state (`discovered`, `installed`, `connected`).
     pub possession_state: CapabilityPossession,
     /// Security trust disposition (`unreviewed`, `restricted`, `trusted`, `revoked`).
@@ -1313,11 +1320,14 @@ pub struct CreateCapabilityRequest {
     /// Administrative ownership (defaults to [`CapabilityOwnership::User`]).
     #[serde(default)]
     pub ownership: CapabilityOwnership,
-    /// Scope visibility (`global`, `project`, or `candidate_unattached`).
+    /// Scope visibility (`global`, `project`, `agent`, or `candidate_unattached`).
     pub scope_kind: CapabilityScopeKind,
     /// Owning project identifier (required when `scope_kind == CapabilityScopeKind::Project`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
+    /// Owning agent identifier (required when `scope_kind == CapabilityScopeKind::Agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
     /// Initial trust disposition (defaults to [`CapabilityTrust::Unreviewed`]).
     #[serde(default)]
     pub trust_state: CapabilityTrust,
@@ -1356,6 +1366,12 @@ impl CreateCapabilityRequest {
                 reason: String::from("project_id is required when `scope_kind` is `project`"),
             });
         }
+        if self.scope_kind == CapabilityScopeKind::Agent && self.agent_id.is_none() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("agent_id"),
+                reason: String::from("agent_id is required when `scope_kind` is `agent`"),
+            });
+        }
         if self.activation_state == CapabilityActivation::Forbidden {
             return Err(DennettError::InvalidInput {
                 field: String::from("activation_state"),
@@ -1389,6 +1405,9 @@ pub struct UpdateCapabilityRequest {
     /// Optional owning project identifier (required when moving into `scope_kind == Project`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
+    /// Optional owning agent identifier (required when moving into `scope_kind == Agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
     /// Optional updated trust disposition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust_state: Option<CapabilityTrust>,
@@ -1412,6 +1431,7 @@ impl UpdateCapabilityRequest {
             && self.version.is_none()
             && self.scope_kind.is_none()
             && self.project_id.is_none()
+            && self.agent_id.is_none()
             && self.trust_state.is_none()
             && self.activation_state.is_none()
             && self.spec.is_none()
@@ -1443,6 +1463,14 @@ impl UpdateCapabilityRequest {
                 field: String::from("project_id"),
                 reason: String::from(
                     "project_id is required when transitioning `scope_kind` to `project`",
+                ),
+            });
+        }
+        if self.scope_kind == Some(CapabilityScopeKind::Agent) && self.agent_id.is_none() {
+            return Err(DennettError::InvalidInput {
+                field: String::from("agent_id"),
+                reason: String::from(
+                    "agent_id is required when transitioning `scope_kind` to `agent`",
                 ),
             });
         }
@@ -2050,6 +2078,7 @@ mod tests {
             ownership: CapabilityOwnership::Project,
             scope_kind: CapabilityScopeKind::Project,
             project_id: Some(ProjectId::new()),
+            agent_id: None,
             trust_state: CapabilityTrust::Unreviewed,
             activation_state: CapabilityActivation::Disabled,
             source_path: None,
@@ -2069,12 +2098,43 @@ mod tests {
 
         let missing_project = CreateCapabilityRequest {
             project_id: None,
-            ..create_req
+            ..create_req.clone()
         };
         assert!(missing_project.validate().is_err());
 
+        assert_eq!(CapabilityScopeKind::Agent.as_str(), "agent");
+        assert_eq!(
+            CapabilityScopeKind::from_str("agent"),
+            Ok(CapabilityScopeKind::Agent)
+        );
+        let agent_scoped_ok = CreateCapabilityRequest {
+            scope_kind: CapabilityScopeKind::Agent,
+            project_id: None,
+            agent_id: Some(AgentId::new()),
+            ..create_req.clone()
+        };
+        assert!(agent_scoped_ok.validate().is_ok());
+        let agent_scoped_missing = CreateCapabilityRequest {
+            scope_kind: CapabilityScopeKind::Agent,
+            project_id: None,
+            agent_id: None,
+            ..create_req
+        };
+        assert!(agent_scoped_missing.validate().is_err());
+
         let empty_update = UpdateCapabilityRequest::default();
         assert!(empty_update.validate().is_err());
+        let agent_update_missing = UpdateCapabilityRequest {
+            scope_kind: Some(CapabilityScopeKind::Agent),
+            ..Default::default()
+        };
+        assert!(agent_update_missing.validate().is_err());
+        let agent_update_ok = UpdateCapabilityRequest {
+            scope_kind: Some(CapabilityScopeKind::Agent),
+            agent_id: Some(AgentId::new()),
+            ..Default::default()
+        };
+        assert!(agent_update_ok.validate().is_ok());
     }
 
     #[test]

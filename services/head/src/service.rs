@@ -6084,6 +6084,8 @@ impl HeadService {
                     "memoryd client is not configured on dennett-head",
                 )),
                 notes: Vec::new(),
+                claims: Vec::new(),
+                documents: Vec::new(),
                 index_status: dennett_contracts::IndexStatus::Degraded,
                 stale_warning: None,
             });
@@ -6102,6 +6104,8 @@ impl HeadService {
                     memory_status: MemoryStatus::Healthy,
                     degraded_reason: None,
                     notes: resp.notes,
+                    claims: resp.claims,
+                    documents: resp.documents,
                     index_status: resp.index_status,
                     stale_warning: resp.stale_warning,
                 })
@@ -6115,6 +6119,8 @@ impl HeadService {
                     memory_status: MemoryStatus::DegradedUnreachable,
                     degraded_reason: Some(self.redact(&format!("memoryd unavailable: {detail}"))),
                     notes: Vec::new(),
+                    claims: Vec::new(),
+                    documents: Vec::new(),
                     index_status: dennett_contracts::IndexStatus::Degraded,
                     stale_warning: None,
                 })

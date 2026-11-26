@@ -101,6 +101,8 @@ function capabilityScopeLabel(scope: CapabilityScopeKind): string {
       return "Глобально";
     case "project":
       return "Проект";
+    case "agent":
+      return "Агент";
     case "candidate_unattached":
       return "Кандидат";
   }

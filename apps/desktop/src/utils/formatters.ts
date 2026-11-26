@@ -82,6 +82,13 @@ export function formatScheduleSummaryRu(kind: ScheduleKind, timezone: string): s
       const mm = String(kind.minute).padStart(2, "0");
       return `${days.join(", ")} в ${hh}:${mm} (${timezone})`;
     }
+    case "yearly_wall_time": {
+      const dd = String(kind.day).padStart(2, "0");
+      const mo = String(kind.month).padStart(2, "0");
+      const hh = String(kind.hour).padStart(2, "0");
+      const mm = String(kind.minute).padStart(2, "0");
+      return `ежегодно ${dd}.${mo} в ${hh}:${mm} (${timezone})`;
+    }
   }
 }
 

@@ -1597,6 +1597,7 @@ fn parse_agent_subcommand(
                 thinking_level,
                 allowed_memory_scopes: scopes,
                 workspace_write_policy: write_policy,
+                autonomy_mode: None,
                 default_budget,
                 attached_skills,
                 preferred_connection_id,
@@ -1673,6 +1674,7 @@ fn parse_agent_subcommand(
                 thinking_level,
                 allowed_memory_scopes: scopes,
                 workspace_write_policy: write_policy,
+                autonomy_mode: None,
                 default_budget,
                 attached_skills,
                 preferred_connection_id,
@@ -2006,7 +2008,11 @@ fn parse_session_subcommand(
                     other => return Err(unknown_flag(other)),
                 }
             }
-            let req = UpdateSessionRequest { title, pinned };
+            let req = UpdateSessionRequest {
+                title,
+                pinned,
+                status: None,
+            };
             req.validate()?;
             Ok(Action::SessionUpdate {
                 g,
@@ -2513,6 +2519,13 @@ fn parse_task_subcommand(
                 budget,
                 attached_skills,
                 auth_profile_override,
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
                 execute_immediately,
             };
             req.validate()?;
@@ -4013,6 +4026,7 @@ fn parse_capabilities_subcommand(
                 ownership: CapabilityOwnership::User,
                 scope_kind,
                 project_id,
+                agent_id: None,
                 trust_state,
                 activation_state,
                 source_path,
@@ -4088,6 +4102,7 @@ fn parse_capabilities_subcommand(
                 version,
                 scope_kind,
                 project_id,
+                agent_id: None,
                 trust_state,
                 activation_state,
                 spec,

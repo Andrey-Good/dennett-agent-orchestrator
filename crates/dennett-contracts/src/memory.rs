@@ -1418,14 +1418,20 @@ impl SearchNotesRequest {
     }
 }
 
-/// Scoped search response containing current notes, truncation metadata, and live index status.
+/// Scoped search response containing ranked notes, claims, documents, truncation metadata, and live index status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchNotesResponse {
     /// Matching current notes visible within the principal's authorized scopes.
     pub notes: Vec<MemoryNote>,
-    /// Total number of notes matching the scoped query.
+    /// Matching structured claims visible within the principal's authorized scopes.
+    #[serde(default)]
+    pub claims: Vec<MemoryClaim>,
+    /// Matching versioned dossier documents visible within the principal's authorized scopes.
+    #[serde(default)]
+    pub documents: Vec<MemoryDocument>,
+    /// Total number of items matching the scoped query.
     pub total_matched: u64,
-    /// `true` when additional matching notes exist beyond `notes.len()`.
+    /// `true` when additional matching items exist beyond the returned slice.
     pub truncated: bool,
     /// Live freshness/health status of the separable search index at query time.
     #[serde(default)]
@@ -3299,6 +3305,12 @@ mod tests {
                 .expect("legacy SearchNotesResponse");
         assert_eq!(legacy_search_resp.index_status, IndexStatus::Healthy);
         assert!(legacy_search_resp.stale_warning.is_none());
+        assert_eq!(legacy_search_resp.claims, Vec::new());
+        assert_eq!(legacy_search_resp.documents, Vec::new());
+        let encoded_unified =
+            serde_json::to_string(&legacy_search_resp).expect("serialize unified search response");
+        assert!(encoded_unified.contains(r#""claims":[]"#));
+        assert!(encoded_unified.contains(r#""documents":[]"#));
 
         let claim_req = CreateClaimRequest {
             scope: scope.clone(),

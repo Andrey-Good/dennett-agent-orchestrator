@@ -305,6 +305,7 @@ async fn live_d1_e2e_preseeded_memoryd_head_agy_mcp_restart_and_policies() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -684,6 +685,7 @@ async fn live_d1_e2e_isolated_gemini_api_key_without_key_fails_closed() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )

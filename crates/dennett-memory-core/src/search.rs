@@ -679,6 +679,8 @@ pub(crate) async fn execute_search_notes(
     if allowed_scopes.is_empty() {
         return Ok(SearchNotesResponse {
             notes: Vec::new(),
+            claims: Vec::new(),
+            documents: Vec::new(),
             total_matched: 0,
             truncated: false,
             index_status: IndexStatus::Healthy,
@@ -726,6 +728,8 @@ pub(crate) async fn execute_search_notes(
         let returned_count = u64::try_from(notes.len()).unwrap_or(u64::MAX);
         Ok(SearchNotesResponse {
             notes,
+            claims: Vec::new(),
+            documents: Vec::new(),
             total_matched,
             truncated: total_matched > returned_count,
             index_status,

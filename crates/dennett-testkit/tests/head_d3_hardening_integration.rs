@@ -315,6 +315,7 @@ async fn d3_artifact_immutable_snapshots_survive_overwrite_delete_and_worktree_r
                 attached_skills: Vec::new(),
                 default_budget: None,
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )

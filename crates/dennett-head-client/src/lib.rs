@@ -44,9 +44,11 @@ use dennett_contracts::{
     TaskRecord, TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest,
     TriggerIndexRebuildResponse, UpdateAgentConfigRequest, UpdateCapabilityRequest,
     UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest,
-    UpdateTaskRequest, UpsertProviderConnectionRequest,
+    UpdateTaskRequest, UpdateUserPreferencesRequest, UpsertProviderConnectionRequest,
+    UserPreferences, EmergencyStopResponse, ForkSessionRequest, IndexState, PolicyRuleId,
+    ProjectFileContentResponse,
 };
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -57,6 +59,8 @@ pub const DEFAULT_HEAD_CLIENT_TIMEOUT: Duration = Duration::from_secs(180);
 pub const DEFAULT_HEAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Maximum HTTP response body size accepted from `dennett-head` (32 MiB).
 pub const MAX_RESPONSE_BODY_BYTES: usize = 32 * 1024 * 1024;
+/// Environment variable carrying an optional owner bearer token for `dennett-head`.
+pub const HEAD_TOKEN_ENV: &str = "DENNETT_HEAD_TOKEN";
 
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
 static HEADER_CONTROL_TOKEN: HeaderName = HeaderName::from_static("x-dennett-control-token");
@@ -79,6 +83,7 @@ pub struct HeadClient {
     base_url: String,
     http: Client,
     control_token: Option<String>,
+    owner_token: Option<String>,
 }
 
 impl fmt::Debug for HeadClient {
@@ -88,6 +93,10 @@ impl fmt::Debug for HeadClient {
             .field(
                 "control_token",
                 &self.control_token.as_ref().map(|_| REDACTED_PLACEHOLDER),
+            )
+            .field(
+                "owner_token",
+                &self.owner_token.as_ref().map(|_| REDACTED_PLACEHOLDER),
             )
             .finish_non_exhaustive()
     }
@@ -140,6 +149,7 @@ impl HeadClient {
             base_url: trimmed.to_owned(),
             http,
             control_token: None,
+            owner_token: None,
         })
     }
 
@@ -150,6 +160,50 @@ impl HeadClient {
         let trimmed = token.into().trim().to_owned();
         self.control_token = (!trimmed.is_empty()).then_some(trimmed);
         self
+    }
+
+    /// Attaches an owner bearer token (`Authorization: Bearer <token>`) to outgoing HTTP requests.
+    #[must_use]
+    pub fn with_owner_token(mut self, token: impl Into<String>) -> Self {
+        let trimmed = token.into().trim().to_owned();
+        self.owner_token = (!trimmed.is_empty()).then_some(trimmed);
+        self
+    }
+
+    /// Attaches an optional owner bearer token (`Authorization: Bearer <token>`), clearing any
+    /// previous token when `None` or blank.
+    #[must_use]
+    pub fn with_optional_owner_token(mut self, token: Option<String>) -> Self {
+        self.owner_token = token
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty());
+        self
+    }
+
+    /// Clears any configured owner bearer token (useful when testing unauthenticated `401` flows).
+    #[must_use]
+    pub fn without_owner_token(mut self) -> Self {
+        self.owner_token = None;
+        self
+    }
+
+    /// Loads an optional owner bearer token from [`HEAD_TOKEN_ENV`] (`DENNETT_HEAD_TOKEN`).
+    #[must_use]
+    pub fn with_owner_token_from_env(self) -> Self {
+        self.with_optional_owner_token(std::env::var(HEAD_TOKEN_ENV).ok())
+    }
+
+    /// Updates or clears the configured owner bearer token in place.
+    pub fn set_owner_token(&mut self, token: Option<String>) {
+        self.owner_token = token
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty());
+    }
+
+    /// Returns the currently configured owner bearer token, when present.
+    #[must_use]
+    pub fn owner_token(&self) -> Option<&str> {
+        self.owner_token.as_deref()
     }
 
     /// Returns the normalized base URL without trailing slash.
@@ -519,7 +573,11 @@ impl HeadClient {
             "{}/v1/sessions/{session_id}/artifacts/{artifact_id}/content",
             self.base_url
         );
-        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
+        let headers = build_headers(
+            correlation_id,
+            self.control_token.as_deref(),
+            self.owner_token.as_deref(),
+        )?;
         let mut resp = self
             .http
             .request(Method::GET, &url)
@@ -2112,6 +2170,220 @@ impl HeadClient {
         .await
     }
 
+    // ------------------------------------------------------------------------
+    // Phase D3+ Audit Closure: Fork, Preferences, File Preview, Controls & Index Status
+    // ------------------------------------------------------------------------
+
+    /// Calls `POST /v1/sessions/{session_id}/fork` to fork a session from an existing message.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn fork_session(
+        &self,
+        session_id: SessionId,
+        req: &ForkSessionRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SessionRecord, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/fork"),
+            req,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/sessions/{session_id}` to delete a session record.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_session(
+        &self,
+        session_id: SessionId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<(), DennettError> {
+        self.request_empty(
+            Method::DELETE,
+            &format!("/v1/sessions/{session_id}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/preferences` to retrieve persisted owner locale, timezone, and composer preferences.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_preferences(
+        &self,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<UserPreferences, DennettError> {
+        self.request_no_body(Method::GET, "/v1/preferences", correlation_id)
+            .await
+    }
+
+    /// Calls `PATCH /v1/preferences` to update persisted owner preferences.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_preferences(
+        &self,
+        req: &UpdateUserPreferencesRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<UserPreferences, DennettError> {
+        self.request_json(Method::PATCH, "/v1/preferences", req, correlation_id)
+            .await
+    }
+
+    /// Calls `GET /v1/projects/{project_id}/file?path=...` to read a bounded workspace file preview.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `relative_path` is empty or contains NUL bytes,
+    /// or the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_project_file_content(
+        &self,
+        project_id: ProjectId,
+        relative_path: &str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ProjectFileContentResponse, DennettError> {
+        let trimmed = relative_path.trim();
+        if trimmed.is_empty() || trimmed.as_bytes().contains(&0) {
+            return Err(DennettError::InvalidInput {
+                field: String::from("relative_path"),
+                reason: String::from("must be non-empty and must not contain NUL bytes"),
+            });
+        }
+        let path = format!(
+            "/v1/projects/{project_id}/file?path={}",
+            encode_query_component(trimmed)
+        );
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
+    /// Calls `DELETE /v1/policies/{rule_id}` to remove an external policy rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_policy_rule(
+        &self,
+        rule_id: PolicyRuleId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<(), DennettError> {
+        self.request_empty(
+            Method::DELETE,
+            &format!("/v1/policies/{rule_id}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/runs/emergency-stop` to cancel all active runs and tasks immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn emergency_stop_all(
+        &self,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<EmergencyStopResponse, DennettError> {
+        self.request_no_body(Method::POST, "/v1/runs/emergency-stop", correlation_id)
+            .await
+    }
+
+    /// Calls `POST /v1/tasks/{task_id}/run-now` to trigger immediate execution of a task.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn run_task_now(
+        &self,
+        task_id: TaskId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskRecord, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/tasks/{task_id}/run-now"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/tasks/{task_id}/pause` to pause a scheduled or queued task.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn pause_task(
+        &self,
+        task_id: TaskId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskRecord, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/tasks/{task_id}/pause"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/tasks/{task_id}/resume` to resume a paused task.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn resume_task(
+        &self,
+        task_id: TaskId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<TaskRecord, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/tasks/{task_id}/resume"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/tasks/{task_id}` to remove a task record.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_task(
+        &self,
+        task_id: TaskId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<(), DennettError> {
+        self.request_empty(
+            Method::DELETE,
+            &format!("/v1/tasks/{task_id}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/memory/index/status` with an optional `scope` filter via Head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_memory_index_status(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<IndexState, DennettError> {
+        let path = scoped_query_path("/v1/memory/index/status", scope);
+        self.request_no_body(Method::GET, &path, correlation_id)
+            .await
+    }
+
     async fn request_no_body<Resp: DeserializeOwned>(
         &self,
         method: Method,
@@ -2119,7 +2391,11 @@ impl HeadClient {
         correlation_id: Option<&CorrelationId>,
     ) -> Result<Resp, DennettError> {
         let url = format!("{}{path}", self.base_url);
-        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
+        let headers = build_headers(
+            correlation_id,
+            self.control_token.as_deref(),
+            self.owner_token.as_deref(),
+        )?;
         let resp = self
             .http
             .request(method, &url)
@@ -2137,7 +2413,11 @@ impl HeadClient {
         correlation_id: Option<&CorrelationId>,
     ) -> Result<(), DennettError> {
         let url = format!("{}{path}", self.base_url);
-        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
+        let headers = build_headers(
+            correlation_id,
+            self.control_token.as_deref(),
+            self.owner_token.as_deref(),
+        )?;
         let resp = self
             .http
             .request(method, &url)
@@ -2156,7 +2436,11 @@ impl HeadClient {
         correlation_id: Option<&CorrelationId>,
     ) -> Result<Resp, DennettError> {
         let url = format!("{}{path}", self.base_url);
-        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
+        let headers = build_headers(
+            correlation_id,
+            self.control_token.as_deref(),
+            self.owner_token.as_deref(),
+        )?;
         let resp = self
             .http
             .request(method, &url)
@@ -2213,6 +2497,7 @@ fn encode_query_component(input: &str) -> String {
 fn build_headers(
     correlation_id: Option<&CorrelationId>,
     control_token: Option<&str>,
+    owner_token: Option<&str>,
 ) -> Result<HeaderMap, DennettError> {
     let mut headers = HeaderMap::new();
     let cid = correlation_id
@@ -2229,6 +2514,16 @@ fn build_headers(
             reason: String::from("invalid control token HTTP header value"),
         })?;
         headers.insert(HEADER_CONTROL_TOKEN.clone(), tok_val);
+    }
+    if let Some(token) = owner_token {
+        let auth_val =
+            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
+                DennettError::InvalidInput {
+                    field: String::from("owner_token"),
+                    reason: String::from("invalid owner token HTTP header value"),
+                }
+            })?;
+        headers.insert(AUTHORIZATION, auth_val);
     }
     Ok(headers)
 }
@@ -2455,5 +2750,110 @@ mod tests {
             .delete_followup(session_id, followup_id, None)
             .await
             .expect("204 No Content should succeed");
+    }
+
+    #[tokio::test]
+    async fn head_client_owner_token_redacts_debug_and_sends_bearer_on_stage0_endpoints() {
+        let secret_token = "owner-secret-bearer-token-999";
+        let mut client = HeadClient::new("http://127.0.0.1:1")
+            .expect("client")
+            .with_owner_token(secret_token);
+        assert_eq!(client.owner_token(), Some(secret_token));
+        let dbg = format!("{client:?}");
+        assert!(
+            !dbg.contains(secret_token),
+            "Debug output leaked owner token: {dbg}"
+        );
+        assert!(dbg.contains(REDACTED_PLACEHOLDER));
+
+        client.set_owner_token(None);
+        assert!(client.owner_token().is_none());
+
+        let err = client
+            .get_project_file_content(ProjectId::new(), "   ", None)
+            .await;
+        assert!(matches!(
+            err,
+            Err(DennettError::InvalidInput { ref field, .. }) if field == "relative_path"
+        ));
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("addr");
+        let project_id = ProjectId::new();
+        let rule_id = PolicyRuleId::new();
+        let task_id = TaskId::new();
+        let expected_auth = format!("authorization: Bearer {secret_token}");
+        let expected_file_req = format!("GET /v1/projects/{project_id}/file?path=docs/readme.md ");
+        let expected_rule_req = format!("DELETE /v1/policies/{rule_id} ");
+        let expected_task_del = format!("DELETE /v1/tasks/{task_id} ");
+        let expected_stop = String::from("POST /v1/runs/emergency-stop ");
+
+        let server = tokio::spawn(async move {
+            let responses = [
+                (
+                    expected_file_req,
+                    format!(
+                        r#"{{"relative_path":"docs/readme.md","mime_type":"text/markdown","byte_size":4,"sha256":"{}","content":"test","truncated":false,"is_binary":false}}"#,
+                        "a".repeat(64)
+                    ),
+                ),
+                (expected_rule_req, String::new()),
+                (expected_task_del, String::new()),
+                (
+                    expected_stop,
+                    String::from(r#"{"cancelled_session_ids":[],"cancelled_task_ids":[]}"#),
+                ),
+            ];
+            for (expected_prefix, body) in responses {
+                let (mut s, _) = listener.accept().await.expect("accept");
+                let mut buf = [0_u8; 2048];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                assert!(
+                    req.starts_with(&expected_prefix),
+                    "expected `{expected_prefix}`, got `{req}`"
+                );
+                assert!(
+                    req.to_ascii_lowercase().contains(&expected_auth.to_ascii_lowercase()),
+                    "missing Authorization Bearer header in request: {req}"
+                );
+                let raw_resp = if body.is_empty() {
+                    String::from("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let _ = s.write_all(raw_resp.as_bytes()).await;
+                let _ = s.shutdown().await;
+            }
+        });
+
+        let authed = HeadClient::new(format!("http://{addr}"))
+            .expect("client")
+            .with_owner_token(secret_token);
+        let preview = authed
+            .get_project_file_content(project_id, "docs/readme.md", None)
+            .await
+            .expect("file preview");
+        assert_eq!(preview.relative_path, "docs/readme.md");
+        authed
+            .delete_policy_rule(rule_id, None)
+            .await
+            .expect("delete policy rule");
+        authed
+            .delete_task(task_id, None)
+            .await
+            .expect("delete task");
+        let stopped = authed
+            .emergency_stop_all(None)
+            .await
+            .expect("emergency stop");
+        assert_eq!(stopped.cancelled_session_ids, Vec::new());
+        assert_eq!(stopped.cancelled_task_ids, Vec::new());
+        server.await.expect("server task");
     }
 }

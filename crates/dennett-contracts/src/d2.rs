@@ -12,11 +12,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::control::{
-    AgentId, AgentRecord, ArtifactRecord, MAX_POLICY_PATTERN_LEN, MAX_POLICY_SCOPE_LEN,
-    MAX_REASON_BYTES, MAX_WORKSPACE_PATH_LEN, MemoryStatus, PermissionDecisionId,
-    PermissionDecisionRecord, ProjectId, ProjectRecord, RunId, RunRecord, SessionId, SessionRecord,
-    WorkspaceWritePolicy,
+    AgentId, AgentRecord, ArtifactRecord, MAX_MODEL_NAME_LEN, MAX_POLICY_PATTERN_LEN,
+    MAX_POLICY_SCOPE_LEN, MAX_REASON_BYTES, MAX_WORKSPACE_PATH_LEN, MemoryStatus,
+    PermissionDecisionId, PermissionDecisionRecord, ProjectId, ProjectRecord, RunId, RunRecord,
+    SessionId, SessionRecord, ThinkingLevel, WorkspaceWritePolicy,
 };
+use crate::d3::ProviderConnectionId;
 use crate::{
     CorrelationId, DennettError, IdempotencyKey, RuntimeAuthProfile, Sha256Hex, TimestampMs,
 };
@@ -443,10 +444,23 @@ pub enum ScheduleKind {
         /// Local minute in `0..=59`.
         minute: u8,
     },
+    /// Fire yearly on local calendar date `month`/`day` at wall-clock `hour:minute`
+    /// in `TaskSchedule::timezone` (DST-aware via PG 16).
+    #[serde(alias = "yearly_local_time")]
+    YearlyWallTime {
+        /// Calendar month (`1..=12`).
+        month: u8,
+        /// Calendar day of month (`1..=31`, bounded by the maximum days in `month`).
+        day: u8,
+        /// Local hour in `0..=23`.
+        hour: u8,
+        /// Local minute in `0..=59`.
+        minute: u8,
+    },
 }
 
 impl ScheduleKind {
-    /// Returns the database `recurrence_kind` label (`once`, `interval`, `daily_wall`, or `weekly_wall`).
+    /// Returns the database `recurrence_kind` label (`once`, `interval`, `daily_wall`, `weekly_wall`, or `yearly_wall`).
     #[must_use]
     pub const fn recurrence_label(&self) -> &'static str {
         match self {
@@ -454,6 +468,7 @@ impl ScheduleKind {
             Self::Interval { .. } => "interval",
             Self::DailyWallTime { .. } => "daily_wall",
             Self::WeeklyWallTime { .. } => "weekly_wall",
+            Self::YearlyWallTime { .. } => "yearly_wall",
         }
     }
 
@@ -462,7 +477,7 @@ impl ScheduleKind {
     /// # Errors
     ///
     /// Returns [`DennettError::InvalidInput`] on out-of-range timestamps, zero intervals,
-    /// invalid weekday masks, or out-of-range hour/minute values.
+    /// invalid weekday masks, invalid calendar month/day, or out-of-range hour/minute values.
     pub fn validate(&self) -> Result<(), DennettError> {
         match *self {
             Self::OnceAt { fire_at } => fire_at.validate("schedule.fire_at"),
@@ -491,8 +506,48 @@ impl ScheduleKind {
                 }
                 validate_wall_clock_hhmm(hour, minute)
             }
+            Self::YearlyWallTime {
+                month,
+                day,
+                hour,
+                minute,
+            } => {
+                let max_day = match month {
+                    1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                    4 | 6 | 9 | 11 => 30,
+                    2 => 29,
+                    _ => {
+                        return Err(DennettError::InvalidInput {
+                            field: String::from("schedule.month"),
+                            reason: String::from("must be between 1 and 12"),
+                        });
+                    }
+                };
+                if day == 0 || day > max_day {
+                    return Err(DennettError::InvalidInput {
+                        field: String::from("schedule.day"),
+                        reason: format!("must be between 1 and {max_day} for month {month}"),
+                    });
+                }
+                validate_wall_clock_hhmm(hour, minute)
+            }
         }
     }
+}
+
+/// Explicit wake trigger for a durable [`TaskRecord`] beyond timer schedules or manual signals.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TaskTrigger {
+    /// Start according to standard creation semantics (`execute_immediately`, `schedule`, or `wait_for_signal`).
+    #[default]
+    Immediate,
+    /// Park the task until the specified [`RunId`] finishes, then wake automatically.
+    OnRunCompleted {
+        /// Execution run identifier whose completion wakes this task.
+        run_id: RunId,
+    },
 }
 
 fn validate_wall_clock_hhmm(hour: u8, minute: u8) -> Result<(), DennettError> {
@@ -924,6 +979,27 @@ pub struct TaskRecord {
     /// Optional explicit runtime auth profile override (`oauth-personal` vs `gemini-api-key`, A10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_profile_override: Option<RuntimeAuthProfile>,
+    /// Optional target session identifier for delegated subagent execution or follow-up posting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_session_id: Option<SessionId>,
+    /// Optional session identifier to notify when this task completes or fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_session_id: Option<SessionId>,
+    /// Optional runtime model identifier override for this task/subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+    /// Optional reasoning effort override for this task/subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_override: Option<ThinkingLevel>,
+    /// Optional provider connection override for this task/subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_override_id: Option<ProviderConnectionId>,
+    /// Optional explicit skill slug override list replacing default agent skill selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_slugs_override: Option<Vec<String>>,
+    /// Optional wake trigger (e.g. [`TaskTrigger::OnRunCompleted`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<TaskTrigger>,
     /// UTC creation timestamp in epoch milliseconds.
     pub created_at: TimestampMs,
     /// UTC last-updated timestamp in epoch milliseconds.
@@ -2022,18 +2098,40 @@ pub struct CreateTaskRequest {
     /// Optional explicit runtime authentication profile override (`oauth-personal` vs `gemini-api-key`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_profile_override: Option<RuntimeAuthProfile>,
+    /// Optional target session identifier for delegated subagent execution or follow-up posting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_session_id: Option<SessionId>,
+    /// Optional session identifier to notify when this task completes or fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_session_id: Option<SessionId>,
+    /// Optional runtime model identifier override for this task/subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+    /// Optional reasoning effort override for this task/subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_override: Option<ThinkingLevel>,
+    /// Optional provider connection override for this task/subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_override_id: Option<ProviderConnectionId>,
+    /// Optional explicit skill slug override list replacing default agent skill selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_slugs_override: Option<Vec<String>>,
+    /// Optional wake trigger (e.g. [`TaskTrigger::OnRunCompleted`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<TaskTrigger>,
     /// When `false` on an unscheduled/non-signal task, leaves the task `queued` without auto-spawning immediately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execute_immediately: Option<bool>,
 }
 
 impl CreateTaskRequest {
-    /// Validates all task creation bounds, schedule invariants, budget limits, and attached skills.
+    /// Validates all task creation bounds, schedule invariants, budget limits, subagent overrides,
+    /// and attached skills.
     ///
     /// # Errors
     ///
     /// Returns [`DennettError::InvalidInput`] on empty/oversized fields, mutually conflicting wait modes,
-    /// or invalid schedule/budget/skills.
+    /// or invalid schedule/budget/overrides/skills.
     pub fn validate(&self) -> Result<(), DennettError> {
         validate_non_empty_text(&self.goal, "goal", MAX_TASK_GOAL_BYTES)?;
         if let Some(ref title) = self.title {
@@ -2043,6 +2141,16 @@ impl CreateTaskRequest {
             return Err(DennettError::InvalidInput {
                 field: String::from("schedule"),
                 reason: String::from("cannot combine `schedule` and `wait_for_signal` on creation"),
+            });
+        }
+        if matches!(self.trigger, Some(TaskTrigger::OnRunCompleted { .. }))
+            && (self.schedule.is_some() || self.wait_for_signal.is_some())
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("trigger"),
+                reason: String::from(
+                    "cannot combine `trigger = on_run_completed` with `schedule` or `wait_for_signal`",
+                ),
             });
         }
         if let Some(ref sched) = self.schedule {
@@ -2055,6 +2163,18 @@ impl CreateTaskRequest {
             budget.validate()?;
         }
         validate_attached_skills(&self.attached_skills)?;
+        if let Some(ref model) = self.model_override {
+            validate_non_empty_text(model, "model_override", MAX_MODEL_NAME_LEN)?;
+            if model.bytes().any(|b| b.is_ascii_control()) {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("model_override"),
+                    reason: String::from("must not contain ASCII control characters"),
+                });
+            }
+        }
+        if let Some(ref skills) = self.skill_slugs_override {
+            validate_attached_skills(skills)?;
+        }
         Ok(())
     }
 }
@@ -2915,6 +3035,7 @@ const _: () = {
     assert_send_sync::<ArtifactLifecycleState>();
     assert_send_sync::<TaskStatus>();
     assert_send_sync::<TaskSchedule>();
+    assert_send_sync::<TaskTrigger>();
     assert_send_sync::<TaskBudget>();
     assert_send_sync::<TaskUsage>();
     assert_send_sync::<TaskRecord>();
@@ -3103,6 +3224,132 @@ mod tests {
                 minute: 0,
             }
         );
+    }
+
+    #[test]
+    fn yearly_schedule_validation_enforces_month_day_and_leap_day() {
+        let yearly_leap = ScheduleKind::YearlyWallTime {
+            month: 2,
+            day: 29,
+            hour: 8,
+            minute: 15,
+        };
+        assert!(yearly_leap.validate().is_ok());
+        assert_eq!(yearly_leap.recurrence_label(), "yearly_wall");
+        let yearly_encoded = serde_json::to_string(&yearly_leap).expect("encode yearly");
+        assert_eq!(
+            serde_json::from_str::<ScheduleKind>(&yearly_encoded).expect("decode yearly"),
+            yearly_leap
+        );
+        let yearly_alias: ScheduleKind = serde_json::from_str(
+            r#"{"kind":"yearly_local_time","month":12,"day":31,"hour":23,"minute":59}"#,
+        )
+        .expect("yearly_local_time alias");
+        assert!(yearly_alias.validate().is_ok());
+
+        for bad_yearly in [
+            ScheduleKind::YearlyWallTime {
+                month: 0,
+                day: 1,
+                hour: 9,
+                minute: 0,
+            },
+            ScheduleKind::YearlyWallTime {
+                month: 13,
+                day: 1,
+                hour: 9,
+                minute: 0,
+            },
+            ScheduleKind::YearlyWallTime {
+                month: 2,
+                day: 30,
+                hour: 9,
+                minute: 0,
+            },
+            ScheduleKind::YearlyWallTime {
+                month: 4,
+                day: 31,
+                hour: 9,
+                minute: 0,
+            },
+            ScheduleKind::YearlyWallTime {
+                month: 1,
+                day: 0,
+                hour: 9,
+                minute: 0,
+            },
+            ScheduleKind::YearlyWallTime {
+                month: 1,
+                day: 15,
+                hour: 24,
+                minute: 0,
+            },
+        ] {
+            assert!(
+                bad_yearly.validate().is_err(),
+                "expected invalid yearly schedule: {bad_yearly:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_trigger_and_subagent_overrides_validate_and_roundtrip() {
+        let run_id = RunId::new();
+        let trigger = TaskTrigger::OnRunCompleted { run_id };
+        let trig_json = serde_json::to_string(&trigger).expect("serialize trigger");
+        assert!(trig_json.contains(r#""kind":"on_run_completed""#));
+        assert_eq!(
+            serde_json::from_str::<TaskTrigger>(&trig_json).expect("deserialize trigger"),
+            trigger
+        );
+        assert_eq!(TaskTrigger::default(), TaskTrigger::Immediate);
+
+        let req = CreateTaskRequest {
+            project_id: ProjectId::new(),
+            session_id: None,
+            agent_id: AgentId::new(),
+            parent_task_id: Some(TaskId::new()),
+            title: Some(String::from("Audit subagent")),
+            goal: String::from("Verify invariants"),
+            schedule: None,
+            wait_for_signal: None,
+            budget: None,
+            attached_skills: Vec::new(),
+            auth_profile_override: None,
+            target_session_id: Some(SessionId::new()),
+            notify_session_id: Some(SessionId::new()),
+            model_override: Some(String::from("gemini-4-neon")),
+            thinking_override: Some(ThinkingLevel::High),
+            connection_override_id: Some(ProviderConnectionId::new()),
+            skill_slugs_override: Some(vec![String::from("rust-audit")]),
+            trigger: Some(trigger),
+            execute_immediately: Some(false),
+        };
+        assert!(req.validate().is_ok());
+        let encoded = serde_json::to_string(&req).expect("serialize CreateTaskRequest");
+        let decoded: CreateTaskRequest =
+            serde_json::from_str(&encoded).expect("deserialize CreateTaskRequest");
+        assert_eq!(decoded, req);
+
+        // Mutually exclusive trigger + schedule must fail.
+        let conflicting = CreateTaskRequest {
+            schedule: Some(TaskSchedule {
+                timezone: String::from("UTC"),
+                original_expression: None,
+                kind: ScheduleKind::Interval { interval_secs: 60 },
+                missed_run_policy: MissedRunPolicy::ExecuteOnce,
+                next_fire_at: None,
+            }),
+            ..req.clone()
+        };
+        assert!(conflicting.validate().is_err());
+
+        // Blank model_override must fail.
+        let bad_model = CreateTaskRequest {
+            model_override: Some(String::from("   ")),
+            ..req
+        };
+        assert!(bad_model.validate().is_err());
     }
 
     proptest! {

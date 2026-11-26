@@ -224,6 +224,7 @@ async fn r1_arch_02_archive_unarchive_pause_reason_and_periodic_task_mid_run() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             &cid,
         )
@@ -252,6 +253,13 @@ async fn r1_arch_02_archive_unarchive_pause_reason_and_periodic_task_mid_run() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -283,6 +291,13 @@ async fn r1_arch_02_archive_unarchive_pause_reason_and_periodic_task_mid_run() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -551,6 +566,7 @@ async fn r1_arch_03_effect_policy_stop_guard_delete_preservation_and_concurrent_
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             &cid,
         )
@@ -571,6 +587,13 @@ async fn r1_arch_03_effect_policy_stop_guard_delete_preservation_and_concurrent_
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -816,6 +839,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             &cid,
         )
@@ -836,6 +860,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             &cid,
         )
@@ -854,6 +879,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             &cid,
         )
@@ -874,6 +900,7 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             &cid,
         )
@@ -947,6 +974,13 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -968,6 +1002,13 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1007,6 +1048,13 @@ async fn r1_sec_01_sec_02_memory_scope_isolation_and_delegated_child_ceiling() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1086,6 +1134,7 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             &cid,
         )
@@ -1116,6 +1165,13 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1188,6 +1244,13 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1279,6 +1342,13 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1353,6 +1423,13 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1414,6 +1491,13 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1511,6 +1595,13 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             &cid,
         )
@@ -1581,6 +1672,7 @@ async fn r1_bug_01_through_05_durability_human_wait_rebind_and_weekly_schedule()
             UpdateSessionRequest {
                 title: Some(String::from("Renamed Session Event Check")),
                 pinned: None,
+                status: None,
             },
             &cid,
         )
@@ -1902,6 +1994,7 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -2017,6 +2110,13 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             None,
         )
@@ -2061,6 +2161,13 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             None,
         )
@@ -2263,6 +2370,7 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -2333,6 +2441,13 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             None,
         )
@@ -2809,6 +2924,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -2861,6 +2977,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
             &UpdateSessionRequest {
                 title: None,
                 pinned: None,
+                status: None,
             },
             None,
         )
@@ -2877,6 +2994,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
             &UpdateSessionRequest {
                 title: None,
                 pinned: Some(true),
+                status: None,
             },
             None,
         )
@@ -2893,6 +3011,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
             &UpdateSessionRequest {
                 title: None,
                 pinned: Some(true),
+                status: None,
             },
             None,
         )
@@ -2908,6 +3027,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
             &UpdateSessionRequest {
                 title: Some(String::from("Chat 1 Renamed")),
                 pinned: None,
+                status: None,
             },
             None,
         )
@@ -2946,6 +3066,7 @@ async fn v7_pinning_projects_and_sessions_sorts_deterministically_and_emits_even
             &UpdateSessionRequest {
                 title: Some(String::from("Chat 2 Unpinned")),
                 pinned: Some(false),
+                status: None,
             },
             None,
         )

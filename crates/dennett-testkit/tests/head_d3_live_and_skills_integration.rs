@@ -284,6 +284,7 @@ async fn d3_live_streaming_text_tool_break_and_context_usage_persisted() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -428,6 +429,7 @@ async fn d3_durable_followups_crud_dedup_v03_auto_dispatch_and_idle_enqueue() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -668,6 +670,7 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -902,6 +905,7 @@ async fn d3_live_steer_mid_run_without_409_preserving_queued_followups() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1076,6 +1080,7 @@ async fn d3_session_skills_delivery_mcp_scope_isolation_standalone_and_prompt_in
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1198,6 +1203,7 @@ async fn d3_session_skills_delivery_mcp_scope_isolation_standalone_and_prompt_in
                         has_scripts: false,
                         entry_files: vec![String::from("SKILL.md")],
                     },
+                    agent_id: None,
                 },
                 None,
             )

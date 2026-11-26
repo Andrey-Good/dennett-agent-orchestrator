@@ -4,6 +4,7 @@ export type ServiceKind = "memoryd" | "head" | "node";
 export type MemoryStatus = "healthy" | "degraded_unreachable";
 export type MemoryOutboxStatus = "pending" | "delivered" | "failed";
 export type ThinkingLevel = "low" | "medium" | "high" | "xhigh";
+export type AutonomyMode = "auto" | "full_access";
 export type SessionStatus = "active" | "archived" | "closed";
 export type SessionKind = "user_chat" | "task_run";
 export type MessageRole = "user" | "assistant" | "system";
@@ -43,7 +44,12 @@ export type ScheduleKind =
   | { kind: "once_at"; fire_at: number }
   | { kind: "interval"; interval_secs: number }
   | { kind: "daily_wall_time"; hour: number; minute: number }
-  | { kind: "weekly_wall_time"; weekdays_mask: number; hour: number; minute: number };
+  | { kind: "weekly_wall_time"; weekdays_mask: number; hour: number; minute: number }
+  | { kind: "yearly_wall_time"; month: number; day: number; hour: number; minute: number };
+
+export type TaskTrigger =
+  | { kind: "immediate" }
+  | { kind: "on_run_completed"; run_id: string };
 
 export type MissedRunPolicy = "execute_once" | "skip" | "ask";
 
@@ -287,6 +293,13 @@ export interface TaskRecord {
   usage: TaskUsage;
   attached_skills: string[];
   auth_profile_override?: RuntimeAuthProfile | null;
+  target_session_id?: string | null;
+  notify_session_id?: string | null;
+  model_override?: string | null;
+  thinking_override?: ThinkingLevel | null;
+  connection_override_id?: string | null;
+  skill_slugs_override?: string[] | null;
+  trigger?: TaskTrigger | null;
   created_at: number;
   updated_at: number;
   finished_at?: number | null;
@@ -341,6 +354,7 @@ export interface AgentConfigVersion {
   thinking_level?: ThinkingLevel | null;
   allowed_memory_scopes: string[];
   workspace_write_policy: WorkspaceWritePolicy;
+  autonomy_mode?: AutonomyMode;
   default_budget?: TaskBudget | null;
   attached_skills?: string[];
   preferred_connection_id?: string | null;
@@ -563,6 +577,25 @@ export interface ListProjectFilesResponse {
   truncated: boolean;
 }
 
+export interface ProjectFileContentResponse {
+  relative_path: string;
+  mime_type: string;
+  byte_size: number;
+  sha256: string;
+  content?: string | null;
+  truncated: boolean;
+  is_binary: boolean;
+}
+
+export interface ArtifactContentResponse {
+  mime_type: string;
+  sha256: string;
+  byte_size: number;
+  text?: string | null;
+  base64: string;
+  is_binary: boolean;
+}
+
 export interface ListAgentsResponse {
   agents: AgentRecord[];
 }
@@ -575,6 +608,7 @@ export interface CreateAgentRequest {
   thinking_level?: ThinkingLevel | null;
   allowed_memory_scopes: string[];
   workspace_write_policy: WorkspaceWritePolicy;
+  autonomy_mode?: AutonomyMode | null;
   default_budget?: TaskBudget | null;
   attached_skills?: string[];
   preferred_connection_id?: string | null;
@@ -586,6 +620,7 @@ export interface UpdateAgentConfigRequest {
   thinking_level?: ThinkingLevel | null;
   allowed_memory_scopes: string[];
   workspace_write_policy: WorkspaceWritePolicy;
+  autonomy_mode?: AutonomyMode | null;
   default_budget?: TaskBudget | null;
   attached_skills?: string[];
   preferred_connection_id?: string | null;
@@ -605,6 +640,12 @@ export interface CreateSessionRequest {
 export interface UpdateSessionRequest {
   title?: string;
   pinned?: boolean;
+  status?: SessionStatus | null;
+}
+
+export interface ForkSessionRequest {
+  from_message_id: string;
+  title?: string | null;
 }
 
 export interface SessionDetailResponse {
@@ -643,6 +684,26 @@ export interface CancelRunResponse {
   external_outcome_unknown?: boolean;
   committed_effects?: EffectClaimRecord[];
   unknown_effects?: EffectClaimRecord[];
+}
+
+export interface EmergencyStopResponse {
+  cancelled_session_ids: string[];
+  cancelled_task_ids: string[];
+}
+
+export interface UserPreferences {
+  ui_language: string;
+  agent_language: string;
+  timezone: string;
+  enter_to_send: boolean;
+  updated_at: number;
+}
+
+export interface UpdateUserPreferencesRequest {
+  ui_language?: string | null;
+  agent_language?: string | null;
+  timezone?: string | null;
+  enter_to_send?: boolean | null;
 }
 
 export interface CreateArtifactRequest {
@@ -830,10 +891,22 @@ export interface HeadMemorySearchRequest {
   include_history?: boolean;
 }
 
+export interface SearchNotesResponse {
+  notes: MemoryNote[];
+  claims?: MemoryClaim[];
+  documents?: MemoryDocument[];
+  total_matched: number;
+  truncated: boolean;
+  index_status: IndexStatus;
+  stale_warning?: string | null;
+}
+
 export interface HeadMemorySearchResponse {
   memory_status: MemoryStatus;
   degraded_reason?: string | null;
   notes: MemoryNote[];
+  claims?: MemoryClaim[];
+  documents?: MemoryDocument[];
   index_status?: IndexStatus;
   stale_warning?: string | null;
 }
@@ -1218,7 +1291,7 @@ export type CapabilityOrigin =
   | "personal_discovered"
   | "builtin";
 export type CapabilityOwnership = "user" | "project" | "provider" | "dennett";
-export type CapabilityScopeKind = "global" | "project" | "candidate_unattached";
+export type CapabilityScopeKind = "global" | "project" | "agent" | "candidate_unattached";
 export type CapabilityPossession = "discovered" | "installed" | "connected";
 export type CapabilityTrust = "unreviewed" | "restricted" | "trusted" | "revoked";
 export type CapabilityActivation = "disabled" | "on_demand" | "active" | "pinned" | "forbidden";
@@ -1273,6 +1346,7 @@ export interface CapabilityRecord {
   ownership: CapabilityOwnership;
   scope_kind: CapabilityScopeKind;
   project_id?: string | null;
+  agent_id?: string | null;
   possession_state: CapabilityPossession;
   trust_state: CapabilityTrust;
   activation_state: CapabilityActivation;
@@ -1313,6 +1387,7 @@ export interface CreateCapabilityRequest {
   ownership?: CapabilityOwnership;
   scope_kind: CapabilityScopeKind;
   project_id?: string | null;
+  agent_id?: string | null;
   trust_state?: CapabilityTrust;
   activation_state?: CapabilityActivation;
   source_path?: string | null;
@@ -1325,6 +1400,7 @@ export interface UpdateCapabilityRequest {
   version?: string | null;
   scope_kind?: CapabilityScopeKind | null;
   project_id?: string | null;
+  agent_id?: string | null;
   trust_state?: CapabilityTrust | null;
   activation_state?: CapabilityActivation | null;
   spec?: CapabilitySpec | null;
@@ -1445,6 +1521,13 @@ export interface CreateTaskRequest {
   budget?: TaskBudget | null;
   attached_skills?: string[];
   auth_profile_override?: RuntimeAuthProfile | null;
+  target_session_id?: string | null;
+  notify_session_id?: string | null;
+  model_override?: string | null;
+  thinking_override?: ThinkingLevel | null;
+  connection_override_id?: string | null;
+  skill_slugs_override?: string[] | null;
+  trigger?: TaskTrigger | null;
   execute_immediately?: boolean | null;
 }
 

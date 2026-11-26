@@ -15,12 +15,13 @@ use uuid::Uuid;
 use crate::d2::{
     ArtifactCompleteness, ArtifactLifecycleState, EffectClaimRecord, ProjectLifecycleState,
     TaskBudget, TaskId, validate_attached_skills, validate_client_message_id,
+    validate_iana_timezone_syntax,
 };
 use crate::d3::{ProviderConnectionId, ProviderQuotaError};
 use crate::{
-    CorrelationId, DennettError, IdempotencyKey, IndexStatus, MemoryEventId, MemoryNote,
-    MemoryNoteId, MemoryScope, ProfileMode, RuntimeAuthProfile, ServiceKind, Sha256Hex,
-    TimestampMs,
+    CorrelationId, DennettError, IdempotencyKey, IndexStatus, MemoryClaim, MemoryDocument,
+    MemoryEventId, MemoryNote, MemoryNoteId, MemoryScope, ProfileMode, RuntimeAuthProfile,
+    ServiceKind, Sha256Hex, TimestampMs,
 };
 
 /// Maximum permitted byte length of an agent display name.
@@ -59,6 +60,8 @@ pub const MAX_AGENT_MEMORY_SCOPES: usize = 32;
 pub const MAX_ADAPTER_ID_LEN: usize = 64;
 /// Maximum permitted byte length of a provider session handle.
 pub const MAX_PROVIDER_SESSION_ID_LEN: usize = 256;
+/// Maximum permitted byte length of a UI or agent language tag (e.g. `"ru"`, `"en"`, `"en-US"`).
+pub const MAX_LANGUAGE_CODE_LEN: usize = 32;
 
 macro_rules! define_control_uuid_id {
     (
@@ -400,6 +403,57 @@ impl WorkspaceWritePolicy {
     }
 }
 
+/// Interactive permission autonomy level configured on an agent alongside [`WorkspaceWritePolicy`].
+///
+/// - [`AutonomyMode::Auto`] (default): allows workspace file edits and local workspace shell
+///   commands without interactive prompts; prompts only for critical E3/E4 external, payment, or
+///   destructive actions unless explicitly granted for this chat/project.
+/// - [`AutonomyMode::FullAccess`]: runs autonomously without interactive prompts for this
+///   chat/project while preserving explicit `Deny` policy rules and workspace boundaries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AutonomyMode {
+    /// Free workspace file edits + local workspace shell commands; asks only for critical E3/E4
+    /// external/payment/destructive actions unless granted for this chat/project.
+    #[default]
+    Auto,
+    /// Autonomous execution without interactive prompts for this chat/project.
+    FullAccess,
+}
+
+impl AutonomyMode {
+    /// Returns the canonical snake-case string representation (`"auto"` or `"full_access"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::FullAccess => "full_access",
+        }
+    }
+}
+
+impl fmt::Display for AutonomyMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AutonomyMode {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "full_access" => Ok(Self::FullAccess),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("autonomy_mode"),
+                reason: format!("unknown autonomy mode `{other}` (expected auto|full_access)"),
+            }),
+        }
+    }
+}
+
 /// Immutable versioned configuration snapshot belonging to a single [`AgentRecord`].
 ///
 /// Updating model preference, thinking level, prompt, scopes, or write policy always creates
@@ -424,6 +478,9 @@ pub struct AgentConfigVersion {
     pub allowed_memory_scopes: BTreeSet<MemoryScope>,
     /// Workspace write policy enforced outside the model.
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Interactive autonomy mode (`auto` default vs `full_access`) alongside [`WorkspaceWritePolicy`].
+    #[serde(default)]
+    pub autonomy_mode: AutonomyMode,
     /// Optional default external resource budget applied to tasks created for this agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_budget: Option<TaskBudget>,
@@ -1136,6 +1193,9 @@ pub struct CreateAgentRequest {
     /// Workspace write policy enforced outside the model.
     #[serde(default)]
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Optional interactive autonomy mode (defaults to [`AutonomyMode::Auto`] when omitted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy_mode: Option<AutonomyMode>,
     /// Optional default external resource budget applied to tasks created for this agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_budget: Option<TaskBudget>,
@@ -1192,6 +1252,9 @@ pub struct UpdateAgentConfigRequest {
     /// Workspace write policy under the new configuration version.
     #[serde(default)]
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Optional interactive autonomy mode override (preserves prior mode or defaults to [`AutonomyMode::Auto`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy_mode: Option<AutonomyMode>,
     /// Optional default external resource budget for this configuration version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_budget: Option<TaskBudget>,
@@ -1350,6 +1413,26 @@ pub struct ListProjectFilesResponse {
     pub truncated: bool,
 }
 
+/// Bounded, symlink-safe file preview returned by `GET /v1/projects/{project_id}/file?path=...`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectFileContentResponse {
+    /// Workspace-relative POSIX path (`/`-separated) verified inside the project root.
+    pub relative_path: String,
+    /// Detected or inferred MIME media type (e.g. `"text/plain"`, `"text/markdown"`).
+    pub mime_type: String,
+    /// Full file size on disk in bytes.
+    pub byte_size: u64,
+    /// Lowercase SHA-256 hex digest of the file bytes.
+    pub sha256: Sha256Hex,
+    /// Inline UTF-8 text preview when `is_binary == false` (`None` for binary files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// `true` when `content` was truncated at the preview byte cap.
+    pub truncated: bool,
+    /// `true` when the file was classified as binary and omitted from UTF-8 `content`.
+    pub is_binary: bool,
+}
+
 /// Response payload for `GET /v1/projects`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListProjectsResponse {
@@ -1393,7 +1476,7 @@ impl CreateSessionRequest {
     }
 }
 
-/// Request payload for `PATCH /v1/sessions/{session_id}` (inline session rename and/or pin/unpin).
+/// Request payload for `PATCH /v1/sessions/{session_id}` (inline session rename, pin/unpin, or status transition).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateSessionRequest {
     /// Optional updated human-readable session title.
@@ -1402,22 +1485,49 @@ pub struct UpdateSessionRequest {
     /// Optional pin state toggle (`Some(true)` pins, `Some(false)` unpins).
     #[serde(default)]
     pub pinned: Option<bool>,
+    /// Optional updated session lifecycle status (e.g. `active`, `archived`, or `closed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<SessionStatus>,
 }
 
 impl UpdateSessionRequest {
-    /// Validates session update input (at least one of `title` or `pinned` must be set).
+    /// Validates session update input (at least one of `title`, `pinned`, or `status` must be set).
     ///
     /// # Errors
     ///
-    /// Returns [`DennettError::InvalidInput`] if neither field is provided or `title` is empty,
+    /// Returns [`DennettError::InvalidInput`] if no field is provided or `title` is empty,
     /// oversized, or contains NUL.
     pub fn validate(&self) -> Result<(), DennettError> {
-        if self.title.is_none() && self.pinned.is_none() {
+        if self.title.is_none() && self.pinned.is_none() && self.status.is_none() {
             return Err(DennettError::InvalidInput {
                 field: String::from("body"),
-                reason: String::from("must specify at least one of `title` or `pinned`"),
+                reason: String::from("must specify at least one of `title`, `pinned`, or `status`"),
             });
         }
+        if let Some(ref title) = self.title {
+            validate_non_empty_text(title, "title", MAX_SESSION_TITLE_LEN)?;
+        }
+        Ok(())
+    }
+}
+
+/// Request payload for `POST /v1/sessions/{session_id}/fork` to branch a conversation from any message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkSessionRequest {
+    /// Message identifier (inclusive) up to which conversation history is copied into the new session.
+    pub from_message_id: MessageId,
+    /// Optional explicit title for the forked session (auto-derived when omitted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+impl ForkSessionRequest {
+    /// Validates optional fork title bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `title` is empty/blank, oversized, or contains NUL.
+    pub fn validate(&self) -> Result<(), DennettError> {
         if let Some(ref title) = self.title {
             validate_non_empty_text(title, "title", MAX_SESSION_TITLE_LEN)?;
         }
@@ -1537,6 +1647,17 @@ pub struct CancelRunResponse {
     /// External effects currently in `unknown` state requiring explicit reconciliation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_effects: Vec<EffectClaimRecord>,
+}
+
+/// Response payload for global `POST /v1/runs/emergency-stop` cancelling all active runs and tasks.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmergencyStopResponse {
+    /// Session identifiers whose active runs received a cancellation signal.
+    #[serde(default)]
+    pub cancelled_session_ids: Vec<SessionId>,
+    /// Durable task identifiers cancelled by this emergency stop.
+    #[serde(default)]
+    pub cancelled_task_ids: Vec<TaskId>,
 }
 
 /// Request payload for `POST /v1/sessions/{session_id}/artifacts`.
@@ -1741,6 +1862,12 @@ pub struct HeadMemorySearchResponse {
     pub degraded_reason: Option<String>,
     /// Matching notes returned by `memoryd` (always empty when degraded).
     pub notes: Vec<MemoryNote>,
+    /// Matching structured claims returned by `memoryd` (always empty when degraded).
+    #[serde(default)]
+    pub claims: Vec<MemoryClaim>,
+    /// Matching versioned documents returned by `memoryd` (always empty when degraded).
+    #[serde(default)]
+    pub documents: Vec<MemoryDocument>,
     /// Live health/freshness status of `memoryd`'s separable search index.
     #[serde(default)]
     pub index_status: IndexStatus,
@@ -1793,6 +1920,140 @@ pub struct DiagnosticsResponse {
     pub permission_decisions: Vec<PermissionDecisionRecord>,
     /// Recent memory outbox items ordered newest first.
     pub outbox_items: Vec<MemoryOutboxItem>,
+}
+
+fn default_language_ru() -> String {
+    String::from("ru")
+}
+
+fn default_timezone_utc() -> String {
+    String::from("UTC")
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+/// Persisted owner preferences for UI language, agent response language, timezone, and composer input (Contract I).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserPreferences {
+    /// Preferred UI language tag (e.g. `"ru"`, `"en"`, defaults to `"ru"`).
+    #[serde(default = "default_language_ru")]
+    pub ui_language: String,
+    /// Preferred default language tag for agent replies (e.g. `"ru"`, `"en"`, defaults to `"ru"`).
+    #[serde(default = "default_language_ru")]
+    pub agent_language: String,
+    /// Validated IANA timezone name for wall-clock schedules and timestamps (defaults to `"UTC"`).
+    #[serde(default = "default_timezone_utc")]
+    pub timezone: String,
+    /// When `true`, pressing `Enter` sends messages (`Shift+Enter` inserts newline); defaults to `true`.
+    #[serde(default = "default_true")]
+    pub enter_to_send: bool,
+    /// UTC timestamp of the latest preference update in epoch milliseconds.
+    pub updated_at: TimestampMs,
+}
+
+impl Default for UserPreferences {
+    fn default() -> Self {
+        Self {
+            ui_language: default_language_ru(),
+            agent_language: default_language_ru(),
+            timezone: default_timezone_utc(),
+            enter_to_send: true,
+            updated_at: TimestampMs::from_millis(0),
+        }
+    }
+}
+
+impl UserPreferences {
+    /// Validates language tags and IANA timezone syntax on this preferences record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if any language tag or timezone is malformed.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        validate_language_tag(&self.ui_language, "ui_language")?;
+        validate_language_tag(&self.agent_language, "agent_language")?;
+        validate_iana_timezone_syntax(&self.timezone)
+    }
+}
+
+/// Request payload for `PATCH /v1/preferences` updating owner locale, timezone, or composer preferences.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateUserPreferencesRequest {
+    /// Optional updated UI language tag (e.g. `"ru"`, `"en"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_language: Option<String>,
+    /// Optional updated default agent reply language tag (e.g. `"ru"`, `"en"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_language: Option<String>,
+    /// Optional updated IANA timezone identifier (e.g. `"Asia/Yekaterinburg"`, `"UTC"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    /// Optional updated `Enter`-to-send composer preference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter_to_send: Option<bool>,
+}
+
+impl UpdateUserPreferencesRequest {
+    /// Validates that at least one preference field is set and all provided values are valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if no field is provided or any language tag or
+    /// IANA timezone fails validation.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        if self.ui_language.is_none()
+            && self.agent_language.is_none()
+            && self.timezone.is_none()
+            && self.enter_to_send.is_none()
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("body"),
+                reason: String::from(
+                    "must specify at least one of `ui_language`, `agent_language`, `timezone`, or `enter_to_send`",
+                ),
+            });
+        }
+        if let Some(ref lang) = self.ui_language {
+            validate_language_tag(lang, "ui_language")?;
+        }
+        if let Some(ref lang) = self.agent_language {
+            validate_language_tag(lang, "agent_language")?;
+        }
+        if let Some(ref tz) = self.timezone {
+            validate_iana_timezone_syntax(tz)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_language_tag(value: &str, field: &str) -> Result<(), DennettError> {
+    reject_nul(value, field)?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed != value || value.len() > MAX_LANGUAGE_CODE_LEN {
+        return Err(DennettError::InvalidInput {
+            field: field.to_owned(),
+            reason: format!(
+                "must be a non-empty language tag without surrounding whitespace (at most {MAX_LANGUAGE_CODE_LEN} bytes)"
+            ),
+        });
+    }
+    let bytes = value.as_bytes();
+    if !bytes
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        || matches!(bytes.first(), Some(b'-' | b'_'))
+        || matches!(bytes.last(), Some(b'-' | b'_'))
+    {
+        return Err(DennettError::InvalidInput {
+            field: field.to_owned(),
+            reason: String::from(
+                "must contain only ASCII alphanumeric characters, '-', or '_' without leading/trailing separators",
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn reject_nul(value: &str, field: &str) -> Result<(), DennettError> {
@@ -1908,7 +2169,13 @@ const _: () = {
     assert_send_sync::<WorkspaceFileKind>();
     assert_send_sync::<WorkspaceFileEntry>();
     assert_send_sync::<ListProjectFilesResponse>();
+    assert_send_sync::<ProjectFileContentResponse>();
     assert_send_sync::<UpdateSessionRequest>();
+    assert_send_sync::<ForkSessionRequest>();
+    assert_send_sync::<AutonomyMode>();
+    assert_send_sync::<UserPreferences>();
+    assert_send_sync::<UpdateUserPreferencesRequest>();
+    assert_send_sync::<EmergencyStopResponse>();
 };
 
 #[cfg(test)]
@@ -2086,21 +2353,31 @@ mod tests {
         let empty_sess = UpdateSessionRequest {
             title: None,
             pinned: None,
+            status: None,
         };
         assert!(empty_sess.validate().is_err());
         let pin_only_sess = UpdateSessionRequest {
             title: None,
             pinned: Some(true),
+            status: None,
         };
         assert!(pin_only_sess.validate().is_ok());
+        let status_only_sess = UpdateSessionRequest {
+            title: None,
+            pinned: None,
+            status: Some(SessionStatus::Archived),
+        };
+        assert!(status_only_sess.validate().is_ok());
         let title_only_sess = UpdateSessionRequest {
             title: Some(String::from("Переименованный чат")),
             pinned: None,
+            status: None,
         };
         assert!(title_only_sess.validate().is_ok());
         let blank_title_sess = UpdateSessionRequest {
             title: Some(String::from("   ")),
             pinned: Some(true),
+            status: None,
         };
         assert!(blank_title_sess.validate().is_err());
 
@@ -2203,5 +2480,105 @@ mod tests {
         let decoded_detail: SessionDetailResponse =
             serde_json::from_str(&encoded_detail).expect("deserialize session detail");
         assert_eq!(decoded_detail, detail);
+    }
+
+    #[test]
+    fn autonomy_mode_preferences_fork_file_preview_and_emergency_stop_roundtrip() {
+        assert_eq!(AutonomyMode::default(), AutonomyMode::Auto);
+        for (raw, expected) in [
+            ("auto", AutonomyMode::Auto),
+            ("full_access", AutonomyMode::FullAccess),
+        ] {
+            assert_eq!(expected.as_str(), raw);
+            assert_eq!(AutonomyMode::from_str(raw), Ok(expected));
+            let encoded = serde_json::to_string(&expected).expect("serialize autonomy_mode");
+            assert_eq!(encoded, format!("\"{raw}\""));
+            let decoded: AutonomyMode =
+                serde_json::from_str(&encoded).expect("deserialize autonomy_mode");
+            assert_eq!(decoded, expected);
+        }
+        assert!(AutonomyMode::from_str("yolo").is_err());
+
+        // Backward-compatible AgentConfigVersion deserialization defaults autonomy_mode to Auto.
+        let now = TimestampMs::now();
+        let cfg_id = AgentConfigVersionId::new();
+        let agent_id = AgentId::new();
+        let legacy_cfg_json = format!(
+            r#"{{"config_version_id":"{cfg_id}","agent_id":"{agent_id}","version_number":1,"system_prompt":"You help.","allowed_memory_scopes":[],"workspace_write_policy":{{"mode":"ask_before_write"}},"created_at":{}}}"#,
+            now.as_millis()
+        );
+        let decoded_cfg: AgentConfigVersion =
+            serde_json::from_str(&legacy_cfg_json).expect("legacy AgentConfigVersion");
+        assert_eq!(decoded_cfg.autonomy_mode, AutonomyMode::Auto);
+
+        let fork_ok = ForkSessionRequest {
+            from_message_id: MessageId::new(),
+            title: Some(String::from("Branch from plan")),
+        };
+        assert!(fork_ok.validate().is_ok());
+        assert!(
+            ForkSessionRequest {
+                from_message_id: MessageId::new(),
+                title: Some(String::from("   ")),
+            }
+            .validate()
+            .is_err()
+        );
+
+        let prefs: UserPreferences = serde_json::from_str(r#"{"updated_at":1700000000000}"#)
+            .expect("default UserPreferences");
+        assert_eq!(prefs.ui_language, "ru");
+        assert_eq!(prefs.agent_language, "ru");
+        assert_eq!(prefs.timezone, "UTC");
+        assert!(prefs.enter_to_send);
+        assert!(prefs.validate().is_ok());
+
+        assert!(UpdateUserPreferencesRequest::default().validate().is_err());
+        let valid_pref_patch = UpdateUserPreferencesRequest {
+            ui_language: Some(String::from("en")),
+            agent_language: Some(String::from("ru-RU")),
+            timezone: Some(String::from("Asia/Yekaterinburg")),
+            enter_to_send: Some(false),
+        };
+        assert!(valid_pref_patch.validate().is_ok());
+        assert!(
+            UpdateUserPreferencesRequest {
+                ui_language: Some(String::from("bad lang")),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            UpdateUserPreferencesRequest {
+                timezone: Some(String::from("InvalidZone")),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+
+        let preview = ProjectFileContentResponse {
+            relative_path: String::from("README.md"),
+            mime_type: String::from("text/markdown"),
+            byte_size: 12,
+            sha256: Sha256Hex::from_digest_bytes([0xab; 32]),
+            content: Some(String::from("# Dennett\n")),
+            truncated: false,
+            is_binary: false,
+        };
+        let decoded_preview: ProjectFileContentResponse =
+            serde_json::from_str(&serde_json::to_string(&preview).expect("encode preview"))
+                .expect("decode preview");
+        assert_eq!(decoded_preview, preview);
+
+        let stop = EmergencyStopResponse {
+            cancelled_session_ids: vec![SessionId::new()],
+            cancelled_task_ids: vec![TaskId::new()],
+        };
+        let decoded_stop: EmergencyStopResponse =
+            serde_json::from_str(&serde_json::to_string(&stop).expect("encode stop"))
+                .expect("decode stop");
+        assert_eq!(decoded_stop, stop);
     }
 }

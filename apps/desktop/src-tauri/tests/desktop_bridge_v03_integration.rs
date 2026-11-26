@@ -295,6 +295,7 @@ async fn run_v03_session_and_drop_bridge(
             thinking_level: Some(ThinkingLevel::Medium),
             allowed_memory_scopes: allowed.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            autonomy_mode: None,
             default_budget: None,
             attached_skills: Vec::new(),
             preferred_connection_id: None,
@@ -314,6 +315,7 @@ async fn run_v03_session_and_drop_bridge(
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
         )
         .await
@@ -496,6 +498,7 @@ async fn v02_desktop_bridge_reports_memoryd_outage_honestly_and_keeps_cancel_unb
             thinking_level: Some(ThinkingLevel::Low),
             allowed_memory_scopes: allowed,
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: None,
             default_budget: None,
             attached_skills: Vec::new(),
             preferred_connection_id: None,
@@ -630,6 +633,7 @@ async fn d2_desktop_bridge_interactive_ask_before_write_approval_and_grant_revoc
             thinking_level: Some(ThinkingLevel::Medium),
             allowed_memory_scopes: allowed,
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            autonomy_mode: None,
             default_budget: None,
             attached_skills: Vec::new(),
             preferred_connection_id: None,
@@ -857,6 +861,7 @@ async fn d2_desktop_bridge_targeted_task_stop_leaves_sibling_alive_and_updates_g
             thinking_level: Some(ThinkingLevel::Low),
             allowed_memory_scopes: allowed,
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: None,
             default_budget: None,
             attached_skills: Vec::new(),
             preferred_connection_id: None,
@@ -878,6 +883,13 @@ async fn d2_desktop_bridge_targeted_task_stop_leaves_sibling_alive_and_updates_g
             attached_skills: Vec::new(),
             auth_profile_override: None,
             execute_immediately: Some(true),
+            target_session_id: None,
+            notify_session_id: None,
+            model_override: None,
+            thinking_override: None,
+            connection_override_id: None,
+            skill_slugs_override: None,
+            trigger: None,
         })
         .await
         .expect("create task A");
@@ -896,6 +908,13 @@ async fn d2_desktop_bridge_targeted_task_stop_leaves_sibling_alive_and_updates_g
             attached_skills: Vec::new(),
             auth_profile_override: None,
             execute_immediately: Some(true),
+            target_session_id: None,
+            notify_session_id: None,
+            model_override: None,
+            thinking_override: None,
+            connection_override_id: None,
+            skill_slugs_override: None,
+            trigger: None,
         })
         .await
         .expect("create task B");
@@ -932,6 +951,13 @@ async fn d2_desktop_bridge_targeted_task_stop_leaves_sibling_alive_and_updates_g
             attached_skills: Vec::new(),
             auth_profile_override: None,
             execute_immediately: None,
+            target_session_id: None,
+            notify_session_id: None,
+            model_override: None,
+            thinking_override: None,
+            connection_override_id: None,
+            skill_slugs_override: None,
+            trigger: None,
         })
         .await
         .expect("create waiting_signal task C");
@@ -1001,6 +1027,7 @@ async fn d2_desktop_bridge_lost_ack_unknown_external_visibility_honest_stop_and_
             thinking_level: Some(ThinkingLevel::Low),
             allowed_memory_scopes: allowed,
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: None,
             default_budget: None,
             attached_skills: Vec::new(),
             preferred_connection_id: None,
@@ -1022,6 +1049,13 @@ async fn d2_desktop_bridge_lost_ack_unknown_external_visibility_honest_stop_and_
             attached_skills: Vec::new(),
             auth_profile_override: None,
             execute_immediately: None,
+            target_session_id: None,
+            notify_session_id: None,
+            model_override: None,
+            thinking_override: None,
+            connection_override_id: None,
+            skill_slugs_override: None,
+            trigger: None,
         })
         .await
         .expect("create task");
@@ -1171,6 +1205,7 @@ async fn d2_desktop_bridge_client_message_id_dedup_project_lifecycle_and_artifac
             thinking_level: Some(ThinkingLevel::Low),
             allowed_memory_scopes: allowed,
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: None,
             default_budget: None,
             attached_skills: Vec::new(),
             preferred_connection_id: None,
@@ -1405,6 +1440,7 @@ async fn desktop_bridge_standalone_chats_and_pinning_roundtrip() {
             thinking_level: None,
             allowed_memory_scopes: BTreeSet::from([scope]),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: None,
             default_budget: None,
             attached_skills: Vec::new(),
             preferred_connection_id: None,
@@ -1512,6 +1548,7 @@ async fn desktop_bridge_standalone_chats_and_pinning_roundtrip() {
             &UpdateSessionRequest {
                 title: None,
                 pinned: Some(true),
+                status: None,
             },
         )
         .await

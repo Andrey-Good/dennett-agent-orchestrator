@@ -261,6 +261,7 @@ fn decode_capability_row(
         ownership: CapabilityOwnership::from_str(&row.get::<_, String>(7))?,
         scope_kind: CapabilityScopeKind::from_str(&row.get::<_, String>(8))?,
         project_id: row.get::<_, Option<Uuid>>(9).map(ProjectId::from_uuid),
+        agent_id: None,
         possession_state: CapabilityPossession::from_str(&row.get::<_, String>(10))?,
         trust_state: CapabilityTrust::from_str(&row.get::<_, String>(11))?,
         activation_state: CapabilityActivation::from_str(&row.get::<_, String>(12))?,

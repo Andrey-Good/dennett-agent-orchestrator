@@ -518,6 +518,7 @@ async fn d3_multi_runtime_switch_v29_rehydrate_and_zero_silent_fallback() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -624,6 +625,7 @@ async fn d3_multi_runtime_switch_v29_rehydrate_and_zero_silent_fallback() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: Some(local_conn.connection_id),
+                autonomy_mode: None,
             },
             None,
         )
@@ -1057,6 +1059,7 @@ async fn d3_a08_capabilities_readonly_personal_discovery_rug_pull_and_rollback()
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1352,6 +1355,7 @@ async fn d3_a07_native_subagents_and_control_mcp_text_cooperation_bounds() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1371,6 +1375,7 @@ async fn d3_a07_native_subagents_and_control_mcp_text_cooperation_bounds() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1390,6 +1395,7 @@ async fn d3_a07_native_subagents_and_control_mcp_text_cooperation_bounds() {
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1568,6 +1574,13 @@ async fn d3_a07_native_subagents_and_control_mcp_text_cooperation_bounds() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             None,
         )
@@ -1591,6 +1604,13 @@ async fn d3_a07_native_subagents_and_control_mcp_text_cooperation_bounds() {
                 attached_skills: Vec::new(),
                 auth_profile_override: None,
                 execute_immediately: Some(false),
+                target_session_id: None,
+                notify_session_id: None,
+                model_override: None,
+                thinking_override: None,
+                connection_override_id: None,
+                skill_slugs_override: None,
+                trigger: None,
             },
             None,
         )
@@ -1676,6 +1696,7 @@ async fn d3_v02_memory_fabric_proxy_degrades_honestly_and_keeps_stop_unblocked()
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1813,6 +1834,7 @@ async fn live_a01_01_boot_gemini_api_key_profile_never_silently_uses_seeded_oaut
                 default_budget: None,
                 attached_skills: Vec::new(),
                 preferred_connection_id: None,
+                autonomy_mode: None,
             },
             None,
         )
@@ -1984,6 +2006,7 @@ async fn d3_ui_02_and_03_create_capability_inspects_skill_and_plugin_folders_on_
                     has_scripts: false,
                     entry_files: Vec::new(),
                 },
+                agent_id: None,
             },
             None,
         )
@@ -2014,6 +2037,7 @@ async fn d3_ui_02_and_03_create_capability_inspects_skill_and_plugin_folders_on_
                     has_scripts: false,
                     entry_files: Vec::new(),
                 },
+                agent_id: None,
             },
             None,
         )
@@ -2065,6 +2089,7 @@ async fn d3_ui_02_and_03_create_capability_inspects_skill_and_plugin_folders_on_
                     has_hooks: false,
                     enabled_components: Vec::new(),
                 },
+                agent_id: None,
             },
             None,
         )
@@ -2098,6 +2123,7 @@ async fn d3_ui_02_and_03_create_capability_inspects_skill_and_plugin_folders_on_
                     has_hooks: false,
                     enabled_components: Vec::new(),
                 },
+                agent_id: None,
             },
             None,
         )
