@@ -23,8 +23,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 MIN_AGY_VERSION = (1, 5, 0)
 DEFAULT_CMD_TIMEOUT_SECONDS = 300
-MIN_INTEGRATION_TESTS = 80
-MIN_DESKTOP_FRONTEND_TESTS = 64
+MIN_INTEGRATION_TESTS = 85
+MIN_DESKTOP_FRONTEND_TESTS = 69
 
 FAST_NEXTEST_FILTER = "not (binary(~integration) | binary(acp_live_probe) | binary(head_live_agy_e2e))"
 INTEGRATION_NEXTEST_FILTER = "binary(~integration)"
@@ -1782,7 +1782,7 @@ def run_demo_d2(
         plan = {
             "mode": "demo-d2-dry-run",
             "stage": "D2",
-            "control_schema_version": 8,
+            "control_schema_version": 9,
             "memory_schema_version": 2,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
@@ -2134,7 +2134,7 @@ def run_demo_d3(
         plan = {
             "mode": "demo-d3-dry-run",
             "stage": "D3",
-            "control_schema_version": 8,
+            "control_schema_version": 9,
             "memory_schema_version": 2,
             "isolated_profile_mode": "test_isolated",
             "compose_project": project_name,
@@ -2463,7 +2463,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_demo_d3 = sub.add_parser(
         "demo-d3",
-        help="Start a safe isolated D3 trial (PG memory v2 + control v8 + Memory Fabric UI + Capabilities + native Desktop UI).",
+        help="Start a safe isolated D3 trial (PG memory v2 + control v9 + Memory Fabric UI + Capabilities + Live Stream/Queue/Steer + native Desktop UI).",
     )
     p_demo_d3.add_argument(
         "--runtime",
