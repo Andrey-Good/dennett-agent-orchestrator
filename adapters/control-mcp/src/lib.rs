@@ -200,10 +200,10 @@ fn drain_exact_bytes<R: BufRead>(reader: &mut R, mut remaining: usize) -> io::Re
     Ok(())
 }
 
-/// Project-scoped MCP server translating the 4 event tools into [`HeadClient`] HTTP requests.
+/// Session/project-scoped MCP server translating event, agent, and session-skill tools into [`HeadClient`] HTTP requests.
 pub struct ControlMcpServer {
     client: HeadClient,
-    project_id: ProjectId,
+    project_id: Option<ProjectId>,
     agent_id: AgentId,
     session_id: SessionId,
     secrets: Vec<String>,
@@ -211,10 +211,14 @@ pub struct ControlMcpServer {
 
 impl ControlMcpServer {
     /// Creates a new [`ControlMcpServer`] bound strictly to `(project_id, agent_id, session_id)`.
+    ///
+    /// When `project_id` is `None` (standalone chat), only global session-skill read tools
+    /// (`dennett_skill_list`, `dennett_skill_read`) are permitted; project event/delegation tools
+    /// fail closed with `ACCESS_DENIED`.
     #[must_use]
     pub fn new(
         client: HeadClient,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         agent_id: AgentId,
         session_id: SessionId,
         secrets: Vec<String>,
@@ -272,7 +276,7 @@ impl ControlMcpServer {
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "tools": tool_definitions()
+                    "tools": tool_definitions_for_scope(self.project_id.is_some())
                 }
             })),
             "tools/call" => {
@@ -335,6 +339,8 @@ impl ControlMcpServer {
             "dennett_agent_send_message" => self.tool_agent_send_message(args, &cid).await,
             "dennett_agent_list_messages" => self.tool_agent_list_messages(args, &cid).await,
             "dennett_delegate_task" => self.tool_delegate_task(args, &cid).await,
+            "dennett_skill_list" => self.tool_skill_list(&cid).await,
+            "dennett_skill_read" => self.tool_skill_read(args, &cid).await,
             other => Err(DennettError::InvalidInput {
                 field: String::from("name"),
                 reason: format!("unknown control MCP tool `{other}`"),
@@ -342,23 +348,36 @@ impl ControlMcpServer {
         }
     }
 
-    fn enforce_optional_project_arg(&self, args: &Value) -> Result<(), DennettError> {
+    fn require_bound_project(&self, tool_name: &str) -> Result<ProjectId, DennettError> {
+        self.project_id.ok_or_else(|| DennettError::AccessDenied {
+            scope: format!("session:{}", self.session_id),
+            reason: format!(
+                "control MCP tool `{tool_name}` is not permitted in standalone sessions without a bound project"
+            ),
+        })
+    }
+
+    fn enforce_optional_project_arg(
+        &self,
+        args: &Value,
+        tool_name: &str,
+    ) -> Result<ProjectId, DennettError> {
+        let project_id = self.require_bound_project(tool_name)?;
         if let Some(raw_pid) = args.get("project_id").and_then(Value::as_str) {
             let trimmed = raw_pid.trim();
             if !trimmed.is_empty() {
                 let parsed = ProjectId::from_str(trimmed)?;
-                if parsed != self.project_id {
+                if parsed != project_id {
                     return Err(DennettError::AccessDenied {
-                        scope: format!("project:{}", self.project_id),
+                        scope: format!("project:{project_id}"),
                         reason: format!(
-                            "control MCP is strictly bound to project `{}` and cannot access `{parsed}`",
-                            self.project_id
+                            "control MCP is strictly bound to project `{project_id}` and cannot access `{parsed}`"
                         ),
                     });
                 }
             }
         }
-        Ok(())
+        Ok(project_id)
     }
 
     #[expect(
@@ -370,7 +389,7 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        self.enforce_optional_project_arg(args)?;
+        let project_id = self.enforce_optional_project_arg(args, "dennett_event_create")?;
 
         let title = required_trimmed_str(args, "title")?;
         let goal = required_trimmed_str(args, "goal")?;
@@ -511,7 +530,7 @@ impl ControlMcpServer {
             .create_session(
                 &CreateSessionRequest {
                     agent_id: self.agent_id,
-                    project_id: Some(self.project_id),
+                    project_id: Some(project_id),
                     title: title.clone(),
                     session_kind: SessionKind::TaskRun,
                 },
@@ -524,7 +543,7 @@ impl ControlMcpServer {
             .client
             .create_task(
                 &CreateTaskRequest {
-                    project_id: self.project_id,
+                    project_id,
                     agent_id: self.agent_id,
                     session_id: Some(task_session.session_id),
                     parent_task_id: None,
@@ -563,7 +582,7 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        self.enforce_optional_project_arg(args)?;
+        let project_id = self.enforce_optional_project_arg(args, "dennett_event_list")?;
         let status_filter = args
             .get("status")
             .and_then(Value::as_str)
@@ -576,7 +595,7 @@ impl ControlMcpServer {
 
         let resp = self
             .client
-            .list_tasks(Some(self.project_id), status_filter, Some(cid))
+            .list_tasks(Some(project_id), status_filter, Some(cid))
             .await?;
         let events: Vec<Value> = resp
             .tasks
@@ -601,7 +620,7 @@ impl ControlMcpServer {
             .collect();
 
         Ok(json!({
-            "project_id": self.project_id,
+            "project_id": project_id,
             "count": events.len(),
             "events": events,
         }))
@@ -612,15 +631,15 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        self.enforce_optional_project_arg(args)?;
+        let project_id = self.enforce_optional_project_arg(args, "dennett_event_update")?;
         let raw_task_id = required_trimmed_str(args, "task_id")?;
         let task_id = TaskId::from_str(&raw_task_id)?;
 
         // Defense-in-depth project ownership check (enforced on Head HTTP boundary too).
         let detail = self.client.get_task_detail(task_id, Some(cid)).await?;
-        if detail.task.project_id != self.project_id {
+        if detail.task.project_id != project_id {
             return Err(DennettError::AccessDenied {
-                scope: format!("project:{}", self.project_id),
+                scope: format!("project:{project_id}"),
                 reason: format!("task `{task_id}` does not belong to bound project"),
             });
         }
@@ -673,14 +692,14 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        self.enforce_optional_project_arg(args)?;
+        let project_id = self.enforce_optional_project_arg(args, "dennett_event_cancel")?;
         let raw_task_id = required_trimmed_str(args, "task_id")?;
         let task_id = TaskId::from_str(&raw_task_id)?;
 
         let detail = self.client.get_task_detail(task_id, Some(cid)).await?;
-        if detail.task.project_id != self.project_id {
+        if detail.task.project_id != project_id {
             return Err(DennettError::AccessDenied {
-                scope: format!("project:{}", self.project_id),
+                scope: format!("project:{project_id}"),
                 reason: format!("task `{task_id}` does not belong to bound project"),
             });
         }
@@ -698,7 +717,7 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        self.enforce_optional_project_arg(args)?;
+        let project_id = self.enforce_optional_project_arg(args, "dennett_agent_send_message")?;
         let recipient_raw = required_trimmed_str(args, "recipient_agent_id")?;
         let recipient_agent_id = AgentId::from_str(&recipient_raw)?;
         let body_text = args
@@ -735,7 +754,7 @@ impl ControlMcpServer {
                 recipient_agent_id,
                 &SendAgentMessageRequest {
                     sender_agent_id: Some(self.agent_id),
-                    project_id: self.project_id,
+                    project_id,
                     related_task_id,
                     idempotency_key,
                     body_text,
@@ -759,7 +778,7 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        self.enforce_optional_project_arg(args)?;
+        let project_id = self.enforce_optional_project_arg(args, "dennett_agent_list_messages")?;
         let undelivered_only = args
             .get("undelivered_only")
             .and_then(Value::as_bool)
@@ -771,7 +790,7 @@ impl ControlMcpServer {
         let messages: Vec<Value> = resp
             .messages
             .into_iter()
-            .filter(|m| m.project_id == self.project_id)
+            .filter(|m| m.project_id == project_id)
             .map(|m| {
                 json!({
                     "agent_message_id": m.agent_message_id,
@@ -786,7 +805,7 @@ impl ControlMcpServer {
             .collect();
         Ok(json!({
             "agent_id": self.agent_id,
-            "project_id": self.project_id,
+            "project_id": project_id,
             "count": messages.len(),
             "messages": messages,
         }))
@@ -797,7 +816,7 @@ impl ControlMcpServer {
         args: &Value,
         cid: &CorrelationId,
     ) -> Result<Value, DennettError> {
-        self.enforce_optional_project_arg(args)?;
+        let project_id = self.enforce_optional_project_arg(args, "dennett_delegate_task")?;
         let target_raw = args
             .get("recipient_agent_id")
             .or_else(|| args.get("agent_id"))
@@ -837,7 +856,7 @@ impl ControlMcpServer {
             .create_session(
                 &CreateSessionRequest {
                     agent_id: target_agent_id,
-                    project_id: Some(self.project_id),
+                    project_id: Some(project_id),
                     title: title.clone(),
                     session_kind: SessionKind::TaskRun,
                 },
@@ -849,7 +868,7 @@ impl ControlMcpServer {
             .client
             .create_task(
                 &CreateTaskRequest {
-                    project_id: self.project_id,
+                    project_id,
                     agent_id: target_agent_id,
                     session_id: Some(task_session.session_id),
                     parent_task_id,
@@ -875,130 +894,184 @@ impl ControlMcpServer {
             "status": created_task.status,
         }))
     }
+
+    async fn tool_skill_list(&self, cid: &CorrelationId) -> Result<Value, DennettError> {
+        let skills = self.client.list_session_skills(Some(cid)).await?;
+        Ok(json!({
+            "count": skills.len(),
+            "skills": skills,
+        }))
+    }
+
+    async fn tool_skill_read(
+        &self,
+        args: &Value,
+        cid: &CorrelationId,
+    ) -> Result<Value, DennettError> {
+        let slug = required_trimmed_str(args, "slug")?;
+        let detail = self.client.read_session_skill(&slug, Some(cid)).await?;
+        Ok(json!({
+            "skill": detail.skill,
+            "skill_md_content": detail.skill_md_content,
+        }))
+    }
 }
 
-/// Returns the JSON Schema definitions for the 7 clean event & agent-cooperation MCP tools.
+/// Returns the JSON Schema definitions for all 9 control MCP tools (project + session skills).
+#[must_use]
+pub fn tool_definitions() -> Value {
+    tool_definitions_for_scope(true)
+}
+
+/// Returns the JSON Schema definitions visible for this session scope:
+/// - Project sessions (`has_project = true`): all 9 tools (events, agent messages, delegation, skills).
+/// - Standalone sessions (`has_project = false`): read-only session skill tools only.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
-    reason = "declares all 7 static MCP tool JSON schemas in one declarative array"
+    reason = "declares static MCP tool JSON schemas in one declarative builder"
 )]
-pub fn tool_definitions() -> Value {
-    json!([
-        {
-            "name": "dennett_event_create",
-            "description": "Create a durable scheduled event, recurring check, or signal-triggered task in the current Dennett project (uses an isolated background task_run session).",
+pub fn tool_definitions_for_scope(has_project: bool) -> Value {
+    let mut defs = Vec::new();
+    if has_project {
+        defs.extend([
+            json!({
+                "name": "dennett_event_create",
+                "description": "Create a durable scheduled event, recurring check, or signal-triggered task in the current Dennett project (uses an isolated background task_run session).",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["title", "goal", "trigger_kind"],
+                    "properties": {
+                        "title": { "type": "string", "description": "Short human-readable title shown in Tasks (<= 120 chars)" },
+                        "goal": { "type": "string", "description": "Full instructions for the agent when the event triggers" },
+                        "trigger_kind": {
+                            "type": "string",
+                            "enum": ["once_at", "interval", "daily_local_time", "weekly_local_time", "wait_for_signal", "immediate"]
+                        },
+                        "fire_at_iso_or_ms": {
+                            "description": "For once_at: RFC3339/ISO-8601 timestamp (e.g. 2026-11-25T09:30:00+05:00 or ...Z) or Unix epoch milliseconds"
+                        },
+                        "interval_secs": { "type": "integer", "minimum": 10 },
+                        "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+                        "minute": { "type": "integer", "minimum": 0, "maximum": 59 },
+                        "weekdays": {
+                            "type": "array",
+                            "items": { "type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }
+                        },
+                        "timezone": { "type": "string", "description": "IANA timezone name, e.g. Asia/Yekaterinburg or UTC" },
+                        "misfire_policy": { "type": "string", "enum": ["catch_up_once", "execute_once", "skip", "ask"] },
+                        "expected_signal_name": { "type": "string" },
+                        "max_turns": { "type": "integer", "minimum": 1 },
+                        "max_tokens": { "type": "integer", "minimum": 1 },
+                        "max_wall_secs": { "type": "integer", "minimum": 1 }
+                    }
+                }
+            }),
+            json!({
+                "name": "dennett_event_list",
+                "description": "List durable scheduled events and tasks belonging to the current Dennett project.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string" },
+                        "include_completed": { "type": "boolean" }
+                    }
+                }
+            }),
+            json!({
+                "name": "dennett_event_update",
+                "description": "Update title, goal, or budget of an existing durable event/task in the current Dennett project.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["task_id"],
+                    "properties": {
+                        "task_id": { "type": "string" },
+                        "title": { "type": "string" },
+                        "goal": { "type": "string" },
+                        "clear_schedule": { "type": "boolean" },
+                        "max_turns": { "type": "integer", "minimum": 1 },
+                        "max_tokens": { "type": "integer", "minimum": 1 },
+                        "max_wall_secs": { "type": "integer", "minimum": 1 }
+                    }
+                }
+            }),
+            json!({
+                "name": "dennett_event_cancel",
+                "description": "Cancel/stop an existing durable event or scheduled task in the current Dennett project.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["task_id"],
+                    "properties": {
+                        "task_id": { "type": "string" }
+                    }
+                }
+            }),
+            json!({
+                "name": "dennett_agent_send_message",
+                "description": "Send a free-form plain-text coordination message to another agent inside the current Dennett project (A07, no rigid delegation forms).",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["recipient_agent_id", "body_text"],
+                    "properties": {
+                        "recipient_agent_id": { "type": "string", "description": "Target agent UUID" },
+                        "body_text": { "type": "string", "description": "Free-form plain-text message body" },
+                        "related_task_id": { "type": "string", "description": "Optional related task UUID" },
+                        "idempotency_key": { "type": "string", "description": "Optional idempotency key" }
+                    }
+                }
+            }),
+            json!({
+                "name": "dennett_agent_list_messages",
+                "description": "List plain-text coordination messages addressed to the current agent inside the current Dennett project.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "undelivered_only": { "type": "boolean" }
+                    }
+                }
+            }),
+            json!({
+                "name": "dennett_delegate_task",
+                "description": "Delegate a free-form plain-text task to another agent within the current project; Head strictly enforces child_scope subset of parent_scope (A07).",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["recipient_agent_id", "goal"],
+                    "properties": {
+                        "recipient_agent_id": { "type": "string", "description": "Helper agent UUID" },
+                        "goal": { "type": "string", "description": "Free-form plain-text instructions for the helper agent" },
+                        "title": { "type": "string" },
+                        "parent_task_id": { "type": "string" },
+                        "max_turns": { "type": "integer", "minimum": 1 },
+                        "max_tokens": { "type": "integer", "minimum": 1 },
+                        "max_wall_secs": { "type": "integer", "minimum": 1 },
+                        "execute_immediately": { "type": "boolean" }
+                    }
+                }
+            }),
+        ]);
+    }
+    defs.extend([
+        json!({
+            "name": "dennett_skill_list",
+            "description": "List Dennett skills enabled for the current session (read-only, scoped by session).",
             "inputSchema": {
                 "type": "object",
-                "required": ["title", "goal", "trigger_kind"],
-                "properties": {
-                    "title": { "type": "string", "description": "Short human-readable title shown in Tasks (<= 120 chars)" },
-                    "goal": { "type": "string", "description": "Full instructions for the agent when the event triggers" },
-                    "trigger_kind": {
-                        "type": "string",
-                        "enum": ["once_at", "interval", "daily_local_time", "weekly_local_time", "wait_for_signal", "immediate"]
-                    },
-                    "fire_at_iso_or_ms": {
-                        "description": "For once_at: RFC3339/ISO-8601 timestamp (e.g. 2026-11-25T09:30:00+05:00 or ...Z) or Unix epoch milliseconds"
-                    },
-                    "interval_secs": { "type": "integer", "minimum": 10 },
-                    "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
-                    "minute": { "type": "integer", "minimum": 0, "maximum": 59 },
-                    "weekdays": {
-                        "type": "array",
-                        "items": { "type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }
-                    },
-                    "timezone": { "type": "string", "description": "IANA timezone name, e.g. Asia/Yekaterinburg or UTC" },
-                    "misfire_policy": { "type": "string", "enum": ["catch_up_once", "execute_once", "skip", "ask"] },
-                    "expected_signal_name": { "type": "string" },
-                    "max_turns": { "type": "integer", "minimum": 1 },
-                    "max_tokens": { "type": "integer", "minimum": 1 },
-                    "max_wall_secs": { "type": "integer", "minimum": 1 }
-                }
+                "properties": {}
             }
-        },
-        {
-            "name": "dennett_event_list",
-            "description": "List durable scheduled events and tasks belonging to the current Dennett project.",
+        }),
+        json!({
+            "name": "dennett_skill_read",
+            "description": "Read the full SKILL.md instructions for one enabled Dennett skill in the current session by slug.",
             "inputSchema": {
                 "type": "object",
+                "required": ["slug"],
                 "properties": {
-                    "status": { "type": "string" },
-                    "include_completed": { "type": "boolean" }
+                    "slug": { "type": "string", "description": "Normalized skill slug from the active skills index or dennett_skill_list" }
                 }
             }
-        },
-        {
-            "name": "dennett_event_update",
-            "description": "Update title, goal, or budget of an existing durable event/task in the current Dennett project.",
-            "inputSchema": {
-                "type": "object",
-                "required": ["task_id"],
-                "properties": {
-                    "task_id": { "type": "string" },
-                    "title": { "type": "string" },
-                    "goal": { "type": "string" },
-                    "clear_schedule": { "type": "boolean" },
-                    "max_turns": { "type": "integer", "minimum": 1 },
-                    "max_tokens": { "type": "integer", "minimum": 1 },
-                    "max_wall_secs": { "type": "integer", "minimum": 1 }
-                }
-            }
-        },
-        {
-            "name": "dennett_event_cancel",
-            "description": "Cancel/stop an existing durable event or scheduled task in the current Dennett project.",
-            "inputSchema": {
-                "type": "object",
-                "required": ["task_id"],
-                "properties": {
-                    "task_id": { "type": "string" }
-                }
-            }
-        },
-        {
-            "name": "dennett_agent_send_message",
-            "description": "Send a free-form plain-text coordination message to another agent inside the current Dennett project (A07, no rigid delegation forms).",
-            "inputSchema": {
-                "type": "object",
-                "required": ["recipient_agent_id", "body_text"],
-                "properties": {
-                    "recipient_agent_id": { "type": "string", "description": "Target agent UUID" },
-                    "body_text": { "type": "string", "description": "Free-form plain-text message body" },
-                    "related_task_id": { "type": "string", "description": "Optional related task UUID" },
-                    "idempotency_key": { "type": "string", "description": "Optional idempotency key" }
-                }
-            }
-        },
-        {
-            "name": "dennett_agent_list_messages",
-            "description": "List plain-text coordination messages addressed to the current agent inside the current Dennett project.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "undelivered_only": { "type": "boolean" }
-                }
-            }
-        },
-        {
-            "name": "dennett_delegate_task",
-            "description": "Delegate a free-form plain-text task to another agent within the current project; Head strictly enforces child_scope subset of parent_scope (A07).",
-            "inputSchema": {
-                "type": "object",
-                "required": ["recipient_agent_id", "goal"],
-                "properties": {
-                    "recipient_agent_id": { "type": "string", "description": "Helper agent UUID" },
-                    "goal": { "type": "string", "description": "Free-form plain-text instructions for the helper agent" },
-                    "title": { "type": "string" },
-                    "parent_task_id": { "type": "string" },
-                    "max_turns": { "type": "integer", "minimum": 1 },
-                    "max_tokens": { "type": "integer", "minimum": 1 },
-                    "max_wall_secs": { "type": "integer", "minimum": 1 },
-                    "execute_immediately": { "type": "boolean" }
-                }
-            }
-        }
-    ])
+        }),
+    ]);
+    Value::Array(defs)
 }
 
 fn required_trimmed_str(args: &Value, field: &str) -> Result<String, DennettError> {
@@ -1343,13 +1416,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn control_mcp_lists_four_tools_and_blocks_foreign_project_id() {
+    async fn control_mcp_lists_tools_for_project_and_standalone_and_blocks_foreign_project_id() {
         let client = HeadClient::new("http://127.0.0.1:18081").expect("client");
         let bound_pid = ProjectId::new();
         let foreign_pid = ProjectId::new();
         let server = ControlMcpServer::new(
-            client,
-            bound_pid,
+            client.clone(),
+            Some(bound_pid),
             AgentId::new(),
             SessionId::new(),
             vec![String::from("dct1.abc.def")],
@@ -1366,7 +1439,7 @@ mod tests {
         let tools = list_resp["result"]["tools"]
             .as_array()
             .expect("tools array");
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 9);
         assert!(
             tools
                 .iter()
@@ -1378,6 +1451,8 @@ mod tests {
                 .any(|t| t["name"] == "dennett_agent_list_messages")
         );
         assert!(tools.iter().any(|t| t["name"] == "dennett_delegate_task"));
+        assert!(tools.iter().any(|t| t["name"] == "dennett_skill_list"));
+        assert!(tools.iter().any(|t| t["name"] == "dennett_skill_read"));
 
         let foreign_call = server
             .handle_message(&json!({
@@ -1398,5 +1473,48 @@ mod tests {
             .as_str()
             .expect("text");
         assert!(err_text.contains("ACCESS_DENIED"));
+
+        // Standalone server exposes only read-only session skill tools and denies project tools.
+        let standalone = ControlMcpServer::new(
+            client,
+            None,
+            AgentId::new(),
+            SessionId::new(),
+            vec![String::from("dct1.standalone.tok")],
+        );
+        let standalone_list = standalone
+            .handle_message(&json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/list"
+            }))
+            .await
+            .expect("standalone list");
+        let standalone_tools = standalone_list["result"]["tools"]
+            .as_array()
+            .expect("standalone tools");
+        assert_eq!(standalone_tools.len(), 2);
+        assert!(standalone_tools.iter().any(|t| t["name"] == "dennett_skill_list"));
+        assert!(standalone_tools.iter().any(|t| t["name"] == "dennett_skill_read"));
+
+        let standalone_event_deny = standalone
+            .handle_message(&json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "dennett_event_list",
+                    "arguments": {}
+                }
+            }))
+            .await
+            .expect("standalone event deny");
+        assert_eq!(standalone_event_deny["result"]["isError"], Value::Bool(true));
+        assert!(
+            standalone_event_deny["result"]["content"][0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("ACCESS_DENIED")
+        );
     }
 }

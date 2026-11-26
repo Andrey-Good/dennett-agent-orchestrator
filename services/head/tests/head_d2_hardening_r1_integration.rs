@@ -444,6 +444,8 @@ async fn r1_arch_02_archive_unarchive_pause_reason_and_periodic_task_mid_run() {
                 human_wait_ms: 0,
             },
             50,
+            None,
+            None,
             &[],
             false,
             &cid,
@@ -1982,7 +1984,7 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
     let token_a_chat = svc
         .control_token_signer()
         .mint_control_token(
-            proj_a.project_id,
+            Some(proj_a.project_id),
             agent.agent_id,
             chat_session.session_id,
             SessionKind::UserChat,
@@ -2035,7 +2037,7 @@ async fn r1_control_mcp_e2e_agent_creates_event_and_enforces_token_isolation() {
     let token_task_run = svc
         .control_token_signer()
         .mint_control_token(
-            proj_a.project_id,
+            Some(proj_a.project_id),
             agent.agent_id,
             created_task.session_id,
             SessionKind::TaskRun,
@@ -2393,13 +2395,35 @@ async fn v7_standalone_chats_enforce_deny_all_inline_artifacts_and_survive_proje
         starts[0].workspace_write_policy,
         WorkspaceWritePolicy::DenyAll
     );
+    let ctrl_mcp = starts[0]
+        .mcp_servers
+        .iter()
+        .find(|m| m.name == "dennett-control")
+        .expect("dennett-control MCP must be mounted for standalone chats (global skills only)");
     assert!(
-        !starts[0]
-            .mcp_servers
+        !ctrl_mcp
+            .env
             .iter()
-            .any(|m| m.name == "dennett-control"),
-        "dennett-control-mcp MUST NOT be mounted on standalone chats: {:?}",
-        starts[0].mcp_servers
+            .any(|e| e.name == "DENNETT_CONTROL_PROJECT_ID"),
+        "standalone dennett-control MCP must NOT receive DENNETT_CONTROL_PROJECT_ID: {:?}",
+        ctrl_mcp.env
+    );
+    let ctrl_token = ctrl_mcp
+        .env
+        .iter()
+        .find(|e| e.name == "DENNETT_CONTROL_TOKEN")
+        .map(|e| e.value.as_str())
+        .expect("DENNETT_CONTROL_TOKEN");
+    let ctrl_payload_b64 = ctrl_token.split('.').nth(1).expect("dct1 payload segment");
+    let ctrl_claims_bytes = URL_SAFE_NO_PAD
+        .decode(ctrl_payload_b64)
+        .expect("decode dct1 claims");
+    let ctrl_claims_json: serde_json::Value =
+        serde_json::from_slice(&ctrl_claims_bytes).expect("parse dct1 claims JSON");
+    assert!(
+        ctrl_claims_json.get("project_id").is_none()
+            || ctrl_claims_json["project_id"].is_null(),
+        "standalone dct1 token must have no project_id claim: {ctrl_claims_json}"
     );
     let mem_mcp = starts[0]
         .mcp_servers

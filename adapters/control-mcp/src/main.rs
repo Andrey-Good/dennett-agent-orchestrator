@@ -48,7 +48,12 @@ fn build_server_from_env() -> Result<ControlMcpServer, ExitCode> {
 
     let build_res = (|| -> Result<ControlMcpServer, DennettError> {
         let head_url = read_required_env(ENV_HEAD_URL)?;
-        let project_id = ProjectId::from_str(&read_required_env(ENV_CONTROL_PROJECT_ID)?)?;
+        let project_id = env::var(ENV_CONTROL_PROJECT_ID)
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+            .map(|raw| ProjectId::from_str(&raw))
+            .transpose()?;
         let agent_id = AgentId::from_str(&read_required_env(ENV_CONTROL_AGENT_ID)?)?;
         let session_id = SessionId::from_str(&read_required_env(ENV_CONTROL_SESSION_ID)?)?;
         let token = raw_token.ok_or_else(|| DennettError::Unauthorized {

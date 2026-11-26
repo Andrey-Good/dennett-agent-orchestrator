@@ -1307,13 +1307,13 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     let head1 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c1 = HeadClient::new(&head1.base_url).expect("client1");
     let h1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(h1.schema_version, Some(8));
+    assert_eq!(h1.schema_version, Some(9));
     head1.shutdown().await;
 
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
     let c2 = HeadClient::new(&head2.base_url).expect("client2");
     let h2 = c2.healthz(None).await.expect("health2");
-    assert_eq!(h2.schema_version, Some(8));
+    assert_eq!(h2.schema_version, Some(9));
 
     // Seed one project inside this isolated schema so `audit_events` has a real row to guard.
     let _proj = c2

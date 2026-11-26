@@ -12,9 +12,11 @@
 //!   added/changed `secret_slots`) automatically downgrades `trust_state` to `Restricted`
 //!   (rug-pull protection) and blocks materialization until explicitly re-trusted.
 
+use core::fmt::Write as _;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::ErrorKind;
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use dennett_contracts::{
@@ -24,8 +26,9 @@ use dennett_contracts::{
     DeleteCapabilityResponse, DennettError, DiscoverCapabilitiesRequest,
     DiscoverCapabilitiesResponse, ListCapabilitiesResponse, MAX_CAPABILITY_DESCRIPTION_BYTES,
     MAX_CAPABILITY_LIST_ITEMS, MAX_CAPABILITY_MARKDOWN_BYTES, MAX_CAPABILITY_NAME_LEN,
-    MAX_CAPABILITY_VERSION_LEN, PluginMcpServerEntry, ProjectId,
-    SetProjectCapabilityBindingRequest, Sha256Hex, TimestampMs, UpdateCapabilityRequest,
+    MAX_CAPABILITY_VERSION_LEN, PluginMcpServerEntry, ProjectId, SessionSkillDetailResponse,
+    SessionSkillSummary, SetProjectCapabilityBindingRequest, Sha256Hex, TimestampMs,
+    UpdateCapabilityRequest,
 };
 use dennett_runtime_antigravity::{ActiveSkillPayload, RuntimeMcpEnvEntry, RuntimeMcpServerSpec};
 use serde::{Deserialize, Serialize};
@@ -34,9 +37,10 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::events::{ControlEventAppend, append_control_event_in_tx};
+use crate::memory_auth::ControlTokenClaims;
 use crate::migrations::sha256_hex;
 use crate::service::{DEFAULT_PG_OP_TIMEOUT, HeadService};
-use crate::store::{append_audit_event, fetch_project, map_pg_err, truncate_utf8};
+use crate::store::{append_audit_event, fetch_project, fetch_session, map_pg_err, truncate_utf8};
 use crate::workspace_files::{clean_display_path, is_symlink_or_reparse_point};
 
 const CAPABILITY_SELECT_COLS: &str = "
@@ -49,15 +53,82 @@ const CAPABILITY_SELECT_COLS: &str = "
     TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
 ";
 
+/// Maximum bytes inlined directly into `[Dennett Active Skills Index]` for a `pinned` skill (16 KiB).
+pub(crate) const MAX_PINNED_SKILL_INLINE_BYTES: usize = 16 * 1024;
+
+/// One enabled Dennett skill resolved for a concrete session (project or standalone).
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedSessionSkill {
+    /// Public wire summary returned by `GET /v1/capabilities/session-skills`.
+    pub(crate) summary: SessionSkillSummary,
+    /// Full UTF-8 `SKILL.md` markdown persisted on `capability_records.spec_json`.
+    pub(crate) skill_markdown: String,
+    /// Optional validated read-only source path on disk.
+    pub(crate) source_path: Option<String>,
+    /// Lowercase SHA-256 content digest.
+    pub(crate) content_sha256: String,
+}
+
 /// Resolved active A08 capabilities materialized into a single runtime session turn.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ResolvedSessionCapabilities {
     /// Active skills materialized into `<gemini_dir>/config/skills/` or local prompt.
     pub(crate) active_skills: Vec<ActiveSkillPayload>,
+    /// All enabled skills (`pinned`, `active`, `on_demand`) for provider-independent prompt index delivery.
+    pub(crate) session_skills: Vec<ResolvedSessionSkill>,
     /// Active non-builtin MCP servers (with `SecretBroker` env slots already resolved).
     pub(crate) extra_mcp_servers: Vec<RuntimeMcpServerSpec>,
     /// Logical names of active A08 MCP servers recognized by `PolicyEngine`.
     pub(crate) registered_mcp_server_names: BTreeSet<String>,
+}
+
+/// Formats the compact provider-independent `[Dennett Active Skills Index]` system prompt block
+/// (`41 §7.10`) without any instructions asking the model to narrate tool calls.
+#[must_use]
+pub(crate) fn format_session_skills_prompt_index(skills: &[ResolvedSessionSkill]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n\n[Dennett Active Skills Index]\n\
+         The following Dennett skills are enabled for this session. \
+         Pinned skills include their instructions inline below; for active or on-demand skills, \
+         call `dennett_skill_read(slug)` (or `dennett_skill_list`) to read full instructions when relevant.",
+    );
+
+    let mut has_listed = false;
+    for skill in skills {
+        if skill.summary.activation_state == CapabilityActivation::Pinned {
+            let truncated = truncate_utf8(&skill.skill_markdown, MAX_PINNED_SKILL_INLINE_BYTES);
+            let suffix = if truncated.len() < skill.skill_markdown.len() {
+                "\n...[truncated at 16 KiB; call dennett_skill_read(slug) for full instructions]"
+            } else {
+                ""
+            };
+            let _ = write!(
+                out,
+                "\n\n### Pinned Skill: {} (v{})\n{}{}",
+                skill.summary.slug, skill.summary.version, truncated, suffix
+            );
+        } else {
+            if !has_listed {
+                out.push_str("\n\nAvailable skills (call `dennett_skill_read(slug)` to load):");
+                has_listed = true;
+            }
+            let desc = if skill.summary.description.trim().is_empty() {
+                skill.summary.display_name.as_str()
+            } else {
+                skill.summary.description.as_str()
+            };
+            let _ = write!(
+                out,
+                "\n- {} (v{}): {}",
+                skill.summary.slug, skill.summary.version, desc
+            );
+        }
+    }
+
+    out
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1299,6 +1370,129 @@ impl HeadService {
         Ok(binding)
     }
 
+    /// Lists skills enabled for the session authorized by `claims` (`GET /v1/capabilities/session-skills`).
+    ///
+    /// - Standalone sessions (`claims.project_id == None`): global enabled skills ONLY.
+    /// - Project sessions (`claims.project_id == Some(pid)`): global + own-project enabled skills
+    ///   with own-project override precedence over global skills of the same slug.
+    /// - Disabled, forbidden, restricted/revoked, incompatible, or foreign-project skills are NEVER exposed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::AccessDenied`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn list_session_skills(
+        &self,
+        claims: &ControlTokenClaims,
+    ) -> Result<Vec<SessionSkillSummary>, DennettError> {
+        self.verify_control_token_session_scope(claims).await?;
+        let resolved = self.resolve_session_skills_internal(claims.project_id).await?;
+        Ok(resolved.into_iter().map(|s| s.summary).collect())
+    }
+
+    /// Reads the full `SKILL.md` content for one enabled skill scoped strictly by `claims`
+    /// (`GET /v1/capabilities/session-skills/{slug}`).
+    ///
+    /// Returns `403 AccessDenied` for disabled, blocked (`restricted`/`revoked`), or foreign-project
+    /// skills, and `404 NotFound` for unknown slugs. When `source_path` is present on disk,
+    /// verifies canonicalization and rejects symlink/traversal escapes before reading `SKILL.md`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::AccessDenied`],
+    /// [`DennettError::NotFound`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn read_session_skill(
+        &self,
+        claims: &ControlTokenClaims,
+        slug: &str,
+    ) -> Result<SessionSkillDetailResponse, DennettError> {
+        let trimmed = slug.trim();
+        if trimmed.is_empty()
+            || trimmed.contains('/')
+            || trimmed.contains('\\')
+            || trimmed.contains("..")
+            || trimmed.as_bytes().contains(&0)
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("slug"),
+                reason: String::from(
+                    "skill slug must be non-empty without '/', '\\', '..', or NUL bytes",
+                ),
+            });
+        }
+        self.verify_control_token_session_scope(claims).await?;
+
+        let resolved = self.resolve_session_skills_internal(claims.project_id).await?;
+        if let Some(found) = resolved.into_iter().find(|s| s.summary.slug == trimmed) {
+            let source_path = found.source_path.clone();
+            let fallback_md = found.skill_markdown.clone();
+            let skill_md_content = tokio::task::spawn_blocking(move || {
+                read_skill_markdown_safe(source_path.as_deref(), &fallback_md)
+            })
+            .await
+            .map_err(|err| DennettError::Internal {
+                detail: format!("session skill reader worker failed: {err}"),
+            })??;
+            return Ok(SessionSkillDetailResponse {
+                skill: found.summary,
+                skill_md_content,
+            });
+        }
+
+        // Distinguish disabled/blocked/foreign-project skills (403) from completely unknown slugs (404).
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let exists_elsewhere: bool = conn
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM capability_records WHERE kind = 'skill' AND slug = $1)",
+                &[&trimmed],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?
+            .get(0);
+        if exists_elsewhere {
+            return Err(DennettError::AccessDenied {
+                scope: format!("session:{}", claims.session_id),
+                reason: format!(
+                    "skill `{trimmed}` is disabled, blocked, or outside this session's authorized project scope"
+                ),
+            });
+        }
+        Err(DennettError::NotFound {
+            resource: String::from("session_skill"),
+            id: trimmed.to_owned(),
+        })
+    }
+
+    async fn verify_control_token_session_scope(
+        &self,
+        claims: &ControlTokenClaims,
+    ) -> Result<(), DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let session = fetch_session(&conn, claims.session_id, self.pg_target()).await?;
+        if session.project_id != claims.project_id {
+            return Err(DennettError::AccessDenied {
+                scope: format!("session:{}", claims.session_id),
+                reason: String::from(
+                    "control token project scope does not match persisted session project binding",
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn resolve_session_skills_internal(
+        &self,
+        project_id: Option<ProjectId>,
+    ) -> Result<Vec<ResolvedSessionSkill>, DennettError> {
+        let listed = self
+            .list_capabilities(project_id, None, Some(CapabilityKind::Skill), None)
+            .await?;
+        Ok(select_session_skills_from_records(
+            listed.capabilities,
+            project_id,
+        ))
+    }
+
     /// Resolves all active A08 skills and MCP servers for an upcoming runtime turn, strictly
     /// enforcing:
     /// - `CandidateUnattached` (including `PersonalDiscovered` from `~/.gemini/`) is NEVER active
@@ -1321,10 +1515,14 @@ impl HeadService {
             agent_attached_skills.iter().map(String::as_str).collect();
 
         let mut out = ResolvedSessionCapabilities::default();
-        let mut seen_skill_slugs: BTreeSet<String> = BTreeSet::new();
+        let mut skill_records = Vec::new();
         let mut seen_mcp_names: BTreeSet<String> = BTreeSet::new();
 
         for cap in listed.capabilities {
+            if cap.kind == CapabilityKind::Skill {
+                skill_records.push(cap);
+                continue;
+            }
             if matches!(
                 cap.trust_state,
                 CapabilityTrust::Revoked | CapabilityTrust::Restricted
@@ -1365,16 +1563,6 @@ impl HeadService {
             }
 
             match cap.spec {
-                CapabilitySpec::Skill { skill_markdown, .. } => {
-                    if seen_skill_slugs.insert(cap.slug.clone()) {
-                        out.active_skills.push(ActiveSkillPayload {
-                            slug: cap.slug,
-                            version: cap.version,
-                            content_sha256: cap.content_sha256.as_str().to_owned(),
-                            skill_markdown,
-                        });
-                    }
-                }
                 CapabilitySpec::McpServer {
                     command,
                     args,
@@ -1429,6 +1617,26 @@ impl HeadService {
             }
         }
 
+        let session_skills = select_session_skills_from_records(skill_records, project_id);
+        for skill in &session_skills {
+            let should_materialize_disk = match skill.summary.activation_state {
+                CapabilityActivation::Pinned | CapabilityActivation::Active => true,
+                CapabilityActivation::OnDemand => {
+                    attached_set.contains(skill.summary.slug.as_str())
+                }
+                _ => false,
+            };
+            if should_materialize_disk {
+                out.active_skills.push(ActiveSkillPayload {
+                    slug: skill.summary.slug.clone(),
+                    version: skill.summary.version.clone(),
+                    content_sha256: skill.content_sha256.clone(),
+                    skill_markdown: skill.skill_markdown.clone(),
+                });
+            }
+        }
+        out.session_skills = session_skills;
+
         Ok(out)
     }
 
@@ -1482,6 +1690,241 @@ async fn fetch_bindings_for_cap<C: deadpool_postgres::GenericClient>(
         .await
         .map_err(|err| map_pg_err(target, &err))?;
     rows.iter().map(decode_binding_row).collect()
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "resolves scope precedence (project over global), trust filtering, deduplication, and activation ranking in one pass"
+)]
+fn select_session_skills_from_records(
+    records: Vec<CapabilityRecord>,
+    project_id: Option<ProjectId>,
+) -> Vec<ResolvedSessionSkill> {
+    struct Candidate {
+        scope_priority: u8,
+        created_at: TimestampMs,
+        skill: ResolvedSessionSkill,
+    }
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for cap in records {
+        if cap.kind != CapabilityKind::Skill {
+            continue;
+        }
+        if matches!(
+            cap.trust_state,
+            CapabilityTrust::Revoked | CapabilityTrust::Restricted
+        ) || cap.compatibility_status == CompatibilityStatus::Incompatible
+        {
+            continue;
+        }
+
+        let (scope_priority, effective_activation, effective_scope) =
+            if let Some(pid) = project_id {
+                let binding = cap
+                    .project_bindings
+                    .iter()
+                    .find(|b| b.project_id == pid)
+                    .map(|b| b.activation_state);
+                match cap.scope_kind {
+                    CapabilityScopeKind::Project => {
+                        if cap.project_id != Some(pid) {
+                            continue;
+                        }
+                        (
+                            0_u8,
+                            binding.unwrap_or(cap.activation_state),
+                            CapabilityScopeKind::Project,
+                        )
+                    }
+                    CapabilityScopeKind::CandidateUnattached => {
+                        let Some(bound_state) = binding else {
+                            continue;
+                        };
+                        (1_u8, bound_state, CapabilityScopeKind::Project)
+                    }
+                    CapabilityScopeKind::Global => (
+                        2_u8,
+                        binding.unwrap_or(cap.activation_state),
+                        CapabilityScopeKind::Global,
+                    ),
+                    _ => continue,
+                }
+            } else {
+                if cap.scope_kind != CapabilityScopeKind::Global {
+                    continue;
+                }
+                (2_u8, cap.activation_state, CapabilityScopeKind::Global)
+            };
+
+        if !matches!(
+            effective_activation,
+            CapabilityActivation::Pinned
+                | CapabilityActivation::Active
+                | CapabilityActivation::OnDemand
+        ) {
+            continue;
+        }
+
+        let CapabilitySpec::Skill { skill_markdown, .. } = cap.spec else {
+            continue;
+        };
+
+        candidates.push(Candidate {
+            scope_priority,
+            created_at: cap.created_at,
+            skill: ResolvedSessionSkill {
+                summary: SessionSkillSummary {
+                    slug: cap.slug,
+                    display_name: cap.display_name,
+                    description: cap.description,
+                    version: cap.version,
+                    scope: effective_scope,
+                    activation_state: effective_activation,
+                    trust_state: cap.trust_state,
+                },
+                skill_markdown,
+                source_path: cap.source_path,
+                content_sha256: cap.content_sha256.as_str().to_owned(),
+            },
+        });
+    }
+
+    // Own-project overrides global for identical slugs; newest revision wins ties within same scope.
+    candidates.sort_by(|a, b| {
+        a.scope_priority
+            .cmp(&b.scope_priority)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| a.skill.summary.slug.cmp(&b.skill.summary.slug))
+    });
+
+    let mut seen_slugs: BTreeSet<String> = BTreeSet::new();
+    let mut resolved: Vec<ResolvedSessionSkill> = Vec::new();
+    for cand in candidates {
+        if seen_slugs.insert(cand.skill.summary.slug.clone()) {
+            resolved.push(cand.skill);
+        }
+    }
+
+    let activation_rank = |state: CapabilityActivation| -> u8 {
+        match state {
+            CapabilityActivation::Pinned => 0,
+            CapabilityActivation::Active => 1,
+            CapabilityActivation::OnDemand => 2,
+            _ => 3,
+        }
+    };
+    resolved.sort_by(|a, b| {
+        activation_rank(a.summary.activation_state)
+            .cmp(&activation_rank(b.summary.activation_state))
+            .then_with(|| a.summary.slug.cmp(&b.summary.slug))
+    });
+
+    resolved
+}
+
+fn read_skill_markdown_safe(
+    source_path: Option<&str>,
+    fallback_markdown: &str,
+) -> Result<String, DennettError> {
+    let Some(raw) = source_path.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(fallback_markdown.to_owned());
+    };
+    if raw.as_bytes().contains(&0) {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("capabilities.session_skill"),
+            reason: String::from("skill source_path contains forbidden NUL byte"),
+        });
+    }
+    let src_path = Path::new(raw);
+    if src_path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("capabilities.session_skill"),
+            reason: String::from("skill source_path contains forbidden parent traversal (`..`)"),
+        });
+    }
+
+    let src_meta = match fs::symlink_metadata(src_path) {
+        Ok(m) => m,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(fallback_markdown.to_owned()),
+        Err(err) => {
+            return Err(DennettError::AccessDenied {
+                scope: String::from("capabilities.session_skill"),
+                reason: format!("cannot inspect skill source_path: {err}"),
+            });
+        }
+    };
+    if is_symlink_or_reparse_point(&src_meta) {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("capabilities.session_skill"),
+            reason: String::from("skill source_path symlink/reparse point is forbidden"),
+        });
+    }
+
+    let (base_dir, skill_md_path) = if src_meta.is_dir() {
+        (src_path.to_path_buf(), src_path.join("SKILL.md"))
+    } else if src_meta.is_file()
+        && src_path
+            .file_name()
+            .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
+        && let Some(parent) = src_path.parent()
+    {
+        (parent.to_path_buf(), src_path.to_path_buf())
+    } else {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("capabilities.session_skill"),
+            reason: String::from("skill source_path must be a directory or SKILL.md file"),
+        });
+    };
+
+    let md_meta = match fs::symlink_metadata(&skill_md_path) {
+        Ok(m) => m,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(fallback_markdown.to_owned()),
+        Err(err) => {
+            return Err(DennettError::AccessDenied {
+                scope: String::from("capabilities.session_skill"),
+                reason: format!("cannot inspect SKILL.md: {err}"),
+            });
+        }
+    };
+    if is_symlink_or_reparse_point(&md_meta) || !md_meta.is_file() {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("capabilities.session_skill"),
+            reason: String::from("SKILL.md must be a regular non-symlink file"),
+        });
+    }
+    if md_meta.len() > MAX_CAPABILITY_MARKDOWN_BYTES as u64 {
+        return Err(DennettError::InvalidInput {
+            field: String::from("skill_md_content"),
+            reason: format!("SKILL.md exceeds maximum size of {MAX_CAPABILITY_MARKDOWN_BYTES} bytes"),
+        });
+    }
+
+    let canon_dir = fs::canonicalize(&base_dir).map_err(|err| DennettError::AccessDenied {
+        scope: String::from("capabilities.session_skill"),
+        reason: format!("failed canonicalizing skill directory: {err}"),
+    })?;
+    let canon_file = fs::canonicalize(&skill_md_path).map_err(|err| DennettError::AccessDenied {
+        scope: String::from("capabilities.session_skill"),
+        reason: format!("failed canonicalizing SKILL.md: {err}"),
+    })?;
+    if !canon_file.starts_with(&canon_dir) {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("capabilities.session_skill"),
+            reason: String::from("canonical SKILL.md path escaped skill source directory"),
+        });
+    }
+
+    let content = fs::read_to_string(&canon_file).map_err(|err| DennettError::Internal {
+        detail: format!("failed reading SKILL.md as UTF-8: {err}"),
+    })?;
+    if content.trim().is_empty() {
+        return Ok(fallback_markdown.to_owned());
+    }
+    Ok(content)
 }
 
 fn scan_project_workspace_readonly(
@@ -2733,6 +3176,75 @@ mod tests {
         assert_eq!(inspected_plugin.mcp_servers.len(), 1);
         assert_eq!(inspected_plugin.mcp_servers[0].secret_slots.len(), 1);
         assert_eq!(inspected_plugin.mcp_servers[0].env_vars.len(), 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn d3_session_skills_prompt_index_and_safe_markdown_reader_enforce_bounds_and_traversal_guards() {
+        let root = std::env::temp_dir().join(format!(
+            "dennett-session-skill-safe-{}",
+            Uuid::new_v4().simple()
+        ));
+        let skill_dir = root.join("ok-skill");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "# Fresh Disk Skill\nAlways test.").expect("write");
+
+        let disk_body = read_skill_markdown_safe(
+            Some(skill_dir.to_string_lossy().as_ref()),
+            "# Fallback",
+        )
+        .expect("read valid skill dir");
+        assert_eq!(disk_body, "# Fresh Disk Skill\nAlways test.");
+
+        let trav_err = read_skill_markdown_safe(Some("../outside"), "# Fallback")
+            .expect_err("traversal must fail closed");
+        assert!(matches!(trav_err, DennettError::AccessDenied { .. }));
+
+        let nul_err = read_skill_markdown_safe(Some("bad\0path"), "# Fallback")
+            .expect_err("NUL byte must fail closed");
+        assert!(matches!(nul_err, DennettError::AccessDenied { .. }));
+
+        let oversized_pinned = "A".repeat(MAX_PINNED_SKILL_INLINE_BYTES + 2048);
+        let skills = vec![
+            ResolvedSessionSkill {
+                summary: SessionSkillSummary {
+                    slug: String::from("pinned-big"),
+                    display_name: String::from("Pinned Big"),
+                    description: String::from("Large pinned skill"),
+                    version: String::from("1.0.0"),
+                    scope: CapabilityScopeKind::Global,
+                    activation_state: CapabilityActivation::Pinned,
+                    trust_state: CapabilityTrust::Trusted,
+                },
+                skill_markdown: oversized_pinned,
+                source_path: None,
+                content_sha256: "0".repeat(64),
+            },
+            ResolvedSessionSkill {
+                summary: SessionSkillSummary {
+                    slug: String::from("rust-audit"),
+                    display_name: String::from("Rust Audit"),
+                    description: String::from("Checks invariants"),
+                    version: String::from("2.1.0"),
+                    scope: CapabilityScopeKind::Project,
+                    activation_state: CapabilityActivation::Active,
+                    trust_state: CapabilityTrust::Trusted,
+                },
+                skill_markdown: String::from("# Full body"),
+                source_path: None,
+                content_sha256: "1".repeat(64),
+            },
+        ];
+
+        let prompt_block = format_session_skills_prompt_index(&skills);
+        assert!(prompt_block.contains("[Dennett Active Skills Index]"));
+        assert!(prompt_block.contains("### Pinned Skill: pinned-big (v1.0.0)"));
+        assert!(prompt_block.contains("truncated at 16 KiB"));
+        assert!(prompt_block.contains("- rust-audit (v2.1.0): Checks invariants"));
+        assert!(prompt_block.contains("dennett_skill_read(slug)"));
+        // Verify ZERO prompt instruction forcing model to narrate tool calls.
+        assert!(!prompt_block.to_ascii_lowercase().contains("narrate"));
 
         let _ = fs::remove_dir_all(&root);
     }

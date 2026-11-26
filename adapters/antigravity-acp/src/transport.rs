@@ -590,6 +590,7 @@ pub(crate) struct PromptTurnIoArgs<'a> {
 
 struct TurnAccumulator {
     assistant_text: String,
+    had_tool_since_last_text: bool,
     events: Vec<RuntimeEvent>,
     cancelled: bool,
     cancel_sent: bool,
@@ -600,6 +601,7 @@ impl TurnAccumulator {
     fn new() -> Self {
         Self {
             assistant_text: String::new(),
+            had_tool_since_last_text: false,
             events: Vec::new(),
             cancelled: false,
             cancel_sent: false,
@@ -1246,11 +1248,20 @@ fn record_session_update(
             }
             if !chunk.is_empty() {
                 let safe_chunk = redact_secrets_owned(&chunk, secrets);
+                if acc.had_tool_since_last_text
+                    && !acc.assistant_text.is_empty()
+                    && !acc.assistant_text.ends_with('\n')
+                    && !safe_chunk.starts_with('\n')
+                {
+                    acc.assistant_text.push_str("\n\n");
+                }
                 acc.assistant_text.push_str(&safe_chunk);
+                acc.had_tool_since_last_text = false;
                 acc.emit(RuntimeEvent::TextDelta { text: safe_chunk }, event_tx);
             }
         }
         "tool_call" | "tool_call_update" => {
+            acc.had_tool_since_last_text = true;
             let tool_call_id = update
                 .get("toolCallId")
                 .and_then(Value::as_str)
@@ -1291,6 +1302,30 @@ fn record_session_update(
                 },
                 event_tx,
             );
+        }
+        "usage_update" => {
+            let nested = update.get("usage");
+            let used_tokens = update
+                .get("used")
+                .or_else(|| update.get("usedTokens"))
+                .or_else(|| update.get("contextUsedTokens"))
+                .or_else(|| nested.and_then(|u| u.get("used").or_else(|| u.get("usedTokens"))))
+                .and_then(Value::as_u64);
+            let window_tokens = update
+                .get("size")
+                .or_else(|| update.get("windowTokens"))
+                .or_else(|| update.get("contextWindowTokens"))
+                .or_else(|| nested.and_then(|u| u.get("size").or_else(|| u.get("windowTokens"))))
+                .and_then(Value::as_u64);
+            if used_tokens.is_some() || window_tokens.is_some() {
+                acc.emit(
+                    RuntimeEvent::ContextUsageUpdated {
+                        used_tokens,
+                        window_tokens,
+                    },
+                    event_tx,
+                );
+            }
         }
         // Explicitly ignore hidden thought/reasoning chunks so private reasoning never leaks.
         _ => {}
@@ -1514,6 +1549,8 @@ fn infer_tool_name(kind: &str, title: &str, raw_input: &Value) -> String {
         "dennett_agent_send_message",
         "dennett_agent_list_messages",
         "dennett_delegate_task",
+        "dennett_skill_list",
+        "dennett_skill_read",
     ] {
         if has_identifier_token(&lower_title, mcp_tool) {
             return mcp_tool.to_owned();
@@ -2855,6 +2892,96 @@ mod tests {
             outcome.human_wait_ms >= 220,
             "expected human_wait_ms >= 220, got {}",
             outcome.human_wait_ms
+        );
+    }
+
+    #[tokio::test]
+    async fn d3_live_usage_update_and_tool_paragraph_separation_work_cleanly() {
+        struct AllowAllPolicy;
+        impl PolicyEvaluator for AllowAllPolicy {
+            fn evaluate<'a>(
+                &'a self,
+                _req: &'a PolicyEvaluationRequest,
+            ) -> crate::port::BoxFuture<'a, PolicyEvaluationOutcome> {
+                Box::pin(async move {
+                    PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        matched_rule_id: None,
+                        reason: String::from("ok"),
+                        scope: String::from("session:test"),
+                    }
+                })
+            }
+        }
+
+        let (mut c2s_w, s_from_c_r) = tokio::io::duplex(8192);
+        let (mut s2c_w, c_from_s_r) = tokio::io::duplex(8192);
+
+        let srv = tokio::spawn(async move {
+            let mut srv_in = BufReader::new(s_from_c_r);
+            let mut line = String::new();
+            srv_in.read_line(&mut line).await.expect("read prompt");
+            let frames = [
+                r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prov-live","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Checking repo."}}}}"#,
+                r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prov-live","update":{"sessionUpdate":"tool_call","toolCallId":"tc-1","title":"read_file","status":"running"}}}"#,
+                r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prov-live","update":{"sessionUpdate":"usage_update","used":8192,"size":1048576}}}"#,
+                r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prov-live","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"All green."}}}}"#,
+                r#"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}"#,
+            ];
+            for frame in frames {
+                s2c_w
+                    .write_all(format!("{frame}\n").as_bytes())
+                    .await
+                    .expect("write frame");
+            }
+        });
+
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let mut reader = BufReader::new(c_from_s_r);
+        let (outcome, _) = exchange_prompt_turn_io(
+            &mut reader,
+            &mut c2s_w,
+            PromptTurnIoArgs {
+                req_id: 1,
+                dennett_session_id: SessionId::new(),
+                provider_session_id: "prov-live",
+                run_id: RunId::new(),
+                prompt_text: "check",
+                timeout: Duration::from_secs(5),
+                secrets: &[],
+            },
+            cancel_rx,
+            Arc::new(AllowAllPolicy),
+            Some(ev_tx),
+            String::new,
+        )
+        .await
+        .expect("live usage turn");
+
+        srv.await.expect("srv");
+        assert_eq!(outcome.status, RunStatus::Succeeded);
+        assert_eq!(outcome.assistant_text, "Checking repo.\n\nAll green.");
+        assert_eq!(outcome.context_usage(), (Some(8192), Some(1_048_576)));
+
+        let mut streamed = Vec::new();
+        while let Ok(ev) = ev_rx.try_recv() {
+            streamed.push(ev);
+        }
+        assert!(streamed.iter().any(|ev| matches!(
+            ev,
+            RuntimeEvent::ContextUsageUpdated {
+                used_tokens: Some(8192),
+                window_tokens: Some(1_048_576),
+            }
+        )));
+        assert_eq!(
+            infer_tool_name("other", "dennett_skill_read", &json!({})),
+            "dennett_skill_read"
+        );
+        assert_eq!(
+            infer_tool_name("other", "dennett_skill_list", &json!({})),
+            "dennett_skill_list"
         );
     }
 }

@@ -1497,7 +1497,7 @@ async fn d3_a07_native_subagents_and_control_mcp_text_cooperation_bounds() {
         .service
         .control_token_signer()
         .mint_control_token(
-            project.project_id,
+            Some(project.project_id),
             parent_agent.agent_id,
             session.session_id,
             SessionKind::UserChat,
@@ -1507,7 +1507,7 @@ async fn d3_a07_native_subagents_and_control_mcp_text_cooperation_bounds() {
         .service
         .control_token_signer()
         .mint_control_token(
-            project.project_id,
+            Some(project.project_id),
             narrow_helper.agent_id,
             session.session_id,
             SessionKind::UserChat,

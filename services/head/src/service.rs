@@ -17,7 +17,7 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -28,18 +28,20 @@ use dennett_contracts::{
     CommitMemoryNoteResponse, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
     CreateNoteRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
     DennettError, DiagnosticsResponse, DispatchEffectRequest, EffectClaimRecord,
-    ExternalEffectStatus, FlushOutboxResponse, HeadHealth, HeadMemorySearchRequest,
-    HeadMemorySearchResponse, IdempotencyKey, ListAgentsResponse, ListArtifactsResponse,
-    ListOutboxResponse, ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
-    ListSessionsResponse, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
+    EnqueueFollowupRequest, ExternalEffectStatus, FlushOutboxResponse, FollowupId, FollowupStatus,
+    HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse, IdempotencyKey,
+    ListAgentsResponse, ListArtifactsResponse, ListOutboxResponse, ListPolicyRulesResponse,
+    ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse, LiveRunResponse,
+    LiveRunSnapshot, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
     MemoryStatus, MessageId, MessageRecord, MessageRole, OrderedOutboxItem, OrderedOutboxStatus,
     OutboxItemId, PermissionDecisionRecord, PermissionRequestId, PolicyRule, PolicyRuleId,
     PrincipalId, ProfileMode, ProjectId, ProjectLifecycleState, ProjectRecord,
-    ProviderConnectionId, RunId, RunRecord, RunStatus, RuntimeAuthProfile, RuntimeBinding,
-    RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest, SendMessageRequest,
-    SendMessageResponse, ServiceKind, SessionDetailResponse, SessionId, SessionKind, SessionRecord,
-    SessionStatus, Sha256Hex, SimEffectBehavior, TaskId, TimestampMs, UpdateAgentConfigRequest,
-    UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
+    ProviderConnectionId, ResumeFollowupsResponse, RunId, RunRecord, RunStatus, RuntimeAuthProfile,
+    RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
+    SendMessageRequest, SendMessageResponse, ServiceKind, SessionDetailResponse,
+    SessionFollowupRecord, SessionId, SessionKind, SessionRecord, SessionStatus, Sha256Hex,
+    SimEffectBehavior, SteerSessionRequest, TaskId, TimestampMs, UpdateAgentConfigRequest,
+    UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
@@ -49,7 +51,7 @@ use dennett_runtime_antigravity::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, oneshot, watch};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::time;
 use tokio_postgres::NoTls;
 
@@ -57,6 +59,7 @@ use crate::approvals::{
     ApprovalResolutionSignal, CapturedPermissionDecision, DEFAULT_APPROVAL_WAIT_TIMEOUT,
     InteractivePolicyEvaluator,
 };
+use crate::capabilities::format_session_skills_prompt_index;
 use crate::connections::CachedDynamicRuntime;
 use crate::effects::{
     ExternalEffectPort, SIMULATED_EXTERNAL_CONNECTOR_ID, SimulatedExternalConnector,
@@ -74,15 +77,16 @@ use crate::policy::{
 use crate::secrets::{SecretCipher, VaultMasterKey, default_vault_dir};
 use crate::store::{
     AGENT_JOIN_SELECT, AGENT_MESSAGE_SELECT_COLS, EFFECT_CLAIM_SELECT_COLS,
-    ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, RUN_SELECT_COLS, SESSION_SELECT_COLS,
-    append_audit_event, decode_agent_join_row, decode_agent_message_row, decode_audit_event_row,
-    decode_config_version_row, decode_effect_claim_row, decode_message_row,
-    decode_ordered_outbox_row, decode_permission_decision_row, decode_policy_rule_row,
-    decode_project_row, decode_run_row, decode_runtime_binding_row, decode_session_row,
-    fetch_agent, fetch_all_runtime_bindings, fetch_policy_rules, fetch_project,
-    fetch_runtime_binding, fetch_session, fetch_session_artifacts, fetch_session_messages,
-    fetch_session_permission_decisions, fetch_session_runs, is_pg_unique_violation, map_pg_err,
-    next_stream_seq, truncate_utf8,
+    ORDERED_OUTBOX_SELECT_COLS, PROJECT_SELECT_COLS, RUN_SELECT_COLS,
+    SESSION_FOLLOWUP_SELECT_COLS, SESSION_SELECT_COLS, append_audit_event, decode_agent_join_row,
+    decode_agent_message_row, decode_audit_event_row, decode_config_version_row,
+    decode_effect_claim_row, decode_message_row, decode_ordered_outbox_row,
+    decode_permission_decision_row, decode_policy_rule_row, decode_project_row, decode_run_row,
+    decode_runtime_binding_row, decode_session_followup_row, decode_session_row, fetch_agent,
+    fetch_all_runtime_bindings, fetch_policy_rules, fetch_project, fetch_runtime_binding,
+    fetch_session, fetch_session_artifacts, fetch_session_messages,
+    fetch_session_permission_decisions, fetch_session_runs, fetch_active_session_followups,
+    is_pg_unique_violation, map_pg_err, next_stream_seq, truncate_utf8,
 };
 use crate::workspace_files::{
     clean_display_path, is_symlink_or_reparse_point, list_project_workspace_files,
@@ -351,6 +355,8 @@ pub(crate) struct CoreTurnOutput {
     pub(crate) runtime_binding: RuntimeBinding,
     pub(crate) turn_outcome: dennett_runtime_antigravity::TurnOutcome,
     pub(crate) effective_elapsed_ms: u64,
+    pub(crate) context_used_tokens: Option<u64>,
+    pub(crate) context_window_tokens: Option<u64>,
     pub(crate) captured_decisions: Vec<CapturedPermissionDecision>,
     pub(crate) hit_unknown_external: bool,
 }
@@ -376,12 +382,64 @@ struct MemoryOutboxEnvelope {
     delivered_note_id: Option<dennett_contracts::MemoryNoteId>,
 }
 
+pub(crate) const CANCEL_REASON_NONE: u8 = 0;
+pub(crate) const CANCEL_REASON_EXPLICIT_STOP: u8 = 1;
+pub(crate) const CANCEL_REASON_STEER: u8 = 2;
+
+const STEER_SLOT_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const IDLE_FOLLOWUP_LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// RAII notifier signaling `true` strictly on Drop after a session's active-run slot and
+/// execution lock are released (prevents `409 Conflict` races during `POST /steer`).
+pub(crate) struct SlotReleasedNotifier(watch::Sender<bool>);
+
+impl SlotReleasedNotifier {
+    pub(crate) const fn new(tx: watch::Sender<bool>) -> Self {
+        Self(tx)
+    }
+}
+
+impl Drop for SlotReleasedNotifier {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
+    }
+}
+
+struct SteeringSessionGuard {
+    map: Arc<StdMutex<HashMap<SessionId, usize>>>,
+    session_id: SessionId,
+}
+
+impl SteeringSessionGuard {
+    fn acquire(map: Arc<StdMutex<HashMap<SessionId, usize>>>, session_id: SessionId) -> Self {
+        if let Ok(mut guard) = map.lock() {
+            *guard.entry(session_id).or_insert(0) += 1;
+        }
+        Self { map, session_id }
+    }
+}
+
+impl Drop for SteeringSessionGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.map.lock()
+            && let Some(count) = guard.get_mut(&self.session_id)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                guard.remove(&self.session_id);
+            }
+        }
+    }
+}
+
 pub(crate) struct ActiveRunHandle {
     pub(crate) run_id: RunId,
     pub(crate) client_message_id: Option<String>,
     pub(crate) cancel_tx: watch::Sender<bool>,
+    pub(crate) cancel_reason: Arc<AtomicU8>,
     pub(crate) completion_rx:
         Option<watch::Receiver<Option<Result<SendMessageResponse, DennettError>>>>,
+    pub(crate) slot_released_rx: watch::Receiver<bool>,
 }
 
 pub(crate) struct ActiveRunGuard {
@@ -425,6 +483,7 @@ impl Drop for ActiveRunGuard {
         if abandoned {
             let _ = self.cancel_tx.send(true);
         }
+        self.service.remove_live_snapshot(session_id, run_id);
         if let Ok(mut guard) = map.try_lock() {
             if guard.get(&session_id).is_some_and(|h| h.run_id == run_id) {
                 guard.remove(&session_id);
@@ -508,6 +567,43 @@ struct InFlightClientMessageGuard {
     key: (SessionId, String),
 }
 
+struct SpawnedTurnHandle {
+    completion_rx: watch::Receiver<Option<Result<SendMessageResponse, DennettError>>>,
+}
+
+struct ClaimedFollowupTurn {
+    followup: SessionFollowupRecord,
+    user_message: MessageRecord,
+    inbox_msgs: Vec<dennett_contracts::AgentMessageRecord>,
+    effective_title: String,
+}
+
+struct DetachedTurnSpawnArgs {
+    session_id: SessionId,
+    session_kind: SessionKind,
+    run_id: RunId,
+    agent: AgentRecord,
+    project: Option<ProjectRecord>,
+    existing_binding: Option<RuntimeBinding>,
+    prior_history: Vec<MessageRecord>,
+    policy_rules: Vec<PolicyRule>,
+    user_message: MessageRecord,
+    effective_prompt: String,
+    effective_session_title: String,
+    runtime: Arc<dyn AgentRuntimePort>,
+    connection_id: Option<ProviderConnectionId>,
+    turn_timeout: Duration,
+    approval_timeout: Duration,
+    cancel_rx: watch::Receiver<bool>,
+    cancel_reason: Arc<AtomicU8>,
+    correlation_id: CorrelationId,
+    completion_tx: watch::Sender<Option<Result<SendMessageResponse, DennettError>>>,
+    session_guard: tokio::sync::OwnedMutexGuard<()>,
+    active_guard: ActiveRunGuard,
+    slot_released: SlotReleasedNotifier,
+    in_flight_cmid_guard: Option<InFlightClientMessageGuard>,
+}
+
 impl Drop for InFlightClientMessageGuard {
     fn drop(&mut self) {
         let map = Arc::clone(&self.map);
@@ -555,6 +651,8 @@ struct HeadServiceInner {
     runtime_catalog_cache: Mutex<Option<(time::Instant, RuntimeCatalogResponse)>>,
     last_memory_status: AtomicU8,
     active_runs: Arc<Mutex<HashMap<SessionId, ActiveRunHandle>>>,
+    live_snapshots: Arc<StdMutex<HashMap<SessionId, LiveRunSnapshot>>>,
+    steering_sessions: Arc<StdMutex<HashMap<SessionId, usize>>>,
     active_tasks: Arc<Mutex<HashMap<TaskId, ActiveTaskHandle>>>,
     stopped_tasks: Arc<Mutex<HashSet<TaskId>>>,
     pending_approvals:
@@ -719,6 +817,8 @@ impl HeadService {
                 runtime_catalog_cache: Mutex::new(None),
                 last_memory_status: AtomicU8::new(initial_memory_status),
                 active_runs: Arc::new(Mutex::new(HashMap::new())),
+                live_snapshots: Arc::new(StdMutex::new(HashMap::new())),
+                steering_sessions: Arc::new(StdMutex::new(HashMap::new())),
                 active_tasks: Arc::new(Mutex::new(HashMap::new())),
                 stopped_tasks: Arc::new(Mutex::new(HashSet::new())),
                 pending_approvals: Arc::new(Mutex::new(HashMap::new())),
@@ -1990,6 +2090,8 @@ impl HeadService {
         let runs = fetch_session_runs(&conn, session_id, &self.inner.pg_target).await?;
         let permission_decisions =
             fetch_session_permission_decisions(&conn, session_id, &self.inner.pg_target).await?;
+        let followups =
+            fetch_active_session_followups(&conn, session_id, &self.inner.pg_target).await?;
 
         Ok(SessionDetailResponse {
             session,
@@ -1997,7 +2099,7 @@ impl HeadService {
             artifacts,
             runs,
             permission_decisions,
-            followups: Vec::new(),
+            followups,
         })
     }
 
@@ -2386,7 +2488,9 @@ impl HeadService {
         // Build dynamically scoped MCP server specs:
         // - Always preserve `build_memory_mcp_specs` using the agent's own `allowed_memory_scopes`
         //   (e.g. `chat:standalone` for standalone chats — never leaking project scopes!).
-        // - Mount `dennett-control-mcp` ONLY for project-bound sessions (`project = Some(...)`).
+        // - Mount `dennett-control-mcp` for BOTH project-bound sessions and standalone chats
+        //   (`project_id = None` exposes ONLY `dennett_skill_list`/`dennett_skill_read` while
+        //   failing closed on all project events/tasks/delegation tools!).
         let mut mcp_servers = match self.build_memory_mcp_specs(&input.agent) {
             Ok(specs) => specs,
             Err(error) => {
@@ -2397,22 +2501,20 @@ impl HeadService {
                 });
             }
         };
-        if let Some(pid) = project_id_opt {
-            match self.build_control_mcp_spec(
-                pid,
-                input.agent.agent_id,
-                input.session_id,
-                input.session_kind,
-            ) {
-                Ok(Some(ctrl_spec)) => mcp_servers.push(ctrl_spec),
-                Ok(None) => {}
-                Err(error) => {
-                    return Err(CoreTurnFailure {
-                        error,
-                        effective_elapsed_ms: 0,
-                        captured_decisions: Vec::new(),
-                    });
-                }
+        match self.build_control_mcp_spec(
+            project_id_opt,
+            input.agent.agent_id,
+            input.session_id,
+            input.session_kind,
+        ) {
+            Ok(Some(ctrl_spec)) => mcp_servers.push(ctrl_spec),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(CoreTurnFailure {
+                    error,
+                    effective_elapsed_ms: 0,
+                    captured_decisions: Vec::new(),
+                });
             }
         }
         // Resolve active A08 capabilities (trusted & enabled skills + MCP servers with SecretBroker env).
@@ -2435,12 +2537,22 @@ impl HeadService {
         mcp_servers.extend(resolved_caps.extra_mcp_servers);
         let turn_secrets = self.collect_turn_secrets(&mcp_servers);
 
+        let skills_index = format_session_skills_prompt_index(&resolved_caps.session_skills);
+        let effective_system_prompt = if skills_index.is_empty() {
+            input.agent.current_config.system_prompt.clone()
+        } else {
+            format!(
+                "{}{}",
+                input.agent.current_config.system_prompt, skills_index
+            )
+        };
+
         let start_outcome = match input
             .runtime
             .start_or_resume_session(SessionStartRequest {
                 dennett_session_id: input.session_id,
                 workspace_cwd: effective_workspace_cwd.clone(),
-                system_prompt: input.agent.current_config.system_prompt.clone(),
+                system_prompt: effective_system_prompt,
                 model_preference: input.agent.current_config.model_preference.clone(),
                 thinking_level: input.agent.current_config.thinking_level,
                 workspace_write_policy: effective_write_policy.clone(),
@@ -2531,10 +2643,70 @@ impl HeadService {
             policy_ctx,
             task_id,
             input.correlation_id.clone(),
-            turn_secrets,
+            turn_secrets.clone(),
             input.cancel_rx.clone(),
             input.approval_timeout,
         );
+
+        let (event_tx, mut event_rx) = mpsc::channel::<RuntimeEvent>(256);
+        let live_svc = self.clone();
+        let live_session_id = input.session_id;
+        let live_run_id = input.run_id;
+        let live_turn_secrets = turn_secrets;
+        let live_consumer = tokio::spawn(async move {
+            let mut had_tool_since_last_text = false;
+            let mut last_ctx_used: Option<u64> = None;
+            let mut last_ctx_window: Option<u64> = None;
+            while let Some(ev) = event_rx.recv().await {
+                match ev {
+                    RuntimeEvent::TextDelta { text } => {
+                        if text.is_empty() {
+                            continue;
+                        }
+                        let safe_delta = redact_secrets_owned(&text, &live_turn_secrets);
+                        live_svc.mutate_live_snapshot(live_session_id, live_run_id, |snap| {
+                            if had_tool_since_last_text
+                                && !snap.streaming_text.is_empty()
+                                && !snap.streaming_text.ends_with('\n')
+                                && !safe_delta.starts_with('\n')
+                            {
+                                snap.streaming_text.push_str("\n\n");
+                            }
+                            snap.streaming_text.push_str(&safe_delta);
+                            snap.updated_at = TimestampMs::now();
+                        });
+                        had_tool_since_last_text = false;
+                    }
+                    RuntimeEvent::ToolObserved { .. } => {
+                        // CRITICAL OWNER RULE (#158): ZERO tool calls in LiveRunSnapshot;
+                        // only track boundary so subsequent assistant prose separates cleanly with \n\n.
+                        had_tool_since_last_text = true;
+                    }
+                    RuntimeEvent::ContextUsageUpdated {
+                        used_tokens,
+                        window_tokens,
+                    } => {
+                        if used_tokens.is_some() {
+                            last_ctx_used = used_tokens;
+                        }
+                        if window_tokens.is_some() {
+                            last_ctx_window = window_tokens;
+                        }
+                        live_svc.mutate_live_snapshot(live_session_id, live_run_id, |snap| {
+                            if let Some(used) = used_tokens {
+                                snap.context_used_tokens = Some(used);
+                            }
+                            if let Some(window) = window_tokens {
+                                snap.context_window_tokens = Some(window);
+                            }
+                            snap.updated_at = TimestampMs::now();
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            (last_ctx_used, last_ctx_window)
+        });
 
         let turn_result = input
             .runtime
@@ -2548,9 +2720,15 @@ impl HeadService {
                     cancel_rx: input.cancel_rx.clone(),
                 },
                 Arc::new(interactive_policy),
-                None,
+                Some(event_tx),
             )
             .await;
+
+        let (streamed_ctx_used, streamed_ctx_window) =
+            match time::timeout(Duration::from_secs(2), live_consumer).await {
+                Ok(Ok(pair)) => pair,
+                _ => (None, None),
+            };
 
         let raw_elapsed_ms =
             u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -2567,6 +2745,10 @@ impl HeadService {
                 });
             }
         };
+
+        let (outcome_ctx_used, outcome_ctx_window) = turn_outcome.context_usage();
+        let context_used_tokens = outcome_ctx_used.or(streamed_ctx_used);
+        let context_window_tokens = outcome_ctx_window.or(streamed_ctx_window);
 
         // D2-BUG-03: Exclude human approval wait time from run/task machine wall-time accounting!
         let effective_elapsed_ms = raw_elapsed_ms.saturating_sub(turn_outcome.human_wait_ms);
@@ -2651,6 +2833,8 @@ impl HeadService {
             runtime_binding,
             turn_outcome,
             effective_elapsed_ms,
+            context_used_tokens,
+            context_window_tokens,
             captured_decisions,
             hit_unknown_external,
         })
@@ -2865,13 +3049,18 @@ impl HeadService {
 
         let run_id = RunId::new();
         let (cancel_tx, cancel_rx) = watch::channel(false);
+        let cancel_reason = Arc::new(AtomicU8::new(CANCEL_REASON_NONE));
+        let (slot_released_tx, slot_released_rx) = watch::channel(false);
+        let slot_released = SlotReleasedNotifier::new(slot_released_tx);
         self.try_register_active_session_run(
             session_id,
             ActiveRunHandle {
                 run_id,
                 client_message_id: client_message_id.clone(),
                 cancel_tx: cancel_tx.clone(),
+                cancel_reason: Arc::clone(&cancel_reason),
                 completion_rx: Some(completion_rx.clone()),
+                slot_released_rx,
             },
         )
         .await?;
@@ -3073,6 +3262,9 @@ impl HeadService {
                 Err(pg_err) => {
                     active_guard.mark_completed();
                     self.unregister_active_session_run(session_id, run_id).await;
+                    drop(in_flight_cmid_guard);
+                    drop(session_guard);
+                    drop(slot_released);
                     return Err(map_pg_err(&self.inner.pg_target, &pg_err));
                 }
             }
@@ -3083,6 +3275,9 @@ impl HeadService {
             Err(replay_res) => {
                 active_guard.mark_completed();
                 self.unregister_active_session_run(session_id, run_id).await;
+                drop(in_flight_cmid_guard);
+                drop(session_guard);
+                drop(slot_released);
                 return replay_res;
             }
         };
@@ -3092,9 +3287,14 @@ impl HeadService {
             Err(err) => {
                 self.record_failed_run(session_id, run_id, &correlation_id, &err, &[])
                     .await;
+                self.pause_queued_followups_for_session(session_id, &correlation_id)
+                    .await;
                 active_guard.mark_completed();
                 self.unregister_active_session_run(session_id, run_id).await;
                 let _ = completion_tx.send(Some(Err(err.clone())));
+                drop(in_flight_cmid_guard);
+                drop(session_guard);
+                drop(slot_released);
                 return Err(err);
             }
         };
@@ -3110,14 +3310,78 @@ impl HeadService {
 
         // 4. Spawn the turn in a DETACHED task owned by `HeadService` (`D2-ARCH-01` / `V03`).
         //    HTTP disconnects drop ONLY the awaiter below — the detached worker completes cleanly!
+        self.spawn_detached_session_turn_worker(DetachedTurnSpawnArgs {
+            session_id,
+            session_kind: session.session_kind,
+            run_id,
+            agent,
+            project,
+            existing_binding,
+            prior_history,
+            policy_rules,
+            user_message,
+            effective_prompt,
+            effective_session_title,
+            runtime: resolved_runtime.runtime,
+            connection_id: resolved_runtime.connection_id,
+            turn_timeout,
+            approval_timeout,
+            cancel_rx,
+            cancel_reason,
+            correlation_id,
+            completion_tx,
+            session_guard,
+            active_guard,
+            slot_released,
+            in_flight_cmid_guard,
+        });
+
+        // 5. Caller awaits the detached worker's completion channel cleanly.
+        match completion_rx.wait_for(Option::is_some).await {
+            Ok(guard) => match guard.as_ref() {
+                Some(res) => res.clone(),
+                None => Err(DennettError::Internal {
+                    detail: String::from("detached session turn completed without result"),
+                }),
+            },
+            Err(_) => Err(DennettError::Internal {
+                detail: String::from("detached session turn terminated unexpectedly"),
+            }),
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "detached session worker owns turn execution, finalization, safe follow-up pause, slot release, and V03 auto-dispatch in strict drop order"
+    )]
+    fn spawn_detached_session_turn_worker(&self, args: DetachedTurnSpawnArgs) {
         let svc = self.clone();
-        let runtime = resolved_runtime.runtime;
-        let connection_id = resolved_runtime.connection_id;
-        let session_kind = session.session_kind;
         tokio::spawn(async move {
-            let session_guard = session_guard;
-            let mut active_guard = active_guard;
-            let in_flight_cmid_guard = in_flight_cmid_guard;
+            let DetachedTurnSpawnArgs {
+                session_id,
+                session_kind,
+                run_id,
+                agent,
+                project,
+                existing_binding,
+                prior_history,
+                policy_rules,
+                user_message,
+                effective_prompt,
+                effective_session_title,
+                runtime,
+                connection_id,
+                turn_timeout,
+                approval_timeout,
+                cancel_rx,
+                cancel_reason,
+                correlation_id,
+                completion_tx,
+                session_guard,
+                mut active_guard,
+                slot_released,
+                in_flight_cmid_guard,
+            } = args;
 
             let (memory_status, _mem_detail) = svc.probe_memory_status(&correlation_id).await;
 
@@ -3167,6 +3431,8 @@ impl HeadService {
                             core.start_outcome.rehydrated,
                             &core.turn_outcome,
                             core.effective_elapsed_ms,
+                            core.context_used_tokens,
+                            core.context_window_tokens,
                             &core.captured_decisions,
                             core.hit_unknown_external,
                             &correlation_id,
@@ -3217,24 +3483,1493 @@ impl HeadService {
                 }
             };
 
+            let final_run_status = final_result.as_ref().ok().map(|resp| resp.run.status);
+            let was_steer_cancel = cancel_reason.load(Ordering::Acquire) == CANCEL_REASON_STEER;
+            let should_pause_followups = match final_run_status {
+                Some(RunStatus::Cancelled | RunStatus::Failed | RunStatus::UnknownExternal)
+                | None => !was_steer_cancel,
+                Some(_) => false,
+            };
+            if should_pause_followups {
+                svc.pause_queued_followups_for_session(session_id, &correlation_id)
+                    .await;
+            }
+
+            // Notify awaiter and release execution lock BEFORE signaling slot_released /
+            // kicking off the next queued follow-up (zero 409 Conflict races!).
             let _ = completion_tx.send(Some(final_result));
             drop(in_flight_cmid_guard);
             drop(session_guard);
+            drop(slot_released);
+
+            // V03-proof server-side auto-dispatch: survives closed Desktop UI.
+            if final_run_status == Some(RunStatus::Succeeded) && !svc.is_session_steering(session_id)
+            {
+                let next_cid = CorrelationId::generate();
+                let _ = svc
+                    .try_dispatch_next_queued_followup_inner(session_id, None, &next_cid)
+                    .await;
+            }
+
             svc.prune_session_lock(session_id).await;
         });
+    }
 
-        // 5. Caller awaits the detached worker's completion channel cleanly.
+    /// Returns the ephemeral live snapshot of any active run in `session_id` together with its
+    /// durable active (`queued` / `paused`) follow-up queue (`GET /v1/sessions/{session_id}/live`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`] if `session_id` does not exist or
+    /// [`DennettError::DatabaseUnavailable`] on PostgreSQL error.
+    pub async fn get_session_live(
+        &self,
+        session_id: SessionId,
+    ) -> Result<LiveRunResponse, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let _ = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+        let followups =
+            fetch_active_session_followups(&conn, session_id, &self.inner.pg_target).await?;
+        drop(conn);
+        let active = self.get_live_snapshot(session_id);
+        Ok(LiveRunResponse { active, followups })
+    }
+
+    /// Enqueues a durable follow-up message behind any active run (`POST /v1/sessions/{id}/followups`).
+    ///
+    /// Deduplicates by `(session_id, idempotency_key)` (`409 IdempotencyMismatch` on conflicting
+    /// content). If the session is idle and has no `paused` follow-ups right after commit,
+    /// auto-dispatches immediately so a race right after run completion never strands a message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`],
+    /// [`DennettError::Conflict`], [`DennettError::IdempotencyMismatch`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "validates session/project state, handles idempotency dedup/conflict, inserts durable row, and triggers idle auto-dispatch"
+    )]
+    pub async fn enqueue_followup(
+        &self,
+        session_id: SessionId,
+        req: EnqueueFollowupRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<SessionFollowupRecord, DennettError> {
+        req.validate()?;
+        let _ = self.ensure_migrated().await?;
+
+        let idempotency_key = req
+            .idempotency_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+
+        let inserted = {
+            let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let tx = conn
+                .transaction()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let session = fetch_session(&tx, session_id, &self.inner.pg_target).await?;
+            if session.status != SessionStatus::Active {
+                return Err(DennettError::Conflict {
+                    resource: String::from("session"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "session is `{}` and does not accept follow-up messages",
+                        session.status
+                    ),
+                });
+            }
+            if let Some(pid) = session.project_id {
+                let proj = fetch_project(&tx, pid, &self.inner.pg_target).await?;
+                if matches!(
+                    proj.lifecycle_state,
+                    ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+                ) {
+                    return Err(DennettError::Conflict {
+                        resource: String::from("project"),
+                        expected_revision: None,
+                        actual_revision: None,
+                        reason: format!(
+                            "project `{}` is `{}` and does not accept follow-up messages",
+                            proj.project_id, proj.lifecycle_state
+                        ),
+                    });
+                }
+            }
+
+            if let Some(ref key) = idempotency_key {
+                let existing_sql = format!(
+                    "SELECT {SESSION_FOLLOWUP_SELECT_COLS}
+                     FROM session_followups
+                     WHERE session_id = $1 AND idempotency_key = $2"
+                );
+                if let Some(row) = tx
+                    .query_opt(&existing_sql, &[&session_id.as_uuid(), &key.as_str()])
+                    .await
+                    .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                {
+                    let existing = decode_session_followup_row(&row)?;
+                    if existing.content != req.content {
+                        return Err(DennettError::IdempotencyMismatch {
+                            idempotency_key: key.clone(),
+                            reason: String::from(
+                                "reused follow-up idempotency_key on this session with different content",
+                            ),
+                        });
+                    }
+                    tx.commit()
+                        .await
+                        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                    return Ok(existing);
+                }
+            }
+
+            let followup_id = FollowupId::new();
+            let stream_id = format!("session:{session_id}:followups");
+            let position = next_stream_seq(&tx, &stream_id, &self.inner.pg_target).await?;
+            let insert_sql = format!(
+                "INSERT INTO session_followups (
+                    followup_id, session_id, content, status, position, idempotency_key
+                 ) VALUES ($1, $2, $3, 'queued', $4, $5)
+                 RETURNING {SESSION_FOLLOWUP_SELECT_COLS}"
+            );
+            let insert_res = tx
+                .query_one(
+                    &insert_sql,
+                    &[
+                        &followup_id.as_uuid(),
+                        &session_id.as_uuid(),
+                        &req.content,
+                        &position,
+                        &idempotency_key,
+                    ],
+                )
+                .await;
+
+            let record = match insert_res {
+                Ok(row) => decode_session_followup_row(&row)?,
+                Err(pg_err) if is_pg_unique_violation(&pg_err) && idempotency_key.is_some() => {
+                    drop(tx);
+                    let key = idempotency_key.as_deref().unwrap_or_default();
+                    let lookup_sql = format!(
+                        "SELECT {SESSION_FOLLOWUP_SELECT_COLS}
+                         FROM session_followups
+                         WHERE session_id = $1 AND idempotency_key = $2"
+                    );
+                    let existing_row = conn
+                        .query_opt(&lookup_sql, &[&session_id.as_uuid(), &key])
+                        .await
+                        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                    let Some(row) = existing_row else {
+                        return Err(map_pg_err(&self.inner.pg_target, &pg_err));
+                    };
+                    let existing = decode_session_followup_row(&row)?;
+                    if existing.content != req.content {
+                        return Err(DennettError::IdempotencyMismatch {
+                            idempotency_key: key.to_owned(),
+                            reason: String::from(
+                                "reused follow-up idempotency_key on this session with different content",
+                            ),
+                        });
+                    }
+                    return Ok(existing);
+                }
+                Err(pg_err) => return Err(map_pg_err(&self.inner.pg_target, &pg_err)),
+            };
+
+            let _ = append_control_event_in_tx(
+                &tx,
+                &self.inner.pg_target,
+                ControlEventAppend {
+                    entity_key: &format!("session:{session_id}"),
+                    event_type: "session.followup_enqueued",
+                    project_id: session.project_id,
+                    session_id: Some(session_id),
+                    task_id: None,
+                    correlation_id,
+                    payload: json!({
+                        "session_id": session_id,
+                        "followup_id": record.followup_id,
+                        "position": record.position,
+                    }),
+                },
+            )
+            .await?;
+
+            tx.commit()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            record
+        };
+
+        // If the session is idle (or finishing within milliseconds) and has no paused items,
+        // auto-dispatch immediately so a race right after run completion never strands a message!
+        if !self.is_session_active_or_steering(session_id).await
+            && let Ok(Some((dispatched_fid, _handle))) = self
+                .try_dispatch_next_queued_followup_inner(
+                    session_id,
+                    Some(IDLE_FOLLOWUP_LOCK_WAIT_TIMEOUT),
+                    correlation_id,
+                )
+                .await
+            && dispatched_fid == inserted.followup_id
+            && let Ok(conn) = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await
+        {
+            let refresh_sql = format!(
+                "SELECT {SESSION_FOLLOWUP_SELECT_COLS}
+                 FROM session_followups
+                 WHERE followup_id = $1"
+            );
+            if let Ok(Some(row)) = conn
+                .query_opt(&refresh_sql, &[&inserted.followup_id.as_uuid()])
+                .await
+                && let Ok(refreshed) = decode_session_followup_row(&row)
+            {
+                return Ok(refreshed);
+            }
+        }
+
+        Ok(inserted)
+    }
+
+    /// Updates a queued or paused follow-up message (`PATCH /v1/sessions/{id}/followups/{fid}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`],
+    /// [`DennettError::Conflict`] (if already dispatched/cancelled), or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn update_followup(
+        &self,
+        session_id: SessionId,
+        followup_id: FollowupId,
+        req: UpdateFollowupRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<SessionFollowupRecord, DennettError> {
+        req.validate()?;
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let session = fetch_session(&tx, session_id, &self.inner.pg_target).await?;
+        let lock_sql = format!(
+            "SELECT {SESSION_FOLLOWUP_SELECT_COLS}
+             FROM session_followups
+             WHERE session_id = $1 AND followup_id = $2
+             FOR UPDATE"
+        );
+        let Some(row) = tx
+            .query_opt(&lock_sql, &[&session_id.as_uuid(), &followup_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("session_followup"),
+                id: followup_id.to_string(),
+            });
+        };
+        let existing = decode_session_followup_row(&row)?;
+        if !matches!(
+            existing.status,
+            FollowupStatus::Queued | FollowupStatus::Paused
+        ) {
+            return Err(DennettError::Conflict {
+                resource: String::from("session_followup"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!("cannot edit follow-up in status `{}`", existing.status),
+            });
+        }
+
+        let update_sql = format!(
+            "UPDATE session_followups
+             SET content = $3, updated_at = now()
+             WHERE session_id = $1 AND followup_id = $2
+             RETURNING {SESSION_FOLLOWUP_SELECT_COLS}"
+        );
+        let updated_row = tx
+            .query_one(
+                &update_sql,
+                &[&session_id.as_uuid(), &followup_id.as_uuid(), &req.content],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let updated = decode_session_followup_row(&updated_row)?;
+
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{session_id}"),
+                event_type: "session.followup_updated",
+                project_id: session.project_id,
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": session_id,
+                    "followup_id": followup_id,
+                }),
+            },
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(updated)
+    }
+
+    /// Cancels a single queued or paused follow-up (`DELETE /v1/sessions/{id}/followups/{fid}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn delete_followup(
+        &self,
+        session_id: SessionId,
+        followup_id: FollowupId,
+        correlation_id: &CorrelationId,
+    ) -> Result<(), DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let session = fetch_session(&tx, session_id, &self.inner.pg_target).await?;
+        let lock_sql = format!(
+            "SELECT {SESSION_FOLLOWUP_SELECT_COLS}
+             FROM session_followups
+             WHERE session_id = $1 AND followup_id = $2
+             FOR UPDATE"
+        );
+        let Some(row) = tx
+            .query_opt(&lock_sql, &[&session_id.as_uuid(), &followup_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("session_followup"),
+                id: followup_id.to_string(),
+            });
+        };
+        let existing = decode_session_followup_row(&row)?;
+        if !matches!(
+            existing.status,
+            FollowupStatus::Queued | FollowupStatus::Paused
+        ) {
+            return Err(DennettError::Conflict {
+                resource: String::from("session_followup"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!("cannot delete follow-up in status `{}`", existing.status),
+            });
+        }
+
+        tx.execute(
+            "UPDATE session_followups
+             SET status = 'cancelled', updated_at = now()
+             WHERE session_id = $1 AND followup_id = $2",
+            &[&session_id.as_uuid(), &followup_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{session_id}"),
+                event_type: "session.followup_cancelled",
+                project_id: session.project_id,
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": session_id,
+                    "followup_id": followup_id,
+                }),
+            },
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(())
+    }
+
+    /// Cancels all queued or paused follow-ups for `session_id` (`DELETE /v1/sessions/{id}/followups`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn clear_followups(
+        &self,
+        session_id: SessionId,
+        correlation_id: &CorrelationId,
+    ) -> Result<(), DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let session = fetch_session(&tx, session_id, &self.inner.pg_target).await?;
+        let cleared = tx
+            .execute(
+                "UPDATE session_followups
+                 SET status = 'cancelled', updated_at = now()
+                 WHERE session_id = $1 AND status IN ('queued', 'paused')",
+                &[&session_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        if cleared > 0 {
+            let _ = append_control_event_in_tx(
+                &tx,
+                &self.inner.pg_target,
+                ControlEventAppend {
+                    entity_key: &format!("session:{session_id}"),
+                    event_type: "session.followups_cleared",
+                    project_id: session.project_id,
+                    session_id: Some(session_id),
+                    task_id: None,
+                    correlation_id,
+                    payload: json!({
+                        "session_id": session_id,
+                        "cleared_count": cleared,
+                    }),
+                },
+            )
+            .await?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(())
+    }
+
+    /// Resumes paused follow-ups (`POST /v1/sessions/{id}/followups/resume`): transitions all
+    /// `paused` items to `queued`, and if the session is idle atomically pops and executes the
+    /// head `queued` item returning `dispatched: Some(SendMessageResponse)` + remaining active items.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], runtime errors from the
+    /// dispatched turn, or [`DennettError::DatabaseUnavailable`].
+    pub async fn resume_followups(
+        &self,
+        session_id: SessionId,
+        correlation_id: &CorrelationId,
+    ) -> Result<ResumeFollowupsResponse, DennettError> {
+        let _ = self.ensure_migrated().await?;
+
+        {
+            let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let tx = conn
+                .transaction()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            let session = fetch_session(&tx, session_id, &self.inner.pg_target).await?;
+            if session.status != SessionStatus::Active {
+                return Err(DennettError::Conflict {
+                    resource: String::from("session"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "session is `{}` and cannot resume follow-ups",
+                        session.status
+                    ),
+                });
+            }
+            if let Some(pid) = session.project_id {
+                let proj = fetch_project(&tx, pid, &self.inner.pg_target).await?;
+                if matches!(
+                    proj.lifecycle_state,
+                    ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+                ) {
+                    return Err(DennettError::Conflict {
+                        resource: String::from("project"),
+                        expected_revision: None,
+                        actual_revision: None,
+                        reason: format!(
+                            "project `{}` is `{}` and cannot resume follow-ups",
+                            proj.project_id, proj.lifecycle_state
+                        ),
+                    });
+                }
+            }
+
+            let resumed = tx
+                .execute(
+                    "UPDATE session_followups
+                     SET status = 'queued', updated_at = now()
+                     WHERE session_id = $1 AND status = 'paused'",
+                    &[&session_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            if resumed > 0 {
+                let _ = append_control_event_in_tx(
+                    &tx,
+                    &self.inner.pg_target,
+                    ControlEventAppend {
+                        entity_key: &format!("session:{session_id}"),
+                        event_type: "session.followups_resumed",
+                        project_id: session.project_id,
+                        session_id: Some(session_id),
+                        task_id: None,
+                        correlation_id,
+                        payload: json!({
+                            "session_id": session_id,
+                            "resumed_count": resumed,
+                        }),
+                    },
+                )
+                .await?;
+            }
+
+            tx.commit()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        }
+
+        let dispatched = if self.is_session_active_or_steering(session_id).await {
+            None
+        } else if let Some((_fid, mut handle)) = self
+            .try_dispatch_next_queued_followup_inner(
+                session_id,
+                Some(IDLE_FOLLOWUP_LOCK_WAIT_TIMEOUT),
+                correlation_id,
+            )
+            .await?
+        {
+            match handle.completion_rx.wait_for(Option::is_some).await {
+                Ok(guard) => match guard.as_ref() {
+                    Some(Ok(resp)) => Some(resp.clone()),
+                    Some(Err(err)) => return Err(err.clone()),
+                    None => None,
+                },
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let followups =
+            fetch_active_session_followups(&conn, session_id, &self.inner.pg_target).await?;
+        Ok(ResumeFollowupsResponse {
+            followups,
+            dispatched,
+        })
+    }
+
+    /// Live mid-run steer (`POST /v1/sessions/{id}/steer`): cancels any active run cleanly with
+    /// `CANCEL_REASON_STEER` (without pausing queued follow-ups!), awaits clean release of the
+    /// active-run slot with bounded timeout (ZERO `409 Conflict`!), and executes the steered turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`],
+    /// [`DennettError::Conflict`], [`DennettError::Timeout`], runtime errors, or
+    /// [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "steer coordinates SteeringSessionGuard, clean active-run cancellation, bounded slot release wait, pre-run persistence, and detached execution"
+    )]
+    pub async fn steer_session(
+        &self,
+        session_id: SessionId,
+        req: SteerSessionRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<SendMessageResponse, DennettError> {
+        req.validate()?;
+        let _ = self.ensure_migrated().await?;
+
+        let steering_guard =
+            SteeringSessionGuard::acquire(Arc::clone(&self.inner.steering_sessions), session_id);
+
+        // Fail fast if session does not exist or is not active before cancelling anything.
+        {
+            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+            if session.status != SessionStatus::Active {
+                return Err(DennettError::Conflict {
+                    resource: String::from("session"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "session is `{}` and does not accept steering messages",
+                        session.status
+                    ),
+                });
+            }
+            if let Some(pid) = session.project_id {
+                let proj = fetch_project(&conn, pid, &self.inner.pg_target).await?;
+                if matches!(
+                    proj.lifecycle_state,
+                    ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+                ) {
+                    return Err(DennettError::Conflict {
+                        resource: String::from("project"),
+                        expected_revision: None,
+                        actual_revision: None,
+                        reason: format!(
+                            "project `{}` is `{}` and does not accept steering messages",
+                            proj.project_id, proj.lifecycle_state
+                        ),
+                    });
+                }
+            }
+        }
+
+        // If a run is active, mark it cancelled by Steer (never pausing queued follow-ups!)
+        // and await clean release of its slot + session_lock.
+        let active_wait = {
+            let active = self.inner.active_runs.lock().await;
+            active.get(&session_id).map(|h| {
+                h.cancel_reason
+                    .store(CANCEL_REASON_STEER, Ordering::Release);
+                let _ = h.cancel_tx.send(true);
+                (h.run_id, h.slot_released_rx.clone())
+            })
+        };
+        if let Some((_prev_run_id, mut slot_rx)) = active_wait {
+            let _ = self.runtime_router().cancel_turn_all(session_id).await;
+            let _ = self
+                .cancel_pending_permissions_for_scope(
+                    Some(session_id),
+                    None,
+                    "cancelled by live steer on session",
+                    &correlation_id,
+                )
+                .await;
+            match time::timeout(
+                STEER_SLOT_WAIT_TIMEOUT,
+                slot_rx.wait_for(|released| *released),
+            )
+            .await
+            {
+                Ok(Ok(_) | Err(_)) => {}
+                Err(_) => {
+                    return Err(DennettError::Timeout {
+                        operation: String::from("steer_wait_active_run_release"),
+                    });
+                }
+            }
+        }
+
+        let session_lock = self.session_exec_lock(session_id).await;
+        let Ok(session_guard) = time::timeout(STEER_SLOT_WAIT_TIMEOUT, session_lock.lock_owned())
+            .await
+        else {
+            return Err(DennettError::Timeout {
+                operation: String::from("steer_acquire_session_lock"),
+            });
+        };
+
+        let client_message_id = req
+            .client_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(ref cmid) = client_message_id
+            && let Some(replayed) = self
+                .try_replay_client_message(session_id, cmid, &req.content, &correlation_id)
+                .await?
+        {
+            return Ok(replayed);
+        }
+
+        let turn_timeout = req
+            .timeout_ms
+            .map_or(DEFAULT_TURN_TIMEOUT, Duration::from_millis);
+        let approval_timeout = match req.timeout_ms {
+            Some(explicit_ms) => Duration::from_millis(explicit_ms)
+                .saturating_sub(Duration::from_millis(200))
+                .max(Duration::from_millis(250))
+                .min(DEFAULT_APPROVAL_WAIT_TIMEOUT),
+            None => DEFAULT_APPROVAL_WAIT_TIMEOUT,
+        };
+
+        // Reload fresh post-cancel session state now that we hold `session_guard`.
+        let (session, agent, project, existing_binding, prior_history, policy_rules) = {
+            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+            let agent = fetch_agent(&conn, session.agent_id, &self.inner.pg_target).await?;
+            let project = match session.project_id {
+                Some(pid) => Some(fetch_project(&conn, pid, &self.inner.pg_target).await?),
+                None => None,
+            };
+            let binding = fetch_runtime_binding(&conn, session_id, &self.inner.pg_target).await?;
+            let history = fetch_session_messages(&conn, session_id, &self.inner.pg_target).await?;
+            let rules = fetch_policy_rules(&conn, &self.inner.pg_target).await?;
+            (session, agent, project, binding, history, rules)
+        };
+
+        let resolved_runtime_res = self
+            .resolve_runtime_for_turn(agent.current_config.preferred_connection_id, None)
+            .await;
+        let runtime_adapter_for_audit = resolved_runtime_res.as_ref().map_or_else(
+            |_| String::from("unresolved"),
+            |r| r.runtime.adapter_id().to_owned(),
+        );
+
+        let (completion_tx, mut completion_rx) =
+            watch::channel::<Option<Result<SendMessageResponse, DennettError>>>(None);
+        let run_id = RunId::new();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let cancel_reason = Arc::new(AtomicU8::new(CANCEL_REASON_NONE));
+        let (slot_released_tx, slot_released_rx) = watch::channel(false);
+        let slot_released = SlotReleasedNotifier::new(slot_released_tx);
+
+        self.try_register_active_session_run(
+            session_id,
+            ActiveRunHandle {
+                run_id,
+                client_message_id: client_message_id.clone(),
+                cancel_tx: cancel_tx.clone(),
+                cancel_reason: Arc::clone(&cancel_reason),
+                completion_rx: Some(completion_rx.clone()),
+                slot_released_rx,
+            },
+        )
+        .await?;
+        let mut active_guard = ActiveRunGuard::new(
+            self.clone(),
+            session_id,
+            run_id,
+            cancel_tx,
+            correlation_id.clone(),
+        );
+
+        // We now hold `session_guard` AND `active_runs` slot; drop `steering_guard` so queued
+        // follow-ups auto-dispatch normally once this steered turn finishes with `Succeeded`!
+        drop(steering_guard);
+
+        let auto_title = if !prior_history.iter().any(|m| m.role == MessageRole::User)
+            && is_default_session_title(&session.title)
+        {
+            derive_auto_session_title(&req.content)
+        } else {
+            None
+        };
+        let effective_session_title = auto_title.clone().unwrap_or_else(|| session.title.clone());
+
+        let pre_run_res: Result<
+            (MessageRecord, Vec<dennett_contracts::AgentMessageRecord>),
+            DennettError,
+        > = async {
+            let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let tx = conn
+                .transaction()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let msg_id = MessageId::new();
+            let stream_id = format!("session:{session_id}:messages");
+            let msg_seq = next_stream_seq(&tx, &stream_id, &self.inner.pg_target).await?;
+
+            if let Some(ref new_title) = auto_title {
+                tx.execute(
+                    "UPDATE sessions SET title = $2, updated_at = now() WHERE session_id = $1",
+                    &[&session_id.as_uuid(), &new_title.as_str()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            }
+
+            tx.execute(
+                "INSERT INTO runs (
+                    run_id, session_id, agent_id, agent_config_version_id,
+                    user_message_id, status, correlation_id
+                 ) VALUES ($1, $2, $3, $4, $5, 'running', $6)",
+                &[
+                    &run_id.as_uuid(),
+                    &session_id.as_uuid(),
+                    &agent.agent_id.as_uuid(),
+                    &agent.current_config_version_id.as_uuid(),
+                    &msg_id.as_uuid(),
+                    &correlation_id.as_str(),
+                ],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let msg_row = tx
+                .query_one(
+                    "INSERT INTO messages (
+                        message_id, session_id, stream_seq, role, content, run_id,
+                        client_message_id, correlation_id
+                     ) VALUES ($1, $2, $3, 'user', $4, $5, $6, $7)
+                     RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
+                    &[
+                        &msg_id.as_uuid(),
+                        &session_id.as_uuid(),
+                        &msg_seq,
+                        &req.content,
+                        &run_id.as_uuid(),
+                        &client_message_id,
+                        &correlation_id.as_str(),
+                    ],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let project_id_opt = project.as_ref().map(|p| p.project_id);
+            let inbox_msgs = if let Some(pid) = project_id_opt {
+                let agent_msg_sql = format!(
+                    "SELECT {AGENT_MESSAGE_SELECT_COLS}
+                     FROM agent_messages
+                     WHERE recipient_agent_id = $1
+                       AND project_id = $2
+                       AND related_task_id IS NULL
+                       AND delivered_in_run_id IS NULL
+                     ORDER BY created_at ASC
+                     FOR UPDATE"
+                );
+                let agent_msg_rows = tx
+                    .query(&agent_msg_sql, &[&agent.agent_id.as_uuid(), &pid.as_uuid()])
+                    .await
+                    .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                let mut claimed = Vec::with_capacity(agent_msg_rows.len());
+                for row in &agent_msg_rows {
+                    claimed.push(decode_agent_message_row(row)?);
+                }
+                if !claimed.is_empty() {
+                    let ids: Vec<uuid::Uuid> = claimed
+                        .iter()
+                        .map(|m| m.agent_message_id.as_uuid())
+                        .collect();
+                    tx.execute(
+                        "UPDATE agent_messages
+                         SET delivered_in_run_id = $2, delivered_at = now()
+                         WHERE agent_message_id = ANY($1)",
+                        &[&ids, &run_id.as_uuid()],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                }
+                claimed
+            } else {
+                Vec::new()
+            };
+
+            let _ = append_audit_event(
+                &tx,
+                &self.inner.pg_target,
+                &correlation_id,
+                Some(session_id),
+                Some(run_id),
+                "head",
+                "run_steered",
+                &format!(
+                    "steered session {session_id} into run {run_id} adapter={runtime_adapter_for_audit}"
+                ),
+            )
+            .await?;
+
+            let _ = append_control_event_in_tx(
+                &tx,
+                &self.inner.pg_target,
+                ControlEventAppend {
+                    entity_key: &format!("session:{session_id}"),
+                    event_type: "session.run_started",
+                    project_id: project_id_opt,
+                    session_id: Some(session_id),
+                    task_id: None,
+                    correlation_id: &correlation_id,
+                    payload: json!({
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "agent_id": agent.agent_id,
+                        "title": effective_session_title,
+                        "steered": true,
+                    }),
+                },
+            )
+            .await?;
+
+            tx.commit()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            Ok((
+                MessageRecord {
+                    message_id: msg_id,
+                    session_id,
+                    role: MessageRole::User,
+                    content: req.content.clone(),
+                    run_id: Some(run_id),
+                    client_message_id: client_message_id.clone(),
+                    correlation_id: correlation_id.clone(),
+                    created_at: TimestampMs::from_millis(msg_row.get(0)),
+                },
+                inbox_msgs,
+            ))
+        }
+        .await;
+
+        let (user_message, inbox_agent_messages) = match pre_run_res {
+            Ok(pair) => pair,
+            Err(err) => {
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
+                drop(session_guard);
+                drop(slot_released);
+                return Err(err);
+            }
+        };
+
+        let resolved_runtime = match resolved_runtime_res {
+            Ok(rt) => rt,
+            Err(err) => {
+                self.record_failed_run(session_id, run_id, &correlation_id, &err, &[])
+                    .await;
+                self.pause_queued_followups_for_session(session_id, &correlation_id)
+                    .await;
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
+                let _ = completion_tx.send(Some(Err(err.clone())));
+                drop(session_guard);
+                drop(slot_released);
+                return Err(err);
+            }
+        };
+
+        let effective_prompt = if inbox_agent_messages.is_empty() {
+            req.content
+        } else {
+            let mut combined = self.format_inter_agent_messages_block(&inbox_agent_messages);
+            combined.push('\n');
+            combined.push_str(&req.content);
+            combined
+        };
+
+        self.spawn_detached_session_turn_worker(DetachedTurnSpawnArgs {
+            session_id,
+            session_kind: session.session_kind,
+            run_id,
+            agent,
+            project,
+            existing_binding,
+            prior_history,
+            policy_rules,
+            user_message,
+            effective_prompt,
+            effective_session_title,
+            runtime: resolved_runtime.runtime,
+            connection_id: resolved_runtime.connection_id,
+            turn_timeout,
+            approval_timeout,
+            cancel_rx,
+            cancel_reason,
+            correlation_id,
+            completion_tx,
+            session_guard,
+            active_guard,
+            slot_released,
+            in_flight_cmid_guard: None,
+        });
+
         match completion_rx.wait_for(Option::is_some).await {
             Ok(guard) => match guard.as_ref() {
                 Some(res) => res.clone(),
                 None => Err(DennettError::Internal {
-                    detail: String::from("detached session turn completed without result"),
+                    detail: String::from("detached steered turn completed without result"),
                 }),
             },
             Err(_) => Err(DennettError::Internal {
-                detail: String::from("detached session turn terminated unexpectedly"),
+                detail: String::from("detached steered turn terminated unexpectedly"),
             }),
         }
+    }
+
+    async fn pause_queued_followups_for_session(
+        &self,
+        session_id: SessionId,
+        correlation_id: &CorrelationId,
+    ) {
+        let Ok(mut conn) = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await else {
+            return;
+        };
+        let Ok(tx) = conn.transaction().await else {
+            return;
+        };
+        let paused = tx
+            .execute(
+                "UPDATE session_followups
+                 SET status = 'paused', updated_at = now()
+                 WHERE session_id = $1 AND status = 'queued'",
+                &[&session_id.as_uuid()],
+            )
+            .await
+            .unwrap_or(0);
+        if paused > 0 {
+            let project_id = fetch_session(&tx, session_id, &self.inner.pg_target)
+                .await
+                .ok()
+                .and_then(|s| s.project_id);
+            let _ = append_control_event_in_tx(
+                &tx,
+                &self.inner.pg_target,
+                ControlEventAppend {
+                    entity_key: &format!("session:{session_id}"),
+                    event_type: "session.followups_paused",
+                    project_id,
+                    session_id: Some(session_id),
+                    task_id: None,
+                    correlation_id,
+                    payload: json!({
+                        "session_id": session_id,
+                        "paused_count": paused,
+                    }),
+                },
+            )
+            .await;
+        }
+        let _ = tx.commit().await;
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "atomically claims next queued follow-up with SKIP LOCKED, persists user message and run, and spawns detached worker"
+    )]
+    async fn try_dispatch_next_queued_followup_inner(
+        &self,
+        session_id: SessionId,
+        lock_wait: Option<Duration>,
+        correlation_id: &CorrelationId,
+    ) -> Result<Option<(FollowupId, SpawnedTurnHandle)>, DennettError> {
+        if self.is_session_steering(session_id) {
+            return Ok(None);
+        }
+
+        let session_lock = self.session_exec_lock(session_id).await;
+        let session_guard = match lock_wait {
+            Some(dur) => match time::timeout(dur, session_lock.lock_owned()).await {
+                Ok(g) => g,
+                Err(_) => return Ok(None),
+            },
+            None => match session_lock.try_lock_owned() {
+                Ok(g) => g,
+                Err(_) => return Ok(None),
+            },
+        };
+
+        if self.is_session_active_or_steering(session_id).await {
+            return Ok(None);
+        }
+
+        // Read metadata and check whether a queued follow-up is eligible BEFORE resolving runtime
+        // so we never hold a PG connection across runtime/network probes.
+        let (session, agent, project, existing_binding, prior_history, policy_rules) = {
+            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let has_paused: bool = conn
+                .query_one(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM session_followups
+                        WHERE session_id = $1 AND status = 'paused'
+                    )",
+                    &[&session_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                .get(0);
+            if has_paused {
+                return Ok(None);
+            }
+            let has_queued: bool = conn
+                .query_one(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM session_followups
+                        WHERE session_id = $1 AND status = 'queued'
+                    )",
+                    &[&session_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                .get(0);
+            if !has_queued {
+                return Ok(None);
+            }
+
+            let session = fetch_session(&conn, session_id, &self.inner.pg_target).await?;
+            if session.status != SessionStatus::Active {
+                return Ok(None);
+            }
+            let agent = fetch_agent(&conn, session.agent_id, &self.inner.pg_target).await?;
+            let project = if let Some(pid) = session.project_id {
+                let proj = fetch_project(&conn, pid, &self.inner.pg_target).await?;
+                if matches!(
+                    proj.lifecycle_state,
+                    ProjectLifecycleState::Archived | ProjectLifecycleState::DeletedRecord
+                ) {
+                    return Ok(None);
+                }
+                Some(proj)
+            } else {
+                None
+            };
+            let binding = fetch_runtime_binding(&conn, session_id, &self.inner.pg_target).await?;
+            let history = fetch_session_messages(&conn, session_id, &self.inner.pg_target).await?;
+            let rules = fetch_policy_rules(&conn, &self.inner.pg_target).await?;
+            (session, agent, project, binding, history, rules)
+        };
+
+        let resolved_runtime_res = self
+            .resolve_runtime_for_turn(agent.current_config.preferred_connection_id, None)
+            .await;
+        let runtime_adapter_for_audit = resolved_runtime_res.as_ref().map_or_else(
+            |_| String::from("unresolved"),
+            |r| r.runtime.adapter_id().to_owned(),
+        );
+
+        let (completion_tx, completion_rx) =
+            watch::channel::<Option<Result<SendMessageResponse, DennettError>>>(None);
+        let run_id = RunId::new();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let cancel_reason = Arc::new(AtomicU8::new(CANCEL_REASON_NONE));
+        let (slot_released_tx, slot_released_rx) = watch::channel(false);
+        let slot_released = SlotReleasedNotifier::new(slot_released_tx);
+
+        self.try_register_active_session_run(
+            session_id,
+            ActiveRunHandle {
+                run_id,
+                client_message_id: None,
+                cancel_tx: cancel_tx.clone(),
+                cancel_reason: Arc::clone(&cancel_reason),
+                completion_rx: Some(completion_rx.clone()),
+                slot_released_rx,
+            },
+        )
+        .await?;
+        let mut active_guard = ActiveRunGuard::new(
+            self.clone(),
+            session_id,
+            run_id,
+            cancel_tx,
+            correlation_id.clone(),
+        );
+
+        let claim_res: Result<Option<ClaimedFollowupTurn>, DennettError> = async {
+            let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let tx = conn
+                .transaction()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let has_paused: bool = tx
+                .query_one(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM session_followups
+                        WHERE session_id = $1 AND status = 'paused'
+                    )",
+                    &[&session_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+                .get(0);
+            if has_paused {
+                return Ok(None);
+            }
+
+            let claim_sql = format!(
+                "SELECT {SESSION_FOLLOWUP_SELECT_COLS}
+                 FROM session_followups
+                 WHERE session_id = $1 AND status = 'queued'
+                 ORDER BY position ASC
+                 LIMIT 1
+                 FOR UPDATE SKIP LOCKED"
+            );
+            let Some(followup_row) = tx
+                .query_opt(&claim_sql, &[&session_id.as_uuid()])
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+            else {
+                return Ok(None);
+            };
+            let followup = decode_session_followup_row(&followup_row)?;
+
+            tx.execute(
+                "UPDATE session_followups
+                 SET status = 'dispatched',
+                     dispatched_run_id = $2,
+                     updated_at = now()
+                 WHERE followup_id = $1",
+                &[&followup.followup_id.as_uuid(), &run_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let auto_title = if !prior_history.iter().any(|m| m.role == MessageRole::User)
+                && is_default_session_title(&session.title)
+            {
+                derive_auto_session_title(&followup.content)
+            } else {
+                None
+            };
+            let effective_title = auto_title.clone().unwrap_or_else(|| session.title.clone());
+            if let Some(ref new_title) = auto_title {
+                tx.execute(
+                    "UPDATE sessions SET title = $2, updated_at = now() WHERE session_id = $1",
+                    &[&session_id.as_uuid(), &new_title.as_str()],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            }
+
+            let msg_id = MessageId::new();
+            let stream_id = format!("session:{session_id}:messages");
+            let msg_seq = next_stream_seq(&tx, &stream_id, &self.inner.pg_target).await?;
+
+            tx.execute(
+                "INSERT INTO runs (
+                    run_id, session_id, agent_id, agent_config_version_id,
+                    user_message_id, status, correlation_id
+                 ) VALUES ($1, $2, $3, $4, $5, 'running', $6)",
+                &[
+                    &run_id.as_uuid(),
+                    &session_id.as_uuid(),
+                    &agent.agent_id.as_uuid(),
+                    &agent.current_config_version_id.as_uuid(),
+                    &msg_id.as_uuid(),
+                    &correlation_id.as_str(),
+                ],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let msg_row = tx
+                .query_one(
+                    "INSERT INTO messages (
+                        message_id, session_id, stream_seq, role, content, run_id, correlation_id
+                     ) VALUES ($1, $2, $3, 'user', $4, $5, $6)
+                     RETURNING TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint",
+                    &[
+                        &msg_id.as_uuid(),
+                        &session_id.as_uuid(),
+                        &msg_seq,
+                        &followup.content,
+                        &run_id.as_uuid(),
+                        &correlation_id.as_str(),
+                    ],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let project_id_opt = project.as_ref().map(|p| p.project_id);
+            let inbox_msgs = if let Some(pid) = project_id_opt {
+                let agent_msg_sql = format!(
+                    "SELECT {AGENT_MESSAGE_SELECT_COLS}
+                     FROM agent_messages
+                     WHERE recipient_agent_id = $1
+                       AND project_id = $2
+                       AND related_task_id IS NULL
+                       AND delivered_in_run_id IS NULL
+                     ORDER BY created_at ASC
+                     FOR UPDATE"
+                );
+                let agent_msg_rows = tx
+                    .query(&agent_msg_sql, &[&agent.agent_id.as_uuid(), &pid.as_uuid()])
+                    .await
+                    .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                let mut claimed = Vec::with_capacity(agent_msg_rows.len());
+                for row in &agent_msg_rows {
+                    claimed.push(decode_agent_message_row(row)?);
+                }
+                if !claimed.is_empty() {
+                    let ids: Vec<uuid::Uuid> = claimed
+                        .iter()
+                        .map(|m| m.agent_message_id.as_uuid())
+                        .collect();
+                    tx.execute(
+                        "UPDATE agent_messages
+                         SET delivered_in_run_id = $2, delivered_at = now()
+                         WHERE agent_message_id = ANY($1)",
+                        &[&ids, &run_id.as_uuid()],
+                    )
+                    .await
+                    .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+                }
+                claimed
+            } else {
+                Vec::new()
+            };
+
+            let _ = append_audit_event(
+                &tx,
+                &self.inner.pg_target,
+                correlation_id,
+                Some(session_id),
+                Some(run_id),
+                "head",
+                "followup_dispatched",
+                &format!(
+                    "dispatched follow-up {} into run {run_id} adapter={runtime_adapter_for_audit}",
+                    followup.followup_id
+                ),
+            )
+            .await?;
+
+            let pending_events = vec![
+                PendingControlEvent {
+                    entity_key: format!("session:{session_id}"),
+                    event_type: "session.followup_dispatched",
+                    project_id: project_id_opt,
+                    session_id: Some(session_id),
+                    task_id: None,
+                    payload: json!({
+                        "session_id": session_id,
+                        "followup_id": followup.followup_id,
+                        "run_id": run_id,
+                    }),
+                },
+                PendingControlEvent {
+                    entity_key: format!("session:{session_id}"),
+                    event_type: "session.run_started",
+                    project_id: project_id_opt,
+                    session_id: Some(session_id),
+                    task_id: None,
+                    payload: json!({
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "agent_id": agent.agent_id,
+                        "title": effective_title,
+                        "followup_id": followup.followup_id,
+                    }),
+                },
+            ];
+            let _ = append_control_events_batch_in_tx(
+                &tx,
+                &self.inner.pg_target,
+                correlation_id,
+                &pending_events,
+            )
+            .await?;
+
+            tx.commit()
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+            let user_message = MessageRecord {
+                message_id: msg_id,
+                session_id,
+                role: MessageRole::User,
+                content: followup.content.clone(),
+                run_id: Some(run_id),
+                client_message_id: None,
+                correlation_id: correlation_id.clone(),
+                created_at: TimestampMs::from_millis(msg_row.get(0)),
+            };
+            Ok(Some(ClaimedFollowupTurn {
+                followup,
+                user_message,
+                inbox_msgs,
+                effective_title,
+            }))
+        }
+        .await;
+
+        let ClaimedFollowupTurn {
+            followup,
+            user_message,
+            inbox_msgs: inbox_agent_messages,
+            effective_title: effective_session_title,
+        } = match claim_res {
+            Ok(Some(claimed)) => claimed,
+            Ok(None) => {
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
+                drop(session_guard);
+                drop(slot_released);
+                return Ok(None);
+            }
+            Err(err) => {
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
+                drop(session_guard);
+                drop(slot_released);
+                return Err(err);
+            }
+        };
+
+        let resolved_runtime = match resolved_runtime_res {
+            Ok(rt) => rt,
+            Err(err) => {
+                self.record_failed_run(session_id, run_id, correlation_id, &err, &[])
+                    .await;
+                self.pause_queued_followups_for_session(session_id, correlation_id)
+                    .await;
+                active_guard.mark_completed();
+                self.unregister_active_session_run(session_id, run_id).await;
+                let _ = completion_tx.send(Some(Err(err.clone())));
+                drop(session_guard);
+                drop(slot_released);
+                return Err(err);
+            }
+        };
+
+        let effective_prompt = if inbox_agent_messages.is_empty() {
+            followup.content
+        } else {
+            let mut combined = self.format_inter_agent_messages_block(&inbox_agent_messages);
+            combined.push('\n');
+            combined.push_str(&followup.content);
+            combined
+        };
+
+        self.spawn_detached_session_turn_worker(DetachedTurnSpawnArgs {
+            session_id,
+            session_kind: session.session_kind,
+            run_id,
+            agent,
+            project,
+            existing_binding,
+            prior_history,
+            policy_rules,
+            user_message,
+            effective_prompt,
+            effective_session_title,
+            runtime: resolved_runtime.runtime,
+            connection_id: resolved_runtime.connection_id,
+            turn_timeout: DEFAULT_TURN_TIMEOUT,
+            approval_timeout: DEFAULT_APPROVAL_WAIT_TIMEOUT,
+            cancel_rx,
+            cancel_reason,
+            correlation_id: correlation_id.clone(),
+            completion_tx,
+            session_guard,
+            active_guard,
+            slot_released,
+            in_flight_cmid_guard: None,
+        });
+
+        Ok(Some((
+            followup.followup_id,
+            SpawnedTurnHandle { completion_rx },
+        )))
     }
 
     #[expect(
@@ -3393,6 +5128,8 @@ impl HeadService {
         let active_run_id = {
             let active = self.inner.active_runs.lock().await;
             active.get(&session_id).map(|h| {
+                h.cancel_reason
+                    .store(CANCEL_REASON_EXPLICIT_STOP, Ordering::Release);
                 let _ = h.cancel_tx.send(true);
                 h.run_id
             })
@@ -3471,6 +5208,16 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
         }
+
+        // Safe pause: explicit Stop ALWAYS pauses any queued follow-ups on this session.
+        tx.execute(
+            "UPDATE session_followups
+             SET status = 'paused', updated_at = now()
+             WHERE session_id = $1 AND status = 'queued'",
+            &[&session_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         let _ = append_audit_event(
             &tx,
@@ -4355,6 +6102,8 @@ impl HeadService {
         rehydrated: bool,
         outcome: &dennett_runtime_antigravity::TurnOutcome,
         elapsed_ms: u64,
+        context_used_tokens: Option<u64>,
+        context_window_tokens: Option<u64>,
         decisions: &[CapturedPermissionDecision],
         hit_unknown_external: bool,
         correlation_id: &CorrelationId,
@@ -4484,6 +6233,8 @@ impl HeadService {
         let tokens_used = outcome.total_tokens();
         let tokens_i64 = tokens_used.and_then(|v| i64::try_from(v).ok());
         let wall_i64 = i64::try_from(elapsed_ms).ok();
+        let ctx_used_i64 = context_used_tokens.and_then(|v| i64::try_from(v).ok());
+        let ctx_window_i64 = context_window_tokens.and_then(|v| i64::try_from(v).ok());
         let run_row = tx
             .query_one(
                 "UPDATE runs
@@ -4493,6 +6244,8 @@ impl HeadService {
                      rehydrated = $5,
                      tokens_used = $6,
                      wall_ms = $7,
+                     context_used_tokens = $8,
+                     context_window_tokens = $9,
                      finished_at = now()
                  WHERE run_id = $1
                  RETURNING status,
@@ -4506,6 +6259,8 @@ impl HeadService {
                     &rehydrated,
                     &tokens_i64,
                     &wall_i64,
+                    &ctx_used_i64,
+                    &ctx_window_i64,
                 ],
             )
             .await
@@ -4604,8 +6359,8 @@ impl HeadService {
             task_generation: None,
             tokens_used,
             wall_ms: Some(elapsed_ms),
-            context_used_tokens: None,
-            context_window_tokens: None,
+            context_used_tokens,
+            context_window_tokens,
             correlation_id: correlation_id.clone(),
             created_at: TimestampMs::from_millis(run_row.get(1)),
             finished_at: Some(TimestampMs::from_millis(run_row.get(2))),
@@ -4726,6 +6481,14 @@ impl HeadService {
             )
             .await
             .unwrap_or(0);
+        let _ = tx
+            .execute(
+                "UPDATE session_followups
+                 SET status = 'paused', updated_at = now()
+                 WHERE session_id = $1 AND status = 'queued'",
+                &[&session_id.as_uuid()],
+            )
+            .await;
         let mut pending_events = Vec::new();
         let expired_perms = self
             .expire_pending_approvals_for_run_in_tx(
@@ -5028,15 +6791,19 @@ impl HeadService {
         }])
     }
 
-    /// Builds project-scoped `dennett-control` MCP server spec (`dennett-control-mcp`) when both
+    /// Builds session-scoped `dennett-control` MCP server spec (`dennett-control-mcp`) when both
     /// the binary path and `dennett-head`'s bound loopback HTTP URL are configured.
+    ///
+    /// Works for BOTH project-bound sessions (`project_id = Some(...)`) and standalone chats
+    /// (`project_id = None`, exposing only `dennett_skill_list`/`dennett_skill_read` while failing
+    /// closed on all project event/task/delegation tools).
     ///
     /// # Errors
     ///
     /// Returns [`DennettError`] if `dct1.` token minting fails.
     pub(crate) fn build_control_mcp_spec(
         &self,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         agent_id: AgentId,
         session_id: SessionId,
         session_kind: SessionKind,
@@ -5053,32 +6820,35 @@ impl HeadService {
             session_id,
             session_kind,
         )?;
+        let mut env = vec![
+            RuntimeMcpEnvEntry {
+                name: String::from("DENNETT_HEAD_URL"),
+                value: head_url,
+            },
+            RuntimeMcpEnvEntry {
+                name: String::from("DENNETT_CONTROL_AGENT_ID"),
+                value: agent_id.to_string(),
+            },
+            RuntimeMcpEnvEntry {
+                name: String::from("DENNETT_CONTROL_SESSION_ID"),
+                value: session_id.to_string(),
+            },
+            RuntimeMcpEnvEntry {
+                name: String::from("DENNETT_CONTROL_TOKEN"),
+                value: token,
+            },
+        ];
+        if let Some(pid) = project_id {
+            env.push(RuntimeMcpEnvEntry {
+                name: String::from("DENNETT_CONTROL_PROJECT_ID"),
+                value: pid.to_string(),
+            });
+        }
         Ok(Some(RuntimeMcpServerSpec {
             name: String::from("dennett-control"),
             command: bin.to_string_lossy().into_owned(),
             args: Vec::new(),
-            env: vec![
-                RuntimeMcpEnvEntry {
-                    name: String::from("DENNETT_HEAD_URL"),
-                    value: head_url,
-                },
-                RuntimeMcpEnvEntry {
-                    name: String::from("DENNETT_CONTROL_PROJECT_ID"),
-                    value: project_id.to_string(),
-                },
-                RuntimeMcpEnvEntry {
-                    name: String::from("DENNETT_CONTROL_AGENT_ID"),
-                    value: agent_id.to_string(),
-                },
-                RuntimeMcpEnvEntry {
-                    name: String::from("DENNETT_CONTROL_SESSION_ID"),
-                    value: session_id.to_string(),
-                },
-                RuntimeMcpEnvEntry {
-                    name: String::from("DENNETT_CONTROL_TOKEN"),
-                    value: token,
-                },
-            ],
+            env,
         }))
     }
 
@@ -5172,15 +6942,73 @@ impl HeadService {
                 reason: String::from("another run is already active in this session"),
             });
         }
+        let now = TimestampMs::now();
+        let initial_snapshot = LiveRunSnapshot {
+            session_id,
+            run_id: handle.run_id,
+            streaming_text: String::new(),
+            context_used_tokens: None,
+            context_window_tokens: None,
+            started_at: now,
+            updated_at: now,
+        };
         active.insert(session_id, handle);
+        if let Ok(mut snaps) = self.inner.live_snapshots.lock() {
+            snaps.insert(session_id, initial_snapshot);
+        }
         Ok(())
     }
 
     pub(crate) async fn unregister_active_session_run(&self, session_id: SessionId, run_id: RunId) {
+        self.remove_live_snapshot(session_id, run_id);
         let mut active = self.inner.active_runs.lock().await;
         if active.get(&session_id).is_some_and(|h| h.run_id == run_id) {
             active.remove(&session_id);
         }
+    }
+
+    pub(crate) fn get_live_snapshot(&self, session_id: SessionId) -> Option<LiveRunSnapshot> {
+        self.inner
+            .live_snapshots
+            .lock()
+            .ok()
+            .and_then(|snaps| snaps.get(&session_id).cloned())
+    }
+
+    pub(crate) fn mutate_live_snapshot(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        f: impl FnOnce(&mut LiveRunSnapshot),
+    ) {
+        if let Ok(mut snaps) = self.inner.live_snapshots.lock()
+            && let Some(snap) = snaps.get_mut(&session_id)
+            && snap.run_id == run_id
+        {
+            f(snap);
+        }
+    }
+
+    pub(crate) fn remove_live_snapshot(&self, session_id: SessionId, run_id: RunId) {
+        if let Ok(mut snaps) = self.inner.live_snapshots.lock()
+            && snaps.get(&session_id).is_some_and(|s| s.run_id == run_id)
+        {
+            snaps.remove(&session_id);
+        }
+    }
+
+    pub(crate) fn is_session_steering(&self, session_id: SessionId) -> bool {
+        self.inner
+            .steering_sessions
+            .lock()
+            .is_ok_and(|m| m.get(&session_id).copied().unwrap_or(0) > 0)
+    }
+
+    pub(crate) async fn is_session_active_or_steering(&self, session_id: SessionId) -> bool {
+        if self.is_session_steering(session_id) {
+            return true;
+        }
+        self.inner.active_runs.lock().await.contains_key(&session_id)
     }
 
     pub(crate) async fn cancel_active_session_run(&self, session_id: SessionId) -> Option<RunId> {

@@ -784,9 +784,17 @@ impl AgentRuntimePort for LocalHttpRuntime {
                     if let Some(existing) = guard.get_mut(&req.dennett_session_id)
                         && existing.provider_session_id == *bound_prov_id
                     {
+                        let skills_for_prompt = if req
+                            .system_prompt
+                            .contains("[Dennett Active Skills Index]")
+                        {
+                            &[][..]
+                        } else {
+                            req.active_skills.as_slice()
+                        };
                         let effective_system = build_effective_system_prompt_with_skills(
                             &req.system_prompt,
-                            &req.active_skills,
+                            skills_for_prompt,
                             &[],
                             None,
                         );
@@ -834,9 +842,17 @@ impl AgentRuntimePort for LocalHttpRuntime {
             }
 
             let provider_session_id = format!("local-sess-{}", Uuid::new_v4().simple());
+            let skills_for_prompt = if req
+                .system_prompt
+                .contains("[Dennett Active Skills Index]")
+            {
+                &[][..]
+            } else {
+                req.active_skills.as_slice()
+            };
             let effective_system = build_effective_system_prompt_with_skills(
                 &req.system_prompt,
-                &req.active_skills,
+                skills_for_prompt,
                 &req.history_for_rehydrate,
                 rehydrate_reason.as_deref(),
             );
@@ -1086,6 +1102,24 @@ impl AgentRuntimePort for LocalHttpRuntime {
                     };
 
                     if let Some(usage) = completion.usage {
+                        let prompt_tokens = usage
+                            .get("prompt_tokens")
+                            .or_else(|| usage.get("input_tokens"))
+                            .and_then(Value::as_u64);
+                        let window_tokens = usage
+                            .get("context_window_tokens")
+                            .or_else(|| usage.get("size"))
+                            .and_then(Value::as_u64);
+                        if prompt_tokens.is_some() || window_tokens.is_some() {
+                            emit(
+                                &mut events,
+                                RuntimeEvent::ContextUsageUpdated {
+                                    used_tokens: prompt_tokens,
+                                    window_tokens,
+                                },
+                                event_tx.as_ref(),
+                            );
+                        }
                         emit(
                             &mut events,
                             RuntimeEvent::UsageReported {
@@ -1097,13 +1131,20 @@ impl AgentRuntimePort for LocalHttpRuntime {
                     }
 
                     if completion.tool_calls.is_empty() || round + 1 == MAX_TOOL_ROUNDS {
-                        final_text = redact_secrets_owned(&completion.content, &secrets);
+                        let safe_round_text = redact_secrets_owned(&completion.content, &secrets);
                         final_stop_reason = completion.finish_reason;
-                        if !final_text.is_empty() {
+                        if !safe_round_text.is_empty() {
+                            if !final_text.is_empty()
+                                && !final_text.ends_with('\n')
+                                && !safe_round_text.starts_with('\n')
+                            {
+                                final_text.push_str("\n\n");
+                            }
+                            final_text.push_str(&safe_round_text);
                             emit(
                                 &mut events,
                                 RuntimeEvent::TextDelta {
-                                    text: final_text.clone(),
+                                    text: safe_round_text,
                                 },
                                 event_tx.as_ref(),
                             );
@@ -1113,6 +1154,22 @@ impl AgentRuntimePort for LocalHttpRuntime {
                             "content": final_text,
                         }));
                         break;
+                    }
+
+                    if !completion.content.is_empty() {
+                        let safe_preface = redact_secrets_owned(&completion.content, &secrets);
+                        if !final_text.is_empty()
+                            && !final_text.ends_with('\n')
+                            && !safe_preface.starts_with('\n')
+                        {
+                            final_text.push_str("\n\n");
+                        }
+                        final_text.push_str(&safe_preface);
+                        emit(
+                            &mut events,
+                            RuntimeEvent::TextDelta { text: safe_preface },
+                            event_tx.as_ref(),
+                        );
                     }
 
                     // Record assistant tool_calls message for multi-turn conversation continuity.

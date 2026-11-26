@@ -144,14 +144,15 @@ impl MemoryTokenSigner {
     }
 }
 
-/// Verified claims embedded inside a short-lived `dct1.` project-scoped control token
+/// Verified claims embedded inside a short-lived `dct1.` session/project-scoped control token
 /// issued by `dennett-head` for `dennett-control-mcp` subprocesses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlTokenClaims {
     /// Unique minted token identifier.
     pub token_id: String,
-    /// Project strictly authorized by this token (cross-project mutations return `403`).
-    pub project_id: ProjectId,
+    /// Project strictly authorized by this token (`None` for standalone chats — only global session skills permitted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
     /// Agent identity on whose behalf `dennett-control-mcp` is acting.
     pub agent_id: AgentId,
     /// Originating session identifier.
@@ -211,7 +212,7 @@ impl ControlTokenSigner {
     /// Returns [`DennettError::Internal`] on serialization or HMAC initialization failure.
     pub fn mint_control_token(
         &self,
-        project_id: ProjectId,
+        project_id: Option<ProjectId>,
         agent_id: AgentId,
         session_id: SessionId,
         session_kind: SessionKind,
@@ -375,17 +376,26 @@ mod tests {
         let aid = AgentId::new();
         let sid = SessionId::new();
         let tok = signer
-            .mint_control_token(pid, aid, sid, SessionKind::UserChat)
+            .mint_control_token(Some(pid), aid, sid, SessionKind::UserChat)
             .expect("mint dct1");
         assert!(tok.starts_with("dct1."));
 
         let verified = signer
             .verify_control_token(&tok, TimestampMs::now())
             .expect("verify dct1");
-        assert_eq!(verified.project_id, pid);
+        assert_eq!(verified.project_id, Some(pid));
         assert_eq!(verified.agent_id, aid);
         assert_eq!(verified.session_id, sid);
         assert_eq!(verified.session_kind, SessionKind::UserChat);
+
+        let standalone_tok = signer
+            .mint_control_token(None, aid, sid, SessionKind::UserChat)
+            .expect("mint standalone dct1");
+        let standalone_verified = signer
+            .verify_control_token(&standalone_tok, TimestampMs::now())
+            .expect("verify standalone dct1");
+        assert_eq!(standalone_verified.project_id, None);
+        assert_eq!(standalone_verified.session_id, sid);
 
         // Tampering with signature MUST fail closed.
         let mut tampered = tok.clone();

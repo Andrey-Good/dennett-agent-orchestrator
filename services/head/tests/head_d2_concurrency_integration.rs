@@ -818,6 +818,8 @@ async fn v07_direct_late_complete_task_run_fenced_and_auth_profile_override_fail
             false,
             &late_outcome,
             42,
+            None,
+            None,
             &[],
             false,
             &cid,
