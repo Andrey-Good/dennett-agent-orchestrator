@@ -13,16 +13,17 @@ use dennett_contracts::{
     AgentRecord, ArtifactCompleteness, ArtifactId, ArtifactLifecycleState, ArtifactRecord,
     AuditEventId, CapabilityGrantId, CapabilityGrantRecord, ControlEventId, ControlEventRecord,
     CorrelationId, DennettError, DiagnosticEvent, EffectClaimId, EffectClaimRecord,
-    ExternalEffectStatus, IdempotencyKey, InboxCardId, InboxCardKind, InboxCardRecord,
-    InboxCardStatus, InboxCardUrgency, MemoryScope, MessageId, MessageRecord, MessageRole,
-    MissedRunPolicy, OrderedOutboxItem, OrderedOutboxItemId, OrderedOutboxStatus,
+    ExternalEffectStatus, FollowupId, FollowupStatus, IdempotencyKey, InboxCardId, InboxCardKind,
+    InboxCardRecord, InboxCardStatus, InboxCardUrgency, MemoryScope, MessageId, MessageRecord,
+    MessageRole, MissedRunPolicy, OrderedOutboxItem, OrderedOutboxItemId, OrderedOutboxStatus,
     PermissionDecisionId, PermissionDecisionRecord, PermissionRequestId, PermissionRequestRecord,
     PermissionRequestStatus, PolicyEffect, PolicyRule, PolicyRuleId, ProjectId,
     ProjectLifecycleState, ProjectRecord, ProviderConnectionId, RunId, RunRecord, RunStatus,
-    RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, SessionId, SessionKind, SessionRecord,
-    SessionStatus, Sha256Hex, TaskBudget, TaskId, TaskRecord, TaskSchedule, TaskSignalId,
-    TaskSignalOutcome, TaskSignalRecord, TaskStatus, TaskTimerId, TaskTimerRecord, TaskTimerStatus,
-    TaskUsage, ThinkingLevel, TimerPauseReason, TimestampMs, UsageConfidence, WorkspaceWritePolicy,
+    RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, SessionFollowupRecord, SessionId,
+    SessionKind, SessionRecord, SessionStatus, Sha256Hex, TaskBudget, TaskId, TaskRecord,
+    TaskSchedule, TaskSignalId, TaskSignalOutcome, TaskSignalRecord, TaskStatus, TaskTimerId,
+    TaskTimerRecord, TaskTimerStatus, TaskUsage, ThinkingLevel, TimerPauseReason, TimestampMs,
+    UsageConfidence, WorkspaceWritePolicy,
 };
 use serde_json::Value as JsonValue;
 use tokio_postgres::Row;
@@ -240,7 +241,15 @@ pub(crate) const RUN_SELECT_COLS: &str = "
     task_id, task_generation, tokens_used, wall_ms,
     correlation_id,
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-    TRUNC(EXTRACT(EPOCH FROM finished_at) * 1000)::bigint
+    TRUNC(EXTRACT(EPOCH FROM finished_at) * 1000)::bigint,
+    context_used_tokens, context_window_tokens
+";
+
+pub(crate) const SESSION_FOLLOWUP_SELECT_COLS: &str = "
+    followup_id, session_id, content, status, position,
+    idempotency_key, dispatched_run_id,
+    TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
 ";
 
 pub(crate) const TASK_SELECT_COLS: &str = "
@@ -507,6 +516,25 @@ pub(crate) async fn fetch_session_runs<C: GenericClient>(
         .map_err(|err| map_pg_err(target, &err))?;
 
     rows.iter().map(decode_run_row).collect()
+}
+
+pub(crate) async fn fetch_active_session_followups<C: GenericClient>(
+    client: &C,
+    session_id: SessionId,
+    target: &ValidatedControlPgTarget,
+) -> Result<Vec<SessionFollowupRecord>, DennettError> {
+    let sql = format!(
+        "SELECT {SESSION_FOLLOWUP_SELECT_COLS}
+         FROM session_followups
+         WHERE session_id = $1 AND status IN ('queued', 'paused')
+         ORDER BY position ASC, created_at ASC"
+    );
+    let rows = client
+        .query(&sql, &[&session_id.as_uuid()])
+        .await
+        .map_err(|err| map_pg_err(target, &err))?;
+
+    rows.iter().map(decode_session_followup_row).collect()
 }
 
 pub(crate) async fn fetch_task_runs<C: GenericClient>(
@@ -825,11 +853,29 @@ pub(crate) fn decode_run_row(row: &Row) -> Result<RunRecord, DennettError> {
         wall_ms: row
             .get::<_, Option<i64>>(14)
             .and_then(|v| u64::try_from(v).ok()),
-        context_used_tokens: None,
-        context_window_tokens: None,
+        context_used_tokens: row
+            .get::<_, Option<i64>>(18)
+            .and_then(|v| u64::try_from(v).ok()),
+        context_window_tokens: row
+            .get::<_, Option<i64>>(19)
+            .and_then(|v| u64::try_from(v).ok()),
         correlation_id: CorrelationId::try_new(row.get::<_, String>(15))?,
         created_at: TimestampMs::from_millis(row.get(16)),
         finished_at: row.get::<_, Option<i64>>(17).map(TimestampMs::from_millis),
+    })
+}
+
+pub(crate) fn decode_session_followup_row(row: &Row) -> Result<SessionFollowupRecord, DennettError> {
+    Ok(SessionFollowupRecord {
+        followup_id: FollowupId::from_uuid(row.get(0)),
+        session_id: SessionId::from_uuid(row.get(1)),
+        content: row.get(2),
+        status: FollowupStatus::from_str(&row.get::<_, String>(3))?,
+        position: row.get(4),
+        idempotency_key: row.get(5),
+        dispatched_run_id: row.get::<_, Option<Uuid>>(6).map(RunId::from_uuid),
+        created_at: TimestampMs::from_millis(row.get(7)),
+        updated_at: TimestampMs::from_millis(row.get(8)),
     })
 }
 

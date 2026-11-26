@@ -1898,7 +1898,7 @@ impl HeadService {
                      finished_at = now()
                  WHERE status = 'running'
                    AND NOT (run_id = ANY($1))
-                 RETURNING run_id",
+                 RETURNING run_id, session_id",
                 &[&active_run_uuids],
             )
             .await
@@ -1907,12 +1907,23 @@ impl HeadService {
         if !stranded_run_rows.is_empty() {
             let stranded_ids: Vec<uuid::Uuid> =
                 stranded_run_rows.iter().map(|r| r.get(0)).collect();
+            let stranded_session_ids: Vec<uuid::Uuid> =
+                stranded_run_rows.iter().map(|r| r.get(1)).collect();
             // D2-BUG-04: Return undelivered inter-agent messages from crashed runs back to queue!
             tx.execute(
                 "UPDATE agent_messages
                  SET delivered_in_run_id = NULL, delivered_at = NULL
                  WHERE delivered_in_run_id = ANY($1)",
                 &[&stranded_ids],
+            )
+            .await
+            .map_err(|err| map_pg_err(self.pg_target(), &err))?;
+            // Safe pause any queued follow-ups on sessions whose in-flight run died on restart.
+            tx.execute(
+                "UPDATE session_followups
+                 SET status = 'paused', updated_at = now()
+                 WHERE session_id = ANY($1) AND status = 'queued'",
+                &[&stranded_session_ids],
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
@@ -2651,13 +2662,17 @@ impl HeadService {
         };
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (slot_released_tx, slot_released_rx) = watch::channel(false);
+        let _slot_released = crate::service::SlotReleasedNotifier::new(slot_released_tx);
         self.try_register_active_session_run(
             task.session_id,
             ActiveRunHandle {
                 run_id,
                 client_message_id: None,
                 cancel_tx: cancel_tx.clone(),
+                cancel_reason: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
                 completion_rx: None,
+                slot_released_rx,
             },
         )
         .await?;
@@ -2744,6 +2759,8 @@ impl HeadService {
                 core.start_outcome.rehydrated,
                 &core.turn_outcome,
                 core.effective_elapsed_ms,
+                core.context_used_tokens,
+                core.context_window_tokens,
                 &core.captured_decisions,
                 core.hit_unknown_external,
                 &correlation_id,
@@ -2794,6 +2811,8 @@ impl HeadService {
         rehydrated: bool,
         outcome: &TurnOutcome,
         elapsed_ms: u64,
+        context_used_tokens: Option<u64>,
+        context_window_tokens: Option<u64>,
         captured: &[crate::approvals::CapturedPermissionDecision],
         hit_unknown_external: bool,
         correlation_id: &CorrelationId,
@@ -2821,6 +2840,8 @@ impl HeadService {
         let turn_tokens = outcome.total_tokens();
         let tokens_i64 = turn_tokens.and_then(|v| i64::try_from(v).ok());
         let wall_i64 = i64::try_from(elapsed_ms).ok();
+        let ctx_used_i64 = context_used_tokens.and_then(|v| i64::try_from(v).ok());
+        let ctx_window_i64 = context_window_tokens.and_then(|v| i64::try_from(v).ok());
 
         // V07 GENERATION FENCE: late worker from an older generation MUST NOT overwrite current goal/state!
         if current_task.generation != run_generation {
@@ -2860,6 +2881,8 @@ impl HeadService {
                      rehydrated = $3,
                      tokens_used = $4,
                      wall_ms = $5,
+                     context_used_tokens = $6,
+                     context_window_tokens = $7,
                      finished_at = now()
                  WHERE run_id = $1",
                 &[
@@ -2868,6 +2891,8 @@ impl HeadService {
                     &rehydrated,
                     &tokens_i64,
                     &wall_i64,
+                    &ctx_used_i64,
+                    &ctx_window_i64,
                 ],
             )
             .await
@@ -2984,6 +3009,8 @@ impl HeadService {
                      rehydrated = $3,
                      tokens_used = $4,
                      wall_ms = $5,
+                     context_used_tokens = $6,
+                     context_window_tokens = $7,
                      finished_at = now()
                  WHERE run_id = $1",
                 &[
@@ -2992,6 +3019,8 @@ impl HeadService {
                     &rehydrated,
                     &tokens_i64,
                     &wall_i64,
+                    &ctx_used_i64,
+                    &ctx_window_i64,
                 ],
             )
             .await
@@ -3132,6 +3161,8 @@ impl HeadService {
                  rehydrated = $5,
                  tokens_used = $6,
                  wall_ms = $7,
+                 context_used_tokens = $8,
+                 context_window_tokens = $9,
                  finished_at = now()
              WHERE run_id = $1",
             &[
@@ -3142,6 +3173,8 @@ impl HeadService {
                 &rehydrated,
                 &tokens_i64,
                 &wall_i64,
+                &ctx_used_i64,
+                &ctx_window_i64,
             ],
         )
         .await

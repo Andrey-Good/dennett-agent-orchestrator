@@ -170,19 +170,31 @@ impl PolicyEngine {
 
         let is_execute = is_execute_tool(&tool_lower, &req.tool_kind, &req.raw_input);
         let is_file_write = !is_execute && is_write_tool(&tool_lower, &req.tool_kind);
-        let is_file_read =
-            !is_execute && !is_file_write && is_read_tool(&tool_lower, &req.tool_kind);
-        let memory_mcp_op = if is_execute || is_file_write || is_file_read {
+        let control_skill_mcp_op = if is_execute || is_file_write {
             None
         } else {
-            canonical_memory_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
+            canonical_control_skill_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
         };
-        let control_mcp_op =
-            if is_execute || is_file_write || is_file_read || memory_mcp_op.is_some() {
+        let is_file_read = !is_execute
+            && !is_file_write
+            && control_skill_mcp_op.is_none()
+            && is_read_tool(&tool_lower, &req.tool_kind);
+        let memory_mcp_op =
+            if is_execute || is_file_write || is_file_read || control_skill_mcp_op.is_some() {
                 None
             } else {
-                canonical_control_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
+                canonical_memory_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
             };
+        let control_mcp_op = if is_execute
+            || is_file_write
+            || is_file_read
+            || control_skill_mcp_op.is_some()
+            || memory_mcp_op.is_some()
+        {
+            None
+        } else {
+            canonical_control_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
+        };
 
         if (is_file_write || is_file_read)
             && (self.ctx.project_id.is_none()
@@ -506,6 +518,22 @@ impl PolicyEngine {
                 matched_rule_id: None,
                 reason: format!("allowed scoped Dennett memory MCP tool `{}`", req.tool_name),
                 scope: format!("agent:{}", self.ctx.agent_id),
+            });
+        }
+
+        // 4a-bis. Read-only `dennett-control-mcp` session skill tools (`dennett_skill_list`,
+        //         `dennett_skill_read`): permitted for BOTH project sessions and standalone chats
+        //         (Step 2 explicit Deny rules already ran above; Head enforces strict `dct1.`
+        //         scope/trust/activation isolation on the HTTP boundary).
+        if let Some(skill_op) = control_skill_mcp_op {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                matched_rule_id: None,
+                reason: format!(
+                    "allowed read-only Dennett session skill MCP tool `{}` ({skill_op})",
+                    req.tool_name
+                ),
+                scope: self.primary_scope_label(),
             });
         }
 
@@ -875,6 +903,7 @@ const CONTROL_MCP_OPS: [&str; 7] = [
     "dennett_agent_list_messages",
     "dennett_delegate_task",
 ];
+const CONTROL_MCP_SKILL_OPS: [&str; 2] = ["dennett_skill_list", "dennett_skill_read"];
 const NATIVE_SUBAGENT_OPS: [&str; 5] = [
     "invoke_subagent",
     "define_subagent",
@@ -1025,6 +1054,47 @@ fn canonical_memory_mcp_op(
                     | "dennett_memory/"
                     | "dennett_memory."
                     | "dennett_memory__"
+            )
+        {
+            return Some(op);
+        }
+    }
+    None
+}
+
+fn canonical_control_skill_mcp_op(
+    tool_lower: &str,
+    tool_kind: &str,
+    raw_input: &serde_json::Value,
+) -> Option<&'static str> {
+    if is_execute_tool(tool_lower, tool_kind, raw_input)
+        || is_write_tool(tool_lower, tool_kind)
+        || has_any_json_key(raw_input, FILE_TARGET_INPUT_KEYS)
+    {
+        return None;
+    }
+
+    for op in CONTROL_MCP_SKILL_OPS {
+        if tool_lower == op {
+            return Some(op);
+        }
+        if let Some(prefix) = tool_lower.strip_suffix(op)
+            && matches!(
+                prefix,
+                "mcp:"
+                    | "mcp__"
+                    | "mcp_dennett-control_"
+                    | "mcp__dennett-control__"
+                    | "mcp_dennett_control_"
+                    | "mcp__dennett_control__"
+                    | "dennett-control:"
+                    | "dennett-control/"
+                    | "dennett-control."
+                    | "dennett-control__"
+                    | "dennett_control:"
+                    | "dennett_control/"
+                    | "dennett_control."
+                    | "dennett_control__"
             )
         {
             return Some(op);
@@ -2209,6 +2279,84 @@ mod tests {
         assert_eq!(
             PolicyEngine::new(denied_mcp_ctx)
                 .evaluate_request(&reg_mcp)
+                .effect,
+            PolicyEffect::Deny
+        );
+
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn d3_standalone_chat_allows_dennett_skill_tools_while_denying_project_events() {
+        let ws = temp_workspace("d3-standalone-skills");
+        let standalone_ctx = PolicyContext {
+            project_id: None,
+            project_lifecycle_state: ProjectLifecycleState::Detached,
+            workspace_bound: false,
+            agent_id: AgentId::new(),
+            session_id: SessionId::new(),
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::new(),
+            task_budget_exhausted: false,
+            rules: Vec::new(),
+        };
+        let engine = PolicyEngine::new(standalone_ctx.clone());
+
+        for skill_tool in [
+            "dennett_skill_list",
+            "dennett_skill_read",
+            "mcp__dennett-control__dennett_skill_read",
+        ] {
+            let mut req = make_req(skill_tool, "read", None);
+            req.raw_input = json!({ "slug": "rust-guide" });
+            assert_eq!(
+                engine.evaluate_request(&req).effect,
+                PolicyEffect::Allow,
+                "expected standalone chat to allow `{skill_tool}`"
+            );
+        }
+
+        // File-target spoofing under `dennett_skill_read` MUST still be rejected!
+        let mut spoofed = make_req("dennett_skill_read", "read", Some("/etc/passwd"));
+        spoofed.raw_input = json!({ "path": "/etc/passwd" });
+        assert_eq!(
+            engine.evaluate_request(&spoofed).effect,
+            PolicyEffect::Deny
+        );
+
+        // Project-scoped events & delegation remain strictly DENIED in standalone chats!
+        for project_tool in [
+            "dennett_event_create",
+            "dennett_event_list",
+            "dennett_delegate_task",
+            "dennett_agent_send_message",
+        ] {
+            let req = make_req(project_tool, "other", None);
+            assert_eq!(
+                engine.evaluate_request(&req).effect,
+                PolicyEffect::Deny,
+                "expected standalone chat to deny `{project_tool}`"
+            );
+        }
+
+        // Explicit Deny rule still beats built-in skill allow!
+        let mut denied_ctx = standalone_ctx;
+        denied_ctx.rules.push(PolicyRule {
+            rule_id: PolicyRuleId::new(),
+            scope: String::from("global"),
+            tool_name: String::from("dennett_skill_read"),
+            target_pattern: None,
+            effect: PolicyEffect::Deny,
+            reason: String::from("skill reading disabled by owner"),
+            created_at: TimestampMs::now(),
+        });
+        assert_eq!(
+            PolicyEngine::new(denied_ctx)
+                .evaluate_request(&make_req("dennett_skill_read", "other", None))
                 .effect,
             PolicyEffect::Deny
         );

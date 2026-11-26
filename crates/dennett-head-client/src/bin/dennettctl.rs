@@ -21,18 +21,20 @@ use dennett_contracts::{
     CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
     CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest, CreateTaskRequest,
     DennettError, DiscoverCapabilitiesRequest, DispatchEffectRequest, DocumentId, EffectClaimId,
-    EpistemicStatus, ExportRequest, ForgetRequest, ForgetTargetType, HeadMemorySearchRequest,
-    IdempotencyKey, ImportRequest, InboxCardId, InboxResolutionAction, ManualEffectResolution,
-    MemoryNoteId, MemoryScope, MissedRunPolicy, PermissionRequestId, PermissionResolutionDecision,
-    PolicyEffect, ProjectId, ProviderConnectionId, ProviderKind, RebindProjectRequest,
-    ReconcileEffectRequest, ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest,
-    ResolvePermissionRequest, RevokeGrantRequest, RuntimeAuthProfile, ScheduleKind,
-    SendAgentMessageRequest, SendMessageRequest, SessionId, SessionKind,
-    SetProjectCapabilityBindingRequest, SetSecretRequest, SimEffectBehavior, SupersedeClaimRequest,
-    TaskBudget, TaskId, TaskSchedule, TaskSignalRequest, ThinkingLevel, TimestampMs,
+    EnqueueFollowupRequest, EpistemicStatus, ExportRequest, FollowupId, ForgetRequest,
+    ForgetTargetType, HeadMemorySearchRequest, IdempotencyKey, ImportRequest, InboxCardId,
+    InboxResolutionAction, ManualEffectResolution, MemoryNoteId, MemoryScope, MissedRunPolicy,
+    PermissionRequestId, PermissionResolutionDecision, PolicyEffect, ProjectId,
+    ProviderConnectionId, ProviderKind, RebindProjectRequest, ReconcileEffectRequest,
+    ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest, ResolvePermissionRequest,
+    RevokeGrantRequest, RuntimeAuthProfile, ScheduleKind, SendAgentMessageRequest,
+    SendMessageRequest, SessionId, SessionKind, SetProjectCapabilityBindingRequest,
+    SetSecretRequest, SimEffectBehavior, SteerSessionRequest, SupersedeClaimRequest, TaskBudget,
+    TaskId, TaskSchedule, TaskSignalRequest, ThinkingLevel, TimestampMs,
     TriggerIndexRebuildRequest, UpdateAgentConfigRequest, UpdateCapabilityRequest,
-    UpdateDocumentRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
-    UpsertProviderConnectionRequest, WorkspaceWritePolicy, validate_secret_slot_key,
+    UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest,
+    UpdateTaskRequest, UpsertProviderConnectionRequest, WorkspaceWritePolicy,
+    validate_secret_slot_key,
 };
 use dennett_head_client::HeadClient;
 use serde::Serialize;
@@ -138,6 +140,43 @@ enum Action {
         g: GlobalOpts,
         session_id: SessionId,
         req: UpdateSessionRequest,
+    },
+    SessionLive {
+        g: GlobalOpts,
+        session_id: SessionId,
+    },
+    SessionSteer {
+        g: GlobalOpts,
+        session_id: SessionId,
+        req: SteerSessionRequest,
+    },
+    SessionFollowupAdd {
+        g: GlobalOpts,
+        session_id: SessionId,
+        req: EnqueueFollowupRequest,
+    },
+    SessionFollowupList {
+        g: GlobalOpts,
+        session_id: SessionId,
+    },
+    SessionFollowupUpdate {
+        g: GlobalOpts,
+        session_id: SessionId,
+        followup_id: FollowupId,
+        req: UpdateFollowupRequest,
+    },
+    SessionFollowupDelete {
+        g: GlobalOpts,
+        session_id: SessionId,
+        followup_id: FollowupId,
+    },
+    SessionFollowupClear {
+        g: GlobalOpts,
+        session_id: SessionId,
+    },
+    SessionFollowupResume {
+        g: GlobalOpts,
+        session_id: SessionId,
     },
     Send {
         g: GlobalOpts,
@@ -471,6 +510,10 @@ async fn main() -> ExitCode {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single exhaustive match maps every CLI Action variant to its --json flag"
+)]
 const fn action_json_mode(action: &Action) -> bool {
     match action {
         Action::Help | Action::Version => false,
@@ -496,6 +539,14 @@ const fn action_json_mode(action: &Action) -> bool {
         | Action::SessionList(g)
         | Action::SessionShow { g, .. }
         | Action::SessionUpdate { g, .. }
+        | Action::SessionLive { g, .. }
+        | Action::SessionSteer { g, .. }
+        | Action::SessionFollowupAdd { g, .. }
+        | Action::SessionFollowupList { g, .. }
+        | Action::SessionFollowupUpdate { g, .. }
+        | Action::SessionFollowupDelete { g, .. }
+        | Action::SessionFollowupClear { g, .. }
+        | Action::SessionFollowupResume { g, .. }
         | Action::Send { g, .. }
         | Action::Cancel { g, .. }
         | Action::ArtifactCreate { g, .. }
@@ -737,6 +788,84 @@ async fn run_action(action: Action) -> Result<(), DennettError> {
             let client = HeadClient::new(&g.url)?;
             let resp = client
                 .update_session(session_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SessionLive { g, session_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .get_session_live(session_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SessionSteer { g, session_id, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .steer_session(session_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SessionFollowupAdd { g, session_id, req } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .enqueue_followup(session_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SessionFollowupList { g, session_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .get_session_live(session_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp.followups, g.json)
+        }
+        Action::SessionFollowupUpdate {
+            g,
+            session_id,
+            followup_id,
+            req,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .update_followup(session_id, followup_id, &req, g.correlation_id.as_ref())
+                .await?;
+            print_output(&resp, g.json)
+        }
+        Action::SessionFollowupDelete {
+            g,
+            session_id,
+            followup_id,
+        } => {
+            let client = HeadClient::new(&g.url)?;
+            client
+                .delete_followup(session_id, followup_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(
+                &serde_json::json!({
+                    "session_id": session_id,
+                    "followup_id": followup_id,
+                    "deleted": true,
+                }),
+                g.json,
+            )
+        }
+        Action::SessionFollowupClear { g, session_id } => {
+            let client = HeadClient::new(&g.url)?;
+            client
+                .clear_followups(session_id, g.correlation_id.as_ref())
+                .await?;
+            print_output(
+                &serde_json::json!({
+                    "session_id": session_id,
+                    "cleared": true,
+                }),
+                g.json,
+            )
+        }
+        Action::SessionFollowupResume { g, session_id } => {
+            let client = HeadClient::new(&g.url)?;
+            let resp = client
+                .resume_followups(session_id, g.correlation_id.as_ref())
                 .await?;
             print_output(&resp, g.json)
         }
@@ -1338,7 +1467,7 @@ where
         "runtime" => parse_runtime_subcommand(g, &mut pos),
         "agent" => parse_agent_subcommand(g, &mut pos),
         "project" => parse_project_subcommand(g, &mut pos),
-        "session" => parse_session_subcommand(g, &mut pos),
+        "session" | "sessions" => parse_session_subcommand(g, &mut pos),
         "send" => parse_send(g, &mut pos),
         "cancel" => parse_cancel(g, &mut pos),
         "artifact" => parse_artifact_subcommand(g, &mut pos),
@@ -1791,6 +1920,10 @@ fn parse_project_subcommand(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "parses all session CRUD, live, steer, and followup subcommands in one match"
+)]
 fn parse_session_subcommand(
     g: GlobalOpts,
     iter: &mut impl Iterator<Item = String>,
@@ -1879,6 +2012,218 @@ fn parse_session_subcommand(
                 g,
                 session_id: req_opt(id, "--id")?,
                 req,
+            })
+        }
+        "live" => {
+            let mut id = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    other if id.is_none() && !other.starts_with("--") => {
+                        id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::SessionLive {
+                g,
+                session_id: req_opt(id, "--session")?,
+            })
+        }
+        "steer" => {
+            let mut id = None;
+            let mut content = None;
+            let mut client_message_id = None;
+            let mut timeout_ms = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    "--message" | "--content" => content = Some(next_val(iter, &flag)?),
+                    "--client-message-id" => {
+                        client_message_id = Some(next_val(iter, "--client-message-id")?);
+                    }
+                    "--timeout-ms" => {
+                        timeout_ms =
+                            Some(parse_u64(&next_val(iter, "--timeout-ms")?, "--timeout-ms")?);
+                    }
+                    other if id.is_none() && !other.starts_with("--") => {
+                        id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = SteerSessionRequest {
+                content: req_opt(content, "--message")?,
+                client_message_id,
+                timeout_ms,
+            };
+            req.validate()?;
+            Ok(Action::SessionSteer {
+                g,
+                session_id: req_opt(id, "--session")?,
+                req,
+            })
+        }
+        "followup" | "followups" => parse_session_followup_subcommand(g, iter),
+        other => Err(unknown_flag(other)),
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "parses all durable session follow-up queue subcommands (add/list/update/delete/clear/resume)"
+)]
+fn parse_session_followup_subcommand(
+    g: GlobalOpts,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<Action, DennettError> {
+    let sub = next_val(iter, "sessions followup <subcommand>")?;
+    match sub.as_str() {
+        "add" => {
+            let mut session_id = None;
+            let mut content = None;
+            let mut idempotency_key = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        session_id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    "--message" | "--content" => content = Some(next_val(iter, &flag)?),
+                    "--idempotency-key" => {
+                        idempotency_key = Some(next_val(iter, "--idempotency-key")?);
+                    }
+                    other if session_id.is_none() && !other.starts_with("--") => {
+                        session_id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = EnqueueFollowupRequest {
+                content: req_opt(content, "--message")?,
+                idempotency_key,
+            };
+            req.validate()?;
+            Ok(Action::SessionFollowupAdd {
+                g,
+                session_id: req_opt(session_id, "--session")?,
+                req,
+            })
+        }
+        "list" => {
+            let mut session_id = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        session_id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    other if session_id.is_none() && !other.starts_with("--") => {
+                        session_id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::SessionFollowupList {
+                g,
+                session_id: req_opt(session_id, "--session")?,
+            })
+        }
+        "update" => {
+            let mut session_id = None;
+            let mut followup_id = None;
+            let mut content = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--session" => {
+                        session_id = Some(SessionId::from_str(&next_val(iter, "--session")?)?);
+                    }
+                    "--followup" | "--followup-id" | "--id" => {
+                        followup_id = Some(FollowupId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    "--message" | "--content" => content = Some(next_val(iter, &flag)?),
+                    other if session_id.is_none() && !other.starts_with("--") => {
+                        session_id = Some(SessionId::from_str(other)?);
+                    }
+                    other if followup_id.is_none() && !other.starts_with("--") => {
+                        followup_id = Some(FollowupId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            let req = UpdateFollowupRequest {
+                content: req_opt(content, "--message")?,
+            };
+            req.validate()?;
+            Ok(Action::SessionFollowupUpdate {
+                g,
+                session_id: req_opt(session_id, "--session")?,
+                followup_id: req_opt(followup_id, "--followup")?,
+                req,
+            })
+        }
+        "delete" => {
+            let mut session_id = None;
+            let mut followup_id = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--session" => {
+                        session_id = Some(SessionId::from_str(&next_val(iter, "--session")?)?);
+                    }
+                    "--followup" | "--followup-id" | "--id" => {
+                        followup_id = Some(FollowupId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    other if session_id.is_none() && !other.starts_with("--") => {
+                        session_id = Some(SessionId::from_str(other)?);
+                    }
+                    other if followup_id.is_none() && !other.starts_with("--") => {
+                        followup_id = Some(FollowupId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::SessionFollowupDelete {
+                g,
+                session_id: req_opt(session_id, "--session")?,
+                followup_id: req_opt(followup_id, "--followup")?,
+            })
+        }
+        "clear" => {
+            let mut session_id = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        session_id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    other if session_id.is_none() && !other.starts_with("--") => {
+                        session_id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::SessionFollowupClear {
+                g,
+                session_id: req_opt(session_id, "--session")?,
+            })
+        }
+        "resume" => {
+            let mut session_id = None;
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--id" | "--session" => {
+                        session_id = Some(SessionId::from_str(&next_val(iter, &flag)?)?);
+                    }
+                    other if session_id.is_none() && !other.starts_with("--") => {
+                        session_id = Some(SessionId::from_str(other)?);
+                    }
+                    other => return Err(unknown_flag(other)),
+                }
+            }
+            Ok(Action::SessionFollowupResume {
+                g,
+                session_id: req_opt(session_id, "--session")?,
             })
         }
         other => Err(unknown_flag(other)),
@@ -4215,6 +4560,12 @@ fn print_usage() {
            secrets list|set|delete [...]\n\
            connections list|create|update|delete|probe|activate [...]\n\
            capabilities list|discover|create|update|rollback|delete|bind [...]\n\
+           sessions live --session <uuid>\n\
+           sessions steer --session <uuid> --message <text> [--client-message-id <k>] [--timeout-ms <ms>]\n\
+           sessions followup add --session <uuid> --message <text> [--idempotency-key <k>]\n\
+           sessions followup list|clear|resume --session <uuid>\n\
+           sessions followup update --session <uuid> --followup <uuid> --message <text>\n\
+           sessions followup delete --session <uuid> --followup <uuid>\n\
            diagnostics [--limit <n>]",
         env!("CARGO_PKG_VERSION")
     );
@@ -4699,6 +5050,135 @@ mod tests {
             .expect("parse memory forget"),
             Action::MemoryForget { ref req, .. }
                 if req.target_type == ForgetTargetType::Note && req.target_id == target_uuid
+        ));
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exercises all D3+ live, steer, and follow-up CLI parsers in one test"
+    )]
+    fn cli_parses_d3_live_followups_and_steer_commands() {
+        let sid = SessionId::new();
+        let fid = FollowupId::new();
+
+        assert!(matches!(
+            parse_cli(
+                ["sessions", "live", "--session", &sid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse sessions live"),
+            Action::SessionLive { session_id, .. } if session_id == sid
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "sessions",
+                    "steer",
+                    "--session",
+                    &sid.to_string(),
+                    "--message",
+                    "Switch to plan B",
+                    "--client-message-id",
+                    "steer-1",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse sessions steer"),
+            Action::SessionSteer { session_id, ref req, .. }
+                if session_id == sid
+                    && req.content == "Switch to plan B"
+                    && req.client_message_id.as_deref() == Some("steer-1")
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "sessions",
+                    "followup",
+                    "add",
+                    "--session",
+                    &sid.to_string(),
+                    "--message",
+                    "Next check tests",
+                    "--idempotency-key",
+                    "fup-1",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse followup add"),
+            Action::SessionFollowupAdd { session_id, ref req, .. }
+                if session_id == sid
+                    && req.content == "Next check tests"
+                    && req.idempotency_key.as_deref() == Some("fup-1")
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["sessions", "followup", "list", &sid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse followup list"),
+            Action::SessionFollowupList { session_id, .. } if session_id == sid
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "sessions",
+                    "followup",
+                    "update",
+                    "--session",
+                    &sid.to_string(),
+                    "--followup",
+                    &fid.to_string(),
+                    "--message",
+                    "Updated text",
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse followup update"),
+            Action::SessionFollowupUpdate {
+                session_id,
+                followup_id,
+                ref req,
+                ..
+            } if session_id == sid && followup_id == fid && req.content == "Updated text"
+        ));
+        assert!(matches!(
+            parse_cli(
+                [
+                    "sessions",
+                    "followup",
+                    "delete",
+                    &sid.to_string(),
+                    &fid.to_string(),
+                ]
+                .map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse followup delete"),
+            Action::SessionFollowupDelete {
+                session_id,
+                followup_id,
+                ..
+            } if session_id == sid && followup_id == fid
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["sessions", "followup", "clear", "--session", &sid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse followup clear"),
+            Action::SessionFollowupClear { session_id, .. } if session_id == sid
+        ));
+        assert!(matches!(
+            parse_cli(
+                ["sessions", "followup", "resume", "--session", &sid.to_string()].map(String::from),
+                DEFAULT_HEAD_URL,
+            )
+            .expect("parse followup resume"),
+            Action::SessionFollowupResume { session_id, .. } if session_id == sid
         ));
     }
 }

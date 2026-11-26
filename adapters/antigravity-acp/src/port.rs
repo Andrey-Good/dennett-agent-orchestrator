@@ -202,6 +202,13 @@ pub enum RuntimeEvent {
         /// Raw JSON usage summary.
         usage: Value,
     },
+    /// Live context window usage update reported by the runtime (`sessionUpdate == "usage_update"`).
+    ContextUsageUpdated {
+        /// Context tokens currently used, when reported.
+        used_tokens: Option<u64>,
+        /// Maximum context window size in tokens, when reported.
+        window_tokens: Option<u64>,
+    },
     /// Explicit Dennett-side context rehydration performed when native resume was unavailable.
     Rehydrated {
         /// Safe reason explaining why fresh rehydration was required.
@@ -370,6 +377,46 @@ impl TurnOutcome {
             (None, Some(o)) => Some(o),
             (None, None) => None,
         }
+    }
+
+    /// Extracts latest reported context token usage `(used_tokens, window_tokens)` when available.
+    #[must_use]
+    pub fn context_usage(&self) -> (Option<u64>, Option<u64>) {
+        let mut used: Option<u64> = None;
+        let mut window: Option<u64> = None;
+        for ev in &self.events {
+            if let RuntimeEvent::ContextUsageUpdated {
+                used_tokens,
+                window_tokens,
+            } = ev
+            {
+                if used_tokens.is_some() {
+                    used = *used_tokens;
+                }
+                if window_tokens.is_some() {
+                    window = *window_tokens;
+                }
+            }
+        }
+        if (used.is_none() || window.is_none())
+            && let Some(ref usage) = self.usage
+        {
+            if used.is_none() {
+                used = usage
+                    .get("used")
+                    .or_else(|| usage.get("contextUsedTokens"))
+                    .or_else(|| usage.get("context_used_tokens"))
+                    .and_then(Value::as_u64);
+            }
+            if window.is_none() {
+                window = usage
+                    .get("size")
+                    .or_else(|| usage.get("contextWindowTokens"))
+                    .or_else(|| usage.get("context_window_tokens"))
+                    .and_then(Value::as_u64);
+            }
+        }
+        (used, window)
     }
 
     /// Returns the clarifying question if the runtime requested user clarification during this turn.

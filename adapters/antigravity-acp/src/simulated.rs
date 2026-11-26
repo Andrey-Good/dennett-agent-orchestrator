@@ -436,6 +436,38 @@ fn find_directive<'a>(prompt: &'a str, prefix: &str) -> Option<&'a str> {
     find_all_directives(prompt, prefix).into_iter().next()
 }
 
+async fn sleep_sim_cancellable(
+    dur: Duration,
+    turn_deadline: time::Instant,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<bool, DennettError> {
+    if *cancel_rx.borrow() {
+        return Ok(true);
+    }
+    let remaining = turn_deadline.saturating_duration_since(time::Instant::now());
+    if remaining.is_zero() {
+        return Err(DennettError::Timeout {
+            operation: String::from("session/prompt"),
+        });
+    }
+    let wait = dur.min(remaining);
+    tokio::select! {
+        biased;
+        changed = cancel_rx.changed() => {
+            Ok(changed.is_ok() && *cancel_rx.borrow())
+        }
+        () = time::sleep(wait) => {
+            if time::Instant::now() >= turn_deadline && wait == remaining && remaining < dur {
+                Err(DennettError::Timeout {
+                    operation: String::from("session/prompt"),
+                })
+            } else {
+                Ok(*cancel_rx.borrow())
+            }
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     clippy::too_many_arguments,
@@ -672,6 +704,226 @@ async fn execute_sim_turn(
             },
             event_tx,
         );
+    }
+
+    if prompt.contains("[SIM:ECHO_SYSTEM_PROMPT]") {
+        let reply = session.system_prompt.clone();
+        emit(
+            &mut events,
+            RuntimeEvent::TextDelta {
+                text: reply.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text: reply,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
+    }
+
+    if let Some(raw_stream_tool) = find_directive(prompt, "[SIM:STREAM_TOOL:") {
+        let chunks: Vec<&str> = raw_stream_tool.split('|').collect();
+        let lead_chunk = chunks.first().copied().unwrap_or_default();
+        let rest_chunks = if chunks.len() > 1 { &chunks[1..] } else { &[] };
+        let deadline = time::Instant::now() + turn_timeout;
+        let mut assistant_text = String::new();
+
+        if !lead_chunk.is_empty() {
+            assistant_text.push_str(lead_chunk);
+            emit(
+                &mut events,
+                RuntimeEvent::TextDelta {
+                    text: lead_chunk.to_owned(),
+                },
+                event_tx,
+            );
+        }
+
+        if sleep_sim_cancellable(Duration::from_millis(120), deadline, cancel_rx).await? {
+            emit(
+                &mut events,
+                RuntimeEvent::Cancelled {
+                    reason: String::from("cancelled"),
+                },
+                event_tx,
+            );
+            return Ok(TurnOutcome {
+                status: RunStatus::Cancelled,
+                stop_reason: String::from("cancelled"),
+                assistant_text,
+                events,
+                usage: None,
+                human_wait_ms,
+            });
+        }
+
+        emit(
+            &mut events,
+            RuntimeEvent::ToolObserved {
+                tool_call_id: format!("sim-st-{}", &Uuid::new_v4().simple().to_string()[..8]),
+                tool_name: String::from("read_file"),
+                title: String::from("read_file src/lib.rs"),
+                status: String::from("completed"),
+                output_excerpt: String::from("simulated silent tool call"),
+            },
+            event_tx,
+        );
+
+        if sleep_sim_cancellable(Duration::from_millis(120), deadline, cancel_rx).await? {
+            emit(
+                &mut events,
+                RuntimeEvent::Cancelled {
+                    reason: String::from("cancelled"),
+                },
+                event_tx,
+            );
+            return Ok(TurnOutcome {
+                status: RunStatus::Cancelled,
+                stop_reason: String::from("cancelled"),
+                assistant_text,
+                events,
+                usage: None,
+                human_wait_ms,
+            });
+        }
+
+        let mut need_tool_break = true;
+        for (idx, chunk) in rest_chunks.iter().enumerate() {
+            if idx > 0
+                && sleep_sim_cancellable(Duration::from_millis(120), deadline, cancel_rx).await?
+            {
+                emit(
+                    &mut events,
+                    RuntimeEvent::Cancelled {
+                        reason: String::from("cancelled"),
+                    },
+                    event_tx,
+                );
+                return Ok(TurnOutcome {
+                    status: RunStatus::Cancelled,
+                    stop_reason: String::from("cancelled"),
+                    assistant_text,
+                    events,
+                    usage: None,
+                    human_wait_ms,
+                });
+            }
+            if !chunk.is_empty() {
+                if need_tool_break
+                    && !assistant_text.is_empty()
+                    && !assistant_text.ends_with('\n')
+                    && !chunk.starts_with('\n')
+                {
+                    assistant_text.push_str("\n\n");
+                }
+                need_tool_break = false;
+                assistant_text.push_str(chunk);
+                emit(
+                    &mut events,
+                    RuntimeEvent::TextDelta {
+                        text: (*chunk).to_owned(),
+                    },
+                    event_tx,
+                );
+            }
+        }
+
+        emit(
+            &mut events,
+            RuntimeEvent::ContextUsageUpdated {
+                used_tokens: Some(4096),
+                window_tokens: Some(1_048_576),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
+    }
+
+    if let Some(raw_stream) = find_directive(prompt, "[SIM:STREAM:") {
+        let parts: Vec<&str> = raw_stream.split('|').collect();
+        let deadline = time::Instant::now() + turn_timeout;
+        let mut assistant_text = String::new();
+
+        for (idx, part) in parts.iter().enumerate() {
+            if idx > 0
+                && sleep_sim_cancellable(Duration::from_millis(120), deadline, cancel_rx).await?
+            {
+                emit(
+                    &mut events,
+                    RuntimeEvent::Cancelled {
+                        reason: String::from("cancelled"),
+                    },
+                    event_tx,
+                );
+                return Ok(TurnOutcome {
+                    status: RunStatus::Cancelled,
+                    stop_reason: String::from("cancelled"),
+                    assistant_text,
+                    events,
+                    usage: None,
+                    human_wait_ms,
+                });
+            }
+            if !part.is_empty() {
+                assistant_text.push_str(part);
+                emit(
+                    &mut events,
+                    RuntimeEvent::TextDelta {
+                        text: (*part).to_owned(),
+                    },
+                    event_tx,
+                );
+            }
+        }
+
+        emit(
+            &mut events,
+            RuntimeEvent::ContextUsageUpdated {
+                used_tokens: Some(4096),
+                window_tokens: Some(1_048_576),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
     }
 
     if prompt.contains("[SIM:INSPECT_CAPABILITIES]") {
@@ -1043,6 +1295,126 @@ async fn execute_sim_turn(
                 )
             }
         };
+        emit(
+            &mut events,
+            RuntimeEvent::TextDelta {
+                text: reply.clone(),
+            },
+            event_tx,
+        );
+        emit(
+            &mut events,
+            RuntimeEvent::Completed {
+                stop_reason: String::from("end_turn"),
+            },
+            event_tx,
+        );
+        return Ok(TurnOutcome {
+            status: RunStatus::Succeeded,
+            stop_reason: String::from("end_turn"),
+            assistant_text: reply,
+            events,
+            usage: usage_payload,
+            human_wait_ms,
+        });
+    }
+
+    if let Some(raw_ctrl) = find_directive(prompt, "[SIM:CONTROL_MCP:") {
+        let (tool_name, args_json) = match raw_ctrl.split_once('|') {
+            Some((name, raw_json)) => {
+                let parsed = serde_json::from_str::<Value>(raw_json.trim())
+                    .unwrap_or_else(|_| json!({}));
+                (name.trim().to_owned(), parsed)
+            }
+            None => (raw_ctrl.trim().to_owned(), json!({})),
+        };
+        let tool_call_id = format!("sim-ctrl-{}", &Uuid::new_v4().simple().to_string()[..8]);
+        let eval_req = PolicyEvaluationRequest {
+            session_id: dennett_session_id,
+            run_id,
+            tool_call_id: tool_call_id.clone(),
+            tool_name: tool_name.clone(),
+            tool_kind: String::from("other"),
+            title: format!("dennett-control:{tool_name}"),
+            target: args_json
+                .get("slug")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            locations: Vec::new(),
+            raw_input: args_json.clone(),
+        };
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionRequested {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+                target: eval_req.target.clone(),
+                title: eval_req.title.clone(),
+            },
+            event_tx,
+        );
+        let wait_started = time::Instant::now();
+        let decision = policy.evaluate(&eval_req).await;
+        human_wait_ms = human_wait_ms
+            .saturating_add(u64::try_from(wait_started.elapsed().as_millis()).unwrap_or(u64::MAX));
+        emit(
+            &mut events,
+            RuntimeEvent::PermissionResolved {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+                target: eval_req.target.clone(),
+                effect: decision.effect,
+                matched_rule_id: decision.matched_rule_id,
+                reason: decision.reason.clone(),
+                scope: decision.scope.clone(),
+                chosen_option_id: Some(if decision.effect == PolicyEffect::Allow {
+                    String::from("allow_once")
+                } else {
+                    String::from("reject_once")
+                }),
+            },
+            event_tx,
+        );
+
+        let reply = if decision.effect == PolicyEffect::Allow {
+            let control_spec = session
+                .mcp_servers
+                .iter()
+                .find(|s| s.name == "dennett-control")
+                .ok_or_else(|| DennettError::Internal {
+                    detail: String::from("dennett-control MCP server spec not attached to session"),
+                })?;
+            let mcp_output = invoke_mcp_tool_stdio(control_spec, &tool_name, &args_json).await?;
+            emit(
+                &mut events,
+                RuntimeEvent::ToolObserved {
+                    tool_call_id,
+                    tool_name: tool_name.clone(),
+                    title: eval_req.title,
+                    status: String::from("completed"),
+                    output_excerpt: mcp_output.clone(),
+                },
+                event_tx,
+            );
+            format!("[simulated] {tool_name} ALLOWED: {mcp_output}")
+        } else {
+            emit(
+                &mut events,
+                RuntimeEvent::ToolObserved {
+                    tool_call_id,
+                    tool_name: tool_name.clone(),
+                    title: eval_req.title,
+                    status: String::from("denied"),
+                    output_excerpt: format!("denied: {}", decision.reason),
+                },
+                event_tx,
+            );
+            format!(
+                "[simulated] tool `{tool_name}` DENIED (policy: {})",
+                decision.reason
+            )
+        };
+
         emit(
             &mut events,
             RuntimeEvent::TextDelta {
