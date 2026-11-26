@@ -39,6 +39,7 @@ import {
   type DispatchEffectResponse,
   type DocumentVersion,
   type EffectClaimRecord,
+  type EnqueueFollowupRequest,
   type EventStreamResponse,
   type ExportRequest,
   type ExportResponse,
@@ -73,6 +74,8 @@ import {
   type ListSessionsResponse,
   type ListTasksResponse,
   type ListTombstonesResponse,
+  type LiveRunResponse,
+  type LiveRunSnapshot,
   type MemoryClaim,
   type MemoryConflict,
   type MemoryDocument,
@@ -100,6 +103,7 @@ import {
   type ResolveInboxCardResponse,
   type ResolvePermissionRequest,
   type ResolvePermissionResponse,
+  type ResumeFollowupsResponse,
   type RevokeGrantRequest,
   type RunRecord,
   type RuntimeAuthProfile,
@@ -113,10 +117,12 @@ import {
   type SendMessageRequest,
   type SendMessageResponse,
   type SessionDetailResponse,
+  type SessionFollowupRecord,
   type SessionRecord,
   type SetProjectCapabilityBindingRequest,
   type SetSecretRequest,
   type StateSnapshotResponse,
+  type SteerSessionRequest,
   type SupersedeClaimRequest,
   type TaskDetailResponse,
   type TaskRecord,
@@ -130,6 +136,7 @@ import {
   type UpdateAgentConfigRequest,
   type UpdateCapabilityRequest,
   type UpdateDocumentRequest,
+  type UpdateFollowupRequest,
   type UpdateProjectRequest,
   type UpdateSessionRequest,
   type UpdateTaskRequest,
@@ -171,6 +178,9 @@ export interface MockBridgeSeed {
   sendDelayMs?: number;
   failNextSendWith?: { code: string; message: string } | null;
   runningSessionIds?: string[];
+  // Phase D3+ live streaming & durable followups
+  liveRunBySession?: Record<string, LiveRunSnapshot | null>;
+  followupsBySession?: Record<string, SessionFollowupRecord[]>;
   // Phase D3 seeds
   secrets?: SecretMetadataRecord[];
   providerConnections?: ProviderConnectionRecord[];
@@ -354,6 +364,8 @@ export class MockDesktopBridge implements DesktopBridge {
   public sendDelayMs: number;
   public failNextSendWith: { code: string; message: string } | null;
   public seededRunningSessionIds: Set<string>;
+  public liveRunBySession: Record<string, LiveRunSnapshot | null>;
+  public followupsBySession: Record<string, SessionFollowupRecord[]>;
 
   // Phase D3 in-memory state
   public secrets: SecretMetadataRecord[];
@@ -384,8 +396,9 @@ export class MockDesktopBridge implements DesktopBridge {
 
   public readonly calls: Array<{ method: string; args?: unknown }> = [];
   private idSeq = 10000;
+  private followupPositionSeq = 1;
   private lastMutationTs = 0;
-  private pendingCancelResolvers = new Map<string, () => void>();
+  private pendingCancelResolvers = new Map<string, (reason: "stop" | "steer") => void>();
 
   constructor(seed: MockBridgeSeed = {}) {
     this.supportsNativeFolderPicker = seed.supportsNativeFolderPicker ?? true;
@@ -444,6 +457,16 @@ export class MockDesktopBridge implements DesktopBridge {
     this.sendDelayMs = seed.sendDelayMs ?? 0;
     this.failNextSendWith = seed.failNextSendWith ?? null;
     this.seededRunningSessionIds = new Set(seed.runningSessionIds ?? []);
+    this.liveRunBySession = { ...(seed.liveRunBySession ?? {}) };
+    this.followupsBySession = {};
+    for (const [sid, list] of Object.entries(seed.followupsBySession ?? {})) {
+      this.followupsBySession[sid] = list.map((item) => ({ ...item }));
+      for (const item of list) {
+        if (item.position >= this.followupPositionSeq) {
+          this.followupPositionSeq = item.position + 1;
+        }
+      }
+    }
 
     const initNow = Date.now();
     this.secrets = seed.secrets
@@ -1190,6 +1213,31 @@ export class MockDesktopBridge implements DesktopBridge {
     return updated;
   }
 
+  private getPendingFollowups(sessionId: string): SessionFollowupRecord[] {
+    return (this.followupsBySession[sessionId] ?? [])
+      .filter((f) => f.status === "queued" || f.status === "paused")
+      .sort((a, b) => a.position - b.position)
+      .map((f) => ({ ...f }));
+  }
+
+  private pauseQueuedFollowups(sessionId: string): void {
+    const existing = this.followupsBySession[sessionId];
+    if (!existing || existing.length === 0) {
+      return;
+    }
+    const now = this.nextTimestamp();
+    this.followupsBySession[sessionId] = existing.map((f) =>
+      f.status === "queued" ? { ...f, status: "paused", updated_at: now } : f,
+    );
+  }
+
+  private isSessionCurrentlyRunning(sessionId: string): boolean {
+    if (this.pendingCancelResolvers.has(sessionId) || this.seededRunningSessionIds.has(sessionId)) {
+      return true;
+    }
+    return (this.runsBySession[sessionId] ?? []).some((r) => r.status === "running");
+  }
+
   public async getSessionDetail(sessionId: string): Promise<SessionDetailResponse> {
     this.calls.push({ method: "getSessionDetail", args: sessionId });
     this.ensureConnected();
@@ -1203,6 +1251,7 @@ export class MockDesktopBridge implements DesktopBridge {
       artifacts: [...(this.artifactsBySession[sessionId] ?? [])],
       runs: [...(this.runsBySession[sessionId] ?? [])],
       permission_decisions: [...(this.permissionDecisionsBySession[sessionId] ?? [])],
+      followups: this.getPendingFollowups(sessionId),
     };
   }
 
@@ -1246,14 +1295,16 @@ export class MockDesktopBridge implements DesktopBridge {
     }
 
     let wasCancelled = false;
+    let cancelReason: "stop" | "steer" | null = null;
     if (this.sendDelayMs > 0) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           this.pendingCancelResolvers.delete(sessionId);
           resolve();
         }, this.sendDelayMs);
-        this.pendingCancelResolvers.set(sessionId, () => {
+        this.pendingCancelResolvers.set(sessionId, (reason) => {
           wasCancelled = true;
+          cancelReason = reason;
           clearTimeout(timer);
           this.pendingCancelResolvers.delete(sessionId);
           resolve();
@@ -1322,8 +1373,9 @@ export class MockDesktopBridge implements DesktopBridge {
       finished_at: now + 10,
     };
 
+    const currentMessages = this.messagesBySession[sessionId] ?? [];
     this.messagesBySession[sessionId] = [
-      ...prior,
+      ...currentMessages,
       userMsg,
       ...(assistantMsg ? [assistantMsg] : []),
     ];
@@ -1351,6 +1403,29 @@ export class MockDesktopBridge implements DesktopBridge {
     if (request.client_message_id) {
       this.clientMessageIndex.set(`${sessionId}:${request.client_message_id}`, response);
     }
+    if (cancelReason !== "steer") {
+      this.liveRunBySession[sessionId] = null;
+    }
+    if (wasCancelled && cancelReason === "stop") {
+      this.pauseQueuedFollowups(sessionId);
+    } else if (!wasCancelled) {
+      const nextQueued = (this.followupsBySession[sessionId] ?? [])
+        .filter((f) => f.status === "queued")
+        .sort((a, b) => a.position - b.position)[0];
+      if (nextQueued) {
+        const dispatchTs = this.nextTimestamp();
+        this.followupsBySession[sessionId] = (this.followupsBySession[sessionId] ?? []).map((f) =>
+          f.followup_id === nextQueued.followup_id
+            ? { ...f, status: "dispatched", updated_at: dispatchTs }
+            : f,
+        );
+        setTimeout(() => {
+          if (this.connected) {
+            void this.sendMessage(sessionId, { content: nextQueued.content }).catch(() => {});
+          }
+        }, 0);
+      }
+    }
     this.emitControlEvent("session.message_completed", {
       projectId: session.project_id,
       sessionId,
@@ -1363,8 +1438,10 @@ export class MockDesktopBridge implements DesktopBridge {
     this.ensureConnected();
     const resolver = this.pendingCancelResolvers.get(sessionId);
     if (resolver) {
-      resolver();
+      resolver("stop");
     }
+    this.liveRunBySession[sessionId] = null;
+    this.pauseQueuedFollowups(sessionId);
     const hadSeededRunning = this.seededRunningSessionIds.delete(sessionId);
     const sessionRuns = this.runsBySession[sessionId] ?? [];
     let cancelledExistingRunId: string | null = null;
@@ -3830,6 +3907,184 @@ export class MockDesktopBridge implements DesktopBridge {
       j.job_id === jobId ? updated : j,
     );
     return updated;
+  }
+
+  // Phase D3+: Live Session Runs, Durable Follow-ups & Steering
+  public async getSessionLive(sessionId: string): Promise<LiveRunResponse> {
+    this.calls.push({ method: "getSessionLive", args: sessionId });
+    this.ensureConnected();
+    const session = this.sessions.find((s) => s.session_id === sessionId);
+    if (!session) {
+      throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
+    }
+    const active = this.liveRunBySession[sessionId] ?? null;
+    return {
+      active: active ? { ...active } : null,
+      followups: this.getPendingFollowups(sessionId),
+    };
+  }
+
+  public async enqueueFollowup(
+    sessionId: string,
+    request: EnqueueFollowupRequest,
+  ): Promise<SessionFollowupRecord> {
+    this.calls.push({ method: "enqueueFollowup", args: { sessionId, request } });
+    this.ensureConnected();
+    const session = this.sessions.find((s) => s.session_id === sessionId);
+    if (!session) {
+      throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
+    }
+    const trimmed = request.content.trim();
+    if (!trimmed) {
+      throw { code: "INVALID_INPUT", message: "followup content must not be empty" };
+    }
+    const existing = this.followupsBySession[sessionId] ?? [];
+    if (request.idempotency_key) {
+      const dup = existing.find((f) => f.idempotency_key === request.idempotency_key);
+      if (dup) {
+        return { ...dup };
+      }
+    }
+    const now = this.nextTimestamp();
+    const record: SessionFollowupRecord = {
+      followup_id: this.nextUuid("98500000"),
+      session_id: sessionId,
+      content: trimmed,
+      status: "queued",
+      position: this.followupPositionSeq++,
+      idempotency_key: request.idempotency_key ?? null,
+      dispatched_run_id: null,
+      created_at: now,
+      updated_at: now,
+    };
+    this.followupsBySession[sessionId] = [...existing, record];
+    return { ...record };
+  }
+
+  public async updateFollowup(
+    sessionId: string,
+    followupId: string,
+    request: UpdateFollowupRequest,
+  ): Promise<SessionFollowupRecord> {
+    this.calls.push({ method: "updateFollowup", args: { sessionId, followupId, request } });
+    this.ensureConnected();
+    const trimmed = request.content.trim();
+    if (!trimmed) {
+      throw { code: "INVALID_INPUT", message: "followup content must not be empty" };
+    }
+    const existing = this.followupsBySession[sessionId] ?? [];
+    const target = existing.find(
+      (f) => f.followup_id === followupId && (f.status === "queued" || f.status === "paused"),
+    );
+    if (!target) {
+      throw { code: "NOT_FOUND", message: `followup ${followupId} not found` };
+    }
+    const updated: SessionFollowupRecord = {
+      ...target,
+      content: trimmed,
+      updated_at: this.nextTimestamp(),
+    };
+    this.followupsBySession[sessionId] = existing.map((f) =>
+      f.followup_id === followupId ? updated : f,
+    );
+    return { ...updated };
+  }
+
+  public async deleteFollowup(sessionId: string, followupId: string): Promise<void> {
+    this.calls.push({ method: "deleteFollowup", args: { sessionId, followupId } });
+    this.ensureConnected();
+    const existing = this.followupsBySession[sessionId] ?? [];
+    const target = existing.find((f) => f.followup_id === followupId);
+    if (!target) {
+      throw { code: "NOT_FOUND", message: `followup ${followupId} not found` };
+    }
+    const now = this.nextTimestamp();
+    this.followupsBySession[sessionId] = existing.map((f) =>
+      f.followup_id === followupId ? { ...f, status: "cancelled", updated_at: now } : f,
+    );
+  }
+
+  public async clearFollowups(sessionId: string): Promise<void> {
+    this.calls.push({ method: "clearFollowups", args: sessionId });
+    this.ensureConnected();
+    const existing = this.followupsBySession[sessionId] ?? [];
+    const now = this.nextTimestamp();
+    this.followupsBySession[sessionId] = existing.map((f) =>
+      f.status === "queued" || f.status === "paused"
+        ? { ...f, status: "cancelled", updated_at: now }
+        : f,
+    );
+  }
+
+  public async resumeFollowups(sessionId: string): Promise<ResumeFollowupsResponse> {
+    this.calls.push({ method: "resumeFollowups", args: sessionId });
+    this.ensureConnected();
+    const session = this.sessions.find((s) => s.session_id === sessionId);
+    if (!session) {
+      throw { code: "NOT_FOUND", message: `session ${sessionId} not found` };
+    }
+    const now = this.nextTimestamp();
+    const existing = this.followupsBySession[sessionId] ?? [];
+    const resumed = existing.map((f) =>
+      f.status === "paused" ? { ...f, status: "queued" as const, updated_at: now } : f,
+    );
+    this.followupsBySession[sessionId] = resumed;
+
+    let dispatched: SendMessageResponse | null = null;
+    if (!this.isSessionCurrentlyRunning(sessionId)) {
+      const nextQueued = resumed
+        .filter((f) => f.status === "queued")
+        .sort((a, b) => a.position - b.position)[0];
+      if (nextQueued) {
+        this.followupsBySession[sessionId] = resumed.map((f) =>
+          f.followup_id === nextQueued.followup_id
+            ? { ...f, status: "dispatched", updated_at: this.nextTimestamp() }
+            : f,
+        );
+        dispatched = await this.sendMessage(sessionId, { content: nextQueued.content });
+        this.followupsBySession[sessionId] = (this.followupsBySession[sessionId] ?? []).map((f) =>
+          f.followup_id === nextQueued.followup_id
+            ? { ...f, dispatched_run_id: dispatched!.run.run_id }
+            : f,
+        );
+      }
+    }
+
+    return {
+      followups: this.getPendingFollowups(sessionId),
+      dispatched,
+    };
+  }
+
+  public async steerSession(
+    sessionId: string,
+    request: SteerSessionRequest,
+  ): Promise<SendMessageResponse> {
+    this.calls.push({ method: "steerSession", args: { sessionId, request } });
+    this.ensureConnected();
+    const trimmed = request.content.trim();
+    if (!trimmed) {
+      throw { code: "INVALID_INPUT", message: "steer content must not be empty" };
+    }
+    const resolver = this.pendingCancelResolvers.get(sessionId);
+    if (resolver) {
+      resolver("steer");
+    }
+    this.seededRunningSessionIds.delete(sessionId);
+    this.liveRunBySession[sessionId] = null;
+    const sessionRuns = this.runsBySession[sessionId] ?? [];
+    if (sessionRuns.some((r) => r.status === "running")) {
+      this.runsBySession[sessionId] = sessionRuns.map((r) =>
+        r.status === "running"
+          ? { ...r, status: "cancelled", stop_reason: "steered", finished_at: Date.now() }
+          : r,
+      );
+    }
+    return this.sendMessage(sessionId, {
+      content: trimmed,
+      client_message_id: request.client_message_id ?? null,
+      timeout_ms: request.timeout_ms ?? null,
+    });
   }
 }
 

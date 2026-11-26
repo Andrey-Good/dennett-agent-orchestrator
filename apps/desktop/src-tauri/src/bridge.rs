@@ -24,8 +24,8 @@ use dennett_contracts::{
     CreateSessionRequest, CreateTaskRequest, DeleteCapabilityResponse,
     DeleteProviderConnectionResponse, DennettError, DiagnosticsResponse,
     DiscoverCapabilitiesRequest, DiscoverCapabilitiesResponse, DispatchEffectRequest,
-    DispatchEffectResponse, DocumentId, EffectClaimId, EventStreamResponse, ExportRequest,
-    ExportResponse, FlushOutboxResponse, ForgetRequest, ForgetResponse,
+    DispatchEffectResponse, DocumentId, EffectClaimId, EnqueueFollowupRequest, EventStreamResponse,
+    ExportRequest, ExportResponse, FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse,
     GetDocumentVersionsResponse, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
     ImportRequest, ImportResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
     ListArtifactsResponse, ListCapabilitiesResponse, ListCapabilityGrantsResponse,
@@ -33,19 +33,20 @@ use dennett_contracts::{
     ListDocumentsResponse, ListEffectsResponse, ListInboxResponse, ListPermissionRequestsResponse,
     ListProjectFilesResponse, ListProjectsResponse, ListProviderConnectionsResponse,
     ListSecretsResponse, ListSessionsResponse, ListTasksResponse, ListTombstonesResponse,
-    MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope,
-    NoteHistoryResponse, NoteMutationResponse, PermissionRequestId, ProbeConnectionResponse,
-    ProjectId, ProjectLifecycleResponse, ProjectRecord, ProviderConnectionId,
-    ProviderConnectionRecord, RebindProjectRequest, ReconcileEffectRequest,
-    ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest, ResolveInboxCardRequest,
-    ResolveInboxCardResponse, ResolvePermissionRequest, ResolvePermissionResponse,
-    RevokeGrantRequest, RuntimeCatalogResponse, SchedulerTickRequest, SchedulerTickResponse,
-    SecretMetadataRecord, SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest,
-    SendMessageResponse, SessionDetailResponse, SessionId, SessionRecord,
-    SetProjectCapabilityBindingRequest, SetSecretRequest, StateSnapshotResponse,
-    SupersedeClaimRequest, TaskDetailResponse, TaskId, TaskRecord, TaskSignalRequest,
-    TaskSignalResponse, TriggerIndexRebuildRequest, TriggerIndexRebuildResponse,
-    UpdateAgentConfigRequest, UpdateCapabilityRequest, UpdateDocumentRequest, UpdateProjectRequest,
+    LiveRunResponse, MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId,
+    MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
+    PermissionRequestId, ProbeConnectionResponse, ProjectId, ProjectLifecycleResponse,
+    ProjectRecord, ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest,
+    ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest,
+    ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
+    ResolvePermissionResponse, ResumeFollowupsResponse, RevokeGrantRequest, RuntimeCatalogResponse,
+    SchedulerTickRequest, SchedulerTickResponse, SecretMetadataRecord, SendAgentMessageRequest,
+    SendAgentMessageResponse, SendMessageRequest, SendMessageResponse, SessionDetailResponse,
+    SessionFollowupRecord, SessionId, SessionRecord, SetProjectCapabilityBindingRequest,
+    SetSecretRequest, StateSnapshotResponse, SteerSessionRequest, SupersedeClaimRequest,
+    TaskDetailResponse, TaskId, TaskRecord, TaskSignalRequest, TaskSignalResponse,
+    TriggerIndexRebuildRequest, TriggerIndexRebuildResponse, UpdateAgentConfigRequest,
+    UpdateCapabilityRequest, UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest,
     UpdateSessionRequest, UpdateTaskRequest, UpsertProviderConnectionRequest,
     validate_secret_slot_key,
 };
@@ -1820,6 +1821,127 @@ impl HeadBridge {
             .await
             .map_err(BridgeError::from)
     }
+
+    // ========================================================================
+    // Phase D3+: Live Session Runs, Durable Follow-ups & Live Steering
+    // ========================================================================
+
+    /// Fetches the active streaming run snapshot and durable follow-up queue (`GET /v1/sessions/{id}/live`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the session is missing or Head is unreachable.
+    pub async fn get_session_live(
+        &self,
+        session_id: SessionId,
+    ) -> Result<LiveRunResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .get_session_live(session_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Appends a durable follow-up message to a session (`POST /v1/sessions/{id}/followups`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing session, or unreachable Head.
+    pub async fn enqueue_followup(
+        &self,
+        session_id: SessionId,
+        req: &EnqueueFollowupRequest,
+    ) -> Result<SessionFollowupRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .enqueue_followup(session_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Edits a queued or paused follow-up message (`PATCH /v1/sessions/{id}/followups/{fid}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, missing follow-up, or unreachable Head.
+    pub async fn update_followup(
+        &self,
+        session_id: SessionId,
+        followup_id: FollowupId,
+        req: &UpdateFollowupRequest,
+    ) -> Result<SessionFollowupRecord, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .update_followup(session_id, followup_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Removes one follow-up message from a session's queue (`DELETE /v1/sessions/{id}/followups/{fid}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the session/follow-up is missing or Head is unreachable.
+    pub async fn delete_followup(
+        &self,
+        session_id: SessionId,
+        followup_id: FollowupId,
+    ) -> Result<(), BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .delete_followup(session_id, followup_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Clears all pending follow-up messages for a session (`DELETE /v1/sessions/{id}/followups`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the session is missing or Head is unreachable.
+    pub async fn clear_followups(&self, session_id: SessionId) -> Result<(), BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .clear_followups(session_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Resumes paused follow-up messages for a session (`POST /v1/sessions/{id}/followups/resume`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] if the session is missing or Head is unreachable.
+    pub async fn resume_followups(
+        &self,
+        session_id: SessionId,
+    ) -> Result<ResumeFollowupsResponse, BridgeError> {
+        let cid = CorrelationId::generate();
+        self.client
+            .resume_followups(session_id, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
+
+    /// Interrupts any active run and immediately steers the session with a new prompt (`POST /v1/sessions/{id}/steer`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeError`] on validation failure, runtime error, or unreachable Head.
+    pub async fn steer_session(
+        &self,
+        session_id: SessionId,
+        req: &SteerSessionRequest,
+    ) -> Result<SendMessageResponse, BridgeError> {
+        req.validate()?;
+        let cid = CorrelationId::generate();
+        self.client
+            .steer_session(session_id, req, Some(&cid))
+            .await
+            .map_err(BridgeError::from)
+    }
 }
 
 const _: () = {
@@ -1927,5 +2049,198 @@ mod tests {
         assert_eq!(snapshot.head_url, url);
         assert_eq!(snapshot.error_code.as_deref(), Some("HEAD_UNREACHABLE"));
         assert!(snapshot.error.is_some());
+    }
+
+    fn json_http_response(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    async fn spawn_mock_live_server(
+        session_id: SessionId,
+        followup_id: FollowupId,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock head server");
+        let addr = listener.local_addr().expect("local addr");
+        let now_ms = dennett_contracts::TimestampMs::now();
+        let followup_json = serde_json::to_string(&SessionFollowupRecord {
+            followup_id,
+            session_id,
+            content: String::from("Уточнить список модулей"),
+            status: dennett_contracts::FollowupStatus::Queued,
+            position: 1,
+            idempotency_key: Some(String::from("idem-1")),
+            dispatched_run_id: None,
+            created_at: now_ms,
+            updated_at: now_ms,
+        })
+        .expect("serialize followup");
+        let live_json = serde_json::to_string(&LiveRunResponse {
+            active: Some(dennett_contracts::LiveRunSnapshot {
+                session_id,
+                run_id: dennett_contracts::RunId::new(),
+                streaming_text: String::from("Промежуточный текст"),
+                context_used_tokens: Some(12_700),
+                context_window_tokens: Some(1_000_000),
+                started_at: now_ms,
+                updated_at: now_ms,
+            }),
+            followups: vec![],
+        })
+        .expect("serialize live");
+        let resume_json = serde_json::to_string(&ResumeFollowupsResponse {
+            followups: vec![],
+            dispatched: None,
+        })
+        .expect("serialize resume");
+
+        let handle = tokio::spawn(async move {
+            for _ in 0..6 {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0_u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req_str.lines().next().unwrap_or("");
+                let response =
+                    if first_line.starts_with(&format!("GET /v1/sessions/{session_id}/live ")) {
+                        json_http_response(&live_json)
+                    } else if first_line
+                        .starts_with(&format!("POST /v1/sessions/{session_id}/followups "))
+                        || first_line.starts_with(&format!(
+                            "PATCH /v1/sessions/{session_id}/followups/{followup_id} "
+                        ))
+                    {
+                        json_http_response(&followup_json)
+                    } else if first_line.starts_with(&format!(
+                        "DELETE /v1/sessions/{session_id}/followups/{followup_id} "
+                    )) || first_line
+                        .starts_with(&format!("DELETE /v1/sessions/{session_id}/followups "))
+                    {
+                        String::from(
+                            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                    } else if first_line
+                        .starts_with(&format!("POST /v1/sessions/{session_id}/followups/resume "))
+                    {
+                        json_http_response(&resume_json)
+                    } else {
+                        String::from(
+                            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                    };
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn live_followup_and_steer_bridge_methods_validate_and_roundtrip() {
+        let session_id = SessionId::new();
+        let followup_id = FollowupId::new();
+        let (addr, server) = spawn_mock_live_server(session_id, followup_id).await;
+        let bridge = HeadBridge::new(&format!("http://{addr}"), HeadEndpointPolicy::LoopbackOnly)
+            .expect("valid bridge");
+
+        assert!(
+            bridge
+                .enqueue_followup(
+                    session_id,
+                    &EnqueueFollowupRequest {
+                        content: String::from("   "),
+                        idempotency_key: None,
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            bridge
+                .update_followup(
+                    session_id,
+                    followup_id,
+                    &UpdateFollowupRequest {
+                        content: String::new(),
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            bridge
+                .steer_session(
+                    session_id,
+                    &SteerSessionRequest {
+                        content: String::from("  "),
+                        client_message_id: None,
+                        timeout_ms: None,
+                    }
+                )
+                .await
+                .is_err()
+        );
+
+        let live = bridge
+            .get_session_live(session_id)
+            .await
+            .expect("get_session_live");
+        assert_eq!(
+            live.active.as_ref().map(|a| a.streaming_text.as_str()),
+            Some("Промежуточный текст")
+        );
+        assert_eq!(
+            live.active.as_ref().and_then(|a| a.context_used_tokens),
+            Some(12_700)
+        );
+
+        let queued = bridge
+            .enqueue_followup(
+                session_id,
+                &EnqueueFollowupRequest {
+                    content: String::from("Уточнить список модулей"),
+                    idempotency_key: Some(String::from("idem-1")),
+                },
+            )
+            .await
+            .expect("enqueue_followup");
+        assert_eq!(queued.followup_id, followup_id);
+
+        let updated = bridge
+            .update_followup(
+                session_id,
+                followup_id,
+                &UpdateFollowupRequest {
+                    content: String::from("Обновлённое уточнение"),
+                },
+            )
+            .await
+            .expect("update_followup");
+        assert_eq!(updated.followup_id, followup_id);
+
+        bridge
+            .delete_followup(session_id, followup_id)
+            .await
+            .expect("delete_followup 204");
+        bridge
+            .clear_followups(session_id)
+            .await
+            .expect("clear_followups 204");
+
+        let resumed = bridge
+            .resume_followups(session_id)
+            .await
+            .expect("resume_followups");
+        assert_eq!(resumed.followups, Vec::<SessionFollowupRecord>::new());
+
+        server.await.expect("mock server done");
     }
 }

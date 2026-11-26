@@ -38,6 +38,7 @@ import {
   type InboxCardRecord,
   type InboxResolutionAction,
   type ListProjectFilesResponse,
+  type LiveRunSnapshot,
   type ManualEffectResolution,
   type MemoryOverviewResponse,
   type MessageRecord,
@@ -51,6 +52,7 @@ import {
   type RuntimeCatalogResponse,
   type SecretMetadataRecord,
   type SessionDetailResponse,
+  type SessionFollowupRecord,
   type SessionRecord,
   type StreamCursor,
   type TaskRecord,
@@ -303,6 +305,13 @@ export interface WorkspaceActions {
   flushQueuedMessages(): Promise<void>;
   stopActiveRun(): Promise<void>;
   cancelSessionRun(sessionId: string): Promise<void>;
+  // Phase D3+ live follow-up queue & steering actions
+  enqueueFollowup(content: string): Promise<SessionFollowupRecord | null>;
+  updateFollowup(followupId: string, content: string): Promise<SessionFollowupRecord | null>;
+  deleteFollowup(followupId: string): Promise<boolean>;
+  clearFollowups(): Promise<boolean>;
+  resumeFollowups(): Promise<boolean>;
+  steerSession(content: string): Promise<boolean>;
   updateActiveAgentModel(
     modelPreference: string | null,
     thinkingLevel: ThinkingLevel | null,
@@ -425,6 +434,8 @@ export interface WorkspaceMeta {
   activeClarificationCard: InboxCardRecord | null;
   activeTaskCount: number;
   openMemoryConflictsCount: number;
+  activeLiveRun: LiveRunSnapshot | null;
+  activeFollowups: SessionFollowupRecord[];
 }
 
 export interface WorkspaceContextValue {
@@ -521,8 +532,12 @@ export function WorkspaceProvider({
   const [optimisticMessagesBySession, setOptimisticMessagesBySession] = useState<
     Record<string, MessageRecord[]>
   >({});
-  const [localInFlightSessionIds, setLocalInFlightSessionIds] = useState<string[]>([]);
+  const [localInFlightCountsBySession, setLocalInFlightCountsBySession] = useState<
+    Record<string, number>
+  >({});
   const [serverRunningSessionIds, setServerRunningSessionIds] = useState<string[]>([]);
+  const [liveRun, setLiveRun] = useState<LiveRunSnapshot | null>(null);
+  const [activeFollowups, setActiveFollowups] = useState<SessionFollowupRecord[]>([]);
   const [cancellingSessionIds, setCancellingSessionIds] = useState<string[]>([]);
   const [stoppingTaskIds, setStoppingTaskIds] = useState<string[]>([]);
   const [cancelledNotice, setCancelledNotice] = useState<string | null>(null);
@@ -583,6 +598,19 @@ export function WorkspaceProvider({
   const isSidebarOpenRef = useRef(true);
   const isRightPanelOpenRef = useRef(initialRightPanelOpen);
   const activeProjectScopeRef = useRef<string | null>(null);
+  const livePollInFlightRef = useRef(false);
+  const wasRunningActiveSessionRef = useRef(false);
+  const activeSteerCountBySessionRef = useRef<Record<string, number>>({});
+  const activeFollowupsRef = useRef<SessionFollowupRecord[]>([]);
+  const localCompletedSessionRef = useRef<string | null>(null);
+
+  const localInFlightSessionIds = useMemo(
+    () =>
+      Object.entries(localInFlightCountsBySession)
+        .filter(([, count]) => count > 0)
+        .map(([sid]) => sid),
+    [localInFlightCountsBySession],
+  );
 
   // D2-ARCH-01: canonical running sessions derived from server snapshot + activeDetail + local in-flight.
   const runningSessionIds = useMemo(() => {
@@ -596,6 +624,26 @@ export function WorkspaceProvider({
     return Array.from(set);
   }, [activeDetail, localInFlightSessionIds, serverRunningSessionIds]);
 
+  const incrementLocalInFlight = useCallback((sessionId: string) => {
+    runningSessionIdsRef.current.add(sessionId);
+    setLocalInFlightCountsBySession((prev) => ({
+      ...prev,
+      [sessionId]: (prev[sessionId] ?? 0) + 1,
+    }));
+  }, []);
+
+  const decrementLocalInFlight = useCallback((sessionId: string) => {
+    setLocalInFlightCountsBySession((prev) => {
+      const nextCount = (prev[sessionId] ?? 0) - 1;
+      if (nextCount <= 0) {
+        const next = { ...prev };
+        delete next[sessionId];
+        return next;
+      }
+      return { ...prev, [sessionId]: nextCount };
+    });
+  }, []);
+
   selectedProjectRef.current = selectedProjectId;
   selectedSessionRef.current = selectedSessionId;
   selectedArtifactIdRef.current = selectedArtifactId;
@@ -606,6 +654,7 @@ export function WorkspaceProvider({
   queuedMessagesRef.current = queuedMessages;
   runningSessionIdsRef.current = new Set(runningSessionIds);
   cancellingSessionIdsRef.current = new Set(cancellingSessionIds);
+  activeFollowupsRef.current = activeFollowups;
   activeViewRef.current = activeView;
   isSidebarOpenRef.current = isSidebarOpen;
   isRightPanelOpenRef.current = isRightPanelOpen;
@@ -671,6 +720,12 @@ export function WorkspaceProvider({
   }, []);
 
   const setSelectedSessionSync = useCallback((nextSessionId: string | null) => {
+    if (selectedSessionRef.current !== nextSessionId) {
+      setLiveRun(null);
+      setActiveFollowups([]);
+      wasRunningActiveSessionRef.current = false;
+      localCompletedSessionRef.current = null;
+    }
     selectedSessionRef.current = nextSessionId;
     setSelectedSessionId(nextSessionId);
   }, []);
@@ -799,6 +854,11 @@ export function WorkspaceProvider({
           return;
         }
         setActiveDetail(detail);
+        setActiveFollowups(
+          (detail.followups ?? [])
+            .filter((f) => f.status === "queued" || f.status === "paused")
+            .sort((a, b) => a.position - b.position),
+        );
         const visibleArtifacts = detail.artifacts.filter((a) => {
           const lc = a.lifecycle_state ?? "active";
           return lc !== "removed";
@@ -975,6 +1035,8 @@ export function WorkspaceProvider({
           await loadSessionDetail(targetSessionId);
         } else if (!targetSessionId) {
           setActiveDetail(null);
+          setLiveRun(null);
+          setActiveFollowups([]);
           selectedArtifactIdRef.current = null;
           setSelectedArtifactId(null);
           setArtifactRevisions([]);
@@ -1440,6 +1502,8 @@ export function WorkspaceProvider({
           void loadSessionDetail(nextSess.session_id);
         } else {
           setActiveDetail(null);
+          setLiveRun(null);
+          setActiveFollowups([]);
           selectedArtifactIdRef.current = null;
           setSelectedArtifactId(null);
           setArtifactRevisions([]);
@@ -2233,8 +2297,7 @@ export function WorkspaceProvider({
         ...prev,
         [sessionId]: [...(prev[sessionId] ?? []), optimisticMessage],
       }));
-      runningSessionIdsRef.current.add(sessionId);
-      setLocalInFlightSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+      incrementLocalInFlight(sessionId);
 
       const removeOptimistic = () => {
         setOptimisticMessagesBySession((prev) => {
@@ -2290,14 +2353,18 @@ export function WorkspaceProvider({
             : prev,
         );
 
+        const steerActiveOnSession = (activeSteerCountBySessionRef.current[sessionId] ?? 0) > 0;
         if (selectedSessionRef.current === sessionId) {
-          if (response.run.status === "cancelled") {
+          if (response.run.status === "cancelled" && !steerActiveOnSession) {
             setCancelledNotice("Запуск остановлен пользователем (Cancelled).");
           } else if (response.run.status === "failed" && response.run.error_summary) {
             setErrorBanner({
               code: response.run.error_code ?? "RUN_FAILED",
               message: formatDecisionReasonRu(response.run.error_summary),
             });
+          }
+          if (!steerActiveOnSession) {
+            setLiveRun((prev) => (prev && prev.session_id === sessionId ? null : prev));
           }
           await loadSessionDetail(sessionId);
         }
@@ -2308,17 +2375,26 @@ export function WorkspaceProvider({
         if (diag) {
           setDiagnostics(diag);
         }
+        if (!steerActiveOnSession) {
+          localCompletedSessionRef.current = sessionId;
+        }
         return true;
       } catch (err) {
         removeOptimistic();
         throw err;
       } finally {
-        setLocalInFlightSessionIds((prev) => prev.filter((id) => id !== sessionId));
+        decrementLocalInFlight(sessionId);
         cancellingSessionIdsRef.current.delete(sessionId);
         setCancellingSessionIds((prev) => prev.filter((id) => id !== sessionId));
       }
     },
-    [applySnapshotCollections, bridge, loadSessionDetail],
+    [
+      applySnapshotCollections,
+      bridge,
+      decrementLocalInFlight,
+      incrementLocalInFlight,
+      loadSessionDetail,
+    ],
   );
 
   // D2-BUG-06: Owner-confirmed offline queue flush (NEVER blind auto-flush!).
@@ -2469,6 +2545,7 @@ export function WorkspaceProvider({
       try {
         const resp = await bridge.cancelRun(targetSessionId);
         if (selectedSessionRef.current === targetSessionId) {
+          setLiveRun(null);
           setCancelledNotice(
             resp.external_outcome_unknown
               ? "Остановлено локально, но внешний исход неизвестен (UNKNOWN) — проверьте во Входящих."
@@ -2506,6 +2583,262 @@ export function WorkspaceProvider({
     }
     await cancelSessionRun(targetSessionId);
   }, [cancelSessionRun]);
+
+  // Phase D3+ Durable Follow-Up Queue & Live Steering Actions
+  const enqueueFollowup = useCallback(
+    async (content: string): Promise<SessionFollowupRecord | null> => {
+      const sessionId = selectedSessionRef.current;
+      const trimmed = content.trim();
+      if (!sessionId || !trimmed || !healthSnapshot?.connected) {
+        return null;
+      }
+      setErrorBanner(null);
+      try {
+        const created = await bridge.enqueueFollowup(sessionId, {
+          content: trimmed,
+          idempotency_key: generateClientMessageId(),
+        });
+        if (selectedSessionRef.current === sessionId) {
+          setActiveFollowups((prev) =>
+            [...prev.filter((f) => f.followup_id !== created.followup_id), created]
+              .filter((f) => f.status === "queued" || f.status === "paused")
+              .sort((a, b) => a.position - b.position),
+          );
+        }
+        return created;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge, healthSnapshot?.connected],
+  );
+
+  const updateFollowup = useCallback(
+    async (followupId: string, content: string): Promise<SessionFollowupRecord | null> => {
+      const sessionId = selectedSessionRef.current;
+      const trimmed = content.trim();
+      if (!sessionId || !trimmed || !healthSnapshot?.connected) {
+        return null;
+      }
+      setErrorBanner(null);
+      try {
+        const updated = await bridge.updateFollowup(sessionId, followupId, { content: trimmed });
+        if (selectedSessionRef.current === sessionId) {
+          setActiveFollowups((prev) =>
+            prev
+              .map((f) => (f.followup_id === followupId ? updated : f))
+              .filter((f) => f.status === "queued" || f.status === "paused")
+              .sort((a, b) => a.position - b.position),
+          );
+        }
+        return updated;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return null;
+      }
+    },
+    [bridge, healthSnapshot?.connected],
+  );
+
+  const deleteFollowup = useCallback(
+    async (followupId: string): Promise<boolean> => {
+      const sessionId = selectedSessionRef.current;
+      if (!sessionId || !healthSnapshot?.connected) {
+        return false;
+      }
+      setErrorBanner(null);
+      try {
+        await bridge.deleteFollowup(sessionId, followupId);
+        if (selectedSessionRef.current === sessionId) {
+          setActiveFollowups((prev) => prev.filter((f) => f.followup_id !== followupId));
+        }
+        return true;
+      } catch (err) {
+        setErrorBanner(normalizeBridgeError(err));
+        return false;
+      }
+    },
+    [bridge, healthSnapshot?.connected],
+  );
+
+  const clearFollowups = useCallback(async (): Promise<boolean> => {
+    const sessionId = selectedSessionRef.current;
+    if (!sessionId || !healthSnapshot?.connected) {
+      return false;
+    }
+    setErrorBanner(null);
+    try {
+      await bridge.clearFollowups(sessionId);
+      if (selectedSessionRef.current === sessionId) {
+        setActiveFollowups([]);
+      }
+      return true;
+    } catch (err) {
+      setErrorBanner(normalizeBridgeError(err));
+      return false;
+    }
+  }, [bridge, healthSnapshot?.connected]);
+
+  const resumeFollowups = useCallback(async (): Promise<boolean> => {
+    const sessionId = selectedSessionRef.current;
+    if (!sessionId || !healthSnapshot?.connected) {
+      return false;
+    }
+    setErrorBanner(null);
+    try {
+      const resp = await bridge.resumeFollowups(sessionId);
+      if (selectedSessionRef.current === sessionId) {
+        setActiveFollowups(
+          (resp.followups ?? [])
+            .filter((f) => f.status === "queued" || f.status === "paused")
+            .sort((a, b) => a.position - b.position),
+        );
+        if (resp.dispatched) {
+          setCancelledNotice(null);
+          await loadSessionDetail(sessionId);
+        }
+      }
+      await applySnapshotCollections(undefined, false).catch(() => {});
+      return true;
+    } catch (err) {
+      setErrorBanner(normalizeBridgeError(err));
+      return false;
+    }
+  }, [applySnapshotCollections, bridge, healthSnapshot?.connected, loadSessionDetail]);
+
+  const steerSession = useCallback(
+    async (content: string): Promise<boolean> => {
+      const sessionId = selectedSessionRef.current;
+      const trimmed = content.trim();
+      if (!sessionId || !trimmed || !healthSnapshot?.connected) {
+        return false;
+      }
+
+      const stableClientMsgId = generateClientMessageId();
+      const optimisticId = `optimistic-steer-${sessionId}-${Date.now()}`;
+      const optimisticMessage: MessageRecord = {
+        message_id: optimisticId,
+        session_id: sessionId,
+        role: "user",
+        content: trimmed,
+        run_id: null,
+        client_message_id: stableClientMsgId,
+        correlation_id: "pending",
+        created_at: Date.now(),
+      };
+
+      setErrorBanner(null);
+      setCancelledNotice(null);
+      setLiveRun((prev) => (prev && prev.session_id === sessionId ? null : prev));
+      setOptimisticMessagesBySession((prev) => ({
+        ...prev,
+        [sessionId]: [...(prev[sessionId] ?? []), optimisticMessage],
+      }));
+      activeSteerCountBySessionRef.current[sessionId] =
+        (activeSteerCountBySessionRef.current[sessionId] ?? 0) + 1;
+      incrementLocalInFlight(sessionId);
+
+      const removeOptimistic = () => {
+        setOptimisticMessagesBySession((prev) => {
+          const list = prev[sessionId];
+          if (!list || list.length === 0) {
+            return prev;
+          }
+          const remaining = list.filter((m) => m.message_id !== optimisticId);
+          if (remaining.length === 0) {
+            const next = { ...prev };
+            delete next[sessionId];
+            return next;
+          }
+          return { ...prev, [sessionId]: remaining };
+        });
+      };
+
+      try {
+        const response = await bridge.steerSession(sessionId, {
+          content: trimmed,
+          client_message_id: stableClientMsgId,
+        });
+
+        setSessions((prev) => {
+          const next = sortSessionsByPin(
+            prev.map((s) =>
+              s.session_id === sessionId
+                ? {
+                    ...s,
+                    title:
+                      response.session_title && response.session_title.trim().length > 0
+                        ? response.session_title
+                        : s.title,
+                    runtime_binding: response.runtime_binding,
+                    updated_at: response.run.finished_at ?? response.run.created_at,
+                  }
+                : s,
+            ),
+          );
+          sessionsRef.current = next;
+          return next;
+        });
+
+        setHealthSnapshot((prev) =>
+          prev && prev.health
+            ? {
+                ...prev,
+                health: {
+                  ...prev.health,
+                  memory_status: response.memory_status,
+                },
+              }
+            : prev,
+        );
+
+        if (selectedSessionRef.current === sessionId) {
+          setLiveRun((prev) => (prev && prev.session_id === sessionId ? null : prev));
+          if (response.run.status === "cancelled") {
+            setCancelledNotice("Запуск остановлен пользователем (Cancelled).");
+          } else if (response.run.status === "failed" && response.run.error_summary) {
+            setErrorBanner({
+              code: response.run.error_code ?? "RUN_FAILED",
+              message: formatDecisionReasonRu(response.run.error_summary),
+            });
+          }
+          await loadSessionDetail(sessionId);
+        }
+        removeOptimistic();
+
+        await applySnapshotCollections(undefined, false).catch(() => {});
+        const diag = await bridge.listDiagnostics(20).catch(() => null);
+        if (diag) {
+          setDiagnostics(diag);
+        }
+        localCompletedSessionRef.current = sessionId;
+        return true;
+      } catch (err) {
+        removeOptimistic();
+        setErrorBanner(normalizeBridgeError(err));
+        return false;
+      } finally {
+        const remainingSteers = (activeSteerCountBySessionRef.current[sessionId] ?? 1) - 1;
+        if (remainingSteers <= 0) {
+          delete activeSteerCountBySessionRef.current[sessionId];
+        } else {
+          activeSteerCountBySessionRef.current[sessionId] = remainingSteers;
+        }
+        decrementLocalInFlight(sessionId);
+        cancellingSessionIdsRef.current.delete(sessionId);
+        setCancellingSessionIds((prev) => prev.filter((id) => id !== sessionId));
+      }
+    },
+    [
+      applySnapshotCollections,
+      bridge,
+      decrementLocalInFlight,
+      healthSnapshot?.connected,
+      incrementLocalInFlight,
+      loadSessionDetail,
+    ],
+  );
 
   const updateActiveAgentModel = useCallback(
     async (modelPreference: string | null, thinkingLevel: ThinkingLevel | null) => {
@@ -3313,7 +3646,9 @@ export function WorkspaceProvider({
           return;
         }
         const target = event.target as HTMLElement | null;
-        if (target?.closest(".inline-rename-input, [role='menu'], [role='dialog']")) {
+        if (
+          target?.closest(".inline-rename-input, .followup-edit-input, [role='menu'], [role='dialog']")
+        ) {
           return;
         }
         const activeSid = selectedSessionRef.current;
@@ -3378,6 +3713,106 @@ export function WorkspaceProvider({
   );
   const isRunningActiveSession =
     selectedSessionId !== null && runningSessionIds.includes(selectedSessionId);
+
+  // Phase D3+: Poll live streaming text & durable followups (~350ms) ONLY while active session is running and visible.
+  useEffect(() => {
+    const sessionId = selectedSessionId;
+    if (!healthSnapshot?.connected || !sessionId || !isRunningActiveSession || isDocumentHidden) {
+      return;
+    }
+
+    let cancelled = false;
+    let sawActiveLiveRun = false;
+
+    const pollLiveOnce = async () => {
+      if (cancelled || livePollInFlightRef.current || selectedSessionRef.current !== sessionId) {
+        return;
+      }
+      livePollInFlightRef.current = true;
+      try {
+        const resp = await bridge.getSessionLive(sessionId);
+        if (cancelled || selectedSessionRef.current !== sessionId) {
+          return;
+        }
+        const nextActive = resp.active ?? null;
+        setLiveRun(nextActive);
+        setActiveFollowups(
+          (resp.followups ?? [])
+            .filter((f) => f.status === "queued" || f.status === "paused")
+            .sort((a, b) => a.position - b.position),
+        );
+        if (nextActive) {
+          sawActiveLiveRun = true;
+        } else if (sawActiveLiveRun) {
+          sawActiveLiveRun = false;
+          void loadSessionDetail(sessionId);
+          void applySnapshotCollections(undefined, false).catch(() => {});
+        }
+      } catch {
+        // Transient live-poll errors are ignored; main cursor poller handles connection truth.
+      } finally {
+        livePollInFlightRef.current = false;
+      }
+    };
+
+    void pollLiveOnce();
+    const handle = window.setInterval(() => {
+      void pollLiveOnce();
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [
+    applySnapshotCollections,
+    bridge,
+    healthSnapshot?.connected,
+    isDocumentHidden,
+    isRunningActiveSession,
+    loadSessionDetail,
+    selectedSessionId,
+  ]);
+
+  // Phase D3+: When an active running turn transitions to idle, clear liveRun and refresh once so
+  // persisted assistant messages and any auto-dispatched follow-up runs appear with zero duplicate flash.
+  useEffect(() => {
+    const wasRunning = wasRunningActiveSessionRef.current;
+    wasRunningActiveSessionRef.current = isRunningActiveSession;
+    if (wasRunning && !isRunningActiveSession) {
+      setLiveRun(null);
+      const sid = selectedSessionRef.current;
+      const alreadyRefreshedLocally = localCompletedSessionRef.current === sid;
+      localCompletedSessionRef.current = null;
+      const hasQueuedFollowups = activeFollowupsRef.current.some((f) => f.status === "queued");
+      if (sid && healthSnapshot?.connected && (!alreadyRefreshedLocally || hasQueuedFollowups)) {
+        void loadSessionDetail(sid);
+        void applySnapshotCollections(undefined, false).catch(() => {});
+      }
+    }
+  }, [
+    applySnapshotCollections,
+    healthSnapshot?.connected,
+    isRunningActiveSession,
+    loadSessionDetail,
+  ]);
+
+  const activeLiveRun = useMemo(
+    () =>
+      liveRun && selectedSessionId && liveRun.session_id === selectedSessionId ? liveRun : null,
+    [liveRun, selectedSessionId],
+  );
+  const activeFollowupsForSession = useMemo(
+    () =>
+      selectedSessionId
+        ? activeFollowups.filter(
+            (f) =>
+              f.session_id === selectedSessionId &&
+              (f.status === "queued" || f.status === "paused"),
+          )
+        : [],
+    [activeFollowups, selectedSessionId],
+  );
   const isAwaitingApprovalActiveSession = useMemo(
     () =>
       Boolean(
@@ -3449,6 +3884,12 @@ export function WorkspaceProvider({
       flushQueuedMessages,
       stopActiveRun,
       cancelSessionRun,
+      enqueueFollowup,
+      updateFollowup,
+      deleteFollowup,
+      clearFollowups,
+      resumeFollowups,
+      steerSession,
       updateActiveAgentModel,
       updateActiveAgentWritePolicy,
       createArtifact,
@@ -3502,6 +3943,7 @@ export function WorkspaceProvider({
       cancelQueuedMessage,
       cancelSessionRun,
       cancelTask,
+      clearFollowups,
       closeFolderPicker,
       createArtifact,
       createBlankChat,
@@ -3514,6 +3956,7 @@ export function WorkspaceProvider({
       createStandaloneChat,
       createTask,
       deleteCapability,
+      deleteFollowup,
       deleteProject,
       deleteProviderConnection,
       deleteSecret,
@@ -3522,6 +3965,7 @@ export function WorkspaceProvider({
       dismissCancelledNotice,
       dismissError,
       dismissReconcileNotice,
+      enqueueFollowup,
       flushMemoryOutbox,
       flushQueuedMessages,
       openSessionInChat,
@@ -3544,6 +3988,7 @@ export function WorkspaceProvider({
       requestFolderPicker,
       resolveInboxCard,
       resolvePermissionRequest,
+      resumeFollowups,
       revokeCapabilityGrant,
       rollbackCapability,
       selectArtifact,
@@ -3557,6 +4002,7 @@ export function WorkspaceProvider({
       setRightPanelOpen,
       setSecret,
       setSidebarOpen,
+      steerSession,
       stopActiveRun,
       submitFolderPickerPath,
       toggleProjectPin,
@@ -3570,6 +4016,7 @@ export function WorkspaceProvider({
       updateActiveAgentWritePolicy,
       updateCapability,
       updateDraft,
+      updateFollowup,
       updateProviderConnection,
       updateTaskGoal,
     ],
@@ -3717,10 +4164,14 @@ export function WorkspaceProvider({
       activeClarificationCard,
       activeTaskCount,
       openMemoryConflictsCount,
+      activeLiveRun,
+      activeFollowups: activeFollowupsForSession,
     }),
     [
       activeAgent,
       activeClarificationCard,
+      activeFollowupsForSession,
+      activeLiveRun,
       activeProject,
       activeSession,
       activeTaskCount,

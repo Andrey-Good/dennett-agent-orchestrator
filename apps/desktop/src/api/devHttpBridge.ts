@@ -33,6 +33,7 @@ import type {
   DiscoverCapabilitiesResponse,
   DispatchEffectRequest,
   DispatchEffectResponse,
+  EnqueueFollowupRequest,
   EventStreamResponse,
   ExportRequest,
   ExportResponse,
@@ -64,6 +65,7 @@ import type {
   ListSessionsResponse,
   ListTasksResponse,
   ListTombstonesResponse,
+  LiveRunResponse,
   MemoryClaim,
   MemoryConflict,
   MemoryDocument,
@@ -83,6 +85,7 @@ import type {
   ResolveInboxCardResponse,
   ResolvePermissionRequest,
   ResolvePermissionResponse,
+  ResumeFollowupsResponse,
   RevokeGrantRequest,
   RuntimeCatalogResponse,
   SecretMetadataRecord,
@@ -91,10 +94,12 @@ import type {
   SendMessageRequest,
   SendMessageResponse,
   SessionDetailResponse,
+  SessionFollowupRecord,
   SessionRecord,
   SetProjectCapabilityBindingRequest,
   SetSecretRequest,
   StateSnapshotResponse,
+  SteerSessionRequest,
   SupersedeClaimRequest,
   TaskDetailResponse,
   TaskRecord,
@@ -105,6 +110,7 @@ import type {
   UpdateAgentConfigRequest,
   UpdateCapabilityRequest,
   UpdateDocumentRequest,
+  UpdateFollowupRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateTaskRequest,
@@ -198,6 +204,25 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
       throw await parseErrorResponse(resp);
     }
     return (await resp.json()) as T;
+  }
+
+  async function requestEmpty(method: string, path: string): Promise<void> {
+    let resp: Response;
+    try {
+      resp = await fetch(`${base}${path}`, { method });
+    } catch (err) {
+      throw {
+        code: "HEAD_UNREACHABLE",
+        message:
+          err instanceof Error
+            ? `Не удалось подключиться к dennett-head: ${err.message}`
+            : "Не удалось подключиться к dennett-head",
+      };
+    }
+
+    if (!resp.ok) {
+      throw await parseErrorResponse(resp);
+    }
   }
 
   return {
@@ -687,5 +712,30 @@ export function createDevHttpBridge(proxyPrefix = "/__dennett_dev_head"): Deskto
 
     resumeMemoryConsolidationJob: (jobId: string) =>
       requestJson<ConsolidationJob>("POST", `/v1/memory/consolidation/jobs/${jobId}/resume`),
+
+    getSessionLive: (sessionId: string) =>
+      requestJson<LiveRunResponse>("GET", `/v1/sessions/${sessionId}/live`),
+
+    enqueueFollowup: (sessionId: string, request: EnqueueFollowupRequest) =>
+      requestJson<SessionFollowupRecord>("POST", `/v1/sessions/${sessionId}/followups`, request),
+
+    updateFollowup: (sessionId: string, followupId: string, request: UpdateFollowupRequest) =>
+      requestJson<SessionFollowupRecord>(
+        "PATCH",
+        `/v1/sessions/${sessionId}/followups/${followupId}`,
+        request,
+      ),
+
+    deleteFollowup: (sessionId: string, followupId: string) =>
+      requestEmpty("DELETE", `/v1/sessions/${sessionId}/followups/${followupId}`),
+
+    clearFollowups: (sessionId: string) =>
+      requestEmpty("DELETE", `/v1/sessions/${sessionId}/followups`),
+
+    resumeFollowups: (sessionId: string) =>
+      requestJson<ResumeFollowupsResponse>("POST", `/v1/sessions/${sessionId}/followups/resume`),
+
+    steerSession: (sessionId: string, request: SteerSessionRequest) =>
+      requestJson<SendMessageResponse>("POST", `/v1/sessions/${sessionId}/steer`, request),
   };
 }

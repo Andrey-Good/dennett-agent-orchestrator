@@ -145,3 +145,41 @@ export function formatDecisionReasonRu(reason: string | null | undefined): strin
   }
   return cleaned;
 }
+
+/**
+ * Formats token counts into a compact human-readable representation (`850`, `12.7K`, `1.0M`).
+ */
+export function formatTokenCount(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens < 0) {
+    return "0";
+  }
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1)}K`;
+  }
+  return String(Math.round(tokens));
+}
+
+/**
+ * Formats live or persisted run context usage for `StatsPopover` (e.g. `12.7K / 1.0M` tokens).
+ */
+export function formatContextUsage(
+  usedTokens: number | null | undefined,
+  windowTokens: number | null | undefined,
+): string | null {
+  if (usedTokens == null && windowTokens == null) {
+    return null;
+  }
+  if (usedTokens != null && windowTokens != null && windowTokens > 0) {
+    return `${formatTokenCount(usedTokens)} / ${formatTokenCount(windowTokens)}`;
+  }
+  if (usedTokens != null) {
+    return `${formatTokenCount(usedTokens)} токенов`;
+  }
+  if (windowTokens != null && windowTokens > 0) {
+    return `окно ${formatTokenCount(windowTokens)}`;
+  }
+  return null;
+}

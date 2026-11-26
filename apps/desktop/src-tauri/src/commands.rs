@@ -17,27 +17,28 @@ use dennett_contracts::{
     CreateSessionRequest, CreateTaskRequest, DeleteCapabilityResponse,
     DeleteProviderConnectionResponse, DiagnosticsResponse, DiscoverCapabilitiesRequest,
     DiscoverCapabilitiesResponse, DispatchEffectRequest, DispatchEffectResponse, DocumentId,
-    EffectClaimId, EventStreamResponse, ExportRequest, ExportResponse, FlushOutboxResponse,
-    ForgetRequest, ForgetResponse, GetDocumentVersionsResponse, HeadMemorySearchRequest,
-    HeadMemorySearchResponse, ImportRequest, ImportResponse, InboxCardId,
+    EffectClaimId, EnqueueFollowupRequest, EventStreamResponse, ExportRequest, ExportResponse,
+    FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse, GetDocumentVersionsResponse,
+    HeadMemorySearchRequest, HeadMemorySearchResponse, ImportRequest, ImportResponse, InboxCardId,
     ListAgentMessagesResponse, ListAgentsResponse, ListArtifactsResponse, ListCapabilitiesResponse,
     ListCapabilityGrantsResponse, ListClaimsResponse, ListConflictsResponse,
     ListConsolidationJobsResponse, ListDocumentsResponse, ListEffectsResponse, ListInboxResponse,
     ListPermissionRequestsResponse, ListProjectFilesResponse, ListProjectsResponse,
     ListProviderConnectionsResponse, ListSecretsResponse, ListSessionsResponse, ListTasksResponse,
-    ListTombstonesResponse, MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId,
-    MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
+    ListTombstonesResponse, LiveRunResponse, MemoryClaim, MemoryConflict, MemoryDocument,
+    MemoryNoteId, MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
     PermissionRequestId, ProbeConnectionResponse, ProjectId, ProjectLifecycleResponse,
     ProjectRecord, ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest,
     ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest,
     ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
-    ResolvePermissionResponse, RevokeGrantRequest, RuntimeCatalogResponse, SecretMetadataRecord,
-    SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest, SendMessageResponse,
-    SessionDetailResponse, SessionId, SessionRecord, SetProjectCapabilityBindingRequest,
-    SetSecretRequest, StateSnapshotResponse, SupersedeClaimRequest, TaskDetailResponse, TaskId,
-    TaskRecord, TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest,
-    TriggerIndexRebuildResponse, UpdateAgentConfigRequest, UpdateCapabilityRequest,
-    UpdateDocumentRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
+    ResolvePermissionResponse, ResumeFollowupsResponse, RevokeGrantRequest, RuntimeCatalogResponse,
+    SecretMetadataRecord, SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest,
+    SendMessageResponse, SessionDetailResponse, SessionFollowupRecord, SessionId, SessionRecord,
+    SetProjectCapabilityBindingRequest, SetSecretRequest, StateSnapshotResponse,
+    SteerSessionRequest, SupersedeClaimRequest, TaskDetailResponse, TaskId, TaskRecord,
+    TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest, TriggerIndexRebuildResponse,
+    UpdateAgentConfigRequest, UpdateCapabilityRequest, UpdateDocumentRequest,
+    UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
     UpsertProviderConnectionRequest,
 };
 use tauri::State;
@@ -149,6 +150,10 @@ fn parse_document_id(raw: &str) -> Result<DocumentId, BridgeError> {
 
 fn parse_consolidation_job_id(raw: &str) -> Result<ConsolidationJobId, BridgeError> {
     ConsolidationJobId::from_str(raw.trim()).map_err(BridgeError::from)
+}
+
+fn parse_followup_id(raw: &str) -> Result<FollowupId, BridgeError> {
+    FollowupId::from_str(raw.trim()).map_err(BridgeError::from)
 }
 
 fn parse_optional_memory_scope(raw: Option<&str>) -> Result<Option<MemoryScope>, BridgeError> {
@@ -1226,4 +1231,107 @@ pub async fn resume_memory_consolidation_job(
     let parsed_id = parse_consolidation_job_id(&job_id)?;
     let bridge = state.snapshot_bridge().await;
     bridge.resume_memory_consolidation_job(parsed_id).await
+}
+
+// ============================================================================
+// Phase D3+ IPC Commands: Live Session Runs, Follow-Up Queue & Live Steering
+// ============================================================================
+
+/// Fetches the active streaming run snapshot and durable follow-up queue (`GET /v1/sessions/{id}/live`).
+#[tauri::command]
+pub async fn get_session_live(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+) -> Result<LiveRunResponse, BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.get_session_live(parsed_session).await
+}
+
+/// Appends a durable follow-up message for a session (`POST /v1/sessions/{id}/followups`).
+#[tauri::command]
+pub async fn enqueue_followup(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+    content: String,
+    idempotency_key: Option<String>,
+) -> Result<SessionFollowupRecord, BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    let req = EnqueueFollowupRequest {
+        content,
+        idempotency_key,
+    };
+    bridge.enqueue_followup(parsed_session, &req).await
+}
+
+/// Updates a queued or paused follow-up message (`PATCH /v1/sessions/{id}/followups/{fid}`).
+#[tauri::command]
+pub async fn update_followup(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+    followup_id: String,
+    content: String,
+) -> Result<SessionFollowupRecord, BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let parsed_followup = parse_followup_id(&followup_id)?;
+    let bridge = state.snapshot_bridge().await;
+    let req = UpdateFollowupRequest { content };
+    bridge
+        .update_followup(parsed_session, parsed_followup, &req)
+        .await
+}
+
+/// Removes one follow-up message from a session's queue (`DELETE /v1/sessions/{id}/followups/{fid}`).
+#[tauri::command]
+pub async fn delete_followup(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+    followup_id: String,
+) -> Result<(), BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let parsed_followup = parse_followup_id(&followup_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.delete_followup(parsed_session, parsed_followup).await
+}
+
+/// Clears all pending follow-up messages for a session (`DELETE /v1/sessions/{id}/followups`).
+#[tauri::command]
+pub async fn clear_followups(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+) -> Result<(), BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.clear_followups(parsed_session).await
+}
+
+/// Resumes paused follow-up messages for a session (`POST /v1/sessions/{id}/followups/resume`).
+#[tauri::command]
+pub async fn resume_followups(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+) -> Result<ResumeFollowupsResponse, BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    bridge.resume_followups(parsed_session).await
+}
+
+/// Interrupts any active run and immediately steers the session (`POST /v1/sessions/{id}/steer`).
+#[tauri::command]
+pub async fn steer_session(
+    state: State<'_, SharedBridge>,
+    session_id: String,
+    content: String,
+    client_message_id: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<SendMessageResponse, BridgeError> {
+    let parsed_session = parse_session_id(&session_id)?;
+    let bridge = state.snapshot_bridge().await;
+    let req = SteerSessionRequest {
+        content,
+        client_message_id,
+        timeout_ms,
+    };
+    bridge.steer_session(parsed_session, &req).await
 }

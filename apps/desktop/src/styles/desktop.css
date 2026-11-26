@@ -1775,6 +1775,8 @@ html.native-shell .workbench {
 
 .composer-send {
   margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .composer-setting,
@@ -4777,6 +4779,292 @@ html.native-shell .workbench {
 }
 
 /* ============================================================================
+   Phase D3+: Clean Live Streaming Bubble & Mid-Run Follow-Up Queue / Steering
+   ============================================================================ */
+
+.live-streaming-bubble {
+  margin-bottom: 18px;
+}
+
+.live-working-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.3;
+  user-select: none;
+}
+
+.live-working-indicator__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  animation: live-dot-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes live-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.08);
+  }
+}
+
+.followup-queue-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 4px 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #1b1c1f;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.followup-queue-bar--paused {
+  border-color: var(--warn-border);
+  background: rgba(243, 198, 119, 0.08);
+}
+
+.followup-queue-bar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.followup-queue-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 560;
+}
+
+.followup-queue-bar--paused .followup-queue-bar__status {
+  color: #f6ddb0;
+}
+
+.followup-queue-bar__head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.followup-head-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 540;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.followup-head-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.11);
+  color: var(--text);
+}
+
+.followup-head-btn--primary {
+  border-color: var(--warn-border);
+  background: rgba(243, 198, 119, 0.18);
+  color: #ffe3ab;
+}
+
+.followup-head-btn--primary:hover:not(:disabled) {
+  background: rgba(243, 198, 119, 0.28);
+  color: #fff3d6;
+}
+
+.followup-head-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.followup-queue-bar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 132px;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.followup-queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.followup-queue-item.is-paused {
+  border-color: rgba(243, 198, 119, 0.24);
+}
+
+.followup-queue-item__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary-glass);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.followup-queue-item__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.followup-item-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.followup-item-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.followup-item-btn--steer:hover:not(:disabled) {
+  background: rgba(243, 198, 119, 0.16);
+  color: #ffe3ab;
+}
+
+.followup-item-btn--confirm {
+  color: var(--ok-dot);
+}
+
+.followup-item-btn--confirm:hover:not(:disabled) {
+  background: rgba(111, 211, 155, 0.16);
+  color: #c7f7db;
+}
+
+.followup-item-btn--danger:hover:not(:disabled) {
+  background: var(--danger-surface);
+  color: #ffbaba;
+}
+
+.followup-item-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.followup-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+}
+
+.followup-edit-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #141518;
+  color: var(--text);
+  font-size: 12.5px;
+  outline: 0;
+}
+
+.followup-edit-input:focus {
+  border-color: var(--focus);
+}
+
+.composer-midrun-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+}
+
+.composer-midrun-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 560;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.composer-midrun-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.composer-midrun-btn--steer {
+  border-color: var(--warn-border);
+  background: var(--warn-surface);
+  color: #ffe3ab;
+}
+
+.composer-midrun-btn--steer:hover:not(:disabled) {
+  background: rgba(243, 198, 119, 0.22);
+  color: #fff3d6;
+}
+
+.composer-midrun-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ============================================================================
    Responsive Refinements
    ============================================================================ */
 
@@ -4815,6 +5103,14 @@ html.native-shell .workbench {
   .settings-quota-split,
   .settings-mcp-secret-row {
     grid-template-columns: 1fr;
+  }
+  .followup-queue-bar {
+    margin: 0 0 8px;
+    padding: 8px 10px;
+  }
+  .composer-midrun-btn {
+    padding: 0 8px;
+    font-size: 11px;
   }
 }
 

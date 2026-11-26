@@ -193,6 +193,13 @@ pub fn run() {
             commands::create_memory_consolidation_job,
             commands::pause_memory_consolidation_job,
             commands::resume_memory_consolidation_job,
+            commands::get_session_live,
+            commands::enqueue_followup,
+            commands::update_followup,
+            commands::delete_followup,
+            commands::clear_followups,
+            commands::resume_followups,
+            commands::steer_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dennett desktop application");

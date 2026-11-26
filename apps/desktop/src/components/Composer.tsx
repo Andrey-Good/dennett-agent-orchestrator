@@ -7,13 +7,24 @@ import {
   ChatCircleText,
   Check,
   Clock,
+  Lightning,
   ListChecks,
+  PauseCircle,
+  PencilSimple,
+  Play,
+  Queue,
   ShieldCheck,
   Sparkle,
   Stop,
+  Trash,
+  X,
 } from "@phosphor-icons/react";
 
-import type { ThinkingLevel, WorkspaceWritePolicy } from "../api/contracts";
+import type {
+  SessionFollowupRecord,
+  ThinkingLevel,
+  WorkspaceWritePolicy,
+} from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
 import { PortalPopover } from "./PortalPopover";
 
@@ -70,6 +81,11 @@ export function Composer() {
   const { state, actions, meta } = useWorkspace();
   const [openPopover, setOpenPopover] = useState<OpenComposerPopover>(null);
   const [submittingClarification, setSubmittingClarification] = useState(false);
+  const [isSubmittingFollowup, setIsSubmittingFollowup] = useState(false);
+  const [editingFollowupId, setEditingFollowupId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const [busyFollowupId, setBusyFollowupId] = useState<string | null>(null);
+  const [isBulkFollowupBusy, setIsBulkFollowupBusy] = useState(false);
 
   const accessTriggerRef = useRef<HTMLButtonElement | null>(null);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -87,6 +103,13 @@ export function Composer() {
   const isRunning = meta.isRunningActiveSession;
   const isCancelling = meta.isCancellingActiveSession;
   const hasDraft = meta.currentDraft.trim().length > 0;
+  const activeFollowups = meta.activeFollowups ?? [];
+  const hasPausedFollowups = activeFollowups.some((item) => item.status === "paused");
+
+  useEffect(() => {
+    setEditingFollowupId(null);
+    setEditingText("");
+  }, [sessionId]);
 
   // Clarification reply routes through this single composer; otherwise normal send/offline queue.
   const canSend = Boolean(sessionId) && hasDraft && (
@@ -173,13 +196,152 @@ export function Composer() {
     await actions.sendMessage();
   };
 
+  const handleEnqueueFromDraft = async () => {
+    if (!sessionId || !isConnected || isSubmittingFollowup) {
+      return;
+    }
+    const rawDraft = meta.currentDraft;
+    const trimmed = rawDraft.trim();
+    if (!trimmed) {
+      return;
+    }
+    setIsSubmittingFollowup(true);
+    actions.updateDraft(sessionId, "");
+    try {
+      const created = await actions.enqueueFollowup(trimmed);
+      if (!created) {
+        actions.updateDraft(sessionId, rawDraft);
+      }
+    } finally {
+      setIsSubmittingFollowup(false);
+    }
+  };
+
+  const handleSteerFromDraft = async () => {
+    if (!sessionId || !isConnected || isSubmittingFollowup) {
+      return;
+    }
+    const rawDraft = meta.currentDraft;
+    const trimmed = rawDraft.trim();
+    if (!trimmed) {
+      return;
+    }
+    setIsSubmittingFollowup(true);
+    actions.updateDraft(sessionId, "");
+    try {
+      const ok = await actions.steerSession(trimmed);
+      if (!ok) {
+        actions.updateDraft(sessionId, rawDraft);
+      }
+    } finally {
+      setIsSubmittingFollowup(false);
+    }
+  };
+
+  const handleSaveEditFollowup = async (followupId: string) => {
+    const trimmed = editingText.trim();
+    if (!trimmed || busyFollowupId) {
+      return;
+    }
+    setBusyFollowupId(followupId);
+    try {
+      const updated = await actions.updateFollowup(followupId, trimmed);
+      if (updated) {
+        setEditingFollowupId(null);
+        setEditingText("");
+      }
+    } finally {
+      setBusyFollowupId(null);
+    }
+  };
+
+  const handlePromoteFollowup = async (item: SessionFollowupRecord) => {
+    if (!isConnected || busyFollowupId) {
+      return;
+    }
+    setBusyFollowupId(item.followup_id);
+    try {
+      const deleted = await actions.deleteFollowup(item.followup_id);
+      if (deleted) {
+        if (editingFollowupId === item.followup_id) {
+          setEditingFollowupId(null);
+          setEditingText("");
+        }
+        await actions.steerSession(item.content);
+      }
+    } finally {
+      setBusyFollowupId(null);
+    }
+  };
+
+  const handleDeleteFollowup = async (followupId: string) => {
+    if (!isConnected || busyFollowupId) {
+      return;
+    }
+    setBusyFollowupId(followupId);
+    try {
+      const deleted = await actions.deleteFollowup(followupId);
+      if (deleted && editingFollowupId === followupId) {
+        setEditingFollowupId(null);
+        setEditingText("");
+      }
+    } finally {
+      setBusyFollowupId(null);
+    }
+  };
+
+  const handleResumeFollowups = async () => {
+    if (!isConnected || isBulkFollowupBusy) {
+      return;
+    }
+    setIsBulkFollowupBusy(true);
+    try {
+      await actions.resumeFollowups();
+    } finally {
+      setIsBulkFollowupBusy(false);
+    }
+  };
+
+  const handleClearFollowups = async () => {
+    if (!isConnected || isBulkFollowupBusy) {
+      return;
+    }
+    setIsBulkFollowupBusy(true);
+    try {
+      await actions.clearFollowups();
+      setEditingFollowupId(null);
+      setEditingText("");
+    } finally {
+      setIsBulkFollowupBusy(false);
+    }
+  };
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
+      const isModEnter = event.ctrlKey || event.metaKey;
+      if (isRunning && !clarificationCard) {
+        event.preventDefault();
+        if (!sessionId || !hasDraft || !isConnected || isSubmittingFollowup) {
+          return;
+        }
+        if (isModEnter) {
+          void handleSteerFromDraft();
+        } else {
+          void handleEnqueueFromDraft();
+        }
+        return;
+      }
       event.preventDefault();
       if (canSend) {
         void submitCurrentInput();
       }
-    } else if (event.key === "Escape" && isRunning && !openPopover && !event.defaultPrevented) {
+    } else if (
+      event.key === "Escape" &&
+      isRunning &&
+      !openPopover &&
+      !editingFollowupId &&
+      !event.defaultPrevented
+    ) {
       event.preventDefault();
       void actions.stopActiveRun();
     }
@@ -398,6 +560,164 @@ export function Composer() {
           </div>
         )}
 
+        {activeFollowups.length > 0 && (
+          <div
+            className={`followup-queue-bar ${hasPausedFollowups ? "followup-queue-bar--paused" : ""}`}
+            data-testid="followup-queue-bar"
+          >
+            <div className="followup-queue-bar__header">
+              <div className="followup-queue-bar__status">
+                {hasPausedFollowups ? (
+                  <>
+                    <PauseCircle size={14} aria-hidden="true" />
+                    <span data-testid="followup-paused-status">
+                      Очередь на паузе после остановки · {activeFollowups.length}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Queue size={14} aria-hidden="true" />
+                    <span data-testid="followup-queued-status">
+                      В очереди · {activeFollowups.length}
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="followup-queue-bar__head-actions">
+                {hasPausedFollowups && (
+                  <button
+                    type="button"
+                    className="followup-head-btn followup-head-btn--primary"
+                    data-testid="followup-resume-btn"
+                    disabled={!isConnected || isBulkFollowupBusy}
+                    onClick={() => void handleResumeFollowups()}
+                  >
+                    <Play size={11} weight="fill" aria-hidden="true" />
+                    Продолжить
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="followup-head-btn"
+                  data-testid="followup-clear-btn"
+                  disabled={!isConnected || isBulkFollowupBusy}
+                  onClick={() => void handleClearFollowups()}
+                >
+                  Очистить
+                </button>
+              </div>
+            </div>
+
+            <div className="followup-queue-bar__list">
+              {activeFollowups.map((item) => {
+                const isEditing = editingFollowupId === item.followup_id;
+                const isItemBusy = busyFollowupId === item.followup_id || isBulkFollowupBusy;
+                return (
+                  <div
+                    key={item.followup_id}
+                    className={`followup-queue-item ${item.status === "paused" ? "is-paused" : ""}`}
+                    data-testid={`followup-item-${item.followup_id}`}
+                  >
+                    {isEditing ? (
+                      <div className="followup-edit-row">
+                        <input
+                          type="text"
+                          className="followup-edit-input"
+                          aria-label="Редактировать уточнение в очереди"
+                          data-testid={`followup-edit-input-${item.followup_id}`}
+                          value={editingText}
+                          disabled={isItemBusy}
+                          autoFocus
+                          onChange={(e) => setEditingText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void handleSaveEditFollowup(item.followup_id);
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setEditingFollowupId(null);
+                              setEditingText("");
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="followup-item-btn followup-item-btn--confirm"
+                          aria-label="Сохранить уточнение"
+                          data-testid={`followup-edit-save-${item.followup_id}`}
+                          disabled={isItemBusy || editingText.trim().length === 0}
+                          onClick={() => void handleSaveEditFollowup(item.followup_id)}
+                        >
+                          <Check size={13} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className="followup-item-btn"
+                          aria-label="Отменить редактирование"
+                          data-testid={`followup-edit-cancel-${item.followup_id}`}
+                          disabled={isItemBusy}
+                          onClick={() => {
+                            setEditingFollowupId(null);
+                            setEditingText("");
+                          }}
+                        >
+                          <X size={13} aria-hidden="true" />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="followup-queue-item__text" title={item.content}>
+                          {item.content}
+                        </span>
+                        <div className="followup-queue-item__actions">
+                          <button
+                            type="button"
+                            className="followup-item-btn"
+                            aria-label="Редактировать уточнение"
+                            title="Редактировать"
+                            data-testid={`followup-edit-btn-${item.followup_id}`}
+                            disabled={!isConnected || isItemBusy}
+                            onClick={() => {
+                              setEditingFollowupId(item.followup_id);
+                              setEditingText(item.content);
+                            }}
+                          >
+                            <PencilSimple size={13} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="followup-item-btn followup-item-btn--steer"
+                            aria-label="Прервать и уточнить сейчас"
+                            title="Уточнить сейчас"
+                            data-testid={`followup-promote-btn-${item.followup_id}`}
+                            disabled={!isConnected || isItemBusy}
+                            onClick={() => void handlePromoteFollowup(item)}
+                          >
+                            <Lightning size={13} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="followup-item-btn followup-item-btn--danger"
+                            aria-label="Удалить из очереди"
+                            title="Удалить"
+                            data-testid={`followup-delete-btn-${item.followup_id}`}
+                            disabled={!isConnected || isItemBusy}
+                            onClick={() => void handleDeleteFollowup(item.followup_id)}
+                          >
+                            <Trash size={13} aria-hidden="true" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="composer" data-testid="chat-composer">
           <textarea
             ref={meta.composerInputRef}
@@ -406,11 +726,13 @@ export function Composer() {
             placeholder={
               clarificationCard
                 ? "Ответьте на уточняющий вопрос агента…"
-                : isConnected
-                  ? isStandaloneSession
-                    ? "Напишите сообщение…"
-                    : "Напишите поручение агенту…"
-                  : "Офлайн-черновик — нажмите Enter, чтобы поставить в очередь отправки…"
+                : isRunning
+                  ? "Уточнить задачу — Enter в очередь, Ctrl+Enter прервать и уточнить"
+                  : isConnected
+                    ? isStandaloneSession
+                      ? "Напишите сообщение…"
+                      : "Напишите поручение агенту…"
+                    : "Офлайн-черновик — нажмите Enter, чтобы поставить в очередь отправки…"
             }
             aria-label={
               clarificationCard
@@ -512,17 +834,45 @@ export function Composer() {
               )}
 
               {isRunning && !clarificationCard ? (
-                <button
-                  type="button"
-                  className="send-button stop-button"
-                  onClick={() => void actions.stopActiveRun()}
-                  disabled={isCancelling}
-                  aria-label="Остановить текущий запуск"
-                  data-testid="composer-stop-button"
-                  title="Остановить (Esc)"
-                >
-                  <Stop size={14} weight="fill" />
-                </button>
+                <div className="composer-midrun-actions">
+                  {hasDraft && isConnected && (
+                    <>
+                      <button
+                        type="button"
+                        className="composer-midrun-btn"
+                        disabled={isSubmittingFollowup}
+                        data-testid="composer-queue-followup-btn"
+                        title="Добавить в очередь (Enter)"
+                        onClick={() => void handleEnqueueFromDraft()}
+                      >
+                        <ArrowUp size={13} weight="bold" aria-hidden="true" />
+                        <span>В очередь</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="composer-midrun-btn composer-midrun-btn--steer"
+                        disabled={isSubmittingFollowup}
+                        data-testid="composer-steer-now-btn"
+                        title="Прервать текущий ход и уточнить сейчас (Ctrl+Enter)"
+                        onClick={() => void handleSteerFromDraft()}
+                      >
+                        <Lightning size={13} weight="fill" aria-hidden="true" />
+                        <span>Уточнить сейчас</span>
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="send-button stop-button"
+                    onClick={() => void actions.stopActiveRun()}
+                    disabled={isCancelling}
+                    aria-label="Остановить текущий запуск"
+                    data-testid="composer-stop-button"
+                    title="Остановить (Esc)"
+                  >
+                    <Stop size={14} weight="fill" />
+                  </button>
+                </div>
               ) : (
                 <button
                   type="button"

@@ -10,6 +10,7 @@ import {
 
 import type { ConsolidationJobStatus, IndexStatus } from "../api/contracts";
 import { useWorkspace } from "../state/WorkspaceProvider";
+import { formatContextUsage } from "../utils/formatters";
 
 export interface StatsPopoverProps {
   onClose(): void;
@@ -88,8 +89,31 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
 
   const memoryHealthy = health?.memory_status === "healthy";
   const pendingOutbox = health?.pending_outbox_count ?? 0;
-  const runsCount = state.activeDetail?.runs.length ?? 0;
+  const runs = state.activeDetail?.runs ?? [];
+  const runsCount = runs.length;
   const policyCount = state.activeDetail?.permission_decisions.length ?? 0;
+
+  let contextUsedTokens: number | null = null;
+  let contextWindowTokens: number | null = null;
+  if (
+    meta.activeLiveRun?.context_used_tokens != null ||
+    meta.activeLiveRun?.context_window_tokens != null
+  ) {
+    contextUsedTokens = meta.activeLiveRun.context_used_tokens ?? null;
+    contextWindowTokens = meta.activeLiveRun.context_window_tokens ?? null;
+  } else if (runs.length > 0) {
+    let latestRun = runs[runs.length - 1]!;
+    for (const run of runs) {
+      if (run.created_at >= latestRun.created_at) {
+        latestRun = run;
+      }
+    }
+    if (latestRun.context_used_tokens != null || latestRun.context_window_tokens != null) {
+      contextUsedTokens = latestRun.context_used_tokens ?? null;
+      contextWindowTokens = latestRun.context_window_tokens ?? null;
+    }
+  }
+  const contextUsageLabel = formatContextUsage(contextUsedTokens, contextWindowTokens);
 
   const memoryStats =
     state.memoryOverview?.memory_status === "healthy" ? (state.memoryOverview.stats ?? null) : null;
@@ -293,6 +317,12 @@ export function StatsPopover({ onClose }: StatsPopoverProps) {
           <span>Ходов в сессии</span>
           <strong>{runsCount}</strong>
         </div>
+        {contextUsageLabel && (
+          <div className="stats-kv" data-testid="stats-context-usage">
+            <span>Контекст</span>
+            <strong>{contextUsageLabel}</strong>
+          </div>
+        )}
         <div className="stats-kv">
           <span>Решений политики</span>
           <strong>{policyCount}</strong>

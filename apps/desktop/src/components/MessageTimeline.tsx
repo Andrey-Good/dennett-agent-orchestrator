@@ -171,6 +171,15 @@ export function MessageTimeline() {
     return set;
   }, [persistedMessages]);
 
+  const activeLiveRun = meta.activeLiveRun;
+  const liveRunAlreadyPersisted = Boolean(
+    activeLiveRun && runIdsWithAssistantMessage.has(activeLiveRun.run_id),
+  );
+  const liveStreamingText =
+    activeLiveRun && !liveRunAlreadyPersisted && activeLiveRun.streaming_text.trim().length > 0
+      ? activeLiveRun.streaming_text
+      : "";
+
   // D2-UX-06: Preserve manual scroll position when user scrolled up to read history;
   // auto-scroll to bottom on session switch or when already near the bottom.
   useEffect(() => {
@@ -198,6 +207,7 @@ export function MessageTimeline() {
     sessionUnknownEffects.length,
     state.selectedSessionId,
     meta.isRunningActiveSession,
+    meta.activeLiveRun?.streaming_text,
   ]);
 
   const handleTimelineScroll = () => {
@@ -230,7 +240,8 @@ export function MessageTimeline() {
     sessionClarificationCards.length > 0 ||
     sessionBudgetCards.length > 0 ||
     sessionMissedScheduleCards.length > 0 ||
-    sessionUnknownEffects.length > 0;
+    sessionUnknownEffects.length > 0 ||
+    (meta.isRunningActiveSession && liveStreamingText.length > 0);
 
   return (
     <div
@@ -783,13 +794,35 @@ export function MessageTimeline() {
           </>
         )}
 
-        {meta.isRunningActiveSession && !meta.isAwaitingApprovalActiveSession && (
-          <div className="loading-lines" aria-live="polite" data-testid="thinking-indicator">
-            <span />
-            <span />
-            <span />
-          </div>
-        )}
+        {meta.isRunningActiveSession &&
+          !meta.isAwaitingApprovalActiveSession &&
+          (liveStreamingText ? (
+            <article
+              className="message message--assistant message-row assistant live-streaming-bubble"
+              aria-live="polite"
+              data-testid="live-streaming-bubble"
+            >
+              <div className="message-block">
+                <div className="message-copy">
+                  <div className="message-markdown">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+                      {liveStreamingText}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+                <div className="live-working-indicator" data-testid="live-working-indicator">
+                  <span className="live-working-indicator__dot" aria-hidden="true" />
+                  <span>Продолжает работу…</span>
+                </div>
+              </div>
+            </article>
+          ) : (
+            <div className="loading-lines" aria-live="polite" data-testid="thinking-indicator">
+              <span />
+              <span />
+              <span />
+            </div>
+          ))}
       </div>
     </div>
   );

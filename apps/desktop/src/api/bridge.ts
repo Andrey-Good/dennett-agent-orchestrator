@@ -35,6 +35,7 @@ import type {
   DiscoverCapabilitiesResponse,
   DispatchEffectRequest,
   DispatchEffectResponse,
+  EnqueueFollowupRequest,
   EventStreamResponse,
   ExportRequest,
   ExportResponse,
@@ -65,6 +66,7 @@ import type {
   ListSessionsResponse,
   ListTasksResponse,
   ListTombstonesResponse,
+  LiveRunResponse,
   MemoryClaim,
   MemoryConflict,
   MemoryDocument,
@@ -84,6 +86,7 @@ import type {
   ResolveInboxCardResponse,
   ResolvePermissionRequest,
   ResolvePermissionResponse,
+  ResumeFollowupsResponse,
   RevokeGrantRequest,
   RuntimeCatalogResponse,
   SecretMetadataRecord,
@@ -92,10 +95,12 @@ import type {
   SendMessageRequest,
   SendMessageResponse,
   SessionDetailResponse,
+  SessionFollowupRecord,
   SessionRecord,
   SetProjectCapabilityBindingRequest,
   SetSecretRequest,
   StateSnapshotResponse,
+  SteerSessionRequest,
   SupersedeClaimRequest,
   TaskDetailResponse,
   TaskRecord,
@@ -106,6 +111,7 @@ import type {
   UpdateAgentConfigRequest,
   UpdateCapabilityRequest,
   UpdateDocumentRequest,
+  UpdateFollowupRequest,
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateTaskRequest,
@@ -270,6 +276,21 @@ export interface DesktopBridge {
   createMemoryConsolidationJob(request: CreateConsolidationJobRequest): Promise<ConsolidationJob>;
   pauseMemoryConsolidationJob(jobId: string): Promise<ConsolidationJob>;
   resumeMemoryConsolidationJob(jobId: string): Promise<ConsolidationJob>;
+  // Phase D3+: Live Session Runs, Durable Follow-ups & Steering
+  getSessionLive(sessionId: string): Promise<LiveRunResponse>;
+  enqueueFollowup(
+    sessionId: string,
+    request: EnqueueFollowupRequest,
+  ): Promise<SessionFollowupRecord>;
+  updateFollowup(
+    sessionId: string,
+    followupId: string,
+    request: UpdateFollowupRequest,
+  ): Promise<SessionFollowupRecord>;
+  deleteFollowup(sessionId: string, followupId: string): Promise<void>;
+  clearFollowups(sessionId: string): Promise<void>;
+  resumeFollowups(sessionId: string): Promise<ResumeFollowupsResponse>;
+  steerSession(sessionId: string, request: SteerSessionRequest): Promise<SendMessageResponse>;
 }
 
 export interface WindowControls {
@@ -534,6 +555,32 @@ export function createTauriBridge(): DesktopBridge {
       invoke<ConsolidationJob>("pause_memory_consolidation_job", { jobId }),
     resumeMemoryConsolidationJob: (jobId: string) =>
       invoke<ConsolidationJob>("resume_memory_consolidation_job", { jobId }),
+    getSessionLive: (sessionId: string) =>
+      invoke<LiveRunResponse>("get_session_live", { sessionId }),
+    enqueueFollowup: (sessionId: string, request: EnqueueFollowupRequest) =>
+      invoke<SessionFollowupRecord>("enqueue_followup", {
+        sessionId,
+        content: request.content,
+        idempotencyKey: request.idempotency_key ?? null,
+      }),
+    updateFollowup: (sessionId: string, followupId: string, request: UpdateFollowupRequest) =>
+      invoke<SessionFollowupRecord>("update_followup", {
+        sessionId,
+        followupId,
+        content: request.content,
+      }),
+    deleteFollowup: (sessionId: string, followupId: string) =>
+      invoke<void>("delete_followup", { sessionId, followupId }),
+    clearFollowups: (sessionId: string) => invoke<void>("clear_followups", { sessionId }),
+    resumeFollowups: (sessionId: string) =>
+      invoke<ResumeFollowupsResponse>("resume_followups", { sessionId }),
+    steerSession: (sessionId: string, request: SteerSessionRequest) =>
+      invoke<SendMessageResponse>("steer_session", {
+        sessionId,
+        content: request.content,
+        clientMessageId: request.client_message_id ?? null,
+        timeoutMs: request.timeout_ms ?? null,
+      }),
   };
 }
 
