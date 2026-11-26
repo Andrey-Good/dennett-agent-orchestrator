@@ -12,11 +12,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::control::{
-    MAX_ADAPTER_ID_LEN, MAX_WORKSPACE_PATH_LEN, MemoryStatus, ProjectId, RuntimeCatalogResponse,
+    MAX_ADAPTER_ID_LEN, MAX_MESSAGE_CONTENT_BYTES, MAX_WORKSPACE_PATH_LEN, MemoryStatus, ProjectId,
+    RunId, RuntimeCatalogResponse, SendMessageResponse, SessionId,
 };
+use crate::d2::validate_client_message_id;
 use crate::memory::{
-    ConsolidationJob, ForgetTombstone, MemoryClaim, MemoryConflict, MemoryDocument, MemoryNote,
-    MemoryScope, MemoryStatsSummary, Sha256Hex, TimestampMs,
+    ConsolidationJob, ForgetTombstone, MAX_IDEMPOTENCY_KEY_LEN, MemoryClaim, MemoryConflict,
+    MemoryDocument, MemoryNote, MemoryScope, MemoryStatsSummary, Sha256Hex, TimestampMs,
 };
 use crate::redact::REDACTED_PLACEHOLDER;
 use crate::{DennettError, RuntimeAuthProfile};
@@ -111,6 +113,12 @@ define_d3_uuid_id! {
     /// Stable UUID identifying a registered [`CapabilityRecord`].
     pub struct CapabilityId;
     field = "capability_id";
+}
+
+define_d3_uuid_id! {
+    /// Stable UUID identifying a persisted [`SessionFollowupRecord`].
+    pub struct FollowupId;
+    field = "followup_id";
 }
 
 // ============================================================================
@@ -1512,6 +1520,242 @@ pub struct MemoryOverviewResponse {
 }
 
 // ============================================================================
+// Live Session Runs, Durable Follow-ups, Steering & Session Skills (D3+)
+// ============================================================================
+
+/// Minimal ephemeral snapshot of an in-flight session run exposed for live UI polling.
+///
+/// Intentionally carries only clean visible `streaming_text` and optional context token counters
+/// (no tool-call activity feed, no phase labels, and never hidden chain-of-thought reasoning).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveRunSnapshot {
+    /// Owning Dennett session identifier.
+    pub session_id: SessionId,
+    /// Active execution run identifier.
+    pub run_id: RunId,
+    /// Accumulated visible assistant response text emitted so far (`TextDelta`).
+    #[serde(default)]
+    pub streaming_text: String,
+    /// Optional live context tokens currently used, when reported by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_used_tokens: Option<u64>,
+    /// Optional maximum context window size in tokens, when reported by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u64>,
+    /// UTC start timestamp of the active run in epoch milliseconds.
+    pub started_at: TimestampMs,
+    /// UTC timestamp of the latest streaming or usage update in epoch milliseconds.
+    pub updated_at: TimestampMs,
+}
+
+/// Durable lifecycle status of a queued follow-up message in `session_followups`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FollowupStatus {
+    /// Waiting for the active run to succeed so it can be auto-dispatched in FIFO order.
+    Queued,
+    /// Paused after a cancelled or failed run until explicitly resumed by the user.
+    Paused,
+    /// Claimed and dispatched into a concrete execution run.
+    Dispatched,
+    /// Cancelled or cleared by the user before dispatch.
+    Cancelled,
+}
+
+impl FollowupStatus {
+    /// Returns the canonical snake-case string representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Paused => "paused",
+            Self::Dispatched => "dispatched",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl fmt::Display for FollowupStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for FollowupStatus {
+    type Err = DennettError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "queued" => Ok(Self::Queued),
+            "paused" => Ok(Self::Paused),
+            "dispatched" => Ok(Self::Dispatched),
+            "cancelled" => Ok(Self::Cancelled),
+            other => Err(DennettError::InvalidInput {
+                field: String::from("status"),
+                reason: format!("unknown followup status `{other}`"),
+            }),
+        }
+    }
+}
+
+/// Durable queued follow-up message persisted on the server for a session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFollowupRecord {
+    /// Stable follow-up identifier.
+    pub followup_id: FollowupId,
+    /// Owning session identifier.
+    pub session_id: SessionId,
+    /// Queued user prompt text to dispatch on a subsequent turn.
+    pub content: String,
+    /// Current durable follow-up lifecycle status.
+    pub status: FollowupStatus,
+    /// Monotonic FIFO ordering position within the session.
+    pub position: i64,
+    /// Optional caller-supplied idempotency key deduplicating enqueue retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    /// Execution run identifier created when this follow-up was dispatched, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatched_run_id: Option<RunId>,
+    /// UTC creation timestamp in epoch milliseconds.
+    pub created_at: TimestampMs,
+    /// UTC last-updated timestamp in epoch milliseconds.
+    pub updated_at: TimestampMs,
+}
+
+/// Response payload for `GET /v1/sessions/{session_id}/live`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveRunResponse {
+    /// Active ephemeral run snapshot when a run is currently executing in this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<LiveRunSnapshot>,
+    /// Active (queued or paused) durable follow-up messages for this session.
+    #[serde(default)]
+    pub followups: Vec<SessionFollowupRecord>,
+}
+
+/// Request payload for `POST /v1/sessions/{session_id}/followups`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnqueueFollowupRequest {
+    /// Follow-up prompt text to enqueue behind the active run.
+    pub content: String,
+    /// Optional caller-supplied idempotency key deduplicating enqueue retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+impl EnqueueFollowupRequest {
+    /// Validates follow-up body bounds and optional idempotency key syntax.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `content` is empty/oversized/contains NUL
+    /// or if `idempotency_key` is empty, oversized, or contains disallowed characters.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        validate_non_empty_text(&self.content, "content", MAX_MESSAGE_CONTENT_BYTES)?;
+        if let Some(ref key) = self.idempotency_key {
+            validate_followup_idempotency_key(key)?;
+        }
+        Ok(())
+    }
+}
+
+/// Request payload for `PATCH /v1/sessions/{session_id}/followups/{followup_id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateFollowupRequest {
+    /// Updated follow-up prompt text.
+    pub content: String,
+}
+
+impl UpdateFollowupRequest {
+    /// Validates updated follow-up body bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `content` is empty, oversized, or contains NUL.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        validate_non_empty_text(&self.content, "content", MAX_MESSAGE_CONTENT_BYTES)
+    }
+}
+
+/// Request payload for `POST /v1/sessions/{session_id}/steer`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SteerSessionRequest {
+    /// Steering prompt text that supersedes any active run and executes immediately.
+    pub content: String,
+    /// Optional caller-supplied idempotency key deduplicating retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
+    /// Optional explicit turn timeout override in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+impl SteerSessionRequest {
+    /// Validates steering prompt body bounds, optional timeout, and optional idempotency key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `content` is invalid, `timeout_ms` is `Some(0)`,
+    /// or `client_message_id` fails syntax validation.
+    pub fn validate(&self) -> Result<(), DennettError> {
+        validate_non_empty_text(&self.content, "content", MAX_MESSAGE_CONTENT_BYTES)?;
+        if let Some(ms) = self.timeout_ms
+            && ms == 0
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("timeout_ms"),
+                reason: String::from("must be greater than zero when provided"),
+            });
+        }
+        if let Some(ref cid) = self.client_message_id {
+            validate_client_message_id(cid)?;
+        }
+        Ok(())
+    }
+}
+
+/// Response payload for `POST /v1/sessions/{session_id}/followups/resume`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeFollowupsResponse {
+    /// Remaining durable follow-up records for this session after resuming paused entries.
+    #[serde(default)]
+    pub followups: Vec<SessionFollowupRecord>,
+    /// Immediate turn response if resuming triggered auto-dispatch of the head follow-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatched: Option<SendMessageResponse>,
+}
+
+/// Compact summary of one skill active for the current session (`GET /v1/capabilities/session-skills`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSkillSummary {
+    /// Normalized skill capability slug (e.g. `"rust-audit"`).
+    pub slug: String,
+    /// Human-readable skill display name.
+    pub display_name: String,
+    /// Concise description of when and how to use this skill.
+    #[serde(default)]
+    pub description: String,
+    /// Semantic or snapshot version label.
+    pub version: String,
+    /// Effective visibility scope (`global`, `project`, or `candidate_unattached`).
+    pub scope: CapabilityScopeKind,
+    /// Effective activation disposition (`pinned`, `active`, `on_demand`, etc.).
+    pub activation_state: CapabilityActivation,
+    /// Security trust disposition (`unreviewed`, `restricted`, `trusted`, `revoked`).
+    pub trust_state: CapabilityTrust,
+}
+
+/// Full session skill payload returned by `GET /v1/capabilities/session-skills/{slug}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSkillDetailResponse {
+    /// Metadata summary for the resolved session skill.
+    pub skill: SessionSkillSummary,
+    /// Full UTF-8 `SKILL.md` instruction body.
+    pub skill_md_content: String,
+}
+
+// ============================================================================
 // Internal Validation Helpers
 // ============================================================================
 
@@ -1668,10 +1912,32 @@ fn validate_mcp_command_spec(
     Ok(())
 }
 
+fn validate_followup_idempotency_key(raw: &str) -> Result<(), DennettError> {
+    if raw.is_empty() || raw.len() > MAX_IDEMPOTENCY_KEY_LEN {
+        return Err(DennettError::InvalidInput {
+            field: String::from("idempotency_key"),
+            reason: format!("must be non-empty and at most {MAX_IDEMPOTENCY_KEY_LEN} bytes"),
+        });
+    }
+    if !raw
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(DennettError::InvalidInput {
+            field: String::from("idempotency_key"),
+            reason: String::from(
+                "must contain only ASCII alphanumeric characters, '-', '_', '.', or ':'",
+            ),
+        });
+    }
+    Ok(())
+}
+
 const _: () = {
     const fn assert_send_sync<T: Send + Sync + 'static>() {}
     assert_send_sync::<ProviderConnectionId>();
     assert_send_sync::<CapabilityId>();
+    assert_send_sync::<FollowupId>();
     assert_send_sync::<SecretSource>();
     assert_send_sync::<SetSecretRequest>();
     assert_send_sync::<SecretMetadataRecord>();
@@ -1707,6 +1973,16 @@ const _: () = {
     assert_send_sync::<SetProjectCapabilityBindingRequest>();
     assert_send_sync::<DeleteCapabilityResponse>();
     assert_send_sync::<MemoryOverviewResponse>();
+    assert_send_sync::<LiveRunSnapshot>();
+    assert_send_sync::<FollowupStatus>();
+    assert_send_sync::<SessionFollowupRecord>();
+    assert_send_sync::<LiveRunResponse>();
+    assert_send_sync::<EnqueueFollowupRequest>();
+    assert_send_sync::<UpdateFollowupRequest>();
+    assert_send_sync::<SteerSessionRequest>();
+    assert_send_sync::<ResumeFollowupsResponse>();
+    assert_send_sync::<SessionSkillSummary>();
+    assert_send_sync::<SessionSkillDetailResponse>();
 };
 
 #[cfg(test)]
@@ -1799,5 +2075,159 @@ mod tests {
 
         let empty_update = UpdateCapabilityRequest::default();
         assert!(empty_update.validate().is_err());
+    }
+
+    #[test]
+    fn live_run_and_followup_snapshot_contracts_roundtrip_json() {
+        let now = TimestampMs::now();
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let followup_id = FollowupId::new();
+
+        for (raw, expected) in [
+            ("queued", FollowupStatus::Queued),
+            ("paused", FollowupStatus::Paused),
+            ("dispatched", FollowupStatus::Dispatched),
+            ("cancelled", FollowupStatus::Cancelled),
+        ] {
+            assert_eq!(expected.as_str(), raw);
+            assert_eq!(expected.to_string(), raw);
+            assert_eq!(FollowupStatus::from_str(raw), Ok(expected));
+            let encoded = serde_json::to_string(&expected).expect("serialize status");
+            assert_eq!(encoded, format!("\"{raw}\""));
+            let decoded: FollowupStatus =
+                serde_json::from_str(&encoded).expect("deserialize status");
+            assert_eq!(decoded, expected);
+        }
+        assert!(FollowupStatus::from_str("unknown").is_err());
+
+        let snapshot = LiveRunSnapshot {
+            session_id,
+            run_id,
+            streaming_text: String::from("Checking repository layout..."),
+            context_used_tokens: Some(12_345),
+            context_window_tokens: Some(1_000_000),
+            started_at: now,
+            updated_at: now,
+        };
+        let followup = SessionFollowupRecord {
+            followup_id,
+            session_id,
+            content: String::from("Then run clippy as well."),
+            status: FollowupStatus::Queued,
+            position: 1,
+            idempotency_key: Some(String::from("fu-key-1")),
+            dispatched_run_id: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let live_resp = LiveRunResponse {
+            active: Some(snapshot),
+            followups: vec![followup.clone()],
+        };
+        let encoded_live = serde_json::to_string(&live_resp).expect("serialize live response");
+        assert!(!encoded_live.contains("activity_steps"));
+        assert!(!encoded_live.contains("phase"));
+        assert!(!encoded_live.contains("dispatched_run_id"));
+        let decoded_live: LiveRunResponse =
+            serde_json::from_str(&encoded_live).expect("deserialize live response");
+        assert_eq!(decoded_live, live_resp);
+
+        let idle_live = LiveRunResponse {
+            active: None,
+            followups: Vec::new(),
+        };
+        let encoded_idle = serde_json::to_string(&idle_live).expect("serialize idle live");
+        assert!(!encoded_idle.contains("\"active\""));
+        assert!(encoded_idle.contains("\"followups\":[]"));
+        let decoded_idle: LiveRunResponse =
+            serde_json::from_str(&encoded_idle).expect("deserialize idle live");
+        assert_eq!(decoded_idle, idle_live);
+
+        let resume = ResumeFollowupsResponse {
+            followups: vec![followup],
+            dispatched: None,
+        };
+        let encoded_resume = serde_json::to_string(&resume).expect("encode resume");
+        assert!(encoded_resume.contains("\"followups\":["));
+        assert!(!encoded_resume.contains("\"dispatched\""));
+        let decoded_resume: ResumeFollowupsResponse =
+            serde_json::from_str(&encoded_resume).expect("decode resume");
+        assert_eq!(decoded_resume, resume);
+    }
+
+    #[test]
+    fn followup_requests_steer_and_session_skills_roundtrip_json() {
+        let enqueue = EnqueueFollowupRequest {
+            content: String::from("Check edge cases"),
+            idempotency_key: Some(String::from("enq:1")),
+        };
+        assert!(enqueue.validate().is_ok());
+        let decoded_enq: EnqueueFollowupRequest =
+            serde_json::from_str(&serde_json::to_string(&enqueue).expect("encode enqueue"))
+                .expect("decode enqueue");
+        assert_eq!(decoded_enq, enqueue);
+        assert!(
+            EnqueueFollowupRequest {
+                content: String::from("   "),
+                idempotency_key: None,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            EnqueueFollowupRequest {
+                content: String::from("ok"),
+                idempotency_key: Some(String::from("bad key with space")),
+            }
+            .validate()
+            .is_err()
+        );
+
+        let update = UpdateFollowupRequest {
+            content: String::from("Updated follow-up"),
+        };
+        assert!(update.validate().is_ok());
+        let decoded_upd: UpdateFollowupRequest =
+            serde_json::from_str(&serde_json::to_string(&update).expect("encode update"))
+                .expect("decode update");
+        assert_eq!(decoded_upd, update);
+
+        let steer = SteerSessionRequest {
+            content: String::from("Focus on contracts only"),
+            client_message_id: Some(String::from("steer-01")),
+            timeout_ms: Some(30_000),
+        };
+        assert!(steer.validate().is_ok());
+        let decoded_steer: SteerSessionRequest =
+            serde_json::from_str(&serde_json::to_string(&steer).expect("encode steer"))
+                .expect("decode steer");
+        assert_eq!(decoded_steer, steer);
+        assert!(
+            SteerSessionRequest {
+                content: String::from("ok"),
+                client_message_id: None,
+                timeout_ms: Some(0),
+            }
+            .validate()
+            .is_err()
+        );
+
+        let skill_detail = SessionSkillDetailResponse {
+            skill: SessionSkillSummary {
+                slug: String::from("rust-audit"),
+                display_name: String::from("Rust Audit"),
+                description: String::from("Audit safety invariants"),
+                version: String::from("1.0.0"),
+                scope: CapabilityScopeKind::Project,
+                activation_state: CapabilityActivation::Pinned,
+                trust_state: CapabilityTrust::Trusted,
+            },
+            skill_md_content: String::from("# Rust Audit\nCheck all invariants."),
+        };
+        let encoded_skill = serde_json::to_string(&skill_detail).expect("encode skill detail");
+        let decoded_skill: SessionSkillDetailResponse =
+            serde_json::from_str(&encoded_skill).expect("decode skill detail");
+        assert_eq!(decoded_skill, skill_detail);
     }
 }

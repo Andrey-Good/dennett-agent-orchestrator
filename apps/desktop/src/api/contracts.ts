@@ -427,6 +427,8 @@ export interface RunRecord {
   task_generation?: number | null;
   tokens_used?: number | null;
   wall_ms?: number | null;
+  context_used_tokens?: number | null;
+  context_window_tokens?: number | null;
   correlation_id: string;
   created_at: number;
   finished_at?: number | null;
@@ -611,6 +613,7 @@ export interface SessionDetailResponse {
   artifacts: ArtifactRecord[];
   runs: RunRecord[];
   permission_decisions: PermissionDecisionRecord[];
+  followups?: SessionFollowupRecord[];
 }
 
 export interface SendMessageRequest {
@@ -1332,6 +1335,74 @@ export interface SetProjectCapabilityBindingRequest {
 export interface DeleteCapabilityResponse {
   capability_id: string;
   deleted: boolean;
+}
+
+// ============================================================================
+// Phase D3+: Live Session Runs, Durable Follow-ups, Steering & Session Skills
+// ============================================================================
+
+export interface LiveRunSnapshot {
+  session_id: string;
+  run_id: string;
+  streaming_text: string;
+  context_used_tokens?: number | null;
+  context_window_tokens?: number | null;
+  started_at: number;
+  updated_at: number;
+}
+
+export type FollowupStatus = "queued" | "paused" | "dispatched" | "cancelled";
+
+export interface SessionFollowupRecord {
+  followup_id: string;
+  session_id: string;
+  content: string;
+  status: FollowupStatus;
+  position: number;
+  idempotency_key?: string | null;
+  dispatched_run_id?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface LiveRunResponse {
+  active?: LiveRunSnapshot | null;
+  followups: SessionFollowupRecord[];
+}
+
+export interface EnqueueFollowupRequest {
+  content: string;
+  idempotency_key?: string | null;
+}
+
+export interface UpdateFollowupRequest {
+  content: string;
+}
+
+export interface SteerSessionRequest {
+  content: string;
+  client_message_id?: string | null;
+  timeout_ms?: number | null;
+}
+
+export interface ResumeFollowupsResponse {
+  followups: SessionFollowupRecord[];
+  dispatched?: SendMessageResponse | null;
+}
+
+export interface SessionSkillSummary {
+  slug: string;
+  display_name: string;
+  description: string;
+  version: string;
+  scope: CapabilityScopeKind;
+  activation_state: CapabilityActivation;
+  trust_state: CapabilityTrust;
+}
+
+export interface SessionSkillDetailResponse {
+  skill: SessionSkillSummary;
+  skill_md_content: string;
 }
 
 // ============================================================================

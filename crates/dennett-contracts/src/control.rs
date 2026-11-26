@@ -822,6 +822,12 @@ pub struct RunRecord {
     /// Optional wall-clock execution duration in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall_ms: Option<u64>,
+    /// Optional context tokens used by this run when reported by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_used_tokens: Option<u64>,
+    /// Optional maximum context window size in tokens when reported by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u64>,
     /// Correlation identifier linking run, messages, decisions, and audit events.
     pub correlation_id: CorrelationId,
     /// UTC start timestamp in epoch milliseconds.
@@ -1439,6 +1445,9 @@ pub struct SessionDetailResponse {
     pub runs: Vec<RunRecord>,
     /// Audited permission decisions evaluated in this session.
     pub permission_decisions: Vec<PermissionDecisionRecord>,
+    /// Active durable follow-up messages queued or paused in this session.
+    #[serde(default)]
+    pub followups: Vec<crate::d3::SessionFollowupRecord>,
 }
 
 /// Request payload for `POST /v1/sessions/{session_id}/messages`.
@@ -2133,5 +2142,66 @@ mod tests {
         let decoded_proj: ProjectRecord =
             serde_json::from_str(&encoded_proj).expect("deserialize project");
         assert_eq!(decoded_proj, project);
+    }
+
+    #[test]
+    fn run_context_tokens_and_session_detail_followups_roundtrip() {
+        let now = TimestampMs::now();
+        let agent_id = AgentId::new();
+        let session = SessionRecord {
+            session_id: SessionId::new(),
+            agent_id,
+            project_id: None,
+            title: String::from("Live chat"),
+            session_kind: SessionKind::UserChat,
+            runtime_binding: None,
+            status: SessionStatus::Active,
+            pinned: false,
+            pinned_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let run = RunRecord {
+            run_id: RunId::new(),
+            session_id: session.session_id,
+            agent_id,
+            agent_config_version_id: AgentConfigVersionId::new(),
+            user_message_id: MessageId::new(),
+            assistant_message_id: None,
+            status: RunStatus::Succeeded,
+            stop_reason: Some(String::from("end_turn")),
+            error_code: None,
+            error_summary: None,
+            rehydrated: false,
+            task_id: None,
+            task_generation: None,
+            tokens_used: Some(150),
+            wall_ms: Some(420),
+            context_used_tokens: Some(4_096),
+            context_window_tokens: Some(1_000_000),
+            correlation_id: CorrelationId::generate(),
+            created_at: now,
+            finished_at: Some(now),
+        };
+        let encoded_run = serde_json::to_string(&run).expect("serialize run");
+        assert!(encoded_run.contains(r#""context_used_tokens":4096"#));
+        assert!(encoded_run.contains(r#""context_window_tokens":1000000"#));
+        let decoded_run: RunRecord = serde_json::from_str(&encoded_run).expect("deserialize run");
+        assert_eq!(decoded_run, run);
+
+        let detail = SessionDetailResponse {
+            session,
+            messages: Vec::new(),
+            artifacts: Vec::new(),
+            runs: vec![run],
+            permission_decisions: Vec::new(),
+            followups: Vec::new(),
+        };
+        let encoded_detail = serde_json::to_string(&detail).expect("serialize session detail");
+        assert!(encoded_detail.contains(r#""followups":[]"#));
+        let decoded_detail: SessionDetailResponse =
+            serde_json::from_str(&encoded_detail).expect("deserialize session detail");
+        assert_eq!(decoded_detail, detail);
     }
 }

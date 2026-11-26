@@ -825,6 +825,8 @@ pub(crate) fn decode_run_row(row: &Row) -> Result<RunRecord, DennettError> {
         wall_ms: row
             .get::<_, Option<i64>>(14)
             .and_then(|v| u64::try_from(v).ok()),
+        context_used_tokens: None,
+        context_window_tokens: None,
         correlation_id: CorrelationId::try_new(row.get::<_, String>(15))?,
         created_at: TimestampMs::from_millis(row.get(16)),
         finished_at: row.get::<_, Option<i64>>(17).map(TimestampMs::from_millis),

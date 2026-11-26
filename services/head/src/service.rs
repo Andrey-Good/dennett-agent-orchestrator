@@ -1997,6 +1997,7 @@ impl HeadService {
             artifacts,
             runs,
             permission_decisions,
+            followups: Vec::new(),
         })
     }
 
@@ -4603,6 +4604,8 @@ impl HeadService {
             task_generation: None,
             tokens_used,
             wall_ms: Some(elapsed_ms),
+            context_used_tokens: None,
+            context_window_tokens: None,
             correlation_id: correlation_id.clone(),
             created_at: TimestampMs::from_millis(run_row.get(1)),
             finished_at: Some(TimestampMs::from_millis(run_row.get(2))),

@@ -19,30 +19,32 @@ use dennett_contracts::{
     CreateDocumentRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
     CreateTaskRequest, DeleteCapabilityResponse, DeleteProviderConnectionResponse, DennettError,
     DiagnosticsResponse, DiscoverCapabilitiesRequest, DiscoverCapabilitiesResponse,
-    DispatchEffectRequest, DispatchEffectResponse, DocumentId, EffectClaimId, EventStreamResponse,
-    ExportRequest, ExportResponse, FlushOutboxResponse, ForgetRequest, ForgetResponse,
-    GetDocumentVersionsResponse, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
-    ImportRequest, ImportResponse, InboxCardId, ListAgentMessagesResponse, ListAgentsResponse,
-    ListArtifactsResponse, ListCapabilitiesResponse, ListCapabilityGrantsResponse,
-    ListClaimsResponse, ListConflictsResponse, ListConsolidationJobsResponse,
-    ListDocumentsResponse, ListEffectsResponse, ListInboxResponse, ListOutboxResponse,
-    ListPermissionRequestsResponse, ListPolicyRulesResponse, ListProjectFilesResponse,
-    ListProjectsResponse, ListProviderConnectionsResponse, ListSecretsResponse,
-    ListSessionsResponse, ListTasksResponse, ListTombstonesResponse, MemoryClaim, MemoryConflict,
-    MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope, NoteHistoryResponse,
-    NoteMutationResponse, PermissionRequestId, PolicyRule, ProbeConnectionResponse, ProjectId,
-    ProjectLifecycleResponse, ProjectRecord, ProviderConnectionId, ProviderConnectionRecord,
-    RebindProjectRequest, ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest,
-    ResolveConflictRequest, ResolveInboxCardRequest, ResolveInboxCardResponse,
-    ResolvePermissionRequest, ResolvePermissionResponse, RevokeGrantRequest,
-    RuntimeCatalogResponse, SchedulerTickRequest, SchedulerTickResponse, SecretMetadataRecord,
-    SendAgentMessageRequest, SendAgentMessageResponse, SendMessageRequest, SendMessageResponse,
-    SessionDetailResponse, SessionId, SessionRecord, SetProjectCapabilityBindingRequest,
-    SetSecretRequest, StateSnapshotResponse, SupersedeClaimRequest, TaskDetailResponse, TaskId,
+    DispatchEffectRequest, DispatchEffectResponse, DocumentId, EffectClaimId,
+    EnqueueFollowupRequest, EventStreamResponse, ExportRequest, ExportResponse,
+    FlushOutboxResponse, FollowupId, ForgetRequest, ForgetResponse, GetDocumentVersionsResponse,
+    HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse, ImportRequest, ImportResponse,
+    InboxCardId, ListAgentMessagesResponse, ListAgentsResponse, ListArtifactsResponse,
+    ListCapabilitiesResponse, ListCapabilityGrantsResponse, ListClaimsResponse,
+    ListConflictsResponse, ListConsolidationJobsResponse, ListDocumentsResponse,
+    ListEffectsResponse, ListInboxResponse, ListOutboxResponse, ListPermissionRequestsResponse,
+    ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse,
+    ListProviderConnectionsResponse, ListSecretsResponse, ListSessionsResponse, ListTasksResponse,
+    ListTombstonesResponse, LiveRunResponse, MemoryClaim, MemoryConflict, MemoryDocument,
+    MemoryNoteId, MemoryOverviewResponse, MemoryScope, NoteHistoryResponse, NoteMutationResponse,
+    PermissionRequestId, PolicyRule, ProbeConnectionResponse, ProjectId, ProjectLifecycleResponse,
+    ProjectRecord, ProviderConnectionId, ProviderConnectionRecord, RebindProjectRequest,
+    ReconcileEffectRequest, ReconcileEffectResponse, ReplyTaskRequest, ResolveConflictRequest,
+    ResolveInboxCardRequest, ResolveInboxCardResponse, ResolvePermissionRequest,
+    ResolvePermissionResponse, ResumeFollowupsResponse, RevokeGrantRequest, RuntimeCatalogResponse,
+    SchedulerTickRequest, SchedulerTickResponse, SecretMetadataRecord, SendAgentMessageRequest,
+    SendAgentMessageResponse, SendMessageRequest, SendMessageResponse, SessionDetailResponse,
+    SessionFollowupRecord, SessionId, SessionRecord, SessionSkillDetailResponse,
+    SessionSkillSummary, SetProjectCapabilityBindingRequest, SetSecretRequest,
+    StateSnapshotResponse, SteerSessionRequest, SupersedeClaimRequest, TaskDetailResponse, TaskId,
     TaskRecord, TaskSignalRequest, TaskSignalResponse, TriggerIndexRebuildRequest,
     TriggerIndexRebuildResponse, UpdateAgentConfigRequest, UpdateCapabilityRequest,
-    UpdateDocumentRequest, UpdateProjectRequest, UpdateSessionRequest, UpdateTaskRequest,
-    UpsertProviderConnectionRequest,
+    UpdateDocumentRequest, UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest,
+    UpdateTaskRequest, UpsertProviderConnectionRequest,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
@@ -1854,6 +1856,196 @@ impl HeadClient {
         .await
     }
 
+    // ------------------------------------------------------------------------
+    // Phase D3+: Live Session Runs, Durable Follow-ups, Steering & Session Skills
+    // ------------------------------------------------------------------------
+
+    /// Calls `GET /v1/sessions/{session_id}/live` to fetch the active streaming run snapshot
+    /// and durable follow-up queue for a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn get_session_live(
+        &self,
+        session_id: SessionId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<LiveRunResponse, DennettError> {
+        self.request_no_body(
+            Method::GET,
+            &format!("/v1/sessions/{session_id}/live"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/sessions/{session_id}/followups` to append a durable follow-up message.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn enqueue_followup(
+        &self,
+        session_id: SessionId,
+        request: &EnqueueFollowupRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SessionFollowupRecord, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/followups"),
+            request,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `PATCH /v1/sessions/{session_id}/followups/{followup_id}` to edit a queued or paused follow-up.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn update_followup(
+        &self,
+        session_id: SessionId,
+        followup_id: FollowupId,
+        request: &UpdateFollowupRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SessionFollowupRecord, DennettError> {
+        self.request_json(
+            Method::PATCH,
+            &format!("/v1/sessions/{session_id}/followups/{followup_id}"),
+            request,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/sessions/{session_id}/followups/{followup_id}` to cancel and remove one follow-up.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn delete_followup(
+        &self,
+        session_id: SessionId,
+        followup_id: FollowupId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<(), DennettError> {
+        self.request_empty(
+            Method::DELETE,
+            &format!("/v1/sessions/{session_id}/followups/{followup_id}"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `DELETE /v1/sessions/{session_id}/followups` to clear all pending follow-ups for a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn clear_followups(
+        &self,
+        session_id: SessionId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<(), DennettError> {
+        self.request_empty(
+            Method::DELETE,
+            &format!("/v1/sessions/{session_id}/followups"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/sessions/{session_id}/followups/resume` to resume paused follow-ups.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn resume_followups(
+        &self,
+        session_id: SessionId,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<ResumeFollowupsResponse, DennettError> {
+        self.request_no_body(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/followups/resume"),
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `POST /v1/sessions/{session_id}/steer` to interrupt any active run and send an immediate steering message.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn steer_session(
+        &self,
+        session_id: SessionId,
+        request: &SteerSessionRequest,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SendMessageResponse, DennettError> {
+        self.request_json(
+            Method::POST,
+            &format!("/v1/sessions/{session_id}/steer"),
+            request,
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/capabilities/session-skills` to list skills active for the scoped session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn list_session_skills(
+        &self,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<Vec<SessionSkillSummary>, DennettError> {
+        self.request_no_body(
+            Method::GET,
+            "/v1/capabilities/session-skills",
+            correlation_id,
+        )
+        .await
+    }
+
+    /// Calls `GET /v1/capabilities/session-skills/{slug}` to read a scoped session skill's `SKILL.md` body.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `slug` is empty or contains path separators/traversal,
+    /// or the typed [`DennettError`] reported by Head or transport failure.
+    pub async fn read_session_skill(
+        &self,
+        slug: &str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<SessionSkillDetailResponse, DennettError> {
+        let trimmed = slug.trim();
+        if trimmed.is_empty()
+            || trimmed.contains('/')
+            || trimmed.contains('\\')
+            || trimmed.contains("..")
+            || trimmed.as_bytes().contains(&0)
+        {
+            return Err(DennettError::InvalidInput {
+                field: String::from("slug"),
+                reason: String::from(
+                    "must be a non-empty single path segment without '/', '\\', '..', or NUL bytes",
+                ),
+            });
+        }
+        let encoded = encode_path_segment(trimmed);
+        self.request_no_body(
+            Method::GET,
+            &format!("/v1/capabilities/session-skills/{encoded}"),
+            correlation_id,
+        )
+        .await
+    }
+
     async fn request_no_body<Resp: DeserializeOwned>(
         &self,
         method: Method,
@@ -1870,6 +2062,24 @@ impl HeadClient {
             .await
             .map_err(|err| map_transport_error(&err))?;
         decode_response_with_limit(resp, MAX_RESPONSE_BODY_BYTES).await
+    }
+
+    async fn request_empty(
+        &self,
+        method: Method,
+        path: &str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<(), DennettError> {
+        let url = format!("{}{path}", self.base_url);
+        let headers = build_headers(correlation_id, self.control_token.as_deref())?;
+        let resp = self
+            .http
+            .request(method, &url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| map_transport_error(&err))?;
+        decode_empty_response_with_limit(resp, MAX_RESPONSE_BODY_BYTES).await
     }
 
     async fn request_json<Req: Serialize, Resp: DeserializeOwned>(
@@ -1973,21 +2183,39 @@ async fn decode_response_with_limit<Resp: DeserializeOwned>(
         });
     }
 
-    if let Ok(envelope) = serde_json::from_slice::<ApiErrorResponse>(&body_bytes) {
-        return Err(envelope.error);
+    Err(decode_error_response(status, &body_bytes))
+}
+
+async fn decode_empty_response_with_limit(
+    mut resp: reqwest::Response,
+    max_bytes: usize,
+) -> Result<(), DennettError> {
+    let status = resp.status();
+    let body_bytes = read_bounded_body(&mut resp, max_bytes).await?;
+
+    if status.is_success() {
+        return Ok(());
     }
-    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+
+    Err(decode_error_response(status, &body_bytes))
+}
+
+fn decode_error_response(status: StatusCode, body_bytes: &[u8]) -> DennettError {
+    if let Ok(envelope) = serde_json::from_slice::<ApiErrorResponse>(body_bytes) {
+        return envelope.error;
+    }
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body_bytes)
         && let Some(err_val) = value.get("error")
         && let Ok(parsed_err) = serde_json::from_value::<DennettError>(err_val.clone())
     {
-        return Err(parsed_err);
+        return parsed_err;
     }
-    if let Ok(direct_err) = serde_json::from_slice::<DennettError>(&body_bytes) {
-        return Err(direct_err);
+    if let Ok(direct_err) = serde_json::from_slice::<DennettError>(body_bytes) {
+        return direct_err;
     }
 
-    let safe_body = redact_secrets(&String::from_utf8_lossy(&body_bytes), &[]);
-    Err(match status {
+    let safe_body = redact_secrets(&String::from_utf8_lossy(body_bytes), &[]);
+    match status {
         StatusCode::BAD_REQUEST => DennettError::InvalidInput {
             field: String::from("request"),
             reason: safe_body,
@@ -2019,7 +2247,7 @@ async fn decode_response_with_limit<Resp: DeserializeOwned>(
         _ => DennettError::Internal {
             detail: format!("unexpected HTTP {}: {safe_body}", status.as_u16()),
         },
-    })
+    }
 }
 
 async fn read_bounded_body(
@@ -2118,5 +2346,48 @@ mod tests {
         assert!(
             matches!(err, Err(DennettError::Internal { ref detail }) if detail.contains("exceeded client limit"))
         );
+    }
+
+    #[tokio::test]
+    async fn head_client_handles_204_followup_deletes_and_validates_skill_slug() {
+        let client = HeadClient::new("http://127.0.0.1:1").expect("client");
+        for bad_slug in ["", "   ", "foo/bar", "foo\\bar", "../escape", "a\0b"] {
+            let err = client.read_session_skill(bad_slug, None).await;
+            assert!(
+                matches!(err, Err(DennettError::InvalidInput { ref field, .. }) if field == "slug"),
+                "expected InvalidInput(slug) for {bad_slug:?}, got {err:?}"
+            );
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("addr");
+        let session_id = SessionId::new();
+        let followup_id = FollowupId::new();
+        let expected_path = format!("/v1/sessions/{session_id}/followups/{followup_id}");
+        let expected_path_clone = expected_path.clone();
+
+        tokio::spawn(async move {
+            if let Ok((mut s, _)) = listener.accept().await {
+                let mut buf = [0_u8; 1024];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                assert!(
+                    req.starts_with(&format!("DELETE {expected_path_clone} HTTP/1.1")),
+                    "unexpected request line: {req}"
+                );
+                let _ = s
+                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+                let _ = s.shutdown().await;
+            }
+        });
+
+        let live_client = HeadClient::new(format!("http://{addr}")).expect("client");
+        live_client
+            .delete_followup(session_id, followup_id, None)
+            .await
+            .expect("204 No Content should succeed");
     }
 }
