@@ -27,10 +27,10 @@ use dennett_contracts::redact::{redact_secrets, sanitize_cli_arg, sanitize_pg_er
 use dennett_contracts::{
     ApiErrorResponse, AuthPrincipal, ClaimId, ConflictId, ConsolidationJobId, CorrectNoteRequest,
     CorrelationId, CreateClaimRequest, CreateConsolidationJobRequest, CreateDocumentRequest,
-    CreateNoteRequest, DennettError, DocumentId, EvidenceId, ExportRequest, ForgetRequest,
-    ImportRequest, IngestEvidenceRequest, MemoryEventId, MemoryNoteId, MemoryScope, ProfileMode,
-    ResolveConflictRequest, SearchNotesRequest, ServiceHealth, ServiceKind, SupersedeClaimRequest,
-    TimestampMs, TriggerIndexRebuildRequest, UpdateDocumentRequest,
+    CreateNoteRequest, DennettError, DocumentId, EvidenceId, EvidenceObject, ExportRequest,
+    ForgetRequest, ImportRequest, IngestEvidenceRequest, MemoryEventId, MemoryNoteId, MemoryScope,
+    ProfileMode, ResolveConflictRequest, SearchNotesRequest, ServiceHealth, ServiceKind,
+    SupersedeClaimRequest, TimestampMs, TriggerIndexRebuildRequest, UpdateDocumentRequest,
 };
 use dennett_memory_core::{
     AuthVerifier, MEMORYD_STAGE_LABEL, MemoryService, StandaloneAuthVerifier, ValidatedPgTarget,
@@ -51,6 +51,14 @@ const MAX_IMPORT_HTTP_BODY_BYTES: usize = 17 * 1024 * 1024;
 const MAX_CONCURRENT_REQUESTS: usize = 64;
 /// Maximum end-to-end wall time permitted for a single HTTP request handler.
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// Environment variable controlling background consolidation tick interval in seconds (`0` disables).
+const ENV_CONSOLIDATION_INTERVAL_SECS: &str = "DENNETT_MEMORYD_CONSOLIDATION_INTERVAL_SECS";
+/// Default interval between periodic background consolidation ticks (60 seconds).
+const DEFAULT_CONSOLIDATION_INTERVAL_SECS: u64 = 60;
+/// Maximum queued consolidation jobs claimed per periodic background tick.
+const BG_CONSOLIDATION_MAX_JOBS_PER_TICK: usize = 4;
+/// Maximum work steps executed per job during a single periodic background tick.
+const BG_CONSOLIDATION_MAX_STEPS_PER_JOB: usize = 16;
 
 static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
 static HEADER_SHUTDOWN: HeaderName = HeaderName::from_static("x-dennett-shutdown");
@@ -281,6 +289,52 @@ fn non_empty(val: Option<&str>) -> Option<&str> {
     val.map(str::trim).filter(|s| !s.is_empty())
 }
 
+fn parse_consolidation_interval_secs(raw: Option<&str>) -> Result<u64, DennettError> {
+    let Some(trimmed) = non_empty(raw) else {
+        return Ok(DEFAULT_CONSOLIDATION_INTERVAL_SECS);
+    };
+    trimmed.parse::<u64>().map_err(|_| DennettError::InvalidInput {
+        field: String::from(ENV_CONSOLIDATION_INTERVAL_SECS),
+        reason: String::from("must be a non-negative integer number of seconds (`0` disables)"),
+    })
+}
+
+fn spawn_background_consolidation_worker(
+    svc: MemoryService,
+    interval_secs: u64,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = time::interval(Duration::from_secs(interval_secs));
+        ticker.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        loop {
+            if *shutdown_rx.borrow() {
+                break;
+            }
+            tokio::select! {
+                biased;
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                _ = ticker.tick() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                    // Run one bounded consolidation tick without touching foreground HTTP permits.
+                    let _ = svc
+                        .run_background_consolidation_tick(
+                            BG_CONSOLIDATION_MAX_JOBS_PER_TICK,
+                            BG_CONSOLIDATION_MAX_STEPS_PER_JOB,
+                        )
+                        .await;
+                }
+            }
+        }
+    })
+}
+
 async fn run_health_once(cli_pg_url: Option<String>, profile_mode: ProfileMode) -> ExitCode {
     let correlation_id = CorrelationId::generate();
     let target = match resolve_pg_target(cli_pg_url.as_deref(), profile_mode) {
@@ -324,6 +378,10 @@ async fn run_health_once(cli_pg_url: Option<String>, profile_mode: ProfileMode) 
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "initializes PG target, runs migration, binds HTTP listener, starts optional background consolidation worker, and coordinates graceful shutdown"
+)]
 async fn run_serve(
     addr: SocketAddr,
     allow_non_loopback: bool,
@@ -392,6 +450,15 @@ async fn run_serve(
         }
     };
 
+    let consolidation_interval_secs =
+        match parse_consolidation_interval_secs(env::var(ENV_CONSOLIDATION_INTERVAL_SECS).ok().as_deref()) {
+            Ok(secs) => secs,
+            Err(err) => {
+                emit_stderr_error(&err);
+                return ExitCode::from(2);
+            }
+        };
+
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let ctrl_c_tx = shutdown_tx.clone();
     tokio::spawn(async move {
@@ -400,18 +467,34 @@ async fn run_serve(
         }
     });
 
+    let consolidation_worker = if consolidation_interval_secs > 0 {
+        service.as_ref().map(|svc| {
+            spawn_background_consolidation_worker(
+                svc.clone(),
+                consolidation_interval_secs,
+                shutdown_tx.subscribe(),
+            )
+        })
+    } else {
+        None
+    };
+
     let state = AppState {
         service,
         auth,
         profile_mode,
         allow_non_loopback,
-        shutdown_tx,
+        shutdown_tx: shutdown_tx.clone(),
         request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
     };
 
     let app = build_router(state);
 
     if writeln!(io::stdout(), "LISTENING {bound_addr}").is_err() || io::stdout().flush().is_err() {
+        let _ = shutdown_tx.send(true);
+        if let Some(worker) = consolidation_worker {
+            worker.abort();
+        }
         emit_stderr_error(&DennettError::Internal {
             detail: String::from("failed to flush listening announcement to stdout"),
         });
@@ -431,6 +514,15 @@ async fn run_serve(
     })
     .await;
 
+    let _ = shutdown_tx.send(true);
+    if let Some(mut worker) = consolidation_worker
+        && time::timeout(Duration::from_secs(5), &mut worker)
+            .await
+            .is_err()
+    {
+        worker.abort();
+    }
+
     if let Err(err) = serve_result {
         emit_stderr_error(&DennettError::Internal {
             detail: format!("HTTP server error: {err}"),
@@ -444,7 +536,10 @@ async fn run_serve(
 fn build_router(state: AppState) -> Router {
     let mut router = Router::new()
         .route("/healthz", get(handle_healthz))
-        .route("/v1/memory/evidence", post(handle_ingest_evidence))
+        .route(
+            "/v1/memory/evidence",
+            get(handle_list_evidence).post(handle_ingest_evidence),
+        )
         .route(
             "/v1/memory/evidence/{evidence_id}",
             get(handle_get_evidence),
@@ -736,6 +831,45 @@ async fn handle_ingest_evidence(
             };
             json_with_correlation(status, &resp, &correlation_id)
         }
+        Err(err) => domain_error_response(err, &correlation_id),
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EvidenceListQuery {
+    scope: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListEvidenceResponse {
+    evidence: Vec<EvidenceObject>,
+}
+
+async fn handle_list_evidence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<EvidenceListQuery>, QueryRejection>,
+) -> Response {
+    let (correlation_id, principal, svc) = match authorize_and_get_service(&state, &headers) {
+        Ok(tuple) => tuple,
+        Err(resp) => return *resp,
+    };
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(rej) => return query_rejection_response(&rej, &correlation_id),
+    };
+    let scope = match parse_optional_scope(q.scope.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return domain_error_response(err, &correlation_id),
+    };
+
+    match svc.list_evidence(&principal, scope.as_ref(), q.limit).await {
+        Ok(evidence) => json_with_correlation(
+            StatusCode::OK,
+            &ListEvidenceResponse { evidence },
+            &correlation_id,
+        ),
         Err(err) => domain_error_response(err, &correlation_id),
     }
 }
@@ -1672,7 +1806,8 @@ fn print_usage() {
          \x20 DENNETT_TEST_MEMORY_PG_URL (required in test_isolated unless --pg-url given; requires *_test DB)\n\
          \x20 DENNETT_MEMORY_PG_URL (production profile only)\n\
          \x20 DENNETT_MEMORY_AUTH_CONFIG_FILE (optional path to standalone auth JSON)\n\
-         \x20 DENNETT_MEMORY_AUTH_CONFIG (optional inline standalone auth JSON; fail-closed if omitted)"
+         \x20 DENNETT_MEMORY_AUTH_CONFIG (optional inline standalone auth JSON; fail-closed if omitted)\n\
+         \x20 DENNETT_MEMORYD_CONSOLIDATION_INTERVAL_SECS (periodic background consolidation interval in seconds; default 60, 0 disables)"
     );
 }
 
@@ -1800,6 +1935,40 @@ mod tests {
         assert!(matches!(
             validate_loopback_request_headers(&cross_site),
             Err(DennettError::AccessDenied { ref scope, .. }) if scope == "http.sec_fetch_site"
+        ));
+    }
+
+    #[test]
+    fn parse_consolidation_interval_secs_defaults_disables_and_validates() {
+        assert_eq!(
+            parse_consolidation_interval_secs(None).expect("default"),
+            DEFAULT_CONSOLIDATION_INTERVAL_SECS
+        );
+        assert_eq!(
+            parse_consolidation_interval_secs(Some("")).expect("empty default"),
+            DEFAULT_CONSOLIDATION_INTERVAL_SECS
+        );
+        assert_eq!(
+            parse_consolidation_interval_secs(Some("   ")).expect("whitespace default"),
+            DEFAULT_CONSOLIDATION_INTERVAL_SECS
+        );
+        assert_eq!(
+            parse_consolidation_interval_secs(Some("0")).expect("zero disables"),
+            0
+        );
+        assert_eq!(
+            parse_consolidation_interval_secs(Some("15")).expect("custom seconds"),
+            15
+        );
+        assert!(matches!(
+            parse_consolidation_interval_secs(Some("-5")),
+            Err(DennettError::InvalidInput { ref field, .. })
+                if field == ENV_CONSOLIDATION_INTERVAL_SECS
+        ));
+        assert!(matches!(
+            parse_consolidation_interval_secs(Some("not-a-number")),
+            Err(DennettError::InvalidInput { ref field, .. })
+                if field == ENV_CONSOLIDATION_INTERVAL_SECS
         ));
     }
 }

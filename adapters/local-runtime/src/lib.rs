@@ -11,11 +11,14 @@
 //! - ZERO SQL drivers, ZERO UI frameworks, ZERO `dennett-memory-core`, and ZERO deferred
 //!   provider crates.
 
+mod mcp_bridge;
+
 use core::fmt;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::process::Stdio;
 use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
@@ -27,10 +30,11 @@ use dennett_contracts::{
 };
 use dennett_runtime_antigravity::{
     ActiveSkillPayload, AgentRuntimePort, BoxFuture, PolicyEvaluationRequest, PolicyEvaluator,
-    RuntimeDescriptor, RuntimeEvent, RuntimeMcpServerSpec, SessionStartOutcome,
+    ProcessTreeGuard, RuntimeDescriptor, RuntimeEvent, RuntimeMcpServerSpec, SessionStartOutcome,
     SessionStartRequest, TurnOutcome, TurnRequest, build_effective_system_prompt_with_skills,
     classify_provider_quota_error, evaluate_binding_resume_compatibility, normalize_workspace_path,
 };
+use mcp_bridge::{McpBridgePool, McpCallResult};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -571,20 +575,24 @@ impl LocalHttpRuntime {
         &self,
         model: &str,
         messages: &[Value],
-        include_tools: bool,
+        tools: Option<&[Value]>,
         bearer_token: Option<&str>,
         secrets: &[String],
         timeout: Duration,
         cancel_rx: &mut watch::Receiver<bool>,
     ) -> Result<ChatCompletionHttpOutcome, DennettError> {
+        let include_tools = tools.is_some_and(|t| !t.is_empty());
         let url = format!("{}/v1/chat/completions", self.endpoint.origin_base);
         let mut payload = json!({
             "model": model,
             "messages": messages,
             "stream": false,
         });
-        if include_tools && let Some(obj) = payload.as_object_mut() {
-            obj.insert(String::from("tools"), local_tool_definitions());
+        if let Some(tool_defs) = tools
+            && !tool_defs.is_empty()
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert(String::from("tools"), Value::Array(tool_defs.to_vec()));
         }
 
         let mut req = self.client.post(&url).json(&payload);
@@ -651,10 +659,13 @@ impl LocalHttpRuntime {
         };
 
         if include_tools
-            && matches!(
+            && (matches!(
                 status,
                 StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
-            )
+            ) || (matches!(
+                status,
+                StatusCode::NOT_IMPLEMENTED | StatusCode::INTERNAL_SERVER_ERROR
+            ) && is_tools_unsupported_body(&body)))
         {
             return Ok(ChatCompletionHttpOutcome::ToolsRejected {
                 status,
@@ -739,6 +750,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                     String::from("local_http_v1"),
                     String::from("ollama_tags_fallback"),
                     String::from("tool_calling_fallback"),
+                    String::from("mcp_stdio_bridge"),
                     String::from("external_permissions"),
                     String::from("live_cancel"),
                 ],
@@ -961,6 +973,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                 }
             });
 
+            let mut mcp_bridge = McpBridgePool::empty();
             let turn_result = async {
                 let model = self
                     .resolve_model_for_turn(snapshot.model_preference.as_deref())
@@ -984,7 +997,44 @@ impl AgentRuntimePort for LocalHttpRuntime {
                     }
                 }
 
+                if !snapshot.mcp_servers.is_empty() {
+                    match McpBridgePool::start_all(
+                        &snapshot.mcp_servers,
+                        Path::new(&snapshot.workspace_cwd),
+                        &secrets,
+                        &mut combined_cancel_rx,
+                    )
+                    .await
+                    {
+                        Ok(pool) => {
+                            mcp_bridge = pool;
+                        }
+                        Err(DennettError::Cancelled { operation }) => {
+                            emit(
+                                &mut events,
+                                RuntimeEvent::Cancelled { reason: operation },
+                                event_tx.as_ref(),
+                            );
+                            return Ok(TurnOutcome {
+                                status: RunStatus::Cancelled,
+                                stop_reason: String::from("cancelled"),
+                                assistant_text: String::new(),
+                                events,
+                                usage: None,
+                                human_wait_ms,
+                            });
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+
+                let mut all_tools = local_tool_definitions();
+                all_tools.extend(mcp_bridge.openai_tool_definitions());
+
                 let mut messages = snapshot.messages.clone();
+                if !snapshot.active_skills.is_empty() && !mcp_bridge.has_control_skill_tool() {
+                    ensure_active_skills_inlined(&mut messages, &snapshot.active_skills);
+                }
                 messages.push(json!({
                     "role": "user",
                     "content": req.prompt_text,
@@ -1009,11 +1059,16 @@ impl AgentRuntimePort for LocalHttpRuntime {
                         });
                     }
 
+                    let active_tools = if allow_tools {
+                        Some(all_tools.as_slice())
+                    } else {
+                        None
+                    };
                     let http_outcome = self
                         .post_chat_completion(
                             &model,
                             &messages,
-                            allow_tools,
+                            active_tools,
                             bearer_token.as_deref(),
                             &secrets,
                             remaining,
@@ -1040,8 +1095,10 @@ impl AgentRuntimePort for LocalHttpRuntime {
                             });
                         }
                         ChatCompletionHttpOutcome::ToolsRejected { .. } if allow_tools => {
-                            // Graceful fallback to plain-text mode when local model server rejects `tools`.
+                            // Graceful fallback to plain-text mode when local model server rejects `tools`,
+                            // ensuring active skill instructions stay inline in the system prompt.
                             allow_tools = false;
+                            ensure_active_skills_inlined(&mut messages, &snapshot.active_skills);
                             let retry_remaining =
                                 deadline.saturating_duration_since(time::Instant::now());
                             if retry_remaining.is_zero() {
@@ -1053,7 +1110,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                                 .post_chat_completion(
                                     &model,
                                     &messages,
-                                    false,
+                                    None,
                                     bearer_token.as_deref(),
                                     &secrets,
                                     retry_remaining,
@@ -1189,18 +1246,37 @@ impl AgentRuntimePort for LocalHttpRuntime {
                     }));
 
                     for tc in completion.tool_calls {
-                        let (tool_kind, target, locations) =
-                            classify_local_tool_call(&tc.name, &tc.arguments_json);
-                        let title = match &target {
-                            Some(t) => format!("{} {t}", tc.name),
-                            None => tc.name.clone(),
-                        };
+                        let resolved_mcp = mcp_bridge
+                            .resolve_tool(&tc.name)
+                            .map(|(idx, meta)| (idx, meta.clone()));
+
+                        let (policy_tool_name, tool_kind, target, locations, title) =
+                            if let Some((_, ref mcp_meta)) = resolved_mcp {
+                                let tgt = extract_mcp_target(&tc.arguments_json);
+                                let ttl = format!("{}:{}", mcp_meta.server_name, mcp_meta.tool_name);
+                                (
+                                    mcp_meta.policy_tool_name.clone(),
+                                    String::from("other"),
+                                    tgt,
+                                    Vec::new(),
+                                    ttl,
+                                )
+                            } else {
+                                let (kind, tgt, locs) =
+                                    classify_local_tool_call(&tc.name, &tc.arguments_json);
+                                let ttl = match &tgt {
+                                    Some(t) => format!("{} {t}", tc.name),
+                                    None => tc.name.clone(),
+                                };
+                                (tc.name.clone(), kind.to_owned(), tgt, locs, ttl)
+                            };
+
                         let eval_req = PolicyEvaluationRequest {
                             session_id: req.dennett_session_id,
                             run_id: req.run_id,
                             tool_call_id: tc.id.clone(),
-                            tool_name: tc.name.clone(),
-                            tool_kind: tool_kind.to_owned(),
+                            tool_name: policy_tool_name.clone(),
+                            tool_kind,
                             title: title.clone(),
                             target: target.clone(),
                             locations,
@@ -1211,7 +1287,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                             &mut events,
                             RuntimeEvent::PermissionRequested {
                                 tool_call_id: tc.id.clone(),
-                                tool_name: tc.name.clone(),
+                                tool_name: policy_tool_name.clone(),
                                 target: target.clone(),
                                 title: title.clone(),
                             },
@@ -1249,7 +1325,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                                 &mut events,
                                 RuntimeEvent::PermissionResolved {
                                     tool_call_id: tc.id,
-                                    tool_name: tc.name,
+                                    tool_name: policy_tool_name,
                                     target,
                                     effect: PolicyEffect::Deny,
                                     matched_rule_id: None,
@@ -1283,7 +1359,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                                 &mut events,
                                 RuntimeEvent::PermissionResolved {
                                     tool_call_id: tc.id,
-                                    tool_name: tc.name,
+                                    tool_name: policy_tool_name,
                                     target,
                                     effect: PolicyEffect::Deny,
                                     matched_rule_id: decision.matched_rule_id,
@@ -1316,7 +1392,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                             &mut events,
                             RuntimeEvent::PermissionResolved {
                                 tool_call_id: tc.id.clone(),
-                                tool_name: tc.name.clone(),
+                                tool_name: policy_tool_name.clone(),
                                 target: target.clone(),
                                 effect: decision.effect,
                                 matched_rule_id: decision.matched_rule_id,
@@ -1332,16 +1408,64 @@ impl AgentRuntimePort for LocalHttpRuntime {
                         );
 
                         let (tool_status, tool_output) = if decision.effect == PolicyEffect::Allow {
-                            match execute_local_tool(
-                                &tc.name,
-                                &tc.arguments_json,
-                                Path::new(&snapshot.workspace_cwd),
-                                &secrets,
-                            )
-                            .await
-                            {
-                                Ok(out) => (String::from("completed"), out),
-                                Err(err) => (String::from("failed"), format!("error: {err}")),
+                            if let Some((mcp_idx, _)) = resolved_mcp {
+                                let mcp_remaining =
+                                    deadline.saturating_duration_since(time::Instant::now());
+                                if mcp_remaining.is_zero() {
+                                    return Err(DennettError::Timeout {
+                                        operation: format!("mcp:{policy_tool_name}"),
+                                    });
+                                }
+                                match mcp_bridge
+                                    .call_tool(
+                                        mcp_idx,
+                                        &tc.arguments_json,
+                                        &secrets,
+                                        mcp_remaining,
+                                        &mut combined_cancel_rx,
+                                    )
+                                    .await
+                                {
+                                    Ok(McpCallResult::Cancelled) => {
+                                        emit(
+                                            &mut events,
+                                            RuntimeEvent::Cancelled {
+                                                reason: String::from("cancelled"),
+                                            },
+                                            event_tx.as_ref(),
+                                        );
+                                        return Ok(TurnOutcome {
+                                            status: RunStatus::Cancelled,
+                                            stop_reason: String::from("cancelled"),
+                                            assistant_text: final_text,
+                                            events,
+                                            usage: last_usage,
+                                            human_wait_ms,
+                                        });
+                                    }
+                                    Ok(McpCallResult::Completed { is_error, text }) => {
+                                        let status = if is_error { "failed" } else { "completed" };
+                                        (
+                                            String::from(status),
+                                            truncate_utf8(&text, MAX_TOOL_OUTPUT_BYTES),
+                                        )
+                                    }
+                                    Err(err) => {
+                                        (String::from("failed"), format!("error: {err}"))
+                                    }
+                                }
+                            } else {
+                                match execute_local_tool(
+                                    &tc.name,
+                                    &tc.arguments_json,
+                                    Path::new(&snapshot.workspace_cwd),
+                                    &secrets,
+                                )
+                                .await
+                                {
+                                    Ok(out) => (String::from("completed"), out),
+                                    Err(err) => (String::from("failed"), format!("error: {err}")),
+                                }
                             }
                         } else {
                             (
@@ -1355,7 +1479,7 @@ impl AgentRuntimePort for LocalHttpRuntime {
                             &mut events,
                             RuntimeEvent::ToolObserved {
                                 tool_call_id: tc.id.clone(),
-                                tool_name: tc.name.clone(),
+                                tool_name: policy_tool_name,
                                 title: redact_secrets_owned(&title, &secrets),
                                 status: tool_status,
                                 output_excerpt: truncate_utf8(&safe_output, 1024),
@@ -1398,6 +1522,8 @@ impl AgentRuntimePort for LocalHttpRuntime {
             }
             .await;
 
+            // Deterministically reap every spawned stdio MCP child process before returning.
+            mcp_bridge.shutdown().await;
             forwarder.abort();
             {
                 let mut cancels = self.active_cancels.lock().await;
@@ -1711,9 +1837,68 @@ fn parse_tool_calls_array(val: Option<&Value>) -> Vec<ParsedToolCall> {
     out
 }
 
-fn local_tool_definitions() -> Value {
-    json!([
+fn is_tools_unsupported_body(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    (lower.contains("tool") || lower.contains("function"))
+        && (lower.contains("not support")
+            || lower.contains("unsupported")
+            || lower.contains("does not support")
+            || lower.contains("not implemented")
+            || lower.contains("invalid")
+            || lower.contains("template"))
+}
+
+fn ensure_active_skills_inlined(messages: &mut [Value], active_skills: &[ActiveSkillPayload]) {
+    if active_skills.is_empty() {
+        return;
+    }
+    let Some(first) = messages.first_mut() else {
+        return;
+    };
+    if first.get("role").and_then(Value::as_str) != Some("system") {
+        return;
+    }
+    let current = first
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if current.contains("[Dennett Active Skills]") {
+        return;
+    }
+    let updated = build_effective_system_prompt_with_skills(current, active_skills, &[], None);
+    *first = json!({
+        "role": "system",
+        "content": updated,
+    });
+}
+
+fn extract_mcp_target(args: &Value) -> Option<String> {
+    for key in [
+        "scope",
+        "project_id",
+        "note_id",
+        "claim_id",
+        "document_id",
+        "slug",
+        "path",
+        "uri",
+        "command",
+    ] {
+        if let Some(val) = args
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
         {
+            return Some(val.to_owned());
+        }
+    }
+    None
+}
+
+fn local_tool_definitions() -> Vec<Value> {
+    vec![
+        json!({
             "type": "function",
             "function": {
                 "name": "read_file",
@@ -1726,8 +1911,8 @@ fn local_tool_definitions() -> Value {
                     "required": ["path"]
                 }
             }
-        },
-        {
+        }),
+        json!({
             "type": "function",
             "function": {
                 "name": "write_file",
@@ -1741,8 +1926,8 @@ fn local_tool_definitions() -> Value {
                     "required": ["path", "content"]
                 }
             }
-        },
-        {
+        }),
+        json!({
             "type": "function",
             "function": {
                 "name": "list_dir",
@@ -1754,8 +1939,8 @@ fn local_tool_definitions() -> Value {
                     }
                 }
             }
-        },
-        {
+        }),
+        json!({
             "type": "function",
             "function": {
                 "name": "run_command",
@@ -1768,8 +1953,8 @@ fn local_tool_definitions() -> Value {
                     "required": ["command"]
                 }
             }
-        }
-    ])
+        }),
+    ]
 }
 
 fn classify_local_tool_call(
@@ -1809,7 +1994,7 @@ fn classify_local_tool_call(
 
 #[expect(
     clippy::too_many_lines,
-    reason = "executes all bounded local workspace tools after PolicyEvaluator approval"
+    reason = "executes all bounded local workspace tools after PolicyEvaluator approval with canonical workspace containment"
 )]
 async fn execute_local_tool(
     tool_name: &str,
@@ -1827,9 +2012,12 @@ async fn execute_local_tool(
                     field: String::from("path"),
                     reason: String::from("read_file requires string `path`"),
                 })?;
-            let resolved = resolve_tool_path(workspace_cwd, raw_path);
+            let resolved = resolve_tool_path(workspace_cwd, raw_path)?;
             let bytes = fs::read(&resolved).map_err(|err| DennettError::Internal {
-                detail: format!("failed reading `{}`: {err}", resolved.display()),
+                detail: redact_secrets_owned(
+                    &format!("failed reading `{raw_path}`: {err}"),
+                    secrets,
+                ),
             })?;
             let slice = &bytes[..bytes.len().min(MAX_TOOL_FILE_READ_BYTES)];
             let text = String::from_utf8_lossy(slice);
@@ -1848,14 +2036,48 @@ async fn execute_local_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let resolved = resolve_tool_path(workspace_cwd, raw_path);
+            let canonical_root =
+                fs::canonicalize(workspace_cwd).map_err(|_| DennettError::AccessDenied {
+                    scope: String::from("local_runtime.workspace"),
+                    reason: String::from("workspace root could not be canonicalized"),
+                })?;
+            let resolved = resolve_tool_path(workspace_cwd, raw_path)?;
             if let Some(parent) = resolved.parent() {
                 fs::create_dir_all(parent).map_err(|err| DennettError::Internal {
-                    detail: format!("failed creating parent dir `{}`: {err}", parent.display()),
+                    detail: redact_secrets_owned(
+                        &format!("failed creating parent dir for `{raw_path}`: {err}"),
+                        secrets,
+                    ),
                 })?;
+                let canonical_parent =
+                    fs::canonicalize(parent).map_err(|_| DennettError::AccessDenied {
+                        scope: String::from("local_runtime.workspace"),
+                        reason: String::from(
+                            "parent directory could not be verified inside canonical workspace",
+                        ),
+                    })?;
+                if !canonical_parent.starts_with(&canonical_root) {
+                    return Err(DennettError::AccessDenied {
+                        scope: String::from("local_runtime.workspace"),
+                        reason: String::from("write target parent escapes canonical workspace"),
+                    });
+                }
+            }
+            if let Ok(meta) = fs::symlink_metadata(&resolved)
+                && is_symlink_or_reparse_point(&meta)
+            {
+                return Err(DennettError::AccessDenied {
+                    scope: String::from("local_runtime.workspace"),
+                    reason: String::from(
+                        "refusing to write through a symlink or NTFS junction/reparse point",
+                    ),
+                });
             }
             fs::write(&resolved, content.as_bytes()).map_err(|err| DennettError::Internal {
-                detail: format!("failed writing `{}`: {err}", resolved.display()),
+                detail: redact_secrets_owned(
+                    &format!("failed writing `{raw_path}`: {err}"),
+                    secrets,
+                ),
             })?;
             Ok(format!("wrote {} bytes to {}", content.len(), raw_path))
         }
@@ -1865,11 +2087,14 @@ async fn execute_local_tool(
                 .or_else(|| args.get("Path"))
                 .and_then(Value::as_str)
                 .unwrap_or(".");
-            let resolved = resolve_tool_path(workspace_cwd, raw_path);
+            let resolved = resolve_tool_path(workspace_cwd, raw_path)?;
             let mut entries = Vec::new();
             for ent in fs::read_dir(&resolved)
                 .map_err(|err| DennettError::Internal {
-                    detail: format!("failed reading dir `{}`: {err}", resolved.display()),
+                    detail: redact_secrets_owned(
+                        &format!("failed reading dir `{raw_path}`: {err}"),
+                        secrets,
+                    ),
                 })?
                 .flatten()
             {
@@ -1887,6 +2112,11 @@ async fn execute_local_tool(
                     field: String::from("command"),
                     reason: String::from("run_command requires string `command`"),
                 })?;
+            let canonical_cwd =
+                fs::canonicalize(workspace_cwd).map_err(|_| DennettError::AccessDenied {
+                    scope: String::from("local_runtime.workspace"),
+                    reason: String::from("workspace root could not be canonicalized"),
+                })?;
             let mut cmd = if cfg!(windows) {
                 let mut c = Command::new("cmd");
                 c.arg("/C").arg(command);
@@ -1896,22 +2126,35 @@ async fn execute_local_tool(
                 c.arg("-c").arg(command);
                 c
             };
-            cmd.current_dir(workspace_cwd)
+            cmd.current_dir(&canonical_cwd)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
-            let output = time::timeout(Duration::from_secs(30), cmd.output())
-                .await
-                .map_err(|_| DennettError::Timeout {
-                    operation: String::from("local_runtime.run_command"),
-                })?
-                .map_err(|err| DennettError::Internal {
+            ProcessTreeGuard::configure_command(&mut cmd);
+            let child = cmd.spawn().map_err(|err| DennettError::Internal {
+                detail: redact_secrets_owned(
+                    &format!("command execution failed to spawn: {err}"),
+                    secrets,
+                ),
+            })?;
+            let guard = ProcessTreeGuard::attach(&child);
+            let output = if let Ok(res) =
+                time::timeout(Duration::from_secs(30), child.wait_with_output()).await
+            {
+                guard.terminate();
+                res.map_err(|err| DennettError::Internal {
                     detail: redact_secrets_owned(
                         &format!("command execution failed: {err}"),
                         secrets,
                     ),
-                })?;
+                })?
+            } else {
+                guard.terminate_and_drain(Duration::from_millis(500)).await;
+                return Err(DennettError::Timeout {
+                    operation: String::from("local_runtime.run_command"),
+                });
+            };
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let combined = format!(
@@ -1930,13 +2173,189 @@ async fn execute_local_tool(
     }
 }
 
-fn resolve_tool_path(workspace_cwd: &Path, raw: &str) -> PathBuf {
-    let p = PathBuf::from(raw);
-    if p.is_absolute() {
-        p
-    } else {
-        workspace_cwd.join(p)
+/// Resolves `raw` strictly within canonical `workspace_cwd`, rejecting traversal (`..`),
+/// external absolute paths, NUL bytes, Windows device/UNC/verbatim paths, Alternate Data Streams
+/// (`:`), and any symlink or Windows NTFS junction/reparse point along every path component from
+/// `workspace_cwd` down to the target.
+///
+/// # Errors
+///
+/// Returns [`DennettError::AccessDenied`] with safe, secret-free diagnostic details whenever
+/// containment or symlink/reparse checks fail.
+pub fn resolve_tool_path(workspace_cwd: &Path, raw: &str) -> Result<PathBuf, DennettError> {
+    let deny = |reason: &str| DennettError::AccessDenied {
+        scope: String::from("local_runtime.workspace"),
+        reason: reason.to_owned(),
+    };
+
+    if raw.is_empty() {
+        return Err(deny("empty path is forbidden"));
     }
+    if raw.as_bytes().contains(&0) {
+        return Err(deny("path contains forbidden NUL byte"));
+    }
+    if raw.starts_with(r"\\?\")
+        || raw.starts_with(r"\\.\")
+        || raw.starts_with("//?/")
+        || raw.starts_with("//./")
+        || raw.starts_with(r"\\")
+        || raw.starts_with("//")
+    {
+        return Err(deny(
+            "Windows device, verbatim, or UNC paths are strictly forbidden",
+        ));
+    }
+    if raw.contains("://") {
+        return Err(deny("URI schemes are forbidden in workspace file paths"));
+    }
+
+    // Reject Windows Alternate Data Streams (`file.txt:stream`, `::$DATA`) and drive-relative
+    // paths (`C:foo.txt`). Only a standard drive prefix `X:\` or `X:/` may contain `:` at index 1.
+    let raw_bytes = raw.as_bytes();
+    for (idx, &b) in raw_bytes.iter().enumerate() {
+        if b == b':' {
+            let valid_drive_prefix = idx == 1
+                && raw_bytes[0].is_ascii_alphabetic()
+                && raw_bytes
+                    .get(2)
+                    .is_some_and(|&sep| sep == b'\\' || sep == b'/');
+            if !valid_drive_prefix {
+                return Err(deny(
+                    "alternate data streams (`:`) and drive-relative paths are strictly forbidden",
+                ));
+            }
+        }
+    }
+
+    let canonical_root = fs::canonicalize(workspace_cwd)
+        .map_err(|_| deny("workspace root does not exist or could not be canonicalized"))?;
+
+    let candidate = Path::new(raw);
+    let rel_segments = if candidate.is_absolute() {
+        strip_workspace_prefix(candidate, &canonical_root)
+            .or_else(|| {
+                workspace_cwd
+                    .is_absolute()
+                    .then(|| strip_workspace_prefix(candidate, workspace_cwd))
+                    .flatten()
+            })
+            .ok_or_else(|| deny("absolute path escapes canonical workspace root"))?
+    } else {
+        let mut segs = Vec::new();
+        for comp in candidate.components() {
+            match comp {
+                Component::CurDir => {}
+                Component::Normal(seg) => segs.push(seg.to_owned()),
+                Component::ParentDir => {
+                    return Err(deny("parent-directory traversal (`..`) is forbidden"));
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(deny("root-relative or drive-relative paths are forbidden"));
+                }
+            }
+        }
+        segs
+    };
+
+    let mut current = canonical_root.clone();
+    let mut hit_missing = false;
+    for seg in &rel_segments {
+        current.push(seg);
+        if hit_missing {
+            continue;
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(meta) => {
+                if is_symlink_or_reparse_point(&meta) {
+                    return Err(deny(
+                        "path traverses a symlink or NTFS junction/reparse point, which is forbidden",
+                    ));
+                }
+                let canonical_cur = fs::canonicalize(&current).map_err(|_| {
+                    deny("path component could not be canonicalized inside workspace")
+                })?;
+                if !canonical_cur.starts_with(&canonical_root) {
+                    return Err(deny("canonicalized path escapes workspace boundary"));
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                hit_missing = true;
+            }
+            Err(_) => {
+                return Err(deny("failed verifying path metadata inside workspace"));
+            }
+        }
+    }
+
+    if !current.starts_with(&canonical_root) {
+        return Err(deny("resolved path escapes canonical workspace root"));
+    }
+
+    Ok(current)
+}
+
+fn is_symlink_or_reparse_point(meta: &fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn decompose_abs_path(path: &Path, allow_verbatim_disk: bool) -> Option<(Option<char>, Vec<OsString>)> {
+    let mut drive: Option<char> = None;
+    let mut segs = Vec::new();
+    let mut saw_root = false;
+
+    for comp in path.components() {
+        match comp {
+            Component::Prefix(pref) => match pref.kind() {
+                Prefix::Disk(d) => {
+                    drive = Some((d as char).to_ascii_uppercase());
+                }
+                Prefix::VerbatimDisk(d) if allow_verbatim_disk => {
+                    drive = Some((d as char).to_ascii_uppercase());
+                }
+                _ => return None,
+            },
+            Component::RootDir => {
+                saw_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => return None,
+            Component::Normal(s) => segs.push(s.to_owned()),
+        }
+    }
+    if !saw_root {
+        return None;
+    }
+    Some((drive, segs))
+}
+
+fn strip_workspace_prefix(candidate: &Path, root: &Path) -> Option<Vec<OsString>> {
+    let (cand_drive, cand_segs) = decompose_abs_path(candidate, false)?;
+    let (root_drive, root_segs) = decompose_abs_path(root, true)?;
+    if cand_drive != root_drive || cand_segs.len() < root_segs.len() {
+        return None;
+    }
+    for (c, r) in cand_segs.iter().zip(root_segs.iter()) {
+        let eq = if cfg!(windows) {
+            c.to_string_lossy().eq_ignore_ascii_case(&r.to_string_lossy())
+        } else {
+            c == r
+        };
+        if !eq {
+            return None;
+        }
+    }
+    Some(cand_segs[root_segs.len()..].to_vec())
 }
 
 fn truncate_utf8(input: &str, max_bytes: usize) -> String {
@@ -1965,7 +2384,9 @@ mod tests {
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use dennett_contracts::RunId;
-    use dennett_runtime_antigravity::{ConformancePrompts, run_runtime_conformance_suite};
+    use dennett_runtime_antigravity::{
+        ConformancePrompts, RuntimeMcpEnvEntry, run_runtime_conformance_suite,
+    };
     use tokio::net::TcpListener;
 
     use super::*;
@@ -2408,5 +2829,793 @@ mod tests {
 
         handle.abort();
         let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "comprehensive A-SEC-2 containment test exercises traversal, device, ADS, symlink/junction escapes across read_file, write_file, and list_dir"
+    )]
+    async fn a_sec_2_path_containment_blocks_traversal_device_ads_and_symlink_junction_escapes() {
+        let base = std::env::temp_dir().join(format!(
+            "dennett-local-asec2-{}",
+            Uuid::new_v4().simple()
+        ));
+        let ws = base.join("workspace");
+        let outside = base.join("outside");
+        fs::create_dir_all(ws.join("nested")).expect("create workspace");
+        fs::create_dir_all(&outside).expect("create outside dir");
+        fs::write(ws.join("inside.txt"), "inside-ok").expect("write inside.txt");
+        fs::write(outside.join("secret.txt"), "outside-secret-payload").expect("write secret.txt");
+
+        let external_abs = outside.join("secret.txt").to_string_lossy().into_owned();
+        for bad in [
+            "",
+            "inside\0.txt",
+            "../outside/secret.txt",
+            "nested/../../outside/secret.txt",
+            external_abs.as_str(),
+            r"\\?\C:\Windows\System32\drivers\etc\hosts",
+            r"\\.\CON",
+            "inside.txt:hidden_stream",
+            "C:drive_relative.txt",
+        ] {
+            let err = resolve_tool_path(&ws, bad);
+            assert!(
+                matches!(err, Err(DennettError::AccessDenied { .. })),
+                "expected AccessDenied for `{bad}`, got: {err:?}"
+            );
+        }
+
+        // Create real OS directory symlink / Windows NTFS junction pointing outside the workspace.
+        let escape_link = ws.join("escape_link");
+        let nested_link = ws.join("nested").join("escape_nested");
+        #[cfg(windows)]
+        {
+            for link in [&escape_link, &nested_link] {
+                let out = std::process::Command::new("cmd")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(link)
+                    .arg(&outside)
+                    .output()
+                    .expect("spawn mklink /J");
+                assert!(
+                    out.status.success(),
+                    "mklink /J failed: stdout={} stderr={}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, &escape_link).expect("create unix symlink");
+            std::os::unix::fs::symlink(&outside, &nested_link).expect("create nested unix symlink");
+        }
+
+        // read_file, write_file (direct and nested new subdir), and list_dir through the link MUST fail.
+        let read_escape = execute_local_tool(
+            "read_file",
+            &json!({ "path": "escape_link/secret.txt" }),
+            &ws,
+            &[],
+        )
+        .await;
+        assert!(
+            matches!(read_escape, Err(DennettError::AccessDenied { .. })),
+            "read_file through junction/symlink must be denied: {read_escape:?}"
+        );
+
+        let read_nested_escape = execute_local_tool(
+            "read_file",
+            &json!({ "path": "nested/escape_nested/secret.txt" }),
+            &ws,
+            &[],
+        )
+        .await;
+        assert!(
+            matches!(read_nested_escape, Err(DennettError::AccessDenied { .. })),
+            "nested read_file through junction/symlink must be denied: {read_nested_escape:?}"
+        );
+
+        let write_escape = execute_local_tool(
+            "write_file",
+            &json!({ "path": "escape_link/pwned.txt", "content": "escaped" }),
+            &ws,
+            &[],
+        )
+        .await;
+        assert!(
+            matches!(write_escape, Err(DennettError::AccessDenied { .. })),
+            "write_file through junction/symlink must be denied: {write_escape:?}"
+        );
+        assert!(
+            !outside.join("pwned.txt").exists(),
+            "outside file must never be created through junction/symlink"
+        );
+
+        let write_nested_new_dir = execute_local_tool(
+            "write_file",
+            &json!({ "path": "escape_link/newsub/pwned2.txt", "content": "escaped" }),
+            &ws,
+            &[],
+        )
+        .await;
+        assert!(
+            matches!(write_nested_new_dir, Err(DennettError::AccessDenied { .. })),
+            "write_file creating subdir inside junction/symlink must be denied: {write_nested_new_dir:?}"
+        );
+        assert!(
+            !outside.join("newsub").exists(),
+            "outside subdir must never be created through junction/symlink"
+        );
+
+        let list_escape = execute_local_tool(
+            "list_dir",
+            &json!({ "path": "escape_link" }),
+            &ws,
+            &[],
+        )
+        .await;
+        assert!(
+            matches!(list_escape, Err(DennettError::AccessDenied { .. })),
+            "list_dir on junction/symlink must be denied: {list_escape:?}"
+        );
+
+        // Legitimate in-workspace operations must succeed cleanly.
+        let ok_read = execute_local_tool(
+            "read_file",
+            &json!({ "path": "inside.txt" }),
+            &ws,
+            &[],
+        )
+        .await
+        .expect("read inside.txt");
+        assert_eq!(ok_read, "inside-ok");
+
+        let in_ws_abs = ws.join("inside.txt").to_string_lossy().into_owned();
+        let ok_abs_read = execute_local_tool(
+            "read_file",
+            &json!({ "path": in_ws_abs }),
+            &ws,
+            &[],
+        )
+        .await
+        .expect("read in-workspace absolute path");
+        assert_eq!(ok_abs_read, "inside-ok");
+
+        let ok_write = execute_local_tool(
+            "write_file",
+            &json!({ "path": "sub/created.txt", "content": "safe-ws-write" }),
+            &ws,
+            &[],
+        )
+        .await
+        .expect("write inside workspace");
+        assert!(ok_write.contains("wrote"));
+        assert_eq!(
+            fs::read_to_string(ws.join("sub").join("created.txt")).expect("read created"),
+            "safe-ws-write"
+        );
+
+        let ok_list = execute_local_tool("list_dir", &json!({ "path": "." }), &ws, &[])
+            .await
+            .expect("list workspace root");
+        assert!(ok_list.contains("inside.txt"));
+
+        // Remove junctions/symlinks explicitly before cleaning base directory.
+        let _ = fs::remove_dir(&escape_link).or_else(|_| fs::remove_file(&escape_link));
+        let _ = fs::remove_dir(&nested_link).or_else(|_| fs::remove_file(&nested_link));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[derive(Clone)]
+    struct RecordingPolicy {
+        effect: PolicyEffect,
+        recorded: Arc<Mutex<Vec<PolicyEvaluationRequest>>>,
+    }
+
+    impl PolicyEvaluator for RecordingPolicy {
+        fn evaluate<'a>(
+            &'a self,
+            req: &'a PolicyEvaluationRequest,
+        ) -> BoxFuture<'a, dennett_runtime_antigravity::PolicyEvaluationOutcome> {
+            let effect = self.effect;
+            let recorded = Arc::clone(&self.recorded);
+            let req_clone = req.clone();
+            Box::pin(async move {
+                recorded.lock().await.push(req_clone);
+                dennett_runtime_antigravity::PolicyEvaluationOutcome {
+                    effect,
+                    matched_rule_id: None,
+                    reason: if effect == PolicyEffect::Allow {
+                        String::from("allowed by test policy")
+                    } else {
+                        String::from("denied by test policy")
+                    },
+                    scope: String::from("test"),
+                }
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct McpMockServerState {
+        reject_tools_400: Arc<AtomicBool>,
+        seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
+        seen_system_prompts: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn spawn_mcp_test_server(
+        state: McpMockServerState,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new()
+            .route(
+                "/v1/models",
+                get(|| async {
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "object": "list",
+                            "data": [{ "id": "local-mcp-model:7b", "object": "model" }]
+                        })),
+                    )
+                }),
+            )
+            .route("/v1/chat/completions", post(mcp_mock_chat_completions))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mcp test server");
+        let addr = listener.local_addr().expect("local addr");
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "mock OpenAI endpoint simulates tool list inspection, MCP tool call, tool follow-up, and non-tool skill fallback"
+    )]
+    async fn mcp_mock_chat_completions(
+        State(state): State<McpMockServerState>,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        let tool_names: Vec<String> = body
+            .get("tools")
+            .and_then(Value::as_array)
+            .map_or_default(|arr| {
+                arr.iter()
+                    .filter_map(|t| {
+                        t.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .collect()
+            });
+        state.seen_tools.lock().await.push(tool_names);
+
+        let messages = body
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(sys) = messages
+            .first()
+            .filter(|m| m.get("role").and_then(Value::as_str) == Some("system"))
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_str)
+        {
+            state.seen_system_prompts.lock().await.push(sys.to_owned());
+        }
+
+        if state.reject_tools_400.load(Ordering::SeqCst) && body.get("tools").is_some() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": { "message": "model does not support tools" } })),
+            );
+        }
+
+        let last_msg = messages.last().cloned().unwrap_or(Value::Null);
+        let last_role = last_msg.get("role").and_then(Value::as_str).unwrap_or("");
+        let last_content = last_msg
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        if last_role == "tool" {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "cmpl-mcp-final",
+                    "choices": [{
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": format!("FINAL_WITH_MCP_TOOL:{last_content}")
+                        }
+                    }],
+                    "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 }
+                })),
+            );
+        }
+
+        if last_content.contains("CALL_MCP_ECHO") {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "cmpl-mcp-call",
+                    "choices": [{
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [{
+                                "id": "call-mcp-echo-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "mcp__mock-echo__echo_tool",
+                                    "arguments": "{\"msg\":\"hello-from-mcp\"}"
+                                }
+                            }]
+                        }
+                    }],
+                    "usage": { "total_tokens": 9 }
+                })),
+            );
+        }
+
+        let sys_text = messages
+            .first()
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        (
+            StatusCode::OK,
+            Json(json!({
+                "id": "cmpl-plain",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": format!("PLAIN_OK:has_skill_marker={}", sys_text.contains("SECRET_SKILL_MARKER_42"))
+                    }
+                }],
+                "usage": { "prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10 }
+            })),
+        )
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "emits self-contained cross-platform Windows PowerShell and Unix POSIX sh stdio MCP server fixture"
+    )]
+    fn write_mock_stdio_mcp_spec(
+        script_dir: &Path,
+        pid_file: &Path,
+        called_file: &Path,
+        stubborn_on_eof: bool,
+    ) -> RuntimeMcpServerSpec {
+        #[cfg(windows)]
+        {
+            let script_path = script_dir.join("mock_mcp_echo.ps1");
+            let script = r#"
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($env:DENNETT_MOCK_MCP_PID_FILE, "$PID")
+while ($true) {
+    $line = [Console]::In.ReadLine()
+    if ($null -eq $line) { break }
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $req = $line | ConvertFrom-Json
+    $id = $req.id
+    $method = $req.method
+    if ($method -eq "initialize") {
+        $resp = @{
+            jsonrpc = "2.0"
+            id = $id
+            result = @{
+                protocolVersion = "2024-11-05"
+                capabilities = @{ tools = @{} }
+                serverInfo = @{ name = "mock-echo"; version = "0.1.0" }
+            }
+        } | ConvertTo-Json -Depth 10 -Compress
+        [Console]::Out.WriteLine($resp)
+        [Console]::Out.Flush()
+    } elseif ($method -eq "tools/list") {
+        $resp = @{
+            jsonrpc = "2.0"
+            id = $id
+            result = @{
+                tools = @(
+                    @{
+                        name = "echo_tool"
+                        description = "Echo test MCP tool"
+                        inputSchema = @{
+                            type = "object"
+                            properties = @{ msg = @{ type = "string" } }
+                            required = @("msg")
+                        }
+                    }
+                )
+            }
+        } | ConvertTo-Json -Depth 10 -Compress
+        [Console]::Out.WriteLine($resp)
+        [Console]::Out.Flush()
+    } elseif ($method -eq "tools/call") {
+        $msg = ""
+        if ($null -ne $req.params -and $null -ne $req.params.arguments -and $null -ne $req.params.arguments.msg) {
+            $msg = [string]$req.params.arguments.msg
+        }
+        [System.IO.File]::AppendAllText($env:DENNETT_MOCK_MCP_CALLED_FILE, "$msg`n")
+        $resp = @{
+            jsonrpc = "2.0"
+            id = $id
+            result = @{
+                content = @(
+                    @{ type = "text"; text = "MCP_ECHO_RESULT:$msg" }
+                )
+                isError = $false
+            }
+        } | ConvertTo-Json -Depth 10 -Compress
+        [Console]::Out.WriteLine($resp)
+        [Console]::Out.Flush()
+    }
+}
+if ($env:DENNETT_MOCK_MCP_STUBBORN -eq "1") {
+    Start-Sleep -Seconds 30
+}
+"#;
+            fs::write(&script_path, script).expect("write mock_mcp_echo.ps1");
+            RuntimeMcpServerSpec {
+                name: String::from("mock-echo"),
+                command: String::from("powershell.exe"),
+                args: vec![
+                    String::from("-NoProfile"),
+                    String::from("-NonInteractive"),
+                    String::from("-ExecutionPolicy"),
+                    String::from("Bypass"),
+                    String::from("-File"),
+                    script_path.to_string_lossy().into_owned(),
+                ],
+                env: vec![
+                    RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_MOCK_MCP_PID_FILE"),
+                        value: pid_file.to_string_lossy().into_owned(),
+                    },
+                    RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_MOCK_MCP_CALLED_FILE"),
+                        value: called_file.to_string_lossy().into_owned(),
+                    },
+                    RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_MOCK_MCP_STUBBORN"),
+                        value: if stubborn_on_eof {
+                            String::from("1")
+                        } else {
+                            String::from("0")
+                        },
+                    },
+                ],
+            }
+        }
+        #[cfg(unix)]
+        {
+            let script_path = script_dir.join("mock_mcp_echo.sh");
+            let script = r#"#!/bin/sh
+printf '%s' "$$" > "$DENNETT_MOCK_MCP_PID_FILE"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"mock-echo","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *'"method":"tools/list"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool","description":"Echo test MCP tool","inputSchema":{"type":"object","properties":{"msg":{"type":"string"}},"required":["msg"]}}]}}\n' "$id"
+      ;;
+    *'"method":"tools/call"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      printf 'called\n' >> "$DENNETT_MOCK_MCP_CALLED_FILE"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"MCP_ECHO_RESULT:hello-from-mcp"}],"isError":false}}\n' "$id"
+      ;;
+  esac
+done
+if [ "$DENNETT_MOCK_MCP_STUBBORN" = "1" ]; then
+  sleep 30
+fi
+"#;
+            fs::write(&script_path, script).expect("write mock_mcp_echo.sh");
+            RuntimeMcpServerSpec {
+                name: String::from("mock-echo"),
+                command: String::from("sh"),
+                args: vec![script_path.to_string_lossy().into_owned()],
+                env: vec![
+                    RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_MOCK_MCP_PID_FILE"),
+                        value: pid_file.to_string_lossy().into_owned(),
+                    },
+                    RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_MOCK_MCP_CALLED_FILE"),
+                        value: called_file.to_string_lossy().into_owned(),
+                    },
+                    RuntimeMcpEnvEntry {
+                        name: String::from("DENNETT_MOCK_MCP_STUBBORN"),
+                        value: if stubborn_on_eof {
+                            String::from("1")
+                        } else {
+                            String::from("0")
+                        },
+                    },
+                ],
+            }
+        }
+    }
+
+    fn is_process_alive(pid: u32) -> bool {
+        #[cfg(windows)]
+        {
+            let out = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+                .output()
+                .expect("run tasklist");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout.contains(&format!("\"{pid}\""))
+        }
+        #[cfg(unix)]
+        {
+            std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .is_ok_and(|s| s.success())
+        }
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "end-to-end A-CORE-2 test verifies stdio MCP discovery, PolicyEvaluator allow/deny gating, tool result injection, and deterministic child process reaping"
+    )]
+    async fn a_core_2_stdio_mcp_bridge_discovers_gates_executes_and_reaps_child() {
+        let base = std::env::temp_dir().join(format!(
+            "dennett-local-acore2-mcp-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&base).expect("create temp dir");
+        let pid_file = base.join("mcp.pid");
+        let called_file = base.join("mcp.called");
+
+        // Use stubborn_on_eof=true to prove ProcessTreeGuard / kill-on-drop reaps children that ignore stdin EOF.
+        let mcp_spec = write_mock_stdio_mcp_spec(&base, &pid_file, &called_file, true);
+
+        let server_state = McpMockServerState {
+            reject_tools_400: Arc::new(AtomicBool::new(false)),
+            seen_tools: Arc::new(Mutex::new(Vec::new())),
+            seen_system_prompts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let (base_url, server_handle) = spawn_mcp_test_server(server_state.clone()).await;
+
+        let runtime = LocalHttpRuntime::new(LocalRuntimeConfig {
+            endpoint_url: base_url,
+            default_model: Some(String::from("local-mcp-model:7b")),
+            turn_timeout: Duration::from_secs(20),
+            ..LocalRuntimeConfig::default()
+        })
+        .expect("build runtime");
+
+        let sid = SessionId::new();
+        let start = runtime
+            .start_or_resume_session(SessionStartRequest {
+                dennett_session_id: sid,
+                workspace_cwd: base.clone(),
+                system_prompt: String::from("MCP bridge test"),
+                model_preference: None,
+                thinking_level: None,
+                workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                mcp_servers: vec![mcp_spec],
+                active_skills: Vec::new(),
+                existing_binding: None,
+                history_for_rehydrate: Vec::new(),
+                allow_rehydrate: true,
+            })
+            .await
+            .expect("start session");
+
+        // 1. Policy ALLOW: discovers MCP tool, gates through PolicyEvaluator, executes tools/call,
+        // injects result into follow-up completion, and deterministically reaps stubborn child!
+        let allow_recorded = Arc::new(Mutex::new(Vec::new()));
+        let allow_policy: Arc<dyn PolicyEvaluator> = Arc::new(RecordingPolicy {
+            effect: PolicyEffect::Allow,
+            recorded: Arc::clone(&allow_recorded),
+        });
+        let (_tx1, rx1) = watch::channel(false);
+        let turn_allow = runtime
+            .send_prompt_turn(
+                TurnRequest {
+                    dennett_session_id: sid,
+                    provider_session_id: start.provider_session_id.clone(),
+                    run_id: RunId::new(),
+                    prompt_text: String::from("Please run CALL_MCP_ECHO now"),
+                    timeout: Duration::from_secs(20),
+                    cancel_rx: rx1,
+                },
+                allow_policy,
+                None,
+            )
+            .await
+            .expect("allow turn");
+        assert_eq!(turn_allow.status, RunStatus::Succeeded);
+        assert!(
+            turn_allow
+                .assistant_text
+                .contains("FINAL_WITH_MCP_TOOL:MCP_ECHO_RESULT:hello-from-mcp"),
+            "unexpected assistant_text: {}",
+            turn_allow.assistant_text
+        );
+
+        let seen_tools = server_state.seen_tools.lock().await;
+        assert!(
+            seen_tools
+                .iter()
+                .any(|list| list.iter().any(|t| t == "mcp__mock-echo__echo_tool")),
+            "discovered MCP tool must be merged into OpenAI tools payload: {seen_tools:?}"
+        );
+        drop(seen_tools);
+
+        let evals = allow_recorded.lock().await;
+        assert_eq!(evals.len(), 1);
+        assert_eq!(evals[0].tool_name, "mcp__mock-echo__echo_tool");
+        assert_eq!(evals[0].tool_kind, "other");
+        assert_eq!(evals[0].title, "mock-echo:echo_tool");
+        drop(evals);
+
+        let pid_after_allow: u32 = fs::read_to_string(&pid_file)
+            .expect("read pid file")
+            .trim()
+            .parse()
+            .expect("parse pid");
+        assert!(
+            !is_process_alive(pid_after_allow),
+            "stubborn stdio MCP child PID {pid_after_allow} must be reaped after turn ends"
+        );
+        let called_content = fs::read_to_string(&called_file).expect("read called file");
+        assert!(called_content.contains("hello-from-mcp"));
+
+        // 2. Policy DENY: MCP tool is gated and DENIED before tools/call ever executes,
+        // and spawned child is still reaped cleanly.
+        let _ = fs::remove_file(&called_file);
+        let deny_recorded = Arc::new(Mutex::new(Vec::new()));
+        let deny_policy: Arc<dyn PolicyEvaluator> = Arc::new(RecordingPolicy {
+            effect: PolicyEffect::Deny,
+            recorded: Arc::clone(&deny_recorded),
+        });
+        let (_tx2, rx2) = watch::channel(false);
+        let turn_deny = runtime
+            .send_prompt_turn(
+                TurnRequest {
+                    dennett_session_id: sid,
+                    provider_session_id: start.provider_session_id,
+                    run_id: RunId::new(),
+                    prompt_text: String::from("Try CALL_MCP_ECHO under deny"),
+                    timeout: Duration::from_secs(20),
+                    cancel_rx: rx2,
+                },
+                deny_policy,
+                None,
+            )
+            .await
+            .expect("deny turn");
+        assert_eq!(turn_deny.status, RunStatus::Succeeded);
+        assert!(
+            turn_deny.assistant_text.contains("DENIED by Dennett policy"),
+            "denied MCP call must return policy denial to model: {}",
+            turn_deny.assistant_text
+        );
+        assert!(
+            !called_file.exists(),
+            "denied MCP tool must NEVER execute tools/call on child server"
+        );
+        let pid_after_deny: u32 = fs::read_to_string(&pid_file)
+            .expect("read pid file 2")
+            .trim()
+            .parse()
+            .expect("parse pid 2");
+        assert!(
+            !is_process_alive(pid_after_deny),
+            "stubborn stdio MCP child PID {pid_after_deny} must be reaped after denied turn"
+        );
+
+        server_handle.abort();
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn a_core_2_non_tool_calling_fallback_preserves_inline_active_skills() {
+        let base = std::env::temp_dir().join(format!(
+            "dennett-local-acore2-skills-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&base).expect("create temp dir");
+
+        let server_state = McpMockServerState {
+            reject_tools_400: Arc::new(AtomicBool::new(true)),
+            seen_tools: Arc::new(Mutex::new(Vec::new())),
+            seen_system_prompts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let (base_url, server_handle) = spawn_mcp_test_server(server_state.clone()).await;
+
+        let runtime = LocalHttpRuntime::new(LocalRuntimeConfig {
+            endpoint_url: base_url,
+            default_model: Some(String::from("local-mcp-model:7b")),
+            turn_timeout: Duration::from_secs(10),
+            ..LocalRuntimeConfig::default()
+        })
+        .expect("build runtime");
+
+        let sid = SessionId::new();
+        let start = runtime
+            .start_or_resume_session(SessionStartRequest {
+                dennett_session_id: sid,
+                workspace_cwd: base.clone(),
+                system_prompt: String::from(
+                    "Base system instructions.\n[Dennett Active Skills Index]\n- alpha-skill",
+                ),
+                model_preference: None,
+                thinking_level: None,
+                workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+                mcp_servers: Vec::new(),
+                active_skills: vec![ActiveSkillPayload {
+                    slug: String::from("alpha-skill"),
+                    version: String::from("1.0.0"),
+                    content_sha256: "a".repeat(64),
+                    skill_markdown: String::from(
+                        "# Alpha Skill\nAlways include SECRET_SKILL_MARKER_42 when summarizing.",
+                    ),
+                }],
+                existing_binding: None,
+                history_for_rehydrate: Vec::new(),
+                allow_rehydrate: true,
+            })
+            .await
+            .expect("start session");
+
+        let policy: Arc<dyn PolicyEvaluator> = Arc::new(DenyAllPolicy);
+        let (_tx, rx) = watch::channel(false);
+        let turn = runtime
+            .send_prompt_turn(
+                TurnRequest {
+                    dennett_session_id: sid,
+                    provider_session_id: start.provider_session_id,
+                    run_id: RunId::new(),
+                    prompt_text: String::from("Summarize using active skill"),
+                    timeout: Duration::from_secs(10),
+                    cancel_rx: rx,
+                },
+                policy,
+                None,
+            )
+            .await
+            .expect("fallback turn must succeed without crashing");
+
+        assert_eq!(turn.status, RunStatus::Succeeded);
+        assert!(
+            turn.assistant_text.contains("PLAIN_OK:has_skill_marker=true"),
+            "fallback without tools must keep active skill instructions inline in system prompt: {}",
+            turn.assistant_text
+        );
+        let prompts = server_state.seen_system_prompts.lock().await;
+        assert!(
+            prompts
+                .last()
+                .is_some_and(|p| p.contains("SECRET_SKILL_MARKER_42")),
+            "retry request system prompt must contain inline skill markdown: {prompts:?}"
+        );
+
+        server_handle.abort();
+        let _ = fs::remove_dir_all(&base);
     }
 }

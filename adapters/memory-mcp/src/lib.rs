@@ -7,22 +7,32 @@
 //!   a scoped bearer token read from environment.
 //! - Enforces a strict maximum stdin line size ([`MAX_MCP_STDIN_LINE_BYTES`]) to bound memory.
 
-use std::collections::BTreeMap;
+use core::fmt;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead};
 use std::str::FromStr;
 
-use dennett_contracts::redact::redact_secrets;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets};
 use dennett_contracts::{
-    AdmissionStatus, ClaimId, ConflictId, ConflictStatus, CorrectNoteRequest, CreateClaimRequest,
-    CreateDocumentRequest, CreateNoteRequest, DennettError, DocumentId, EpistemicStatus,
-    EvidenceLinkInput, ExportRequest, ForgetRequest, ForgetTargetType, IdempotencyKey,
-    ImportRequest, MemoryEventId, MemoryNoteId, MemoryScope, ResolveConflictRequest,
-    SearchNotesRequest, SupersedeClaimRequest, TimestampMs, UpdateDocumentRequest,
+    AdmissionStatus, ApiErrorResponse, ClaimId, ConflictId, ConflictStatus, CorrectNoteRequest,
+    CorrelationId, CreateClaimRequest, CreateDocumentRequest, CreateNoteRequest, DennettError,
+    DocumentId, EpistemicStatus, EvidenceLinkInput, ExportRequest, ForgetRequest, ForgetTargetType,
+    IdempotencyKey, ImportRequest, IngestEvidenceRequest, MemoryCapability, MemoryEventId,
+    MemoryNoteId, MemoryScope, PrincipalId, ResolveConflictRequest, SearchNotesRequest,
+    SupersedeClaimRequest, TimestampMs, UpdateDocumentRequest,
 };
-use dennett_memory_client::MemoryClient;
-use serde::Deserialize;
+use dennett_memory_client::{DEFAULT_CLIENT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT, MAX_RESPONSE_BODY_BYTES, MemoryClient};
+use hmac::{Hmac, Mac};
+use reqwest::StatusCode;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::Sha256;
 use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Default MCP protocol version advertised when a client omits `protocolVersion`.
 pub const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -34,6 +44,160 @@ pub const DEFAULT_MEMORY_URL: &str = "http://127.0.0.1:18080";
 pub const ENV_MEMORY_URL: &str = "DENNETT_MEMORY_URL";
 /// Environment variable providing the scoped bearer credential for `dennett-memoryd`.
 pub const ENV_MEMORY_TOKEN: &str = "DENNETT_MEMORY_TOKEN";
+/// Environment variable providing the shared HMAC-SHA256 secret for minting `dnt1.` tokens.
+pub const ENV_MEMORY_HMAC_SECRET: &str = "DENNETT_MEMORY_HMAC_SECRET";
+/// Optional comma-separated scope allowlist used when minting `dnt1.` tokens via HMAC secret.
+pub const ENV_MEMORY_SCOPES: &str = "DENNETT_MEMORY_SCOPES";
+/// Optional principal identifier used when minting `dnt1.` tokens via HMAC secret.
+pub const ENV_MEMORY_PRINCIPAL_ID: &str = "DENNETT_MEMORY_PRINCIPAL_ID";
+/// Optional comma-separated capabilities (`read,write,export,forget,admin`) used with HMAC auth.
+pub const ENV_MEMORY_CAPABILITIES: &str = "DENNETT_MEMORY_CAPABILITIES";
+/// Minimum required byte length for `DENNETT_MEMORY_HMAC_SECRET` / `--memory-hmac-secret`.
+pub const MIN_HMAC_SECRET_BYTES: usize = 16;
+
+const DEFAULT_MEMORY_AUDIENCE: &str = "dennett-memoryd";
+const DEFAULT_MEMORY_ISSUER: &str = "dennett-standalone";
+const SIGNED_TOKEN_PREFIX: &str = "dnt1";
+const DEFAULT_TOKEN_TTL_MS: i64 = 2 * 60 * 60 * 1000;
+const MAX_EVIDENCE_LIST_LIMIT: u32 = 200;
+
+static HEADER_CORRELATION_ID: HeaderName = HeaderName::from_static("x-correlation-id");
+
+#[derive(Debug, Serialize)]
+struct McpSignedTokenClaims {
+    token_id: String,
+    principal_id: PrincipalId,
+    issuer: String,
+    audience: String,
+    allowed_scopes: BTreeSet<MemoryScope>,
+    capabilities: BTreeSet<MemoryCapability>,
+    issued_at: TimestampMs,
+    expires_at: TimestampMs,
+}
+
+/// Cryptographic HMAC-SHA256 signer that mints `dnt1.` bearer tokens for `dennett-memoryd`
+/// when `DENNETT_MEMORY_HMAC_SECRET` (or `--memory-hmac-secret`) is configured.
+///
+/// Custom [`fmt::Debug`] redacts the signing secret so it never enters logs or diagnostics.
+#[derive(Clone)]
+pub struct HmacTokenMinter {
+    secret: Vec<u8>,
+    secret_raw: String,
+    principal_id: PrincipalId,
+    allowed_scopes: BTreeSet<MemoryScope>,
+    capabilities: BTreeSet<MemoryCapability>,
+    issuer: String,
+    audience: String,
+}
+
+impl fmt::Debug for HmacTokenMinter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HmacTokenMinter")
+            .field("secret", &REDACTED_PLACEHOLDER)
+            .field("secret_raw", &REDACTED_PLACEHOLDER)
+            .field("principal_id", &self.principal_id)
+            .field("allowed_scopes", &self.allowed_scopes)
+            .field("capabilities", &self.capabilities)
+            .field("issuer", &self.issuer)
+            .field("audience", &self.audience)
+            .finish()
+    }
+}
+
+impl HmacTokenMinter {
+    /// Constructs a new [`HmacTokenMinter`] from a shared HMAC-SHA256 secret (at least 16 bytes).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `secret` is shorter than [`MIN_HMAC_SECRET_BYTES`].
+    pub fn new(
+        secret: impl Into<String>,
+        allowed_scopes: BTreeSet<MemoryScope>,
+        principal_id: Option<PrincipalId>,
+        capabilities: Option<BTreeSet<MemoryCapability>>,
+    ) -> Result<Self, DennettError> {
+        let secret_raw = secret.into();
+        if secret_raw.len() < MIN_HMAC_SECRET_BYTES {
+            return Err(DennettError::InvalidInput {
+                field: String::from("memory_hmac_secret"),
+                reason: format!("must be at least {MIN_HMAC_SECRET_BYTES} bytes"),
+            });
+        }
+        let principal = match principal_id {
+            Some(p) => p,
+            None => PrincipalId::try_new("agent:memory-mcp")?,
+        };
+        let caps = match capabilities {
+            Some(c) if !c.is_empty() => c,
+            _ => BTreeSet::from([
+                MemoryCapability::Read,
+                MemoryCapability::Write,
+                MemoryCapability::Export,
+                MemoryCapability::Forget,
+                MemoryCapability::Admin,
+            ]),
+        };
+        Ok(Self {
+            secret: secret_raw.as_bytes().to_vec(),
+            secret_raw,
+            principal_id: principal,
+            allowed_scopes,
+            capabilities: caps,
+            issuer: String::from(DEFAULT_MEMORY_ISSUER),
+            audience: String::from(DEFAULT_MEMORY_AUDIENCE),
+        })
+    }
+
+    /// Returns the raw secret string strictly for redaction registration.
+    #[must_use]
+    pub fn secret_for_redaction(&self) -> &str {
+        &self.secret_raw
+    }
+
+    /// Mints a short-lived `dnt1.` bearer token authorized for configured scopes (or
+    /// `requested_scope` when no static allowlist was configured).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::Internal`] on serialization or HMAC signing errors.
+    pub fn mint_for_scope(&self, requested_scope: Option<&MemoryScope>) -> Result<String, DennettError> {
+        let effective_scopes = if !self.allowed_scopes.is_empty() {
+            self.allowed_scopes.clone()
+        } else if let Some(sc) = requested_scope {
+            BTreeSet::from([sc.clone()])
+        } else {
+            BTreeSet::from([MemoryScope::try_new("default")?])
+        };
+
+        let issued_at = TimestampMs::now();
+        let expires_at =
+            TimestampMs::from_millis(issued_at.as_millis().saturating_add(DEFAULT_TOKEN_TTL_MS));
+        let claims = McpSignedTokenClaims {
+            token_id: format!("mcp-{}", Uuid::new_v4().simple()),
+            principal_id: self.principal_id.clone(),
+            issuer: self.issuer.clone(),
+            audience: self.audience.clone(),
+            allowed_scopes: effective_scopes,
+            capabilities: self.capabilities.clone(),
+            issued_at,
+            expires_at,
+        };
+        let payload_json = serde_json::to_vec(&claims).map_err(|err| DennettError::Internal {
+            detail: format!("failed serializing MCP signed token claims: {err}"),
+        })?;
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload_json);
+        let signing_input = format!("{SIGNED_TOKEN_PREFIX}.{payload_b64}");
+
+        let mut mac =
+            HmacSha256::new_from_slice(&self.secret).map_err(|_| DennettError::Internal {
+                detail: String::from("failed initializing HMAC-SHA256 signer"),
+            })?;
+        mac.update(signing_input.as_bytes());
+        let tag = mac.finalize().into_bytes();
+        let tag_b64 = URL_SAFE_NO_PAD.encode(tag);
+        Ok(format!("{signing_input}.{tag_b64}"))
+    }
+}
 
 /// Result of reading one bounded newline-delimited frame from an input stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +309,15 @@ pub enum ParsedToolCall {
     Import(ImportRequest),
     /// Query separable search index freshness/health status (`memory_index_status`).
     IndexStatus(Option<MemoryScope>),
+    /// Ingest an immutable inline evidence object (`memory_evidence_create`).
+    EvidenceCreate(IngestEvidenceRequest),
+    /// List active evidence objects across authorized scopes (`memory_evidence_list`).
+    EvidenceList {
+        /// Optional scope filter.
+        scope: Option<MemoryScope>,
+        /// Optional maximum items returned (`1..=200`).
+        limit: Option<u32>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -353,6 +526,36 @@ struct ImportArgs {
     package_json: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceCreateArgs {
+    scope: String,
+    content: String,
+    #[serde(default = "default_evidence_media_type")]
+    media_type: String,
+    #[serde(default)]
+    source_uri: Option<String>,
+    #[serde(default)]
+    observed_at: Option<TimestampMs>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+
+fn default_evidence_media_type() -> String {
+    String::from("text/plain")
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceListArgs {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
 /// Parses and validates an MCP tool name + JSON arguments object into a typed [`ParsedToolCall`].
 ///
 /// # Errors
@@ -361,7 +564,7 @@ struct ImportArgs {
 /// or `Err(DennettError::InvalidInput)` if arguments fail validation.
 #[expect(
     clippy::too_many_lines,
-    reason = "single validated match table covering all 16 Memory Fabric MCP tools"
+    reason = "single validated match table covering all 18 Memory Fabric MCP tools"
 )]
 pub fn parse_tool_call(
     tool_name: &str,
@@ -374,6 +577,7 @@ pub fn parse_tool_call(
             | "memory_conflict_list"
             | "memory_document_read"
             | "memory_index_status"
+            | "memory_evidence_list"
     );
     let args_obj = match raw_args {
         Value::Object(_) => raw_args.clone(),
@@ -671,6 +875,38 @@ pub fn parse_tool_call(
             let scope = parsed.scope.map(MemoryScope::try_new).transpose()?;
             Ok(Some(ParsedToolCall::IndexStatus(scope)))
         }
+        "memory_evidence_create" => {
+            let parsed: EvidenceCreateArgs = deserialize_args(args_obj)?;
+            let scope = MemoryScope::try_new(parsed.scope)?;
+            let idempotency_key = parse_opt_idempotency(parsed.idempotency_key)?;
+            let req = IngestEvidenceRequest {
+                scope,
+                media_type: parsed.media_type,
+                content: parsed.content,
+                source_uri: parsed.source_uri,
+                observed_at: parsed.observed_at,
+                metadata: parsed.metadata,
+                idempotency_key,
+            };
+            req.validate()?;
+            Ok(Some(ParsedToolCall::EvidenceCreate(req)))
+        }
+        "memory_evidence_list" => {
+            let parsed: EvidenceListArgs = deserialize_args(args_obj)?;
+            let scope = parsed.scope.map(MemoryScope::try_new).transpose()?;
+            if let Some(lim) = parsed.limit
+                && (lim == 0 || lim > MAX_EVIDENCE_LIST_LIMIT)
+            {
+                return Err(DennettError::InvalidInput {
+                    field: String::from("limit"),
+                    reason: format!("must be between 1 and {MAX_EVIDENCE_LIST_LIMIT}"),
+                });
+            }
+            Ok(Some(ParsedToolCall::EvidenceList {
+                scope,
+                limit: parsed.limit,
+            }))
+        }
         _ => Ok(None),
     }
 }
@@ -689,23 +925,121 @@ fn deserialize_args<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, Den
     })
 }
 
-/// Thin MCP JSON-RPC dispatcher backed by [`MemoryClient`].
-#[derive(Debug, Clone)]
+/// Thin MCP JSON-RPC dispatcher backed by [`MemoryClient`] and optional [`HmacTokenMinter`].
+#[derive(Clone)]
 pub struct MemoryMcpServer {
     client: MemoryClient,
+    base_url: String,
+    static_token: Option<String>,
+    hmac_minter: Option<HmacTokenMinter>,
+    extra_secrets: Vec<String>,
+    http: reqwest::Client,
+}
+
+impl fmt::Debug for MemoryMcpServer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryMcpServer")
+            .field("base_url", &self.base_url)
+            .field(
+                "static_token",
+                &self.static_token.as_ref().map(|_| REDACTED_PLACEHOLDER),
+            )
+            .field("hmac_minter", &self.hmac_minter)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MemoryMcpServer {
     /// Creates a new [`MemoryMcpServer`] wrapping a configured [`MemoryClient`].
     #[must_use]
-    pub const fn new(client: MemoryClient) -> Self {
-        Self { client }
+    pub fn new(client: MemoryClient) -> Self {
+        let base_url = client.base_url().to_owned();
+        let http = reqwest::Client::builder()
+            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .timeout(DEFAULT_CLIENT_TIMEOUT)
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self {
+            client,
+            base_url,
+            static_token: None,
+            hmac_minter: None,
+            extra_secrets: Vec::new(),
+            http,
+        }
     }
 
-    /// Redacts generic secrets and the configured bearer credential from `text`.
+    /// Creates a [`MemoryMcpServer`] with explicit URL, optional static/pre-minted bearer token,
+    /// optional [`HmacTokenMinter`] (`DENNETT_MEMORY_HMAC_SECRET` / `--memory-hmac-secret`), and
+    /// additional secret strings to redact from every diagnostic path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] if `base_url` or `bearer_token` is malformed, or
+    /// [`DennettError::Internal`] if HTTP client initialization fails.
+    pub fn with_auth(
+        base_url: &str,
+        bearer_token: Option<String>,
+        hmac_minter: Option<HmacTokenMinter>,
+        mut extra_secrets: Vec<String>,
+    ) -> Result<Self, DennettError> {
+        let clean_token = bearer_token
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty());
+        let client = match clean_token.as_deref() {
+            Some(tok) => MemoryClient::new(base_url, tok)?,
+            None => MemoryClient::unauthenticated(base_url)?,
+        };
+        if let Some(ref minter) = hmac_minter {
+            let sec = minter.secret_for_redaction();
+            if !sec.is_empty() && !extra_secrets.iter().any(|s| s == sec) {
+                extra_secrets.push(sec.to_owned());
+            }
+        }
+        let normalized_url = client.base_url().to_owned();
+        let http = reqwest::Client::builder()
+            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .timeout(DEFAULT_CLIENT_TIMEOUT)
+            .no_proxy()
+            .build()
+            .map_err(|err| DennettError::Internal {
+                detail: format!("failed to construct HTTP client: {err}"),
+            })?;
+        Ok(Self {
+            client,
+            base_url: normalized_url,
+            static_token: clean_token,
+            hmac_minter,
+            extra_secrets,
+            http,
+        })
+    }
+
+    /// Redacts generic secrets, the configured bearer credential, and any HMAC signing secret.
     #[must_use]
     pub fn redact_text(&self, text: &str) -> String {
-        self.client.redact_text(text)
+        let first = self.client.redact_text(text);
+        if self.extra_secrets.is_empty() {
+            return first;
+        }
+        let refs: Vec<&str> = self.extra_secrets.iter().map(String::as_str).collect();
+        redact_secrets(&first, &refs)
+    }
+
+    fn client_and_token_for(
+        &self,
+        scope: Option<&MemoryScope>,
+    ) -> Result<(MemoryClient, Option<String>), DennettError> {
+        if self.static_token.is_some() {
+            return Ok((self.client.clone(), self.static_token.clone()));
+        }
+        if let Some(ref minter) = self.hmac_minter {
+            let tok = minter.mint_for_scope(scope)?;
+            let cli = MemoryClient::new(&self.base_url, tok.clone())?;
+            return Ok((cli, Some(tok)));
+        }
+        Ok((self.client.clone(), None))
     }
 
     /// Dispatches one parsed JSON-RPC 2.0 message and returns an optional response payload.
@@ -823,131 +1157,275 @@ impl MemoryMcpServer {
 
     #[expect(
         clippy::too_many_lines,
-        reason = "exhaustive match dispatches all 16 D1+D3 MCP memory tools through one MemoryClient boundary"
+        reason = "exhaustive match dispatches all 18 D1+D3 MCP memory tools through one authenticated memoryd boundary"
     )]
     async fn dispatch_tool_call(&self, parsed: ParsedToolCall) -> Result<String, DennettError> {
         match parsed {
-            ParsedToolCall::Search(req) => self
-                .client
-                .search_notes(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::GetCurrent(note_id) => self
-                .client
-                .get_note_current(note_id, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::GetHistory(note_id) => self
-                .client
-                .get_note_history(note_id, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::WriteNote(req) => self
-                .client
-                .create_note(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::CorrectNote(req) => self
-                .client
-                .correct_note(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::ClaimCreate(req) => self
-                .client
-                .create_claim(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::Search(req) => {
+                let (cli, _) = self.client_and_token_for(req.scope.as_ref())?;
+                cli.search_notes(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::GetCurrent(note_id) => {
+                let (cli, _) = self.client_and_token_for(None)?;
+                cli.get_note_current(note_id, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::GetHistory(note_id) => {
+                let (cli, _) = self.client_and_token_for(None)?;
+                cli.get_note_history(note_id, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::WriteNote(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.create_note(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::CorrectNote(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.correct_note(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::ClaimCreate(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.create_claim(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
             ParsedToolCall::ClaimLookup { scope, topic_key } => {
+                let (cli, _) = self.client_and_token_for(scope.as_ref())?;
                 match (scope.as_ref(), topic_key.as_deref()) {
-                    (Some(sc), Some(topic)) if !topic.trim().is_empty() => self
-                        .client
+                    (Some(sc), Some(topic)) if !topic.trim().is_empty() => cli
                         .list_claims_by_topic(sc, topic, None)
                         .await
                         .and_then(|resp| to_json_string(&resp)),
-                    _ => self
-                        .client
+                    _ => cli
                         .list_claims(scope.as_ref(), topic_key.as_deref(), None)
                         .await
                         .and_then(|resp| to_json_string(&resp)),
                 }
             }
-            ParsedToolCall::ClaimSupersede(req) => self
-                .client
-                .supersede_claim(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::ConflictList(scope) => self
-                .client
-                .list_open_conflicts(scope.as_ref(), None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::ConflictResolve(req) => self
-                .client
-                .resolve_conflict(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
+            ParsedToolCall::ClaimSupersede(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.supersede_claim(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::ConflictList(scope) => {
+                let (cli, _) = self.client_and_token_for(scope.as_ref())?;
+                cli.list_open_conflicts(scope.as_ref(), None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::ConflictResolve(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.resolve_conflict(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
             ParsedToolCall::DocumentRead {
                 document_id,
                 scope,
                 include_versions,
-            } => match document_id {
-                Some(doc_id) if include_versions => self
-                    .client
-                    .get_document_versions(doc_id, None)
+            } => {
+                let (cli, _) = self.client_and_token_for(scope.as_ref())?;
+                match document_id {
+                    Some(doc_id) if include_versions => cli
+                        .get_document_versions(doc_id, None)
+                        .await
+                        .and_then(|resp| to_json_string(&resp)),
+                    Some(doc_id) => cli
+                        .get_document(doc_id, None)
+                        .await
+                        .and_then(|resp| to_json_string(&resp)),
+                    None => cli
+                        .list_documents(scope.as_ref(), None)
+                        .await
+                        .and_then(|resp| to_json_string(&resp)),
+                }
+            }
+            ParsedToolCall::DocumentCreate(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.create_document(&req, None)
                     .await
-                    .and_then(|resp| to_json_string(&resp)),
-                Some(doc_id) => self
-                    .client
-                    .get_document(doc_id, None)
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::DocumentUpdate(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.update_document(&req, None)
                     .await
-                    .and_then(|resp| to_json_string(&resp)),
-                None => self
-                    .client
-                    .list_documents(scope.as_ref(), None)
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::Forget(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.forget(&req, None)
                     .await
-                    .and_then(|resp| to_json_string(&resp)),
-            },
-            ParsedToolCall::DocumentCreate(req) => self
-                .client
-                .create_document(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::DocumentUpdate(req) => self
-                .client
-                .update_document(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::Forget(req) => self
-                .client
-                .forget(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::Export(req) => self
-                .client
-                .export_package(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::Import(req) => self
-                .client
-                .import_package(&req, None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
-            ParsedToolCall::IndexStatus(scope) => self
-                .client
-                .get_index_status(scope.as_ref(), None)
-                .await
-                .and_then(|resp| to_json_string(&resp)),
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::Export(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.export_package(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::Import(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.import_package(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::IndexStatus(scope) => {
+                let (cli, _) = self.client_and_token_for(scope.as_ref())?;
+                cli.get_index_status(scope.as_ref(), None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::EvidenceCreate(req) => {
+                let (cli, _) = self.client_and_token_for(Some(&req.scope))?;
+                cli.ingest_evidence(&req, None)
+                    .await
+                    .and_then(|resp| to_json_string(&resp))
+            }
+            ParsedToolCall::EvidenceList { scope, limit } => {
+                let resp = self.fetch_evidence_list(scope.as_ref(), limit).await?;
+                to_json_string(&resp)
+            }
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sends authenticated bounded GET /v1/memory/evidence request and maps HTTP/domain errors cleanly"
+    )]
+    async fn fetch_evidence_list(
+        &self,
+        scope: Option<&MemoryScope>,
+        limit: Option<u32>,
+    ) -> Result<Value, DennettError> {
+        let (_, token) = self.client_and_token_for(scope)?;
+        let mut params = Vec::new();
+        if let Some(sc) = scope {
+            params.push(format!("scope={}", encode_query_component(sc.as_str())));
+        }
+        if let Some(lim) = limit {
+            params.push(format!("limit={lim}"));
+        }
+        let url = if params.is_empty() {
+            format!("{}/v1/memory/evidence", self.base_url)
+        } else {
+            format!("{}/v1/memory/evidence?{}", self.base_url, params.join("&"))
+        };
+
+        let mut headers = HeaderMap::new();
+        let cid = CorrelationId::generate();
+        if let Ok(cid_val) = HeaderValue::from_str(cid.as_str()) {
+            headers.insert(HEADER_CORRELATION_ID.clone(), cid_val);
+        }
+        if let Some(ref tok) = token {
+            let auth_header = format!("Bearer {tok}");
+            let auth_val =
+                HeaderValue::from_str(&auth_header).map_err(|_| DennettError::InvalidInput {
+                    field: String::from("bearer_token"),
+                    reason: String::from("bearer token contains disallowed HTTP header characters"),
+                })?;
+            headers.insert(AUTHORIZATION, auth_val);
+        }
+
+        let mut resp = self
+            .http
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| {
+                if err.is_timeout() {
+                    DennettError::Timeout {
+                        operation: String::from("memory_mcp::evidence_list"),
+                    }
+                } else {
+                    DennettError::DatabaseUnavailable {
+                        detail: self.redact_text(&format!("memoryd request failed: {err}")),
+                    }
+                }
+            })?;
+
+        let status = resp.status();
+        let mut body_bytes = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(|err| {
+            DennettError::DatabaseUnavailable {
+                detail: self.redact_text(&format!("memoryd response read failed: {err}")),
+            }
+        })? {
+            if body_bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
+                return Err(DennettError::Internal {
+                    detail: format!(
+                        "memoryd response body exceeded limit of {MAX_RESPONSE_BODY_BYTES} bytes"
+                    ),
+                });
+            }
+            body_bytes.extend_from_slice(&chunk);
+        }
+
+        if status.is_success() {
+            return serde_json::from_slice(&body_bytes).map_err(|err| DennettError::Internal {
+                detail: self.redact_text(&format!(
+                    "failed to decode evidence list JSON from memoryd: {err}"
+                )),
+            });
+        }
+
+        if let Ok(envelope) = serde_json::from_slice::<ApiErrorResponse>(&body_bytes) {
+            return Err(envelope.error);
+        }
+        if let Ok(val) = serde_json::from_slice::<Value>(&body_bytes)
+            && let Some(err_val) = val.get("error")
+            && let Ok(parsed_err) = serde_json::from_value::<DennettError>(err_val.clone())
+        {
+            return Err(parsed_err);
+        }
+        let safe_body = self.redact_text(&String::from_utf8_lossy(&body_bytes));
+        Err(match status {
+            StatusCode::UNAUTHORIZED => DennettError::Unauthorized {
+                reason: if safe_body.is_empty() {
+                    String::from("unauthorized")
+                } else {
+                    safe_body
+                },
+            },
+            StatusCode::FORBIDDEN => DennettError::ForbiddenScope {
+                scope: scope.map_or_else(|| String::from("unknown"), ToString::to_string),
+                reason: if safe_body.is_empty() {
+                    String::from("forbidden")
+                } else {
+                    safe_body
+                },
+            },
+            StatusCode::BAD_REQUEST => DennettError::InvalidInput {
+                field: String::from("request"),
+                reason: safe_body,
+            },
+            StatusCode::SERVICE_UNAVAILABLE => {
+                DennettError::DatabaseUnavailable { detail: safe_body }
+            }
+            _ => DennettError::Internal {
+                detail: format!("unexpected HTTP {}: {safe_body}", status.as_u16()),
+            },
+        })
+    }
+
     fn tool_error_redacted(&self, id: &Value, err: &DennettError) -> Value {
-        let safe_message = self.client.redact_text(&err.to_string());
+        let safe_message = self.redact_text(&err.to_string());
         let payload = json!({
             "code": err.code(),
             "error": err,
             "message": safe_message,
         });
-        let safe_text = self.client.redact_text(&payload.to_string());
+        let safe_text = self.redact_text(&payload.to_string());
         json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -960,6 +1438,19 @@ impl MemoryMcpServer {
             }
         })
     }
+}
+
+fn encode_query_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            out.push(char::from(byte));
+        } else {
+            use core::fmt::Write as _;
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 fn invalid_request(id: &Value, message: &str) -> Value {
@@ -1002,11 +1493,11 @@ pub fn tool_error(id: &Value, err: &DennettError) -> Value {
     })
 }
 
-/// Returns the JSON Schema descriptors for all 16 tools exposed by `dennett-memory-mcp`.
+/// Returns the JSON Schema descriptors for all 18 tools exposed by `dennett-memory-mcp`.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
-    reason = "complete JSON Schema manifest for all 16 Memory Fabric MCP tools"
+    reason = "complete JSON Schema manifest for all 18 Memory Fabric MCP tools"
 )]
 pub fn tool_descriptors() -> Value {
     let evidence_link_schema = json!({
@@ -1033,14 +1524,14 @@ pub fn tool_descriptors() -> Value {
     json!([
         {
             "name": "memory_search",
-            "description": "Search current memory notes within authorized scopes with fresh-tail overlay and live index status.",
+            "description": "Unified ranked search over current memory notes, structured claims, and dossier documents within authorized scopes with fresh-tail overlay and live index status.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "scope": { "type": "string", "description": "Optional scope filter (must be allowed by the active credential)." },
-                    "query": { "type": "string", "description": "Optional text search query over note titles, bodies, and tags." },
+                    "query": { "type": "string", "description": "Optional text search query over notes, claims, and documents." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
-                    "include_history": { "type": "boolean", "description": "Include historical revisions in query matching." }
+                    "include_history": { "type": "boolean", "description": "Include historical revisions and superseded claims in query matching." }
                 }
             }
         },
@@ -1270,6 +1761,34 @@ pub fn tool_descriptors() -> Value {
                     "scope": { "type": "string" }
                 }
             }
+        },
+        {
+            "name": "memory_evidence_create",
+            "description": "Ingest an immutable inline evidence object into an authorized scope.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "content": { "type": "string" },
+                    "media_type": { "type": "string", "description": "MIME type (defaults to text/plain)." },
+                    "source_uri": { "type": "string" },
+                    "observed_at": { "type": "integer" },
+                    "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+                    "idempotency_key": { "type": "string" }
+                },
+                "required": ["scope", "content"]
+            }
+        },
+        {
+            "name": "memory_evidence_list",
+            "description": "List active evidence objects across authorized scopes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+                }
+            }
         }
     ])
 }
@@ -1437,6 +1956,29 @@ mod tests {
             parse_tool_call("memory_index_status", &Value::Null),
             Ok(Some(ParsedToolCall::IndexStatus(None)))
         ));
+        assert!(matches!(
+            parse_tool_call(
+                "memory_evidence_create",
+                &json!({
+                    "scope": "project-alpha",
+                    "content": "Primary benchmark log",
+                    "media_type": "text/plain",
+                    "source_uri": "https://example.invalid/bench"
+                })
+            ),
+            Ok(Some(ParsedToolCall::EvidenceCreate(_)))
+        ));
+        assert!(matches!(
+            parse_tool_call("memory_evidence_list", &Value::Null),
+            Ok(Some(ParsedToolCall::EvidenceList {
+                scope: None,
+                limit: None
+            }))
+        ));
+        assert!(matches!(
+            parse_tool_call("memory_evidence_list", &json!({"limit": 0})),
+            Err(DennettError::InvalidInput { .. })
+        ));
 
         let unknown = parse_tool_call("memory_drop_database", &json!({}));
         assert_eq!(unknown, Ok(None));
@@ -1471,7 +2013,7 @@ mod tests {
             .await
             .expect("tools/list response");
         let tools = list["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 18);
 
         let unknown = server
             .handle_message(&json!({"jsonrpc": "2.0", "id": 3, "method": "does/not/exist"}))

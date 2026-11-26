@@ -888,11 +888,15 @@ dependencies = [
 name = "dennett-memory-mcp"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dennett-contracts",
  "dennett-memory-client",
+ "hmac 0.12.1",
  "proptest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "uuid",
 ]

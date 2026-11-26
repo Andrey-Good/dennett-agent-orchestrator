@@ -17,6 +17,8 @@ use tokio::time;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
+use crate::claims::decode_claim_row;
+use crate::documents::decode_document_row;
 use crate::service::{
     MemoryService, decode_note_row, fetch_links_for_events, require_scope_capability,
     resolve_search_scopes, scope_stream_id,
@@ -668,7 +670,12 @@ pub(crate) async fn rebuild_scope_search_index_in_tx<C: GenericClient>(
     })
 }
 
-/// Executes scoped multi-language FTS + fresh-tail overlay search over active [`MemoryNote`]s.
+/// Executes unified scoped multi-language FTS + fresh-tail overlay ranked search across active
+/// [`MemoryNote`]s, [`MemoryClaim`]s, and [`MemoryDocument`]s.
+#[expect(
+    clippy::too_many_lines,
+    reason = "unified ranked search executes notes, claims, and documents queries with defense-in-depth scope checks in one bounded timeout"
+)]
 pub(crate) async fn execute_search_notes(
     svc: &MemoryService,
     principal: &AuthPrincipal,
@@ -698,7 +705,25 @@ pub(crate) async fn execute_search_notes(
         let (index_status, stale_warning, _, _) =
             compute_aggregate_index_status(&conn, &allowed_scopes, svc).await?;
 
-        let rows = query_scoped_notes_v2(
+        let note_rows = query_scoped_notes_v2(
+            &conn,
+            &allowed_scopes,
+            prepared.as_ref(),
+            include_history,
+            limit_i64,
+            svc,
+        )
+        .await?;
+        let claim_rows = query_scoped_claims_v2(
+            &conn,
+            &allowed_scopes,
+            prepared.as_ref(),
+            include_history,
+            limit_i64,
+            svc,
+        )
+        .await?;
+        let doc_rows = query_scoped_documents_v2(
             &conn,
             &allowed_scopes,
             prepared.as_ref(),
@@ -708,15 +733,23 @@ pub(crate) async fn execute_search_notes(
         )
         .await?;
 
-        let total_matched: u64 = rows
+        let notes_total: u64 = note_rows
             .first()
             .map_or(0, |r| u64::try_from(r.get::<_, i64>(18)).unwrap_or(0));
+        let claims_total: u64 = claim_rows
+            .first()
+            .map_or(0, |r| u64::try_from(r.get::<_, i64>(16)).unwrap_or(0));
+        let docs_total: u64 = doc_rows
+            .first()
+            .map_or(0, |r| u64::try_from(r.get::<_, i64>(14)).unwrap_or(0));
 
-        let event_uuids: Vec<Uuid> = rows.iter().map(|r| r.get::<_, Uuid>(8)).collect();
+        let mut event_uuids: Vec<Uuid> = Vec::with_capacity(note_rows.len() + claim_rows.len());
+        event_uuids.extend(note_rows.iter().map(|r| r.get::<_, Uuid>(8)));
+        event_uuids.extend(claim_rows.iter().map(|r| r.get::<_, Uuid>(9)));
         let mut links_by_event = fetch_links_for_events(&conn, &event_uuids, svc).await?;
 
-        let mut notes = Vec::with_capacity(rows.len());
-        for row in rows {
+        let mut notes = Vec::with_capacity(note_rows.len());
+        for row in note_rows {
             let event_uuid: Uuid = row.get(8);
             let links = links_by_event.remove(&event_uuid).unwrap_or_default();
             let note = decode_note_row(&row, links)?;
@@ -725,11 +758,31 @@ pub(crate) async fn execute_search_notes(
             notes.push(note);
         }
 
-        let returned_count = u64::try_from(notes.len()).unwrap_or(u64::MAX);
+        let mut claims = Vec::with_capacity(claim_rows.len());
+        for row in claim_rows {
+            let event_uuid: Uuid = row.get(9);
+            let links = links_by_event.remove(&event_uuid).unwrap_or_default();
+            let claim = decode_claim_row(&row, links)?;
+            require_scope_capability(principal, &claim.scope, MemoryCapability::Read)?;
+            claims.push(claim);
+        }
+
+        let mut documents = Vec::with_capacity(doc_rows.len());
+        for row in doc_rows {
+            let doc = decode_document_row(&row)?;
+            require_scope_capability(principal, &doc.scope, MemoryCapability::Read)?;
+            documents.push(doc);
+        }
+
+        let total_matched = notes_total
+            .saturating_add(claims_total)
+            .saturating_add(docs_total);
+        let returned_count = u64::try_from(notes.len() + claims.len() + documents.len())
+            .unwrap_or(u64::MAX);
         Ok(SearchNotesResponse {
             notes,
-            claims: Vec::new(),
-            documents: Vec::new(),
+            claims,
+            documents,
             total_matched,
             truncated: total_matched > returned_count,
             index_status,
@@ -829,7 +882,41 @@ async fn query_scoped_notes_v2<C: GenericClient>(
                              )
                        ))
                    )
-                 ORDER BY n.updated_at DESC, n.note_id ASC
+                 ORDER BY
+                    (
+                        (CASE
+                            WHEN idx.entry_id IS NOT NULL AND idx.source_updated_at >= n.updated_at THEN
+                                GREATEST(
+                                    ts_rank(idx.tsv_simple, plainto_tsquery('simple', $2)),
+                                    ts_rank(COALESCE(idx.tsv_english, ''::tsvector), plainto_tsquery('english', $2)),
+                                    ts_rank(COALESCE(idx.tsv_russian, ''::tsvector), plainto_tsquery('russian', $2))
+                                )
+                            ELSE
+                                GREATEST(
+                                    ts_rank(
+                                        to_tsvector('simple', n.title || ' ' || n.body || ' ' || COALESCE(n.rationale, '') || ' ' || COALESCE(n.topic_key, '')),
+                                        plainto_tsquery('simple', $2)
+                                    ),
+                                    ts_rank(
+                                        to_tsvector('english', n.title || ' ' || n.body || ' ' || COALESCE(n.rationale, '') || ' ' || COALESCE(n.topic_key, '')),
+                                        plainto_tsquery('english', $2)
+                                    ),
+                                    ts_rank(
+                                        to_tsvector('russian', n.title || ' ' || n.body || ' ' || COALESCE(n.rationale, '') || ' ' || COALESCE(n.topic_key, '')),
+                                        plainto_tsquery('russian', $2)
+                                    )
+                                )
+                         END)::double precision
+                        + CASE
+                            WHEN n.title ILIKE $3 ESCAPE '\\' THEN 0.25::double precision
+                            WHEN n.body ILIKE $3 ESCAPE '\\'
+                                 OR COALESCE(n.topic_key, '') ILIKE $3 ESCAPE '\\'
+                                 OR COALESCE(n.rationale, '') ILIKE $3 ESCAPE '\\' THEN 0.10::double precision
+                            ELSE 0.02::double precision
+                          END
+                    ) * (0.5::double precision + (n.salience::double precision / 100.0::double precision)) DESC,
+                    n.updated_at DESC,
+                    n.note_id ASC
                  LIMIT $5",
                 &[
                     &allowed_scopes,
@@ -857,6 +944,278 @@ async fn query_scoped_notes_v2<C: GenericClient>(
                    AND n.forgotten_at IS NULL
                    AND n.admission_status <> 'rejected'
                  ORDER BY n.updated_at DESC, n.note_id ASC
+                 LIMIT $2",
+                &[&allowed_scopes, &limit_i64],
+            )
+            .await
+            .map_err(|err| svc.map_pg_err(&err))
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "combined indexed FTS + canonical fresh-tail SQL query for claims with epistemic confidence weighting"
+)]
+async fn query_scoped_claims_v2<C: GenericClient>(
+    client: &C,
+    allowed_scopes: &[String],
+    prepared: Option<&PreparedSearchQuery>,
+    include_history: bool,
+    limit_i64: i64,
+    svc: &MemoryService,
+) -> Result<Vec<Row>, DennettError> {
+    if let Some(q) = prepared {
+        client
+            .query(
+                "SELECT c.claim_id, c.scope, c.topic_key, c.claim_key, c.natural_language,
+                        c.epistemic_status, c.supersedes_claim_id,
+                        TRUNC(EXTRACT(EPOCH FROM c.valid_from) * 1000)::bigint,
+                        TRUNC(EXTRACT(EPOCH FROM c.valid_to) * 1000)::bigint,
+                        c.source_event_id, c.source_note_id, c.caveats, c.provenance,
+                        c.trust_level, c.instruction_active,
+                        TRUNC(EXTRACT(EPOCH FROM c.created_at) * 1000)::bigint,
+                        COUNT(*) OVER()::bigint AS total_matched
+                 FROM memory_claims c
+                 LEFT JOIN memory_search_index idx
+                   ON idx.source_type = 'claim'
+                  AND idx.source_id = c.claim_id
+                  AND idx.scope = c.scope
+                 WHERE c.scope = ANY($1::text[])
+                   AND c.forgotten_at IS NULL
+                   AND c.epistemic_status <> 'retracted'
+                   AND ($4::boolean = true OR c.epistemic_status <> 'superseded')
+                   AND (
+                       (idx.entry_id IS NOT NULL AND idx.source_updated_at >= c.created_at AND (
+                           idx.tsv_simple @@ plainto_tsquery('simple', $2)
+                           OR idx.tsv_english @@ plainto_tsquery('english', $2)
+                           OR idx.tsv_russian @@ plainto_tsquery('russian', $2)
+                           OR c.topic_key ILIKE $3 ESCAPE '\\'
+                           OR COALESCE(c.claim_key, '') ILIKE $3 ESCAPE '\\'
+                           OR c.natural_language ILIKE $3 ESCAPE '\\'
+                           OR EXISTS (
+                               SELECT 1
+                               FROM jsonb_array_elements_text(c.caveats) AS cav_val
+                               WHERE cav_val ILIKE $3 ESCAPE '\\'
+                           )
+                       ))
+                       OR
+                       ((idx.entry_id IS NULL OR idx.source_updated_at < c.created_at) AND (
+                           to_tsvector('simple',
+                               c.topic_key || ' ' || COALESCE(c.claim_key, '') || ' ' || c.natural_language)
+                               @@ plainto_tsquery('simple', $2)
+                           OR to_tsvector('english',
+                               c.topic_key || ' ' || COALESCE(c.claim_key, '') || ' ' || c.natural_language)
+                               @@ plainto_tsquery('english', $2)
+                           OR to_tsvector('russian',
+                               c.topic_key || ' ' || COALESCE(c.claim_key, '') || ' ' || c.natural_language)
+                               @@ plainto_tsquery('russian', $2)
+                           OR c.topic_key ILIKE $3 ESCAPE '\\'
+                           OR COALESCE(c.claim_key, '') ILIKE $3 ESCAPE '\\'
+                           OR c.natural_language ILIKE $3 ESCAPE '\\'
+                           OR EXISTS (
+                               SELECT 1
+                               FROM jsonb_array_elements_text(c.caveats) AS cav_val
+                               WHERE cav_val ILIKE $3 ESCAPE '\\'
+                           )
+                       ))
+                   )
+                 ORDER BY
+                    (
+                        (CASE
+                            WHEN idx.entry_id IS NOT NULL AND idx.source_updated_at >= c.created_at THEN
+                                GREATEST(
+                                    ts_rank(idx.tsv_simple, plainto_tsquery('simple', $2)),
+                                    ts_rank(COALESCE(idx.tsv_english, ''::tsvector), plainto_tsquery('english', $2)),
+                                    ts_rank(COALESCE(idx.tsv_russian, ''::tsvector), plainto_tsquery('russian', $2))
+                                )
+                            ELSE
+                                GREATEST(
+                                    ts_rank(
+                                        to_tsvector('simple', c.topic_key || ' ' || COALESCE(c.claim_key, '') || ' ' || c.natural_language),
+                                        plainto_tsquery('simple', $2)
+                                    ),
+                                    ts_rank(
+                                        to_tsvector('english', c.topic_key || ' ' || COALESCE(c.claim_key, '') || ' ' || c.natural_language),
+                                        plainto_tsquery('english', $2)
+                                    ),
+                                    ts_rank(
+                                        to_tsvector('russian', c.topic_key || ' ' || COALESCE(c.claim_key, '') || ' ' || c.natural_language),
+                                        plainto_tsquery('russian', $2)
+                                    )
+                                )
+                         END)::double precision
+                        + CASE
+                            WHEN c.topic_key ILIKE $3 ESCAPE '\\' OR COALESCE(c.claim_key, '') ILIKE $3 ESCAPE '\\' THEN 0.20::double precision
+                            WHEN c.natural_language ILIKE $3 ESCAPE '\\' THEN 0.15::double precision
+                            ELSE 0.05::double precision
+                          END
+                    ) * (
+                        CASE c.epistemic_status
+                            WHEN 'observed' THEN 1.0::double precision
+                            WHEN 'asserted' THEN 0.9::double precision
+                            WHEN 'inferred' THEN 0.75::double precision
+                            WHEN 'contested' THEN 0.6::double precision
+                            WHEN 'hypothesis' THEN 0.5::double precision
+                            ELSE 0.25::double precision
+                        END
+                    ) DESC,
+                    c.created_at DESC,
+                    c.claim_id ASC
+                 LIMIT $5",
+                &[
+                    &allowed_scopes,
+                    &q.plain_text,
+                    &q.like_pattern,
+                    &include_history,
+                    &limit_i64,
+                ],
+            )
+            .await
+            .map_err(|err| svc.map_pg_err(&err))
+    } else {
+        client
+            .query(
+                "SELECT c.claim_id, c.scope, c.topic_key, c.claim_key, c.natural_language,
+                        c.epistemic_status, c.supersedes_claim_id,
+                        TRUNC(EXTRACT(EPOCH FROM c.valid_from) * 1000)::bigint,
+                        TRUNC(EXTRACT(EPOCH FROM c.valid_to) * 1000)::bigint,
+                        c.source_event_id, c.source_note_id, c.caveats, c.provenance,
+                        c.trust_level, c.instruction_active,
+                        TRUNC(EXTRACT(EPOCH FROM c.created_at) * 1000)::bigint,
+                        COUNT(*) OVER()::bigint AS total_matched
+                 FROM memory_claims c
+                 WHERE c.scope = ANY($1::text[])
+                   AND c.forgotten_at IS NULL
+                   AND c.epistemic_status <> 'retracted'
+                   AND ($2::boolean = true OR c.epistemic_status <> 'superseded')
+                 ORDER BY c.created_at DESC, c.claim_id ASC
+                 LIMIT $3",
+                &[&allowed_scopes, &include_history, &limit_i64],
+            )
+            .await
+            .map_err(|err| svc.map_pg_err(&err))
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "combined indexed FTS + canonical fresh-tail + optional version history SQL query for dossier documents"
+)]
+async fn query_scoped_documents_v2<C: GenericClient>(
+    client: &C,
+    allowed_scopes: &[String],
+    prepared: Option<&PreparedSearchQuery>,
+    include_history: bool,
+    limit_i64: i64,
+    svc: &MemoryService,
+) -> Result<Vec<Row>, DennettError> {
+    if let Some(q) = prepared {
+        client
+            .query(
+                "SELECT d.document_id, d.scope, d.document_key, d.title, d.current_version,
+                        d.current_body, d.provenance_claim_ids, d.provenance_note_ids,
+                        d.source_event_id, d.principal_id, d.trust_level, d.instruction_active,
+                        TRUNC(EXTRACT(EPOCH FROM d.created_at) * 1000)::bigint,
+                        TRUNC(EXTRACT(EPOCH FROM d.updated_at) * 1000)::bigint,
+                        COUNT(*) OVER()::bigint AS total_matched
+                 FROM memory_documents d
+                 LEFT JOIN memory_search_index idx
+                   ON idx.source_type = 'document'
+                  AND idx.source_id = d.document_id
+                  AND idx.scope = d.scope
+                 WHERE d.scope = ANY($1::text[])
+                   AND d.forgotten_at IS NULL
+                   AND (
+                       (idx.entry_id IS NOT NULL AND idx.source_updated_at >= d.updated_at AND (
+                           idx.tsv_simple @@ plainto_tsquery('simple', $2)
+                           OR idx.tsv_english @@ plainto_tsquery('english', $2)
+                           OR idx.tsv_russian @@ plainto_tsquery('russian', $2)
+                           OR d.document_key ILIKE $3 ESCAPE '\\'
+                           OR d.title ILIKE $3 ESCAPE '\\'
+                           OR d.current_body ILIKE $3 ESCAPE '\\'
+                       ))
+                       OR
+                       ((idx.entry_id IS NULL OR idx.source_updated_at < d.updated_at) AND (
+                           to_tsvector('simple', d.document_key || ' ' || d.title || ' ' || d.current_body)
+                               @@ plainto_tsquery('simple', $2)
+                           OR to_tsvector('english', d.document_key || ' ' || d.title || ' ' || d.current_body)
+                               @@ plainto_tsquery('english', $2)
+                           OR to_tsvector('russian', d.document_key || ' ' || d.title || ' ' || d.current_body)
+                               @@ plainto_tsquery('russian', $2)
+                           OR d.document_key ILIKE $3 ESCAPE '\\'
+                           OR d.title ILIKE $3 ESCAPE '\\'
+                           OR d.current_body ILIKE $3 ESCAPE '\\'
+                       ))
+                       OR
+                       ($4::boolean = true AND EXISTS (
+                           SELECT 1
+                           FROM memory_document_versions v
+                           WHERE v.document_id = d.document_id
+                             AND (
+                                 to_tsvector('simple', v.body) @@ plainto_tsquery('simple', $2)
+                                 OR to_tsvector('english', v.body) @@ plainto_tsquery('english', $2)
+                                 OR to_tsvector('russian', v.body) @@ plainto_tsquery('russian', $2)
+                                 OR v.body ILIKE $3 ESCAPE '\\'
+                             )
+                       ))
+                   )
+                 ORDER BY
+                    (
+                        (CASE
+                            WHEN idx.entry_id IS NOT NULL AND idx.source_updated_at >= d.updated_at THEN
+                                GREATEST(
+                                    ts_rank(idx.tsv_simple, plainto_tsquery('simple', $2)),
+                                    ts_rank(COALESCE(idx.tsv_english, ''::tsvector), plainto_tsquery('english', $2)),
+                                    ts_rank(COALESCE(idx.tsv_russian, ''::tsvector), plainto_tsquery('russian', $2))
+                                )
+                            ELSE
+                                GREATEST(
+                                    ts_rank(
+                                        to_tsvector('simple', d.document_key || ' ' || d.title || ' ' || d.current_body),
+                                        plainto_tsquery('simple', $2)
+                                    ),
+                                    ts_rank(
+                                        to_tsvector('english', d.document_key || ' ' || d.title || ' ' || d.current_body),
+                                        plainto_tsquery('english', $2)
+                                    ),
+                                    ts_rank(
+                                        to_tsvector('russian', d.document_key || ' ' || d.title || ' ' || d.current_body),
+                                        plainto_tsquery('russian', $2)
+                                    )
+                                )
+                         END)::double precision
+                        + CASE
+                            WHEN d.title ILIKE $3 ESCAPE '\\' OR d.document_key ILIKE $3 ESCAPE '\\' THEN 0.25::double precision
+                            WHEN d.current_body ILIKE $3 ESCAPE '\\' THEN 0.10::double precision
+                            ELSE 0.02::double precision
+                          END
+                    ) DESC,
+                    d.updated_at DESC,
+                    d.document_id ASC
+                 LIMIT $5",
+                &[
+                    &allowed_scopes,
+                    &q.plain_text,
+                    &q.like_pattern,
+                    &include_history,
+                    &limit_i64,
+                ],
+            )
+            .await
+            .map_err(|err| svc.map_pg_err(&err))
+    } else {
+        client
+            .query(
+                "SELECT d.document_id, d.scope, d.document_key, d.title, d.current_version,
+                        d.current_body, d.provenance_claim_ids, d.provenance_note_ids,
+                        d.source_event_id, d.principal_id, d.trust_level, d.instruction_active,
+                        TRUNC(EXTRACT(EPOCH FROM d.created_at) * 1000)::bigint,
+                        TRUNC(EXTRACT(EPOCH FROM d.updated_at) * 1000)::bigint,
+                        COUNT(*) OVER()::bigint AS total_matched
+                 FROM memory_documents d
+                 WHERE d.scope = ANY($1::text[])
+                   AND d.forgotten_at IS NULL
+                 ORDER BY d.updated_at DESC, d.document_id ASC
                  LIMIT $2",
                 &[&allowed_scopes, &limit_i64],
             )

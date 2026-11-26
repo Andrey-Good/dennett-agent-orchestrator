@@ -175,21 +175,32 @@ struct RunningMemoryd {
 
 impl RunningMemoryd {
     async fn spawn(pg_url: &str, auth_config: &AuthConfig) -> Self {
+        Self::spawn_with_env(pg_url, auth_config, &[]).await
+    }
+
+    async fn spawn_with_env(
+        pg_url: &str,
+        auth_config: &AuthConfig,
+        extra_env: &[(&str, &str)],
+    ) -> Self {
         let bin = locate_binary("dennett-memoryd", "dennett-memoryd");
         let auth_json = serde_json::to_string(auth_config).expect("serialize auth config");
-        let mut child = Command::new(&bin)
-            .args(["--serve", "127.0.0.1:0"])
+        let mut cmd = Command::new(&bin);
+        cmd.args(["--serve", "127.0.0.1:0"])
             .env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_MEMORY_PG_URL", pg_url)
             .env("DENNETT_MEMORY_AUTH_CONFIG", &auth_json)
             .env_remove("DENNETT_MEMORY_PG_URL")
             .env_remove("DENNETT_MEMORY_AUTH_CONFIG_FILE")
+            .env_remove("DENNETT_MEMORYD_CONSOLIDATION_INTERVAL_SECS")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("spawn dennett-memoryd");
+            .kill_on_drop(true);
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().expect("spawn dennett-memoryd");
 
         let stdout = child.stdout.take().expect("memoryd stdout");
         let mut reader = BufReader::new(stdout);
@@ -247,12 +258,36 @@ impl McpSession {
         let mut child = Command::new(&bin)
             .env("DENNETT_MEMORY_URL", base_url)
             .env("DENNETT_MEMORY_TOKEN", token)
+            .env_remove("DENNETT_MEMORY_HMAC_SECRET")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .expect("spawn dennett-memory-mcp");
+        let stdin = child.stdin.take().expect("mcp stdin");
+        let stdout = BufReader::new(child.stdout.take().expect("mcp stdout"));
+        Self {
+            child,
+            stdin,
+            stdout,
+            next_id: 1,
+        }
+    }
+
+    fn spawn_with_hmac_env(base_url: &str, hmac_secret: &str, scopes: &str) -> Self {
+        let bin = locate_binary("dennett-memory-mcp", "dennett-memory-mcp");
+        let mut child = Command::new(&bin)
+            .env("DENNETT_MEMORY_URL", base_url)
+            .env("DENNETT_MEMORY_HMAC_SECRET", hmac_secret)
+            .env("DENNETT_MEMORY_SCOPES", scopes)
+            .env_remove("DENNETT_MEMORY_TOKEN")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn dennett-memory-mcp with HMAC env");
         let stdin = child.stdin.take().expect("mcp stdin");
         let stdout = BufReader::new(child.stdout.take().expect("mcp stdout"));
         Self {
@@ -1651,6 +1686,7 @@ async fn d3_export_deterministic_secret_free_scope_filtered_and_import_untrusted
     let bad_path_json = serialize_canonical_package(PortablePackagePayload {
         notes: vec![],
         claims: vec![],
+        evidence_objects: vec![],
         documents: vec![ExportedDocument {
             body: String::from("evil"),
             document_key: String::from("../escape/secret"),
@@ -1981,7 +2017,7 @@ async fn d3_e2e_standalone_memoryd_http_cli_and_mcp_without_head() {
     let tools_list = mcp.request("tools/list", json!({})).await;
     assert_eq!(
         tools_list["result"]["tools"].as_array().expect("arr").len(),
-        16
+        18
     );
 
     let (c2_err, c2_val) = mcp
@@ -2458,6 +2494,821 @@ async fn d3_tombstone_stream_v15_commit_barrier_and_lost_ack_no_resurrection() {
 
     drop(raw_pg);
     raw_handle.abort();
+}
+
+// ============================================================================
+// 3.7b Bucket A (`A-MEM-1`) Memory Fabric v2 Completeness Integration Tests
+// ============================================================================
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end PG16 unified search test seeds notes, claims, documents, tombstones, superseded/retracted claims, and Cyrillic records"
+)]
+async fn a_mem_1_unified_ranked_search_returns_notes_claims_documents_excludes_forgotten_superseded_and_handles_cyrillic()
+{
+    let target = pg_target();
+    let svc = MemoryService::new(target).expect("service");
+    svc.ensure_migrated().await.expect("migrate");
+
+    let scope = unique_scope("a-mem-search");
+    let principal = full_principal("agent:a-mem-search", std::slice::from_ref(&scope));
+    let cid = CorrelationId::generate();
+
+    // Notes: low salience vs high salience, forgotten note, and Russian Cyrillic note.
+    let mut n_low_req = make_note_req(
+        &scope,
+        "Quantum cryptography overview",
+        "Quantum cryptography architecture notes",
+    );
+    n_low_req.salience = Some(10);
+    let n_low = svc
+        .create_note(&principal, &cid, n_low_req)
+        .await
+        .expect("n_low");
+
+    let mut n_high_req = make_note_req(
+        &scope,
+        "Quantum cryptography overview",
+        "Quantum cryptography architecture notes",
+    );
+    n_high_req.salience = Some(95);
+    let n_high = svc
+        .create_note(&principal, &cid, n_high_req)
+        .await
+        .expect("n_high");
+
+    let n_forgot = svc
+        .create_note(
+            &principal,
+            &cid,
+            make_note_req(
+                &scope,
+                "Quantum cryptography forgotten",
+                "Quantum cryptography deleted payload",
+            ),
+        )
+        .await
+        .expect("n_forgot");
+    svc.forget(
+        &principal,
+        &cid,
+        ForgetRequest {
+            scope: scope.clone(),
+            target_type: ForgetTargetType::Note,
+            target_id: n_forgot.note.note_id.as_uuid(),
+            reason: String::from("exclude forgotten note"),
+            idempotency_key: IdempotencyKey::generate(),
+        },
+    )
+    .await
+    .expect("forget note");
+
+    let mut n_ru_req = make_note_req(
+        &scope,
+        "Квантовая криптография",
+        "Алгоритмы распределения ключей для квантовой криптографии",
+    );
+    n_ru_req.salience = Some(80);
+    let n_ru = svc
+        .create_note(&principal, &cid, n_ru_req)
+        .await
+        .expect("n_ru");
+
+    // Claims: observed vs hypothesis (confidence ranking), superseded + replacement, retracted,
+    // forgotten, and Cyrillic claim.
+    let mut c_obs_req = make_claim_req(
+        &scope,
+        "crypto-qkd",
+        "Quantum cryptography protects key exchange links",
+    );
+    c_obs_req.epistemic_status = EpistemicStatus::Observed;
+    let c_obs = svc
+        .create_claim(&principal, &cid, c_obs_req)
+        .await
+        .expect("c_obs");
+
+    let mut c_hyp_req = make_claim_req(
+        &scope,
+        "crypto-hyp",
+        "Quantum cryptography protects key exchange links",
+    );
+    c_hyp_req.epistemic_status = EpistemicStatus::Hypothesis;
+    let c_hyp = svc
+        .create_claim(&principal, &cid, c_hyp_req)
+        .await
+        .expect("c_hyp");
+
+    let c_old = svc
+        .create_claim(
+            &principal,
+            &cid,
+            make_claim_req(
+                &scope,
+                "crypto-ver",
+                "Quantum cryptography legacy v1 protocol",
+            ),
+        )
+        .await
+        .expect("c_old");
+    let c_new = svc
+        .supersede_claim(
+            &principal,
+            &cid,
+            SupersedeClaimRequest {
+                claim_id: c_old.claim_id,
+                scope: scope.clone(),
+                new_claim: make_claim_req(
+                    &scope,
+                    "crypto-ver",
+                    "Quantum cryptography modern v2 protocol",
+                ),
+                resolution_event_id: None,
+            },
+        )
+        .await
+        .expect("supersede c_old");
+
+    let mut c_retracted_req = make_claim_req(
+        &scope,
+        "crypto-ret",
+        "Quantum cryptography retracted rumor",
+    );
+    c_retracted_req.epistemic_status = EpistemicStatus::Retracted;
+    let c_retracted = svc
+        .create_claim(&principal, &cid, c_retracted_req)
+        .await
+        .expect("c_retracted");
+
+    let c_forgot = svc
+        .create_claim(
+            &principal,
+            &cid,
+            make_claim_req(
+                &scope,
+                "crypto-fgt",
+                "Quantum cryptography forgotten claim",
+            ),
+        )
+        .await
+        .expect("c_forgot");
+    svc.forget(
+        &principal,
+        &cid,
+        ForgetRequest {
+            scope: scope.clone(),
+            target_type: ForgetTargetType::Claim,
+            target_id: c_forgot.claim_id.as_uuid(),
+            reason: String::from("exclude forgotten claim"),
+            idempotency_key: IdempotencyKey::generate(),
+        },
+    )
+    .await
+    .expect("forget claim");
+
+    let mut c_ru_req = make_claim_req(
+        &scope,
+        "crypto-ru",
+        "Квантовая криптография обнаруживает пассивный перехват",
+    );
+    c_ru_req.epistemic_status = EpistemicStatus::Observed;
+    let c_ru = svc
+        .create_claim(&principal, &cid, c_ru_req)
+        .await
+        .expect("c_ru");
+
+    // Documents: active, forgotten, and Cyrillic document.
+    let d_active = svc
+        .create_document(
+            &principal,
+            &cid,
+            CreateDocumentRequest {
+                scope: scope.clone(),
+                document_key: String::from("dossier:quantum-crypto"),
+                title: String::from("Quantum Cryptography Dossier"),
+                body: String::from("Reference dossier on quantum cryptography deployments."),
+                provenance_claim_ids: vec![c_obs.claim_id],
+                provenance_note_ids: vec![n_high.note.note_id],
+                idempotency_key: IdempotencyKey::generate(),
+            },
+        )
+        .await
+        .expect("d_active");
+
+    let d_forgot = svc
+        .create_document(
+            &principal,
+            &cid,
+            CreateDocumentRequest {
+                scope: scope.clone(),
+                document_key: String::from("dossier:quantum-forgot"),
+                title: String::from("Quantum Cryptography Forgotten Doc"),
+                body: String::from("Deleted quantum cryptography document."),
+                provenance_claim_ids: vec![],
+                provenance_note_ids: vec![],
+                idempotency_key: IdempotencyKey::generate(),
+            },
+        )
+        .await
+        .expect("d_forgot");
+    svc.forget(
+        &principal,
+        &cid,
+        ForgetRequest {
+            scope: scope.clone(),
+            target_type: ForgetTargetType::Document,
+            target_id: d_forgot.document_id.as_uuid(),
+            reason: String::from("exclude forgotten doc"),
+            idempotency_key: IdempotencyKey::generate(),
+        },
+    )
+    .await
+    .expect("forget doc");
+
+    let d_ru = svc
+        .create_document(
+            &principal,
+            &cid,
+            CreateDocumentRequest {
+                scope: scope.clone(),
+                document_key: String::from("dossier:quantum-ru"),
+                title: String::from("Досье по квантовой криптографии"),
+                body: String::from("Сводка протоколов квантовой криптографии."),
+                provenance_claim_ids: vec![c_ru.claim_id],
+                provenance_note_ids: vec![n_ru.note.note_id],
+                idempotency_key: IdempotencyKey::generate(),
+            },
+        )
+        .await
+        .expect("d_ru");
+
+    // 1. Default unified search (`include_history = false`):
+    let resp = svc
+        .search_notes(
+            &principal,
+            SearchNotesRequest {
+                scope: Some(scope.clone()),
+                query: Some(String::from("Quantum cryptography")),
+                limit: Some(20),
+                include_history: false,
+            },
+        )
+        .await
+        .expect("unified search");
+
+    // Notes: high-salience ranks before low-salience, forgotten excluded.
+    let note_ids: Vec<_> = resp.notes.iter().map(|n| n.note_id).collect();
+    assert!(note_ids.contains(&n_high.note.note_id));
+    assert!(note_ids.contains(&n_low.note.note_id));
+    assert!(!note_ids.contains(&n_forgot.note.note_id));
+    let pos_high = note_ids
+        .iter()
+        .position(|id| *id == n_high.note.note_id)
+        .expect("pos high");
+    let pos_low = note_ids
+        .iter()
+        .position(|id| *id == n_low.note.note_id)
+        .expect("pos low");
+    assert!(
+        pos_high < pos_low,
+        "higher-salience note must outrank lower-salience note: {note_ids:?}"
+    );
+
+    // Claims: observed ranks before hypothesis; superseded, retracted, and forgotten excluded.
+    let claim_ids: Vec<_> = resp.claims.iter().map(|c| c.claim_id).collect();
+    assert!(claim_ids.contains(&c_obs.claim_id));
+    assert!(claim_ids.contains(&c_hyp.claim_id));
+    assert!(claim_ids.contains(&c_new.claim_id));
+    assert!(!claim_ids.contains(&c_old.claim_id));
+    assert!(!claim_ids.contains(&c_retracted.claim_id));
+    assert!(!claim_ids.contains(&c_forgot.claim_id));
+    let pos_obs = claim_ids
+        .iter()
+        .position(|id| *id == c_obs.claim_id)
+        .expect("pos obs");
+    let pos_hyp = claim_ids
+        .iter()
+        .position(|id| *id == c_hyp.claim_id)
+        .expect("pos hyp");
+    assert!(
+        pos_obs < pos_hyp,
+        "observed claim must outrank hypothesis claim: {claim_ids:?}"
+    );
+
+    // Documents: active included, forgotten excluded.
+    let doc_ids: Vec<_> = resp.documents.iter().map(|d| d.document_id).collect();
+    assert!(doc_ids.contains(&d_active.document_id));
+    assert!(!doc_ids.contains(&d_forgot.document_id));
+
+    // 2. Historical search (`include_history = true`): includes superseded claim, still excludes retracted & forgotten.
+    let hist_resp = svc
+        .search_notes(
+            &principal,
+            SearchNotesRequest {
+                scope: Some(scope.clone()),
+                query: Some(String::from("Quantum cryptography")),
+                limit: Some(20),
+                include_history: true,
+            },
+        )
+        .await
+        .expect("history search");
+    let hist_claim_ids: Vec<_> = hist_resp.claims.iter().map(|c| c.claim_id).collect();
+    assert!(hist_claim_ids.contains(&c_old.claim_id));
+    assert!(!hist_claim_ids.contains(&c_retracted.claim_id));
+    assert!(!hist_claim_ids.contains(&c_forgot.claim_id));
+
+    // 3. Cyrillic substring fallback query matches notes, claims, and documents cleanly!
+    let ru_resp = svc
+        .search_notes(
+            &principal,
+            SearchNotesRequest {
+                scope: Some(scope),
+                query: Some(String::from("криптограф")),
+                limit: Some(20),
+                include_history: false,
+            },
+        )
+        .await
+        .expect("cyrillic search");
+    assert!(ru_resp.notes.iter().any(|n| n.note_id == n_ru.note.note_id));
+    assert!(ru_resp.claims.iter().any(|c| c.claim_id == c_ru.claim_id));
+    assert!(
+        ru_resp
+            .documents
+            .iter()
+            .any(|d| d.document_id == d_ru.document_id)
+    );
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end PG16 test spawns real memoryd with background consolidation interval and checks both pending execution and paused preservation"
+)]
+async fn a_mem_1_background_consolidation_tick_executes_pending_and_respects_paused() {
+    let pg_url = require_memory_pg_url();
+    let target = pg_target();
+    let svc = MemoryService::new(target).expect("service");
+    svc.ensure_migrated().await.expect("migrate");
+
+    let scope_run = unique_scope("a-mem-bg-run");
+    let scope_paused = unique_scope("a-mem-bg-paused");
+    let principal = full_principal(
+        "agent:a-mem-bg",
+        &[scope_run.clone(), scope_paused.clone()],
+    );
+    let cid = CorrelationId::generate();
+
+    // Seed one active claim in each scope so DossierUpdate has concrete work to materialize.
+    svc.create_claim(
+        &principal,
+        &cid,
+        make_claim_req(&scope_run, "bg-topic", "Background tick generates dossier"),
+    )
+    .await
+    .expect("seed claim run");
+    svc.create_claim(
+        &principal,
+        &cid,
+        make_claim_req(&scope_paused, "bg-topic", "Paused job must stay untouched"),
+    )
+    .await
+    .expect("seed claim paused");
+
+    let queued_run = svc
+        .enqueue_consolidation_job(
+            &principal,
+            CreateConsolidationJobRequest {
+                scope: scope_run.clone(),
+                job_type: ConsolidationJobType::DossierUpdate,
+                idempotency_key: Some(IdempotencyKey::generate()),
+            },
+        )
+        .await
+        .expect("enqueue pending run job");
+    assert_eq!(queued_run.status, ConsolidationJobStatus::Pending);
+
+    let queued_paused = svc
+        .enqueue_consolidation_job(
+            &principal,
+            CreateConsolidationJobRequest {
+                scope: scope_paused.clone(),
+                job_type: ConsolidationJobType::DossierUpdate,
+                idempotency_key: Some(IdempotencyKey::generate()),
+            },
+        )
+        .await
+        .expect("enqueue pending paused job");
+    let paused = svc
+        .pause_consolidation_job(&principal, queued_paused.job_id)
+        .await
+        .expect("pause job");
+    assert_eq!(paused.status, ConsolidationJobStatus::Paused);
+
+    // Spawn real `dennett-memoryd` with 1-second background consolidation interval.
+    let auth_cfg = AuthConfig {
+        allowed_issuers: vec![String::from(DEFAULT_ISSUER)],
+        audience: String::from(DEFAULT_AUDIENCE),
+        hmac_secret: None,
+        tokens: vec![],
+        revoked_token_ids: BTreeSet::new(),
+    };
+    let daemon = RunningMemoryd::spawn_with_env(
+        &pg_url,
+        &auth_cfg,
+        &[("DENNETT_MEMORYD_CONSOLIDATION_INTERVAL_SECS", "1")],
+    )
+    .await;
+
+    let deadline = time::Instant::now() + Duration::from_secs(10);
+    let finished_run = loop {
+        let jobs = svc
+            .list_consolidation_jobs(&principal, Some(&scope_run))
+            .await
+            .expect("list run jobs");
+        let job = jobs
+            .jobs
+            .into_iter()
+            .find(|j| j.job_id == queued_run.job_id)
+            .expect("queued_run exists");
+        if job.status == ConsolidationJobStatus::Completed || time::Instant::now() >= deadline {
+            break job;
+        }
+        time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(
+        finished_run.status,
+        ConsolidationJobStatus::Completed,
+        "background consolidation worker must execute queued pending job"
+    );
+
+    // Verify dossier document was materialized in scope_run.
+    let run_docs = svc
+        .list_documents(&principal, Some(&scope_run))
+        .await
+        .expect("list run docs");
+    assert!(
+        run_docs
+            .documents
+            .iter()
+            .any(|d| d.document_key == "dossier:bg-topic"),
+        "background consolidation tick must materialize dossier: {:?}",
+        run_docs.documents
+    );
+
+    // Verify paused job stayed Paused and materialized zero dossiers in scope_paused.
+    let paused_jobs = svc
+        .list_consolidation_jobs(&principal, Some(&scope_paused))
+        .await
+        .expect("list paused jobs");
+    let still_paused = paused_jobs
+        .jobs
+        .into_iter()
+        .find(|j| j.job_id == queued_paused.job_id)
+        .expect("paused job exists");
+    assert_eq!(still_paused.status, ConsolidationJobStatus::Paused);
+
+    let paused_docs = svc
+        .list_documents(&principal, Some(&scope_paused))
+        .await
+        .expect("list paused docs");
+    assert_eq!(paused_docs.documents.len(), 0);
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end Contract J test exercises evidence_objects scrubbing, export/import/export manifest roundtrip, untrusted isolation, and legacy import compatibility"
+)]
+async fn a_mem_1_contract_j_evidence_objects_roundtrip_and_legacy_import_compat() {
+    let target = pg_target();
+    let svc = MemoryService::new(target).expect("service");
+    svc.ensure_migrated().await.expect("migrate");
+
+    let scope_a = unique_scope("a-mem-ev-a");
+    let scope_b = unique_scope("a-mem-ev-b");
+    let scope_legacy = unique_scope("a-mem-ev-leg");
+    let scope_hash = unique_scope("a-mem-ev-hash");
+    let principal = full_principal(
+        "agent:a-mem-portable",
+        &[
+            scope_a.clone(),
+            scope_b.clone(),
+            scope_legacy.clone(),
+            scope_hash.clone(),
+        ],
+    );
+    let cid = CorrelationId::generate();
+
+    // 1. Seed a note + evidence object (containing a secret token that must be scrubbed on export).
+    svc.create_note(
+        &principal,
+        &cid,
+        make_note_req(&scope_a, "Audit note", "Linked to captured evidence"),
+    )
+    .await
+    .expect("create note");
+
+    let mut ev_meta = BTreeMap::new();
+    ev_meta.insert(String::from("origin"), String::from("audit-run"));
+    let ev = svc
+        .ingest_evidence(
+            &principal,
+            &cid,
+            IngestEvidenceRequest {
+                scope: scope_a.clone(),
+                media_type: String::from("text/markdown"),
+                content: String::from(
+                    "Observed runtime log with Bearer SUPER_SECRET_EVIDENCE_TOKEN_987654321",
+                ),
+                source_uri: Some(String::from("https://example.invalid/audit/log.md")),
+                observed_at: Some(TimestampMs::now()),
+                metadata: ev_meta.clone(),
+                idempotency_key: IdempotencyKey::generate(),
+            },
+        )
+        .await
+        .expect("ingest evidence");
+
+    // 2. Export scope_a: evidence_objects must be included and scrubbed!
+    let exp_a = svc
+        .export_package(
+            &principal,
+            &cid,
+            ExportRequest {
+                scope: scope_a.clone(),
+                format_version: None,
+            },
+        )
+        .await
+        .expect("export scope_a");
+    assert_eq!(exp_a.item_count, 2);
+    assert!(
+        !exp_a
+            .package_json
+            .contains("SUPER_SECRET_EVIDENCE_TOKEN_987654321"),
+        "exported evidence content must scrub bearer secret"
+    );
+    let parsed_exp: Value = serde_json::from_str(&exp_a.package_json).expect("valid export json");
+    let exported_evs = parsed_exp["payload"]["evidence_objects"]
+        .as_array()
+        .expect("evidence_objects array");
+    assert_eq!(exported_evs.len(), 1);
+    assert_eq!(
+        exported_evs[0]["source_uri"].as_str(),
+        Some("https://example.invalid/audit/log.md")
+    );
+
+    // 3. Import into scope_b -> evidence imported as external_untrusted, instruction_active = false.
+    let imp_b = svc
+        .import_package(
+            &principal,
+            &cid,
+            ImportRequest {
+                scope: scope_b.clone(),
+                package_json: exp_a.package_json.clone(),
+            },
+        )
+        .await
+        .expect("import scope_b");
+    assert_eq!(imp_b.items_imported, 2);
+    assert_eq!(imp_b.items_rejected, 0);
+    assert_eq!(imp_b.trust_level, TrustLevel::ExternalUntrusted);
+    assert!(!imp_b.instruction_active);
+
+    let b_evs = svc
+        .list_evidence(&principal, Some(&scope_b), Some(10))
+        .await
+        .expect("list evidence in scope_b");
+    assert_eq!(b_evs.len(), 1);
+    assert_eq!(b_evs[0].media_type, "text/markdown");
+    assert_eq!(
+        b_evs[0].source_uri.as_deref(),
+        Some("https://example.invalid/audit/log.md")
+    );
+    assert_eq!(b_evs[0].metadata, ev_meta);
+    assert_ne!(b_evs[0].evidence_id, ev.evidence.evidence_id);
+
+    // Verify imported evidence is persisted with trust_level='external_untrusted' and instruction_active=false.
+    let b_stats = svc
+        .get_stats(&principal, Some(&scope_b))
+        .await
+        .expect("stats scope_b");
+    assert_eq!(
+        b_stats.imported_untrusted_count, 2,
+        "imported note + imported evidence object must both count as external_untrusted"
+    );
+
+    // 4. Roundtrip export(scope_b) matches manifest_sha256 of export(scope_a)!
+    let exp_b = svc
+        .export_package(
+            &principal,
+            &cid,
+            ExportRequest {
+                scope: scope_b,
+                format_version: None,
+            },
+        )
+        .await
+        .expect("export scope_b");
+    assert_eq!(exp_b.manifest_sha256, exp_a.manifest_sha256);
+
+    // 5. Legacy Contract J export OMITTING `evidence_objects` imports cleanly!
+    let legacy_payload = r#"{"claims":[],"documents":[],"notes":[{"admission_status":"admitted","body":"Legacy body without evidence_objects","salience":55,"title":"Legacy note"}]}"#;
+    let hash_ev = svc
+        .ingest_evidence(
+            &principal,
+            &cid,
+            IngestEvidenceRequest {
+                scope: scope_hash,
+                media_type: String::from("application/json"),
+                content: legacy_payload.to_owned(),
+                source_uri: None,
+                observed_at: None,
+                metadata: BTreeMap::new(),
+                idempotency_key: IdempotencyKey::generate(),
+            },
+        )
+        .await
+        .expect("compute sha256 via evidence ingest");
+    let legacy_pkg = format!(
+        "{{\"format_version\":\"1.0\",\"manifest_sha256\":\"{}\",\"payload\":{legacy_payload},\"secrets_stripped\":true}}",
+        hash_ev.evidence.sha256.as_str()
+    );
+    let imp_legacy = svc
+        .import_package(
+            &principal,
+            &cid,
+            ImportRequest {
+                scope: scope_legacy.clone(),
+                package_json: legacy_pkg,
+            },
+        )
+        .await
+        .expect("import legacy package");
+    assert_eq!(imp_legacy.items_imported, 1);
+    assert_eq!(imp_legacy.items_rejected, 0);
+    let leg_search = svc
+        .search_notes(
+            &principal,
+            SearchNotesRequest {
+                scope: Some(scope_legacy),
+                query: Some(String::from("Legacy body")),
+                limit: Some(10),
+                include_history: false,
+            },
+        )
+        .await
+        .expect("search legacy scope");
+    assert_eq!(leg_search.notes.len(), 1);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end memory-mcp test verifies DENNETT_MEMORY_HMAC_SECRET env auth, evidence tools, index status, and unified search across notes/claims/documents"
+)]
+async fn a_mem_1_memory_mcp_hmac_env_evidence_tools_index_status_and_unified_search() {
+    let pg_url = require_memory_pg_url();
+    let scope = unique_scope("a-mem-mcp-hmac");
+    let hmac_secret = "a-mem-1-hmac-env-secret-0123456789abcdef";
+
+    // Configure memoryd with ONLY HMAC secret (zero static tokens!).
+    let auth_cfg = AuthConfig {
+        allowed_issuers: vec![String::from(DEFAULT_ISSUER)],
+        audience: String::from(DEFAULT_AUDIENCE),
+        hmac_secret: Some(hmac_secret.to_owned()),
+        tokens: vec![],
+        revoked_token_ids: BTreeSet::new(),
+    };
+    let daemon = RunningMemoryd::spawn(&pg_url, &auth_cfg).await;
+
+    // Spawn memory-mcp with ONLY env vars (DENNETT_MEMORY_HMAC_SECRET + DENNETT_MEMORY_SCOPES;
+    // NO DENNETT_MEMORY_TOKEN and NO --memory-hmac-secret on argv!).
+    let mut mcp = McpSession::spawn_with_hmac_env(&daemon.base_url, hmac_secret, scope.as_str());
+
+    let init_resp = mcp.request("initialize", json!({})).await;
+    assert_eq!(init_resp["result"]["serverInfo"]["name"], "dennett-memory-mcp");
+
+    let tools_resp = mcp.request("tools/list", json!({})).await;
+    let tools = tools_resp["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert_eq!(tools.len(), 18);
+    let tool_names: BTreeSet<&str> = tools
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(tool_names.contains("memory_evidence_create"));
+    assert!(tool_names.contains("memory_evidence_list"));
+    assert!(tool_names.contains("memory_index_status"));
+    assert!(tool_names.contains("memory_search"));
+
+    // 1. memory_evidence_create & memory_evidence_list over HMAC env auth!
+    let (ev_err, ev_val) = mcp
+        .call_tool(
+            "memory_evidence_create",
+            json!({
+                "scope": scope.as_str(),
+                "media_type": "text/plain",
+                "content": "HyperionProtocol evidence artifact",
+                "source_uri": "file:///hyperion/evidence.txt",
+                "metadata": { "stage": "audit" }
+            }),
+        )
+        .await;
+    assert!(!ev_err, "memory_evidence_create failed: {ev_val}");
+    let created_ev_id = ev_val["evidence"]["evidence_id"]
+        .as_str()
+        .expect("evidence_id")
+        .to_owned();
+
+    let (ev_list_err, ev_list_val) = mcp
+        .call_tool(
+            "memory_evidence_list",
+            json!({
+                "scope": scope.as_str(),
+                "limit": 10
+            }),
+        )
+        .await;
+    assert!(!ev_list_err, "memory_evidence_list failed: {ev_list_val}");
+    let listed_evs = ev_list_val["evidence"].as_array().expect("evidence array");
+    assert_eq!(listed_evs.len(), 1);
+    assert_eq!(
+        listed_evs[0]["evidence_id"].as_str(),
+        Some(created_ev_id.as_str())
+    );
+
+    // 2. Write a note, claim, and document sharing keyword "HyperionProtocol".
+    let (n_err, n_val) = mcp
+        .call_tool(
+            "memory_write_note",
+            json!({
+                "scope": scope.as_str(),
+                "title": "HyperionProtocol note",
+                "body": "Notes covering HyperionProtocol design"
+            }),
+        )
+        .await;
+    assert!(!n_err, "memory_write_note failed: {n_val}");
+
+    let (c_err, c_val) = mcp
+        .call_tool(
+            "memory_claim_create",
+            json!({
+                "scope": scope.as_str(),
+                "topic_key": "hyperion",
+                "natural_language": "HyperionProtocol uses HMAC-authenticated memory tools"
+            }),
+        )
+        .await;
+    assert!(!c_err, "memory_claim_create failed: {c_val}");
+
+    let (d_err, d_val) = mcp
+        .call_tool(
+            "memory_document_write",
+            json!({
+                "scope": scope.as_str(),
+                "document_key": "dossier:hyperion",
+                "title": "HyperionProtocol Architecture",
+                "body": "Dossier describing HyperionProtocol memory fabric"
+            }),
+        )
+        .await;
+    assert!(!d_err, "memory_document_write failed: {d_val}");
+
+    // 3. memory_index_status
+    let (idx_err, idx_val) = mcp
+        .call_tool("memory_index_status", json!({ "scope": scope.as_str() }))
+        .await;
+    assert!(!idx_err, "memory_index_status failed: {idx_val}");
+    assert_eq!(idx_val["status"], "healthy");
+
+    // 4. Unified memory_search returns notes, claims, AND documents!
+    let (srch_err, srch_val) = mcp
+        .call_tool(
+            "memory_search",
+            json!({
+                "scope": scope.as_str(),
+                "query": "HyperionProtocol",
+                "limit": 10
+            }),
+        )
+        .await;
+    assert!(!srch_err, "memory_search failed: {srch_val}");
+    assert_eq!(srch_val["notes"].as_array().expect("notes").len(), 1);
+    assert_eq!(srch_val["claims"].as_array().expect("claims").len(), 1);
+    assert_eq!(
+        srch_val["documents"].as_array().expect("documents").len(),
+        1
+    );
+
+    mcp.close().await;
+    daemon.shutdown().await;
 }
 
 // ============================================================================

@@ -40,7 +40,8 @@ use crate::claims::{
     execute_resolve_conflict, execute_supersede_claim,
 };
 use crate::consolidation::{
-    execute_create_consolidation_job, execute_list_consolidation_jobs,
+    execute_background_consolidation_tick, execute_create_consolidation_job,
+    execute_enqueue_consolidation_job, execute_list_consolidation_jobs,
     execute_pause_consolidation_job, execute_resume_consolidation_job,
 };
 use crate::documents::{
@@ -415,6 +416,69 @@ impl MemoryService {
             .await
             .map_err(|_| DennettError::Timeout {
                 operation: String::from("memory_service::get_evidence"),
+            })?
+    }
+
+    /// Lists active (non-forgotten) [`EvidenceObject`] records across authorized scopes, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::ForbiddenScope`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn list_evidence(
+        &self,
+        principal: &AuthPrincipal,
+        scope: Option<&MemoryScope>,
+        limit: Option<u32>,
+    ) -> Result<Vec<EvidenceObject>, DennettError> {
+        const DEFAULT_EVIDENCE_LIST_LIMIT: u32 = 50;
+        const MAX_EVIDENCE_LIST_LIMIT: u32 = 200;
+
+        let effective_limit = limit.unwrap_or(DEFAULT_EVIDENCE_LIST_LIMIT);
+        if effective_limit == 0 || effective_limit > MAX_EVIDENCE_LIST_LIMIT {
+            return Err(DennettError::InvalidInput {
+                field: String::from("limit"),
+                reason: format!("must be between 1 and {MAX_EVIDENCE_LIST_LIMIT}"),
+            });
+        }
+        let allowed_scopes = resolve_search_scopes(principal, scope)?;
+        if allowed_scopes.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.ensure_migrated().await?;
+        let limit_i64 = i64::from(effective_limit);
+
+        let op_fut = async {
+            let conn = self.get_conn(self.inner.op_timeout).await?;
+            let rows = conn
+                .query(
+                    "SELECT evidence_id, scope, sha256, media_type, byte_len, content, source_uri,
+                            TRUNC(EXTRACT(EPOCH FROM observed_at) * 1000)::bigint,
+                            TRUNC(EXTRACT(EPOCH FROM ingested_at) * 1000)::bigint,
+                            ingested_by, metadata
+                     FROM evidence_objects
+                     WHERE scope = ANY($1::text[])
+                       AND forgotten_at IS NULL
+                     ORDER BY ingested_at DESC, evidence_id ASC
+                     LIMIT $2",
+                    &[&allowed_scopes, &limit_i64],
+                )
+                .await
+                .map_err(|err| self.map_pg_err(&err))?;
+
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                let ev = decode_evidence_row(&row)?;
+                require_scope_capability(principal, &ev.scope, MemoryCapability::Read)?;
+                out.push(ev);
+            }
+            Ok(out)
+        };
+
+        time::timeout(self.inner.op_timeout, op_fut)
+            .await
+            .map_err(|_| DennettError::Timeout {
+                operation: String::from("memory_service::list_evidence"),
             })?
     }
 
@@ -1164,6 +1228,35 @@ impl MemoryService {
             .await
     }
 
+    /// Enqueues a [`ConsolidationJob`] in `pending` state without blocking on execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::ForbiddenScope`], [`DennettError::IdempotencyMismatch`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    pub async fn enqueue_consolidation_job(
+        &self,
+        principal: &AuthPrincipal,
+        req: CreateConsolidationJobRequest,
+    ) -> Result<ConsolidationJob, DennettError> {
+        execute_enqueue_consolidation_job(self, principal, req).await
+    }
+
+    /// Executes one bounded background consolidation tick for unpaused `pending` jobs.
+    ///
+    /// Never modifies `paused` jobs. Returns the number of jobs stepped during this tick.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] if PostgreSQL is unreachable.
+    pub async fn run_background_consolidation_tick(
+        &self,
+        max_jobs: usize,
+        max_steps_per_job: usize,
+    ) -> Result<u64, DennettError> {
+        execute_background_consolidation_tick(self, max_jobs, max_steps_per_job).await
+    }
+
     /// Lists [`ConsolidationJob`] records across authorized scopes.
     ///
     /// # Errors
@@ -1281,6 +1374,8 @@ impl MemoryService {
                         + (SELECT COUNT(*)::bigint FROM memory_claims
                            WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND trust_level = 'external_untrusted')
                         + (SELECT COUNT(*)::bigint FROM memory_documents
+                           WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND trust_level = 'external_untrusted')
+                        + (SELECT COUNT(*)::bigint FROM evidence_objects
                            WHERE scope = ANY($1::text[]) AND forgotten_at IS NULL AND trust_level = 'external_untrusted')",
                     &[&allowed_scopes],
                 )
@@ -2053,6 +2148,10 @@ async fn fetch_evidence_row<C: GenericClient>(
         });
     };
 
+    decode_evidence_row(&row)
+}
+
+fn decode_evidence_row(row: &Row) -> Result<EvidenceObject, DennettError> {
     let metadata: BTreeMap<String, String> = serde_json::from_value(row.get::<_, JsonValue>(10))
         .map_err(|err| DennettError::Internal {
             detail: format!("corrupt evidence metadata JSON: {err}"),

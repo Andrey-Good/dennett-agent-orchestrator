@@ -914,7 +914,7 @@ async fn fetch_document_row<C: GenericClient>(
     decode_document_row(&row)
 }
 
-fn decode_document_row(row: &Row) -> Result<MemoryDocument, DennettError> {
+pub(crate) fn decode_document_row(row: &Row) -> Result<MemoryDocument, DennettError> {
     let raw_claims: Vec<Uuid> = row.get(6);
     let raw_notes: Vec<Uuid> = row.get(7);
     let source_event_uuid: Uuid = row.get(8);

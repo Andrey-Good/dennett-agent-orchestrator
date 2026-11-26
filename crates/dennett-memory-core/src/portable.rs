@@ -16,13 +16,14 @@ use std::collections::BTreeMap;
 use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets};
 use dennett_contracts::{
     AdmissionStatus, AuthPrincipal, ClaimId, CorrelationId, DennettError, DocumentId,
-    DocumentVersionId, EpistemicStatus, ExportPackageId, ExportRequest, ExportResponse,
+    DocumentVersionId, EpistemicStatus, EvidenceId, ExportPackageId, ExportRequest, ExportResponse,
     IdempotencyKey, ImportRecordId, ImportRequest, ImportResponse, MAX_CAVEAT_BYTES,
     MAX_CAVEATS_PER_CLAIM, MAX_CLAIM_KEY_LEN, MAX_CLAIM_TEXT_BYTES, MAX_DOCUMENT_BODY_BYTES,
-    MAX_DOCUMENT_KEY_LEN, MAX_DOCUMENT_TITLE_BYTES, MAX_METADATA_ENTRIES, MAX_METADATA_KEY_LEN,
-    MAX_METADATA_VALUE_LEN, MAX_NOTE_BODY_BYTES, MAX_NOTE_SALIENCE, MAX_NOTE_TITLE_BYTES,
-    MAX_RATIONALE_BYTES, MAX_TAG_LEN, MAX_TAGS_PER_NOTE, MAX_TOPIC_KEY_LEN, MemoryCapability,
-    MemoryEventId, MemoryEventKind, MemoryNoteId, NoteRevisionId, TimestampMs, TrustLevel,
+    MAX_DOCUMENT_KEY_LEN, MAX_DOCUMENT_TITLE_BYTES, MAX_EVIDENCE_CONTENT_BYTES, MAX_MEDIA_TYPE_LEN,
+    MAX_METADATA_ENTRIES, MAX_METADATA_KEY_LEN, MAX_METADATA_VALUE_LEN, MAX_NOTE_BODY_BYTES,
+    MAX_NOTE_SALIENCE, MAX_NOTE_TITLE_BYTES, MAX_RATIONALE_BYTES, MAX_SOURCE_URI_LEN, MAX_TAG_LEN,
+    MAX_TAGS_PER_NOTE, MAX_TOPIC_KEY_LEN, MemoryCapability, MemoryEventId, MemoryEventKind,
+    MemoryNoteId, NoteRevisionId, TimestampMs, TrustLevel,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -73,6 +74,9 @@ pub struct PortablePackagePayload {
     /// Deterministic sorted list of exported dossier documents.
     #[serde(default)]
     pub documents: Vec<ExportedDocument>,
+    /// Deterministic sorted list of exported immutable evidence objects.
+    #[serde(default)]
+    pub evidence_objects: Vec<ExportedEvidenceObject>,
     /// Deterministic sorted list of exported notes.
     #[serde(default)]
     pub notes: Vec<ExportedNote>,
@@ -137,6 +141,24 @@ pub struct ExportedDocument {
     pub title: String,
 }
 
+/// Portable representation of one [`dennett_contracts::EvidenceObject`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ExportedEvidenceObject {
+    /// Stored UTF-8 evidence content (secret-scrubbed).
+    pub content: String,
+    /// Media/MIME type (e.g. `"text/plain"`, `"text/markdown"`).
+    pub media_type: String,
+    /// Deterministic string metadata map (secret-scrubbed).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
+    /// Optional original observation timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<TimestampMs>,
+    /// Optional provenance source URI (secret-scrubbed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_uri: Option<String>,
+}
+
 /// Result of parsing and validating an untrusted portable memory package string.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParsedImportPackage {
@@ -146,6 +168,8 @@ pub struct ParsedImportPackage {
     pub valid_claims: Vec<ExportedClaim>,
     /// Validated documents ready for `external_untrusted` insertion.
     pub valid_documents: Vec<ExportedDocument>,
+    /// Validated evidence objects ready for `external_untrusted` insertion.
+    pub valid_evidence_objects: Vec<ExportedEvidenceObject>,
     /// Count of rejected items (or 1 when the top-level envelope itself failed validation).
     pub items_rejected: u64,
     /// Safe, bounded human-readable validation error strings.
@@ -625,6 +649,43 @@ pub fn parse_and_validate_import_package(raw_json: &str) -> ParsedImportPackage 
         }
     }
 
+    // Validate optional evidence_objects array (backward compatible when omitted in legacy exports).
+    if let Some(ev_val) = payload_obj.get("evidence_objects") {
+        if let Some(arr) = ev_val.as_array() {
+            if arr.len() > MAX_IMPORT_ITEMS_PER_SECTION {
+                push_err(
+                    &mut result,
+                    format!(
+                        "evidence_objects array exceeds maximum of {MAX_IMPORT_ITEMS_PER_SECTION} items"
+                    ),
+                );
+                result.items_rejected = result.items_rejected.saturating_add(1);
+            } else {
+                for (idx, item) in arr.iter().enumerate() {
+                    match serde_json::from_value::<ExportedEvidenceObject>(item.clone()) {
+                        Ok(ev) => match validate_imported_evidence_object(&ev) {
+                            Ok(()) => result.valid_evidence_objects.push(ev),
+                            Err(msg) => {
+                                result.items_rejected = result.items_rejected.saturating_add(1);
+                                push_err(&mut result, format!("evidence_objects[{idx}]: {msg}"));
+                            }
+                        },
+                        Err(err) => {
+                            result.items_rejected = result.items_rejected.saturating_add(1);
+                            push_err(
+                                &mut result,
+                                format!("evidence_objects[{idx}]: invalid schema ({err})"),
+                            );
+                        }
+                    }
+                }
+            }
+        } else {
+            result.items_rejected = result.items_rejected.saturating_add(1);
+            push_err(&mut result, "`payload.evidence_objects` must be an array");
+        }
+    }
+
     result
 }
 
@@ -679,6 +740,7 @@ pub fn serialize_canonical_package(
             ))
     });
     payload.documents.sort();
+    payload.evidence_objects.sort();
 
     let payload_val = serde_json::to_value(&payload).map_err(|err| DennettError::Internal {
         detail: format!("failed to convert portable payload to JSON value: {err}"),
@@ -845,6 +907,48 @@ fn validate_imported_document(doc: &ExportedDocument) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_imported_evidence_object(ev: &ExportedEvidenceObject) -> Result<(), String> {
+    validate_safe_text(&ev.media_type, "media_type", MAX_MEDIA_TYPE_LEN)?;
+    if ev.media_type.bytes().any(|b| b.is_ascii_control()) {
+        return Err(String::from(
+            "media_type must not contain ASCII control characters",
+        ));
+    }
+    validate_safe_text(&ev.content, "content", MAX_EVIDENCE_CONTENT_BYTES)?;
+    if let Some(ref uri) = ev.source_uri {
+        if uri.len() > MAX_SOURCE_URI_LEN {
+            return Err(format!(
+                "source_uri exceeds maximum length of {MAX_SOURCE_URI_LEN} bytes"
+            ));
+        }
+        if uri.bytes().any(|b| b.is_ascii_control()) || uri.contains("..") {
+            return Err(String::from(
+                "source_uri contains forbidden control characters or path traversal",
+            ));
+        }
+    }
+    if let Some(obs) = ev.observed_at
+        && !obs.is_in_range()
+    {
+        return Err(String::from("observed_at timestamp is out of range"));
+    }
+    if ev.metadata.len() > MAX_METADATA_ENTRIES {
+        return Err(format!(
+            "metadata exceeds maximum of {MAX_METADATA_ENTRIES} entries"
+        ));
+    }
+    for (k, v) in &ev.metadata {
+        validate_safe_key(k, "metadata.key", MAX_METADATA_KEY_LEN)?;
+        if v.len() > MAX_METADATA_VALUE_LEN
+            || v.bytes()
+                .any(|b| b == 0 || (b.is_ascii_control() && !matches!(b, b'\n' | b'\r' | b'\t')))
+        {
+            return Err(String::from("metadata value invalid or oversized"));
+        }
+    }
+    Ok(())
+}
+
 /// Exports one authorized scope as a deterministic, secret-free Contract J package.
 #[expect(
     clippy::too_many_lines,
@@ -971,10 +1075,43 @@ pub(crate) async fn execute_export_package(
             });
         }
 
-        let item_count = u64::try_from(notes.len() + claims.len() + documents.len()).unwrap_or(0);
+        let ev_rows = tx
+            .query(
+                "SELECT media_type, content, source_uri,
+                        TRUNC(EXTRACT(EPOCH FROM observed_at) * 1000)::bigint,
+                        metadata
+                 FROM evidence_objects
+                 WHERE scope = $1 AND forgotten_at IS NULL",
+                &[&req.scope.as_str()],
+            )
+            .await
+            .map_err(|err| svc.map_pg_err(&err))?;
+
+        let mut evidence_objects = Vec::with_capacity(ev_rows.len());
+        for row in ev_rows {
+            let raw_meta: BTreeMap<String, String> =
+                serde_json::from_value(row.get::<_, JsonValue>(4)).unwrap_or_default();
+            let metadata: BTreeMap<String, String> = raw_meta
+                .into_iter()
+                .map(|(k, v)| (scrub_required_export_text(&k), scrub_export_text(&v)))
+                .collect();
+            let raw_uri: Option<String> = row.get(2);
+            evidence_objects.push(ExportedEvidenceObject {
+                content: scrub_required_export_text(&row.get::<_, String>(1)),
+                media_type: scrub_required_export_text(&row.get::<_, String>(0)),
+                metadata,
+                observed_at: row.get::<_, Option<i64>>(3).map(TimestampMs::from_millis),
+                source_uri: raw_uri.map(|u| scrub_required_export_text(&u)),
+            });
+        }
+
+        let item_count =
+            u64::try_from(notes.len() + claims.len() + documents.len() + evidence_objects.len())
+                .unwrap_or(0);
         let package_json = serialize_canonical_package(PortablePackagePayload {
             claims,
             documents,
+            evidence_objects,
             notes,
         })?;
         let manifest_sha256 = sha256_hex(package_json.as_bytes());
@@ -1067,6 +1204,7 @@ pub(crate) async fn execute_import_package(
         valid_notes,
         valid_claims,
         valid_documents,
+        valid_evidence_objects,
         mut items_rejected,
         mut validation_errors,
     } = parse_and_validate_import_package(&req.package_json);
@@ -1334,6 +1472,85 @@ pub(crate) async fn execute_import_package(
             items_imported = items_imported.saturating_add(1);
         }
 
+        // 4. Import validated evidence objects strictly as `external_untrusted` + `instruction_active = false`.
+        for ev in &valid_evidence_objects {
+            let content_sha = sha256_hex(ev.content.as_bytes());
+            let byte_len_i64 = i64::try_from(ev.content.len()).unwrap_or(i64::MAX);
+            let metadata_json =
+                serde_json::to_value(&ev.metadata).map_err(|err| DennettError::Internal {
+                    detail: format!("failed to serialize imported evidence metadata: {err}"),
+                })?;
+            let observed_ms = ev.observed_at.map(TimestampMs::as_millis);
+
+            let existing_ev = tx
+                .query_opt(
+                    "SELECT evidence_id
+                     FROM evidence_objects
+                     WHERE scope = $1 AND sha256 = $2 AND forgotten_at IS NULL
+                     ORDER BY ingested_at ASC, evidence_id ASC
+                     LIMIT 1",
+                    &[&req.scope.as_str(), &content_sha.as_str()],
+                )
+                .await
+                .map_err(|err| svc.map_pg_err(&err))?;
+
+            let evidence_id = if let Some(row) = existing_ev {
+                EvidenceId::from_uuid(row.get(0))
+            } else {
+                let fresh_id = EvidenceId::new();
+                tx.execute(
+                    "INSERT INTO evidence_objects (
+                        evidence_id, scope, sha256, media_type, byte_len, content,
+                        source_uri, observed_at, ingested_by, metadata,
+                        trust_level, instruction_active
+                     ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7,
+                        TIMESTAMPTZ '1970-01-01 00:00:00+00' + ($8::bigint * INTERVAL '1 millisecond'),
+                        $9, $10, 'external_untrusted', false
+                     )",
+                    &[
+                        &fresh_id.as_uuid(),
+                        &req.scope.as_str(),
+                        &content_sha.as_str(),
+                        &ev.media_type,
+                        &byte_len_i64,
+                        &ev.content,
+                        &ev.source_uri,
+                        &observed_ms,
+                        &principal.principal_id.as_str(),
+                        &metadata_json,
+                    ],
+                )
+                .await
+                .map_err(|err| svc.map_pg_err(&err))?;
+                fresh_id
+            };
+
+            let ev_event_id = MemoryEventId::new();
+            let ev_idem = IdempotencyKey::try_new(format!("imp-ev-{ev_event_id}"))?;
+            if let Some(stream_seq) = insert_memory_event(
+                &tx,
+                NewMemoryEvent {
+                    event_id: ev_event_id,
+                    scope: &req.scope,
+                    kind: MemoryEventKind::EvidenceIngested,
+                    principal_id: &principal.principal_id,
+                    correlation_id,
+                    idempotency_key: &ev_idem,
+                    fingerprint: &content_sha,
+                    target_entity_id: evidence_id.as_uuid(),
+                    target_revision: None,
+                    observed_ms,
+                },
+                svc,
+            )
+            .await?
+            {
+                maybe_advance_watermark_only(&tx, &req.scope, ev_event_id, stream_seq, svc).await?;
+            }
+            items_imported = items_imported.saturating_add(1);
+        }
+
         let errors_json =
             serde_json::to_value(&validation_errors).map_err(|err| DennettError::Internal {
                 detail: format!("failed to serialize import validation_errors: {err}"),
@@ -1459,6 +1676,7 @@ mod tests {
             }],
             claims: vec![],
             documents: vec![],
+            evidence_objects: vec![],
         };
         let valid_json = serialize_canonical_package(tampered_payload).expect("serialize");
         let mutated = valid_json.replace("ok body", "tampered body");
@@ -1475,12 +1693,46 @@ mod tests {
                 document_key: String::from("../../etc/passwd"),
                 title: String::from("evil"),
             }],
+            evidence_objects: vec![],
         };
         let bad_doc_json = serialize_canonical_package(bad_doc_payload).expect("serialize");
         let res_bad_doc = parse_and_validate_import_package(&bad_doc_json);
         assert_eq!(res_bad_doc.valid_documents.len(), 0);
         assert_eq!(res_bad_doc.items_rejected, 1);
         assert_ne!(res_bad_doc.validation_errors, Vec::<String>::new());
+    }
+
+    #[test]
+    fn import_parser_stays_backward_compatible_with_legacy_packages_omitting_evidence_objects() {
+        let legacy_payload = serde_json::json!({
+            "claims": [],
+            "documents": [],
+            "notes": [{
+                "admission_status": "admitted",
+                "body": "legacy note body",
+                "salience": 50,
+                "title": "legacy note title"
+            }]
+        });
+        let payload_bytes = canonical_json_bytes(&legacy_payload).expect("canonical bytes");
+        let manifest = sha256_hex(&payload_bytes);
+        let legacy_env = serde_json::json!({
+            "format_version": PORTABLE_FORMAT_VERSION,
+            "manifest_sha256": manifest.as_str(),
+            "payload": legacy_payload,
+            "secrets_stripped": true
+        });
+        let raw = serde_json::to_string(&legacy_env).expect("encode legacy");
+        let parsed = parse_and_validate_import_package(&raw);
+        assert_eq!(parsed.items_rejected, 0);
+        assert_eq!(parsed.valid_notes.len(), 1);
+        assert_eq!(parsed.valid_evidence_objects.len(), 0);
+
+        // Also confirm PortablePackagePayload deserializes cleanly via #[serde(default)].
+        let deserialized: PortablePackagePayload =
+            serde_json::from_value(legacy_payload).expect("deserialize legacy payload");
+        assert_eq!(deserialized.evidence_objects.len(), 0);
+        assert_eq!(deserialized.notes.len(), 1);
     }
 
     proptest! {
@@ -1493,6 +1745,7 @@ mod tests {
                     || !parsed.valid_notes.is_empty()
                     || !parsed.valid_claims.is_empty()
                     || !parsed.valid_documents.is_empty()
+                    || !parsed.valid_evidence_objects.is_empty()
                     || parsed.validation_errors.is_empty()
             );
         }
@@ -1531,6 +1784,13 @@ mod tests {
                     document_key: format!("dossier:{topic}"),
                     title: scrub_required_export_text(&title),
                 }],
+                evidence_objects: vec![ExportedEvidenceObject {
+                    content: scrub_required_export_text(&body),
+                    media_type: String::from("text/plain"),
+                    metadata: BTreeMap::new(),
+                    observed_at: None,
+                    source_uri: Some(format!("https://example.invalid/{topic}")),
+                }],
             };
 
             let json1 = serialize_canonical_package(payload).expect("serialize 1");
@@ -1539,11 +1799,13 @@ mod tests {
             prop_assert_eq!(parsed.valid_notes.len(), 1);
             prop_assert_eq!(parsed.valid_claims.len(), 1);
             prop_assert_eq!(parsed.valid_documents.len(), 1);
+            prop_assert_eq!(parsed.valid_evidence_objects.len(), 1);
 
             let json2 = serialize_canonical_package(PortablePackagePayload {
                 notes: parsed.valid_notes,
                 claims: parsed.valid_claims,
                 documents: parsed.valid_documents,
+                evidence_objects: parsed.valid_evidence_objects,
             }).expect("serialize 2");
             prop_assert_eq!(sha256_hex(json1.as_bytes()), sha256_hex(json2.as_bytes()));
         }

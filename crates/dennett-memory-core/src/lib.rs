@@ -35,10 +35,10 @@ pub use migrations::{
 };
 pub use pg_target::ValidatedPgTarget;
 pub use portable::{
-    ExportedClaim, ExportedDocument, ExportedNote, MAX_IMPORT_JSON_DEPTH, MAX_IMPORT_SAFE_BYTES,
-    PORTABLE_FORMAT_VERSION, ParsedImportPackage, PortablePackageEnvelope, PortablePackagePayload,
-    check_json_depth, has_unsafe_path_or_traversal, parse_and_validate_import_package,
-    scrub_export_text, serialize_canonical_package,
+    ExportedClaim, ExportedDocument, ExportedEvidenceObject, ExportedNote, MAX_IMPORT_JSON_DEPTH,
+    MAX_IMPORT_SAFE_BYTES, PORTABLE_FORMAT_VERSION, ParsedImportPackage, PortablePackageEnvelope,
+    PortablePackagePayload, check_json_depth, has_unsafe_path_or_traversal,
+    parse_and_validate_import_package, scrub_export_text, serialize_canonical_package,
 };
 pub use search::{
     PreparedSearchQuery, SEARCH_MODEL_VERSION, escape_like_pattern, prepare_search_query,

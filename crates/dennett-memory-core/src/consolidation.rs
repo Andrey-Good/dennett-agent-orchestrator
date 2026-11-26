@@ -18,8 +18,8 @@ use dennett_contracts::{
     AuthPrincipal, ConflictType, ConsolidationJob, ConsolidationJobId, ConsolidationJobStatus,
     ConsolidationJobType, CorrelationId, CreateConsolidationJobRequest, DennettError,
     EpistemicStatus, IdempotencyKey, ListConsolidationJobsResponse, MAX_CLAIM_TEXT_BYTES,
-    MemoryCapability, MemoryEventId, MemoryEventKind, MemoryNoteId, MemoryScope, TimestampMs,
-    TrustLevel,
+    MemoryCapability, MemoryEventId, MemoryEventKind, MemoryNoteId, MemoryScope, PrincipalId,
+    TimestampMs, TrustLevel,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -347,16 +347,205 @@ pub(crate) async fn execute_resume_consolidation_job(
         })?
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "consolidation job state machine transitions running/paused/completed/failed and persists durable checkpoints atomically"
-)]
+/// Enqueues a deterministic [`ConsolidationJob`] in `pending` status for periodic background
+/// execution without running it synchronously.
+pub(crate) async fn execute_enqueue_consolidation_job(
+    svc: &MemoryService,
+    principal: &AuthPrincipal,
+    req: CreateConsolidationJobRequest,
+) -> Result<ConsolidationJob, DennettError> {
+    require_consolidation_capability(principal, &req.scope, req.job_type)?;
+    svc.ensure_migrated().await?;
+
+    let op_fut = async {
+        let conn = svc.get_conn(svc.op_timeout()).await?;
+
+        if let Some(ref idem) = req.idempotency_key {
+            let existing = conn
+                .query_opt(
+                    "SELECT job_id, scope, job_type, status, checkpoint_data, watermark_event_id,
+                            caveats_preserved, error_detail,
+                            TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
+                            TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
+                            TRUNC(EXTRACT(EPOCH FROM started_at) * 1000)::bigint,
+                            TRUNC(EXTRACT(EPOCH FROM completed_at) * 1000)::bigint
+                     FROM memory_consolidation_jobs
+                     WHERE scope = $1 AND idempotency_key = $2",
+                    &[&req.scope.as_str(), &idem.as_str()],
+                )
+                .await
+                .map_err(|err| svc.map_pg_err(&err))?;
+
+            if let Some(row) = existing {
+                let job = decode_job_row(&row)?;
+                if job.job_type != req.job_type {
+                    return Err(DennettError::IdempotencyMismatch {
+                        idempotency_key: idem.to_string(),
+                        reason: String::from(
+                            "idempotency_key already used for a different consolidation job_type",
+                        ),
+                    });
+                }
+                return Ok(job);
+            }
+        }
+
+        let job_id = ConsolidationJobId::new();
+        let initial_cp = ConsolidationCheckpoint {
+            stage: String::from("queued"),
+            ..ConsolidationCheckpoint::default()
+        };
+        let cp_json = serde_json::to_value(&initial_cp).map_err(|err| DennettError::Internal {
+            detail: format!("failed to serialize consolidation checkpoint: {err}"),
+        })?;
+        let idem_str = req.idempotency_key.as_ref().map(IdempotencyKey::as_str);
+
+        conn.execute(
+            "INSERT INTO memory_consolidation_jobs (
+                job_id, scope, job_type, status, checkpoint_data,
+                caveats_preserved, idempotency_key
+             ) VALUES ($1, $2, $3, 'pending', $4, true, $5)",
+            &[
+                &job_id.as_uuid(),
+                &req.scope.as_str(),
+                &req.job_type.as_str(),
+                &cp_json,
+                &idem_str,
+            ],
+        )
+        .await
+        .map_err(|err| svc.map_pg_err(&err))?;
+
+        fetch_job_row(&conn, job_id, svc).await
+    };
+
+    time::timeout(svc.op_timeout(), op_fut)
+        .await
+        .map_err(|_| DennettError::Timeout {
+            operation: String::from("memory_service::enqueue_consolidation_job"),
+        })?
+}
+
+/// Runs one bounded background consolidation tick, claiming up to `max_jobs` unpaused `pending`
+/// jobs via `FOR UPDATE SKIP LOCKED` and advancing each by at most `max_steps_per_job` steps.
+///
+/// Strictly skips `paused` (and `running`/`completed`/`failed`/`cancelled`) jobs so manual pause
+/// controls are always honored. Returns the number of jobs stepped during this tick.
+pub(crate) async fn execute_background_consolidation_tick(
+    svc: &MemoryService,
+    max_jobs: usize,
+    max_steps_per_job: usize,
+) -> Result<u64, DennettError> {
+    if max_jobs == 0 || max_steps_per_job == 0 {
+        return Ok(0);
+    }
+    svc.ensure_migrated().await?;
+
+    let mut stepped_jobs: u64 = 0;
+
+    for _ in 0..max_jobs {
+        let claimed = {
+            let mut conn = svc.get_conn(svc.op_timeout()).await?;
+            let tx = conn
+                .transaction()
+                .await
+                .map_err(|err| svc.map_pg_err(&err))?;
+            let row = tx
+                .query_opt(
+                    "SELECT job_id, scope
+                     FROM memory_consolidation_jobs
+                     WHERE status = 'pending'
+                     ORDER BY created_at ASC, job_id ASC
+                     LIMIT 1
+                     FOR UPDATE SKIP LOCKED",
+                    &[],
+                )
+                .await
+                .map_err(|err| svc.map_pg_err(&err))?;
+
+            if let Some(row) = row {
+                let job_id = ConsolidationJobId::from_uuid(row.get(0));
+                let scope = MemoryScope::try_new(row.get::<_, String>(1))?;
+                tx.execute(
+                    "UPDATE memory_consolidation_jobs
+                     SET status = 'running',
+                         started_at = COALESCE(started_at, now()),
+                         updated_at = now()
+                     WHERE job_id = $1 AND status = 'pending'",
+                    &[&job_id.as_uuid()],
+                )
+                .await
+                .map_err(|err| svc.map_pg_err(&err))?;
+                tx.commit().await.map_err(|err| svc.map_pg_err(&err))?;
+                Some((job_id, scope))
+            } else {
+                tx.commit().await.map_err(|err| svc.map_pg_err(&err))?;
+                None
+            }
+        };
+
+        let Some((job_id, scope)) = claimed else {
+            break;
+        };
+
+        let sys_principal = AuthPrincipal {
+            principal_id: PrincipalId::try_new("system:memoryd-consolidation")?,
+            issuer: String::from(crate::auth::DEFAULT_ISSUER),
+            token_id: String::from("system-background-consolidation"),
+            allowed_scopes: BTreeSet::from([scope]),
+            capabilities: BTreeSet::from([
+                MemoryCapability::Read,
+                MemoryCapability::Write,
+                MemoryCapability::Admin,
+            ]),
+            expires_at: None,
+        };
+        let cid = CorrelationId::generate();
+
+        let _ = run_job_from_checkpoint_with_incomplete_status(
+            svc,
+            &sys_principal,
+            &cid,
+            job_id,
+            Some(max_steps_per_job),
+            ConsolidationJobStatus::Pending,
+        )
+        .await;
+        stepped_jobs = stepped_jobs.saturating_add(1);
+    }
+
+    Ok(stepped_jobs)
+}
+
 async fn run_job_from_checkpoint(
     svc: &MemoryService,
     principal: &AuthPrincipal,
     correlation_id: &CorrelationId,
     job_id: ConsolidationJobId,
     max_steps: Option<usize>,
+) -> Result<ConsolidationJob, DennettError> {
+    run_job_from_checkpoint_with_incomplete_status(
+        svc,
+        principal,
+        correlation_id,
+        job_id,
+        max_steps,
+        ConsolidationJobStatus::Paused,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "consolidation job state machine transitions running/pending/paused/completed/failed and persists durable checkpoints atomically"
+)]
+async fn run_job_from_checkpoint_with_incomplete_status(
+    svc: &MemoryService,
+    principal: &AuthPrincipal,
+    correlation_id: &CorrelationId,
+    job_id: ConsolidationJobId,
+    max_steps: Option<usize>,
+    incomplete_status: ConsolidationJobStatus,
 ) -> Result<ConsolidationJob, DennettError> {
     let conn = svc.get_conn(svc.op_timeout()).await?;
     let meta_row = conn
@@ -445,6 +634,8 @@ async fn run_job_from_checkpoint(
             cp.incomplete = !finished;
             cp.stage = if finished {
                 String::from("completed")
+            } else if incomplete_status == ConsolidationJobStatus::Pending {
+                String::from("queued_checkpoint")
             } else {
                 String::from("paused_checkpoint")
             };
@@ -462,7 +653,7 @@ async fn run_job_from_checkpoint(
                          error_detail = NULL,
                          completed_at = now(),
                          updated_at = now()
-                     WHERE job_id = $4",
+                     WHERE job_id = $4 AND status = 'running'",
                     &[
                         &cp_val,
                         &watermark_event_id,
@@ -473,15 +664,17 @@ async fn run_job_from_checkpoint(
                 .await
                 .map_err(|err| svc.map_pg_err(&err))?;
             } else {
+                let next_status = incomplete_status.as_str();
                 conn.execute(
                     "UPDATE memory_consolidation_jobs
-                     SET status = 'paused',
-                         checkpoint_data = $1,
-                         watermark_event_id = COALESCE($2, watermark_event_id),
-                         caveats_preserved = $3,
+                     SET status = $1,
+                         checkpoint_data = $2,
+                         watermark_event_id = COALESCE($3, watermark_event_id),
+                         caveats_preserved = $4,
                          updated_at = now()
-                     WHERE job_id = $4",
+                     WHERE job_id = $5 AND status = 'running'",
                     &[
+                        &next_status,
                         &cp_val,
                         &watermark_event_id,
                         &caveats_preserved,
