@@ -1416,6 +1416,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "verifies full project + standalone MCP tool isolation matrix in one unit test"
+    )]
     async fn control_mcp_lists_tools_for_project_and_standalone_and_blocks_foreign_project_id() {
         let client = HeadClient::new("http://127.0.0.1:18081").expect("client");
         let bound_pid = ProjectId::new();
