@@ -91,9 +91,16 @@ struct RunningDaemon {
     child: Child,
     addr: String,
     base_url: String,
+    owner_token: Option<String>,
 }
 
 impl RunningDaemon {
+    fn head_client(&self) -> HeadClient {
+        HeadClient::new(&self.base_url)
+            .expect("head client")
+            .with_optional_owner_token(self.owner_token.clone())
+    }
+
     async fn spawn_memoryd(pg_url: &str, auth_config: &AuthConfig) -> Self {
         let bin = locate_binary("dennett-memoryd", "dennett-memoryd");
         let auth_json = serde_json::to_string(auth_config).expect("serialize auth config");
@@ -110,7 +117,7 @@ impl RunningDaemon {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn dennett-memoryd");
-        Self::await_listening(child, "dennett-memoryd").await
+        Self::await_listening(child, "dennett-memoryd", None).await
     }
 
     async fn spawn_head_simulated(
@@ -120,6 +127,7 @@ impl RunningDaemon {
     ) -> Self {
         let bin = locate_binary("dennett-head", "dennett-head");
         let mcp_bin = locate_binary("dennett-memory-mcp", "dennett-memory-mcp");
+        let owner_token = format!("e2e-head-tok-{}", Uuid::new_v4().simple());
         let child = Command::new(&bin)
             .args([
                 "--serve",
@@ -133,6 +141,7 @@ impl RunningDaemon {
             ])
             .env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
+            .env("DENNETT_HEAD_TOKEN", &owner_token)
             .env("DENNETT_MEMORY_TOKEN", memory_token)
             .env_remove("DENNETT_CONTROL_PG_URL")
             .stdin(Stdio::null())
@@ -141,7 +150,7 @@ impl RunningDaemon {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn dennett-head");
-        Self::await_listening(child, "dennett-head").await
+        Self::await_listening(child, "dennett-head", Some(owner_token)).await
     }
 
     async fn spawn_head_simulated_with_hmac(
@@ -152,6 +161,7 @@ impl RunningDaemon {
     ) -> Self {
         let bin = locate_binary("dennett-head", "dennett-head");
         let mcp_bin = locate_binary("dennett-memory-mcp", "dennett-memory-mcp");
+        let owner_token = format!("e2e-head-hmac-tok-{}", Uuid::new_v4().simple());
         let child = Command::new(&bin)
             .args([
                 "--serve",
@@ -165,6 +175,7 @@ impl RunningDaemon {
             ])
             .env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
+            .env("DENNETT_HEAD_TOKEN", &owner_token)
             .env("DENNETT_MEMORY_TOKEN", memory_token)
             .env("DENNETT_MEMORY_HMAC_SECRET", hmac_secret)
             .env_remove("DENNETT_CONTROL_PG_URL")
@@ -174,10 +185,14 @@ impl RunningDaemon {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn dennett-head");
-        Self::await_listening(child, "dennett-head").await
+        Self::await_listening(child, "dennett-head", Some(owner_token)).await
     }
 
-    async fn await_listening(mut child: Child, label: &str) -> Self {
+    async fn await_listening(
+        mut child: Child,
+        label: &str,
+        owner_token: Option<String>,
+    ) -> Self {
         let stdout = child.stdout.take().expect("daemon stdout piped");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -195,12 +210,17 @@ impl RunningDaemon {
             child,
             addr,
             base_url,
+            owner_token,
         }
     }
 
     async fn shutdown(mut self) {
+        let auth_hdr = self
+            .owner_token
+            .as_deref()
+            .map_or_else(String::new, |tok| format!("Authorization: Bearer {tok}\r\n"));
         let req = format!(
-            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "POST /shutdown HTTP/1.1\r\nHost: {}\r\n{auth_hdr}X-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             self.addr
         );
         let mut stream = time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr))
@@ -226,18 +246,17 @@ impl RunningDaemon {
     }
 }
 
-async fn run_dennettctl(head_url: &str, args: &[&str]) -> (i32, String, String) {
+async fn run_dennettctl(head: &RunningDaemon, args: &[&str]) -> (i32, String, String) {
     let bin = locate_binary("dennettctl", "dennett-head-client");
-    let output = time::timeout(
-        Duration::from_secs(20),
-        Command::new(&bin)
-            .args(args)
-            .env("DENNETT_HEAD_URL", head_url)
-            .output(),
-    )
-    .await
-    .expect("dennettctl timeout")
-    .expect("run dennettctl");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args).env("DENNETT_HEAD_URL", &head.base_url);
+    if let Some(ref tok) = head.owner_token {
+        cmd.env("DENNETT_HEAD_TOKEN", tok);
+    }
+    let output = time::timeout(Duration::from_secs(20), cmd.output())
+        .await
+        .expect("dennettctl timeout")
+        .expect("run dennettctl");
     let code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -287,7 +306,7 @@ async fn head_full_lifecycle_restart_and_dennettctl_persistence() {
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
 
     // 1. Check health via dennettctl --json: explicitly shows is_simulated=true and healthy memoryd!
-    let (code, out, err) = run_dennettctl(&head.base_url, &["--json", "health"]).await;
+    let (code, out, err) = run_dennettctl(&head, &["--json", "health"]).await;
     assert_eq!(code, 0, "dennettctl health failed: {err}");
     let health: HeadHealth = serde_json::from_str(out.trim()).expect("parse health");
     assert!(health.postgres_connected);
@@ -301,7 +320,7 @@ async fn head_full_lifecycle_restart_and_dennettctl_persistence() {
     // 2. Create project, non-coding agent, session, message, and artifact via dennettctl CLI!
     let ws_str = profile.workspace_dir().to_string_lossy().into_owned();
     let (p_code, p_out, p_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "project",
@@ -319,7 +338,7 @@ async fn head_full_lifecycle_restart_and_dennettctl_persistence() {
     let project: ProjectRecord = serde_json::from_str(p_out.trim()).expect("parse project");
 
     let (a_code, a_out, a_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "agent",
@@ -344,7 +363,7 @@ async fn head_full_lifecycle_restart_and_dennettctl_persistence() {
     assert_eq!(agent.current_config.version_number, 1);
 
     let (s_code, s_out, s_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "session",
@@ -362,7 +381,7 @@ async fn head_full_lifecycle_restart_and_dennettctl_persistence() {
     let session: SessionRecord = serde_json::from_str(s_out.trim()).expect("parse session");
 
     let (m_code, m_out, m_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "send",
@@ -377,7 +396,7 @@ async fn head_full_lifecycle_restart_and_dennettctl_persistence() {
     assert!(m_out.contains("Catalog Edelweiss specimen #42"));
 
     let (art_code, art_out, art_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "artifact",
@@ -405,7 +424,7 @@ async fn head_full_lifecycle_restart_and_dennettctl_persistence() {
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd2.base_url, mem_token).await;
 
     let (show_code, show_out, show_err) = run_dennettctl(
-        &head2.base_url,
+        &head2,
         &[
             "--json",
             "session",
@@ -455,7 +474,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
 
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
-    let head_client = HeadClient::new(&head.base_url).expect("head client");
+    let head_client = head.head_client();
 
     let project = head_client
         .create_project(
@@ -671,7 +690,7 @@ async fn v02_memoryd_outage_degraded_stop_and_idempotent_outbox_recovery() {
     let recovered_memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
     let recovered_head =
         RunningDaemon::spawn_head_simulated(&ctrl_pg, &recovered_memoryd.base_url, mem_token).await;
-    let recovered_client = HeadClient::new(&recovered_head.base_url).expect("head client");
+    let recovered_client = recovered_head.head_client();
 
     let health_back = recovered_client
         .healthz(None)
@@ -785,7 +804,7 @@ async fn v05_v06_policy_engine_allow_deny_path_escape_and_secret_free_audit_trac
 
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.head_client();
 
     let project = client
         .create_project(
@@ -1112,7 +1131,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
 
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.head_client();
 
     let project = client
         .create_project(
@@ -1267,7 +1286,7 @@ async fn a04_v29_session_isolation_model_config_version_invariance_and_rehydrate
     // using ONLY session A's history (zero leak from session B!).
     head.shutdown().await;
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
-    let client2 = HeadClient::new(&head2.base_url).expect("head client 2");
+    let client2 = head2.head_client();
 
     let turn_a3 = client2
         .send_message(
@@ -1309,15 +1328,15 @@ async fn head_pg_migration_idempotency_and_append_only_triggers() {
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
     // Start Head once (applies migrations v1..v4), shut down, start again (must be idempotent!).
     let head1 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
-    let c1 = HeadClient::new(&head1.base_url).expect("client1");
+    let c1 = head1.head_client();
     let h1 = c1.healthz(None).await.expect("health1");
-    assert_eq!(h1.schema_version, Some(10));
+    assert_eq!(h1.schema_version, Some(11));
     head1.shutdown().await;
 
     let head2 = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
-    let c2 = HeadClient::new(&head2.base_url).expect("client2");
+    let c2 = head2.head_client();
     let h2 = c2.healthz(None).await.expect("health2");
-    assert_eq!(h2.schema_version, Some(10));
+    assert_eq!(h2.schema_version, Some(11));
 
     // Seed one project inside this isolated schema so `audit_events` has a real row to guard.
     let _proj = c2
@@ -1432,7 +1451,7 @@ async fn head_d1_rework_catalog_folderless_projects_inline_rename_and_hmac_scope
         hmac_secret,
     )
     .await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.head_client();
 
     // 1. Dynamic runtime catalog returns honest SIMULATED models & thinking options (zero fake Gemini 3.8 Pro).
     let catalog = client
@@ -1707,7 +1726,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
 
     let memoryd = RunningDaemon::spawn_memoryd(&mem_pg, &auth_cfg).await;
     let head = RunningDaemon::spawn_head_simulated(&ctrl_pg, &memoryd.base_url, mem_token).await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.head_client();
     let host_port = head.base_url.strip_prefix("http://").expect("host:port");
 
     // H1-01: DNS-rebinding Host, cross-site Origin, and Sec-Fetch-Site: cross-site are rejected with 403.
@@ -1736,10 +1755,14 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
     .await;
     assert_eq!(cross_site_status, 403);
 
+    let owner_tok = head
+        .owner_token
+        .as_deref()
+        .expect("head daemon owner token");
     let (tauri_origin_status, _) = raw_http_request(
         &head.base_url,
         &format!(
-            "GET /v1/projects HTTP/1.1\r\nHost: {host_port}\r\nOrigin: http://tauri.localhost\r\nSec-Fetch-Site: same-origin\r\nConnection: close\r\n\r\n"
+            "GET /v1/projects HTTP/1.1\r\nHost: {host_port}\r\nAuthorization: Bearer {owner_tok}\r\nOrigin: http://tauri.localhost\r\nSec-Fetch-Site: same-origin\r\nConnection: close\r\n\r\n"
         ),
     )
     .await;
@@ -1749,7 +1772,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
     let (cat_status, cat_json) = raw_http_request(
         &head.base_url,
         &format!(
-            "GET /v1/runtime/catalog HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n"
+            "GET /v1/runtime/catalog HTTP/1.1\r\nHost: {host_port}\r\nAuthorization: Bearer {owner_tok}\r\nConnection: close\r\n\r\n"
         ),
     )
     .await;
@@ -1769,7 +1792,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
     let (xhigh_status, xhigh_json) = raw_http_request(
         &head.base_url,
         &format!(
-            "POST /v1/agents HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{xhigh_body}",
+            "POST /v1/agents HTTP/1.1\r\nHost: {host_port}\r\nAuthorization: Bearer {owner_tok}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{xhigh_body}",
             xhigh_body.len()
         ),
     )
@@ -1871,13 +1894,13 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
 
     // H1-08: dennettctl CLI parity for runtime catalog, project update, project files, session update.
     let (cat_code, cat_out, cat_err) =
-        run_dennettctl(&head.base_url, &["--json", "runtime", "catalog"]).await;
+        run_dennettctl(&head, &["--json", "runtime", "catalog"]).await;
     assert_eq!(cat_code, 0, "dennettctl runtime catalog failed: {cat_err}");
     assert!(cat_out.contains("sim-model-alpha"));
 
     let pid_str = project.project_id.to_string();
     let (proj_upd_code, proj_upd_out, proj_upd_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "project",
@@ -1896,7 +1919,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
     assert!(proj_upd_out.contains("Renamed Via CLI"));
 
     let (files_code, files_out, files_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &["--json", "project", "files", "--id", &pid_str],
     )
     .await;
@@ -1909,7 +1932,7 @@ async fn head_h1_security_guards_concurrent_artifacts_and_dennettctl_parity() {
 
     let sid_str = session.session_id.to_string();
     let (sess_upd_code, sess_upd_out, sess_upd_err) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "session",

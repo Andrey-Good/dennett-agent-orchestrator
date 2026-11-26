@@ -298,20 +298,21 @@ impl InteractivePolicyEvaluator {
         let safe_target_summary = redact_secrets_owned(&target_summary, &self.secrets_to_redact);
         let safe_reason = redact_secrets_owned(&reason, &self.secrets_to_redact);
         let preview_snippet =
-            extract_redacted_preview_snippet(&req.raw_input, &self.secrets_to_redact);
+            extract_redacted_preview_snippet(&req.raw_input, &self.secrets_to_redact).or_else(
+                || {
+                    let trimmed = safe_target_summary.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(truncate_utf8(trimmed, 2000).to_owned())
+                    }
+                },
+            );
 
-        let Some(project_id) = self.base_ctx.project_id else {
-            let outcome = PolicyEvaluationOutcome {
-                effect: PolicyEffect::Deny,
-                matched_rule_id: None,
-                reason: String::from(
-                    "denied: standalone chat sessions enforce deny_all and do not support workspace approvals",
-                ),
-                scope,
-            };
-            self.record_decision(req, &outcome, None);
-            return outcome;
-        };
+        let project_id = self
+            .base_ctx
+            .project_id
+            .unwrap_or_else(crate::policy::standalone_system_project_id);
 
         let (tx, rx) = oneshot::channel::<ApprovalResolutionSignal>();
         let request_id = match self
@@ -471,7 +472,7 @@ fn extract_redacted_preview_snippet(
         Some(truncate_utf8(&redacted, 2000).to_owned())
     };
 
-    // 1. Direct write / patch keys (covering PascalCase agy acp & camelCase/snake_case tools)
+    // 1. Direct write / patch / shell / message keys (covering PascalCase agy acp & camelCase/snake_case tools)
     for key in [
         "Content",
         "content",
@@ -483,6 +484,14 @@ fn extract_redacted_preview_snippet(
         "text",
         "patch",
         "diff",
+        "CommandLine",
+        "command",
+        "cmd",
+        "script",
+        "shell",
+        "message",
+        "body",
+        "payload",
     ] {
         if let Some(val) = obj.get(key).and_then(serde_json::Value::as_str)
             && let Some(out) = finalize(val)
@@ -670,9 +679,16 @@ impl HeadService {
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let rules = fetch_policy_rules(&conn, self.pg_target()).await?;
         let Some(pid) = project_id else {
+            let grants = fetch_active_project_grants(
+                &conn,
+                crate::policy::standalone_system_project_id(),
+                self.pg_target(),
+            )
+            .await
+            .unwrap_or_default();
             return Ok(LivePolicyInputs {
                 rules,
-                grants: Vec::new(),
+                grants,
                 project_lifecycle_state: ProjectLifecycleState::Detached,
                 workspace_bound: false,
                 parent_write_ceiling: Some(WorkspaceWritePolicy::DenyAll),
@@ -1358,6 +1374,8 @@ impl HeadService {
 
         // Re-verify through PolicyEngine before allowing execution!
         let (effective_effect, final_status, effective_reason, effective_scope) = if wants_allow {
+            let is_standalone_sys =
+                project.project_id == crate::policy::standalone_system_project_id();
             let reverify_err: Option<String> = if project.lifecycle_state
                 != ProjectLifecycleState::Active
             {
@@ -1365,8 +1383,15 @@ impl HeadService {
                     "denied on re-verification: project lifecycle_state is `{}`",
                     project.lifecycle_state
                 ))
-            } else if let Some(ref ws_path) = project.workspace_path {
-                let ws_root = PathBuf::from(ws_path);
+            } else if !perm.normalized_targets.is_empty() && project.workspace_path.is_none() {
+                Some(String::from(
+                    "denied on re-verification: project workspace folder was detached",
+                ))
+            } else {
+                let ws_root = project.workspace_path.as_deref().map_or_else(
+                    || self.fallback_workspace_root(project.project_id),
+                    PathBuf::from,
+                );
                 let mut err_msg = None;
                 for rel in &perm.normalized_targets {
                     if let Err(boundary_err) = resolve_within_workspace(&ws_root, rel) {
@@ -1378,20 +1403,35 @@ impl HeadService {
                 }
                 if err_msg.is_none() {
                     let reverify_engine = PolicyEngine::new(PolicyContext {
-                        project_id: Some(project.project_id),
+                        project_id: if is_standalone_sys {
+                            None
+                        } else {
+                            Some(project.project_id)
+                        },
                         project_lifecycle_state: project.lifecycle_state,
-                        workspace_bound: true,
+                        workspace_bound: project.workspace_path.is_some(),
                         agent_id: agent.agent_id,
                         session_id: perm.session_id,
                         task_id: perm.task_id,
                         workspace_root: ws_root,
                         workspace_write_policy: agent.current_config.workspace_write_policy.clone(),
+                        autonomy_mode: agent.current_config.autonomy_mode,
                         parent_write_ceiling,
                         allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
                         registered_mcp_servers: std::collections::BTreeSet::new(),
                         task_budget_exhausted: false,
                         rules,
                     });
+                    let synthetic_raw_input = if perm.tool_kind.eq_ignore_ascii_case("execute")
+                        || matches!(
+                            perm.tool_name.to_ascii_lowercase().as_str(),
+                            "run_command" | "bash" | "sh" | "shell" | "powershell" | "pwsh" | "cmd"
+                        )
+                    {
+                        json!({ "command": perm.target_summary })
+                    } else {
+                        json!({})
+                    };
                     let synthetic_req = PolicyEvaluationRequest {
                         session_id: perm.session_id,
                         run_id: perm.run_id,
@@ -1399,25 +1439,35 @@ impl HeadService {
                         tool_name: perm.tool_name.clone(),
                         tool_kind: perm.tool_kind.clone(),
                         title: format!("{} {}", perm.tool_name, perm.target_summary),
-                        target: perm.normalized_targets.first().cloned(),
+                        target: perm
+                            .normalized_targets
+                            .first()
+                            .cloned()
+                            .or_else(|| Some(perm.target_summary.clone())),
                         locations: perm.normalized_targets.clone(),
-                        raw_input: json!({}),
+                        raw_input: synthetic_raw_input,
                     };
                     if let PolicyEvaluationDecision::Immediate(o) = reverify_engine
                         .evaluate_with_grants(&synthetic_req, &[], TimestampMs::now())
                         && o.effect == PolicyEffect::Deny
                     {
-                        err_msg = Some(format!(
-                            "denied on PolicyEngine re-verification: {}",
-                            o.reason
-                        ));
+                        // Only block if an explicit Deny rule, workspace escape, or DenyAll policy
+                        // rejects the tool (registered third-party MCP tools that were originally
+                        // asked under `NeedsInteractiveApproval` are re-verified against explicit
+                        // Deny rules above).
+                        let is_unregistered_mcp_default_deny = o.matched_rule_id.is_none()
+                            && o.reason.starts_with("default-deny outside model:")
+                            && !is_workspace_write_tool(&perm.tool_name, &perm.tool_kind)
+                            && !perm.tool_kind.eq_ignore_ascii_case("execute");
+                        if !is_unregistered_mcp_default_deny {
+                            err_msg = Some(format!(
+                                "denied on PolicyEngine re-verification: {}",
+                                o.reason
+                            ));
+                        }
                     }
                 }
                 err_msg
-            } else {
-                Some(String::from(
-                    "denied on re-verification: project workspace folder was detached",
-                ))
             };
 
             if let Some(fail_reason) = reverify_err {
@@ -1489,14 +1539,29 @@ impl HeadService {
             )
         {
             let grant_id = CapabilityGrantId::new();
-            let grant_task_id = if req.decision == PermissionResolutionDecision::ApproveTask {
-                perm.task_id
-            } else {
-                None
-            };
-            let grant_scope = match grant_task_id {
-                Some(tid) => format!("task:{tid}"),
-                None => format!("project:{}", perm.project_id),
+            let (grant_session_id, grant_task_id, grant_scope) = match req.decision {
+                PermissionResolutionDecision::ApproveTask => match perm.task_id {
+                    Some(tid) => (None, Some(tid), format!("task:{tid}")),
+                    // Interactive chat session grant: allows negotiating/messaging/shell in THIS
+                    // session without re-asking while keeping other sessions isolated!
+                    None => (
+                        Some(perm.session_id),
+                        None,
+                        format!("session:{}", perm.session_id),
+                    ),
+                },
+                PermissionResolutionDecision::ApproveProject => {
+                    if perm.project_id == crate::policy::standalone_system_project_id() {
+                        (
+                            Some(perm.session_id),
+                            None,
+                            format!("session:{}", perm.session_id),
+                        )
+                    } else {
+                        (None, None, format!("project:{}", perm.project_id))
+                    }
+                }
+                _ => (None, None, format!("project:{}", perm.project_id)),
             };
             let tool_pattern = if is_workspace_write_tool(&perm.tool_name, &perm.tool_kind) {
                 String::from("workspace_write")
@@ -1516,9 +1581,9 @@ impl HeadService {
                     grant_id, scope, project_id, agent_id, session_id, task_id,
                     tool_pattern, target_prefixes, max_uses, uses_consumed, reason, expires_at
                  ) VALUES (
-                    $1, $2, $3, NULL, NULL, $4,
-                    $5, $6, $7, 1, $8,
-                    CASE WHEN $9::double precision IS NULL THEN NULL ELSE to_timestamp($9) END
+                    $1, $2, $3, NULL, $4, $5,
+                    $6, $7, $8, 1, $9,
+                    CASE WHEN $10::double precision IS NULL THEN NULL ELSE to_timestamp($10) END
                  )
                  RETURNING {CAPABILITY_GRANT_SELECT_COLS}"
             );
@@ -1529,6 +1594,7 @@ impl HeadService {
                         &grant_id.as_uuid(),
                         &grant_scope,
                         &perm.project_id.as_uuid(),
+                        &grant_session_id.map(SessionId::as_uuid),
                         &grant_task_id.map(TaskId::as_uuid),
                         &tool_pattern,
                         &empty_prefixes,

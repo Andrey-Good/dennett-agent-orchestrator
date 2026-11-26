@@ -11,19 +11,20 @@ use deadpool_postgres::GenericClient;
 use dennett_contracts::{
     AgentConfigVersion, AgentConfigVersionId, AgentId, AgentMessageId, AgentMessageRecord,
     AgentRecord, ArtifactCompleteness, ArtifactId, ArtifactLifecycleState, ArtifactRecord,
-    AuditEventId, CapabilityGrantId, CapabilityGrantRecord, ControlEventId, ControlEventRecord,
-    CorrelationId, DennettError, DiagnosticEvent, EffectClaimId, EffectClaimRecord,
-    ExternalEffectStatus, FollowupId, FollowupStatus, IdempotencyKey, InboxCardId, InboxCardKind,
-    InboxCardRecord, InboxCardStatus, InboxCardUrgency, MemoryScope, MessageId, MessageRecord,
-    MessageRole, MissedRunPolicy, OrderedOutboxItem, OrderedOutboxItemId, OrderedOutboxStatus,
-    PermissionDecisionId, PermissionDecisionRecord, PermissionRequestId, PermissionRequestRecord,
-    PermissionRequestStatus, PolicyEffect, PolicyRule, PolicyRuleId, ProjectId,
-    ProjectLifecycleState, ProjectRecord, ProviderConnectionId, RunId, RunRecord, RunStatus,
-    RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, SessionFollowupRecord, SessionId,
-    SessionKind, SessionRecord, SessionStatus, Sha256Hex, TaskBudget, TaskId, TaskRecord,
-    TaskSchedule, TaskSignalId, TaskSignalOutcome, TaskSignalRecord, TaskStatus, TaskTimerId,
-    TaskTimerRecord, TaskTimerStatus, TaskUsage, ThinkingLevel, TimerPauseReason, TimestampMs,
-    UsageConfidence, WorkspaceWritePolicy,
+    AuditEventId, AutonomyMode, CapabilityGrantId, CapabilityGrantRecord, ControlEventId,
+    ControlEventRecord, CorrelationId, DennettError, DiagnosticEvent, EffectClaimId,
+    EffectClaimRecord, ExternalEffectStatus, FollowupId, FollowupStatus, IdempotencyKey,
+    InboxCardId, InboxCardKind, InboxCardRecord, InboxCardStatus, InboxCardUrgency, MemoryScope,
+    MessageId, MessageRecord, MessageRole, MissedRunPolicy, OrderedOutboxItem, OrderedOutboxItemId,
+    OrderedOutboxStatus, PermissionDecisionId, PermissionDecisionRecord, PermissionRequestId,
+    PermissionRequestRecord, PermissionRequestStatus, PolicyEffect, PolicyRule, PolicyRuleId,
+    ProjectId, ProjectLifecycleState, ProjectRecord, ProviderConnectionId, RunId, RunRecord,
+    RunStatus, RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, SessionFollowupRecord,
+    SessionId, SessionKind, SessionRecord, SessionStatus, Sha256Hex, TaskBudget, TaskId,
+    TaskRecord, TaskSchedule, TaskSignalId, TaskSignalOutcome, TaskSignalRecord, TaskStatus,
+    TaskTimerId, TaskTimerRecord, TaskTimerStatus, TaskTrigger, TaskUsage, ThinkingLevel,
+    TimerPauseReason, TimestampMs, UpdateUserPreferencesRequest, UsageConfidence, UserPreferences,
+    WorkspaceWritePolicy,
 };
 use serde_json::Value as JsonValue;
 use tokio_postgres::Row;
@@ -206,7 +207,8 @@ pub(crate) const AGENT_JOIN_SELECT: &str = "
            v.allowed_memory_scopes, v.workspace_write_policy,
            v.default_budget, v.attached_skills,
            TRUNC(EXTRACT(EPOCH FROM v.created_at) * 1000)::bigint,
-           v.preferred_connection_id
+           v.preferred_connection_id,
+           v.autonomy_mode
     FROM agents a
     JOIN agent_config_versions v ON v.config_version_id = a.current_config_version_id
 ";
@@ -261,7 +263,14 @@ pub(crate) const TASK_SELECT_COLS: &str = "
     TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint,
     TRUNC(EXTRACT(EPOCH FROM finished_at) * 1000)::bigint,
-    expected_signal_name
+    expected_signal_name,
+    target_session_id,
+    notify_session_id,
+    model_override,
+    thinking_override,
+    connection_override_id,
+    skill_slugs_override_json,
+    trigger_json
 ";
 
 pub(crate) const TASK_TIMER_SELECT_COLS: &str = "
@@ -419,7 +428,9 @@ pub(crate) async fn fetch_session<C: GenericClient>(
     session_id: SessionId,
     target: &ValidatedControlPgTarget,
 ) -> Result<SessionRecord, DennettError> {
-    let sql = format!("SELECT {SESSION_SELECT_COLS} FROM sessions WHERE session_id = $1");
+    let sql = format!(
+        "SELECT {SESSION_SELECT_COLS} FROM sessions WHERE session_id = $1 AND deleted_at IS NULL"
+    );
     let row = client
         .query_opt(&sql, &[&session_id.as_uuid()])
         .await
@@ -613,7 +624,9 @@ pub(crate) async fn fetch_task<C: GenericClient>(
     task_id: TaskId,
     target: &ValidatedControlPgTarget,
 ) -> Result<TaskRecord, DennettError> {
-    let sql = format!("SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1");
+    let sql = format!(
+        "SELECT {TASK_SELECT_COLS} FROM tasks WHERE task_id = $1 AND deleted_at IS NULL"
+    );
     let row = client
         .query_opt(&sql, &[&task_id.as_uuid()])
         .await
@@ -685,7 +698,7 @@ pub(crate) fn decode_agent_join_row(row: &Row) -> Result<AgentRecord, DennettErr
         thinking_level,
         allowed_memory_scopes: scopes_vec.into_iter().collect::<BTreeSet<_>>(),
         workspace_write_policy: write_policy,
-        autonomy_mode: dennett_contracts::AutonomyMode::Auto,
+        autonomy_mode: AutonomyMode::from_str(&row.get::<_, String>(17))?,
         default_budget,
         attached_skills,
         preferred_connection_id: row
@@ -744,7 +757,7 @@ pub(crate) fn decode_config_version_row(row: &Row) -> Result<AgentConfigVersion,
         thinking_level,
         allowed_memory_scopes: scopes_vec.into_iter().collect(),
         workspace_write_policy: write_policy,
-        autonomy_mode: dennett_contracts::AutonomyMode::Auto,
+        autonomy_mode: AutonomyMode::from_str(&row.get::<_, String>(12))?,
         default_budget,
         attached_skills,
         preferred_connection_id: row
@@ -973,6 +986,26 @@ pub(crate) fn decode_task_row(row: &Row) -> Result<TaskRecord, DennettError> {
         .get::<_, Option<String>>(21)
         .map(|s| decode_auth_profile(&s))
         .transpose()?;
+    let thinking_override = row
+        .get::<_, Option<String>>(29)
+        .map(|s| ThinkingLevel::from_str(&s))
+        .transpose()?;
+    let skill_slugs_override: Option<Vec<String>> = row
+        .get::<_, Option<String>>(31)
+        .map(|raw| {
+            serde_json::from_str(&raw).map_err(|err| DennettError::Internal {
+                detail: format!("corrupt tasks.skill_slugs_override_json: {err}"),
+            })
+        })
+        .transpose()?;
+    let trigger: Option<TaskTrigger> = row
+        .get::<_, Option<String>>(32)
+        .map(|raw| {
+            serde_json::from_str(&raw).map_err(|err| DennettError::Internal {
+                detail: format!("corrupt tasks.trigger_json: {err}"),
+            })
+        })
+        .transpose()?;
 
     Ok(TaskRecord {
         task_id: TaskId::from_uuid(row.get(0)),
@@ -1000,13 +1033,15 @@ pub(crate) fn decode_task_row(row: &Row) -> Result<TaskRecord, DennettError> {
         },
         attached_skills,
         auth_profile_override,
-        target_session_id: None,
-        notify_session_id: None,
-        model_override: None,
-        thinking_override: None,
-        connection_override_id: None,
-        skill_slugs_override: None,
-        trigger: None,
+        target_session_id: row.get::<_, Option<Uuid>>(26).map(SessionId::from_uuid),
+        notify_session_id: row.get::<_, Option<Uuid>>(27).map(SessionId::from_uuid),
+        model_override: row.get(28),
+        thinking_override,
+        connection_override_id: row
+            .get::<_, Option<Uuid>>(30)
+            .map(ProviderConnectionId::from_uuid),
+        skill_slugs_override,
+        trigger,
         created_at: TimestampMs::from_millis(row.get(22)),
         updated_at: TimestampMs::from_millis(row.get(23)),
         finished_at: row.get::<_, Option<i64>>(24).map(TimestampMs::from_millis),
@@ -1224,6 +1259,91 @@ pub(crate) fn decode_ordered_outbox_row(row: &Row) -> Result<OrderedOutboxItem, 
         correlation_id: CorrelationId::try_new(row.get::<_, String>(14))?,
         created_at: TimestampMs::from_millis(row.get(15)),
         updated_at: TimestampMs::from_millis(row.get(16)),
+    })
+}
+
+pub(crate) async fn fetch_user_preferences<C: GenericClient>(
+    client: &C,
+    target: &ValidatedControlPgTarget,
+) -> Result<UserPreferences, DennettError> {
+    let row = client
+        .query_opt(
+            "SELECT ui_language, agent_language, timezone, enter_to_send,
+                    TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint
+             FROM user_preferences
+             WHERE id = 1",
+            &[],
+        )
+        .await
+        .map_err(|err| map_pg_err(target, &err))?;
+    match row {
+        Some(r) => Ok(UserPreferences {
+            ui_language: r.get(0),
+            agent_language: r.get(1),
+            timezone: r.get(2),
+            enter_to_send: r.get(3),
+            updated_at: TimestampMs::from_millis(r.get(4)),
+        }),
+        None => Ok(UserPreferences::default()),
+    }
+}
+
+pub(crate) async fn update_user_preferences_in_tx<C: GenericClient>(
+    tx: &C,
+    req: &UpdateUserPreferencesRequest,
+    target: &ValidatedControlPgTarget,
+) -> Result<UserPreferences, DennettError> {
+    if let Some(ref tz) = req.timezone {
+        let exists: bool = tx
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_timezone_names WHERE name = $1)",
+                &[&tz.as_str()],
+            )
+            .await
+            .map_err(|err| map_pg_err(target, &err))?
+            .get(0);
+        if !exists {
+            return Err(DennettError::InvalidInput {
+                field: String::from("timezone"),
+                reason: format!("unknown IANA timezone `{tz}` in PostgreSQL pg_timezone_names"),
+            });
+        }
+    }
+
+    tx.execute(
+        "INSERT INTO user_preferences (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+        &[],
+    )
+    .await
+    .map_err(|err| map_pg_err(target, &err))?;
+
+    let row = tx
+        .query_one(
+            "UPDATE user_preferences
+             SET ui_language = COALESCE($1, ui_language),
+                 agent_language = COALESCE($2, agent_language),
+                 timezone = COALESCE($3, timezone),
+                 enter_to_send = COALESCE($4, enter_to_send),
+                 updated_at = now()
+             WHERE id = 1
+             RETURNING ui_language, agent_language, timezone, enter_to_send,
+                       TRUNC(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint",
+            &[
+                &req.ui_language.as_deref(),
+                &req.agent_language.as_deref(),
+                &req.timezone.as_deref(),
+                &req.enter_to_send,
+            ],
+        )
+        .await
+        .map_err(|err| map_pg_err(target, &err))?;
+
+    Ok(UserPreferences {
+        ui_language: row.get(0),
+        agent_language: row.get(1),
+        timezone: row.get(2),
+        enter_to_send: row.get(3),
+        updated_at: TimestampMs::from_millis(row.get(4)),
     })
 }
 

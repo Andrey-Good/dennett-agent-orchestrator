@@ -94,15 +94,23 @@ struct RunningHead {
     child: Child,
     addr: String,
     base_url: String,
+    owner_token: String,
 }
 
 impl RunningHead {
+    fn client(&self) -> HeadClient {
+        HeadClient::new(&self.base_url)
+            .expect("head client")
+            .with_owner_token(&self.owner_token)
+    }
+
     async fn spawn_simulated(
         control_pg_url: &str,
         profile_root: Option<&Path>,
         effects_ledger: Option<&Path>,
     ) -> Self {
         let bin = locate_binary("dennett-head", "dennett-head");
+        let owner_token = format!("d2-head-tok-{}", Uuid::new_v4().simple());
         let mut cmd = Command::new(&bin);
         cmd.args(["--serve", "127.0.0.1:0", "--runtime", "simulated"]);
         if let Some(root) = profile_root {
@@ -114,6 +122,7 @@ impl RunningHead {
         let mut child = cmd
             .env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
+            .env("DENNETT_HEAD_TOKEN", &owner_token)
             .env_remove("DENNETT_CONTROL_PG_URL")
             .env_remove("DENNETT_MEMORY_URL")
             .env_remove("DENNETT_MEMORY_TOKEN")
@@ -141,13 +150,14 @@ impl RunningHead {
             child,
             addr,
             base_url,
+            owner_token,
         }
     }
 
     async fn shutdown(mut self) {
         let req = format!(
-            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            self.addr
+            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            self.addr, self.owner_token
         );
         if let Ok(Ok(mut stream)) =
             time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr)).await
@@ -166,11 +176,12 @@ impl RunningHead {
     }
 }
 
-async fn run_dennettctl(head_url: &str, args: &[&str]) -> (i32, String, String) {
+async fn run_dennettctl(head: &RunningHead, args: &[&str]) -> (i32, String, String) {
     let bin = locate_binary("dennettctl", "dennett-head-client");
     let out = Command::new(&bin)
-        .args(["--url", head_url])
+        .args(["--url", &head.base_url])
         .args(args)
+        .env("DENNETT_HEAD_TOKEN", &head.owner_token)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -225,10 +236,10 @@ async fn d2_timers_survive_head_restart_misfire_policies_and_concurrent_idempote
 
     // 1. Start Head #1, verify schema v4 & D2 capabilities, create scheduled tasks.
     let head1 = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), None).await;
-    let c1 = HeadClient::new(&head1.base_url).expect("head client 1");
+    let c1 = head1.client();
     let health1 = c1.healthz(None).await.expect("health1");
     assert_eq!(health1.stage, "D3");
-    assert_eq!(health1.schema_version, Some(10));
+    assert_eq!(health1.schema_version, Some(11));
     assert!(health1.capabilities.iter().any(|c| c == "control.tasks.v1"));
 
     let proj = c1
@@ -396,7 +407,7 @@ async fn d2_timers_survive_head_restart_misfire_policies_and_concurrent_idempote
     // 2. Full `dennett-head` restart! All armed timers MUST survive in PostgreSQL!
     head1.shutdown().await;
     let head2 = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), None).await;
-    let c2 = HeadClient::new(&head2.base_url).expect("head client 2");
+    let c2 = head2.client();
 
     // Advance virtual scheduler time +20 min (> 60s misfire grace past all 4 timers!).
     let tick_ms = fire_target_ms + 600_000;
@@ -623,7 +634,7 @@ async fn d2_goal_update_generation_fence_targeted_stop_delegation_and_agent_mess
     let scope_b = unique_scope("d2-scope-b");
 
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), None).await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.client();
 
     let proj = client
         .create_project(
@@ -1038,7 +1049,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
     let scope = unique_scope("d2-approvals");
 
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), None).await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.client();
 
     let proj = client
         .create_project(
@@ -1083,7 +1094,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .await
         .expect("session");
 
-    // 1. First write pauses in `pending` -> file MUST NOT exist on disk before approval!
+    // 1. First risky external command pauses in `pending` -> MUST NOT execute before approval!
     let c_turn1 = client.clone();
     let sid = session.session_id;
     let turn1_handle = tokio::spawn(async move {
@@ -1091,7 +1102,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
             .send_message(
                 sid,
                 &SendMessageRequest {
-                    content: String::from("[SIM:TOOL:write_file:docs/a.txt|first_approved]"),
+                    content: String::from("[SIM:TOOL:run_command:git push origin branch-a]"),
                     timeout_ms: Some(30_000),
                     client_message_id: None,
                 },
@@ -1118,10 +1129,6 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         }
     };
     assert_eq!(perm1.status, PermissionRequestStatus::Pending);
-    assert!(
-        !profile.workspace_dir().join("docs").join("a.txt").exists(),
-        "file MUST NOT be created before owner resolves permission_request!"
-    );
 
     // Wrong optimistic revision -> 409 Conflict!
     let stale_perm_err = client
@@ -1139,14 +1146,14 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .await;
     assert!(matches!(stale_perm_err, Err(DennettError::Conflict { .. })));
 
-    // Approve with `ApproveProject` -> resumes turn, writes file once, issues revocable grant!
+    // Approve with `ApproveProject` -> resumes turn, executes once, issues revocable grant!
     let resolved1 = client
         .resolve_permission_request(
             perm1.request_id,
             &ResolvePermissionRequest {
                 expected_revision: Some(perm1.revision),
                 decision: PermissionResolutionDecision::ApproveProject,
-                reason: Some(String::from("allow writes in this project")),
+                reason: Some(String::from("allow external git push in this project")),
                 max_uses: Some(5),
                 expires_in_secs: Some(600),
             },
@@ -1159,7 +1166,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .expect("ApproveProject must issue a revocable CapabilityGrantRecord");
     assert_eq!(
         grant.uses_consumed, 1,
-        "initial approved write (docs/a.txt) consumes 1 of 5 uses on the newly issued grant"
+        "initial approved command consumes 1 of 5 uses on the newly issued grant"
     );
 
     let turn1_resp = turn1_handle
@@ -1167,18 +1174,21 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .expect("join turn1")
         .expect("turn1 succeeded");
     assert_eq!(turn1_resp.run.status, RunStatus::Succeeded);
-    assert_eq!(
-        fs::read_to_string(profile.workspace_dir().join("docs").join("a.txt"))
-            .expect("docs/a.txt written"),
-        "first_approved"
+    assert!(
+        turn1_resp
+            .assistant_message
+            .as_ref()
+            .is_some_and(|m| m.content.contains("ALLOWED") && m.content.contains("branch-a")),
+        "approved command must run cleanly: {:?}",
+        turn1_resp.assistant_message
     );
 
-    // 2. Second write succeeds IMMEDIATELY via the standing grant (zero new pending approval)!
+    // 2. Second risky command succeeds IMMEDIATELY via the standing grant (zero new pending approval)!
     let turn2_resp = client
         .send_message(
             session.session_id,
             &SendMessageRequest {
-                content: String::from("[SIM:TOOL:write_file:docs/b.txt|second_via_grant]"),
+                content: String::from("[SIM:TOOL:run_command:git push origin branch-b]"),
                 timeout_ms: Some(15_000),
                 client_message_id: None,
             },
@@ -1187,10 +1197,13 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .await
         .expect("turn2 via grant");
     assert_eq!(turn2_resp.run.status, RunStatus::Succeeded);
-    assert_eq!(
-        fs::read_to_string(profile.workspace_dir().join("docs").join("b.txt"))
-            .expect("docs/b.txt written"),
-        "second_via_grant"
+    assert!(
+        turn2_resp
+            .assistant_message
+            .as_ref()
+            .is_some_and(|m| m.content.contains("ALLOWED") && m.content.contains("branch-b")),
+        "second command via standing grant must succeed: {:?}",
+        turn2_resp.assistant_message
     );
 
     let grants_after_use = client
@@ -1204,15 +1217,15 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .expect("grant present");
     assert_eq!(
         used_grant.uses_consumed, 2,
-        "second write via standing grant (docs/b.txt) increments uses_consumed from 1 to 2"
+        "second command via standing grant increments uses_consumed from 1 to 2"
     );
 
-    // 3. Revoke grant -> third write MUST pause for approval again, and Stop cancels it cleanly!
+    // 3. Revoke grant -> third risky command MUST pause for approval again, and Stop cancels it cleanly!
     let revoked = client
         .revoke_capability_grant(
             grant.grant_id,
             &RevokeGrantRequest {
-                reason: Some(String::from("revoking write permission")),
+                reason: Some(String::from("revoking external command permission")),
             },
             None,
         )
@@ -1226,7 +1239,7 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
             .send_message(
                 sid,
                 &SendMessageRequest {
-                    content: String::from("[SIM:TOOL:write_file:docs/c.txt|must_not_write]"),
+                    content: String::from("[SIM:TOOL:run_command:git push origin branch-c]"),
                     timeout_ms: Some(20_000),
                     client_message_id: None,
                 },
@@ -1247,12 +1260,11 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
             }
             assert!(
                 time::Instant::now() < deadline,
-                "revoked grant MUST cause third write to pause for interactive approval!"
+                "revoked grant MUST cause third risky command to pause for interactive approval!"
             );
             time::sleep(Duration::from_millis(50)).await;
         }
     };
-    assert!(!profile.workspace_dir().join("docs").join("c.txt").exists());
 
     // Stop cancels waiting turn and withdraws pending permission_request!
     let cancel_resp = client
@@ -1266,10 +1278,6 @@ async fn d2_interactive_ask_before_write_approvals_revocable_grants_and_stop_wit
         .expect("join turn3")
         .expect("cancelled turn3");
     assert_eq!(turn3_resp.run.status, RunStatus::Cancelled);
-    assert!(
-        !profile.workspace_dir().join("docs").join("c.txt").exists(),
-        "docs/c.txt MUST NEVER be written after Stop!"
-    );
 
     // Late resolve after Stop MUST fail closed with 409 Conflict!
     let late_resolve = client
@@ -1306,7 +1314,7 @@ async fn d2_lost_ack_unknown_external_effect_survives_restart_honest_stop_and_re
 
     let head1 =
         RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), Some(&ledger_path)).await;
-    let c1 = HeadClient::new(&head1.base_url).expect("head client 1");
+    let c1 = head1.client();
 
     let proj = c1
         .create_project(
@@ -1446,7 +1454,7 @@ async fn d2_lost_ack_unknown_external_effect_survives_restart_honest_stop_and_re
     head1.shutdown().await;
     let head2 =
         RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), Some(&ledger_path)).await;
-    let c2 = HeadClient::new(&head2.base_url).expect("head client 2");
+    let c2 = head2.client();
 
     // Retry AFTER full restart MUST STILL refuse blind re-send!
     let retry_after_restart = c2
@@ -1509,7 +1517,7 @@ async fn d2_clarification_budgets_client_idempotency_strict_lifecycle_and_dennet
 
     let scope = unique_scope("d2-life");
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), None).await;
-    let client = HeadClient::new(&head.base_url).expect("head client");
+    let client = head.client();
 
     let proj = client
         .create_project(
@@ -1893,7 +1901,7 @@ async fn d2_clarification_budgets_client_idempotency_strict_lifecycle_and_dennet
         &["--json", "effect", "list"][..],
         &["--json", "project", "list", "--include-archived"][..],
     ] {
-        let (code, stdout, stderr) = run_dennettctl(&head.base_url, cli_args).await;
+        let (code, stdout, stderr) = run_dennettctl(&head, cli_args).await;
         assert_eq!(
             code, 0,
             "dennettctl {cli_args:?} failed (code={code}): stderr={stderr}"

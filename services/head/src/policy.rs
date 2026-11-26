@@ -17,13 +17,23 @@ use std::sync::{Arc, Mutex};
 
 use dennett_contracts::redact::redact_secrets;
 use dennett_contracts::{
-    AgentId, CapabilityGrantId, CapabilityGrantRecord, CorrelationId, MemoryScope,
+    AgentId, AutonomyMode, CapabilityGrantId, CapabilityGrantRecord, CorrelationId, MemoryScope,
     PermissionDecisionId, PermissionDecisionRecord, PolicyEffect, PolicyRule, ProjectId,
     ProjectLifecycleState, SessionId, TaskId, TimestampMs, WorkspaceWritePolicy,
 };
 use dennett_runtime_antigravity::{
     BoxFuture, PolicyEvaluationOutcome, PolicyEvaluationRequest, PolicyEvaluator,
 };
+
+/// Deterministic hidden system project UUID backing standalone session reminders and approvals.
+pub const STANDALONE_SYSTEM_PROJECT_UUID: uuid::Uuid =
+    uuid::Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_00ff);
+
+/// Deterministic hidden system [`ProjectId`] backing standalone session reminders and approvals.
+#[must_use]
+pub const fn standalone_system_project_id() -> ProjectId {
+    ProjectId::from_uuid(STANDALONE_SYSTEM_PROJECT_UUID)
+}
 
 /// Context snapshot evaluated by [`PolicyEngine`] for one session or task turn.
 #[derive(Debug, Clone)]
@@ -44,6 +54,8 @@ pub struct PolicyContext {
     pub workspace_root: PathBuf,
     /// Agent's configured workspace write policy.
     pub workspace_write_policy: WorkspaceWritePolicy,
+    /// Agent's interactive autonomy mode (`Auto` default vs `FullAccess`, `A-CORE-1`).
+    pub autonomy_mode: AutonomyMode,
     /// Optional parent task agent's write policy ceiling enforced BEFORE child Allow rules or
     /// project capability grants on delegated sub-tasks (D2-SEC-02).
     pub parent_write_ceiling: Option<WorkspaceWritePolicy>,
@@ -170,23 +182,32 @@ impl PolicyEngine {
 
         let is_execute = is_execute_tool(&tool_lower, &req.tool_kind, &req.raw_input);
         let is_file_write = !is_execute && is_write_tool(&tool_lower, &req.tool_kind);
-        let control_skill_mcp_op = if is_execute || is_file_write {
+        let is_web_tool = !is_execute
+            && !is_file_write
+            && is_builtin_web_tool(&tool_lower, &req.tool_kind, &req.raw_input);
+        let control_skill_mcp_op = if is_execute || is_file_write || is_web_tool {
             None
         } else {
             canonical_control_skill_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
         };
         let is_file_read = !is_execute
             && !is_file_write
+            && !is_web_tool
             && control_skill_mcp_op.is_none()
             && is_read_tool(&tool_lower, &req.tool_kind);
-        let memory_mcp_op =
-            if is_execute || is_file_write || is_file_read || control_skill_mcp_op.is_some() {
-                None
-            } else {
-                canonical_memory_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
-            };
+        let memory_mcp_op = if is_execute
+            || is_file_write
+            || is_web_tool
+            || is_file_read
+            || control_skill_mcp_op.is_some()
+        {
+            None
+        } else {
+            canonical_memory_mcp_op(&tool_lower, &req.tool_kind, &req.raw_input)
+        };
         let control_mcp_op = if is_execute
             || is_file_write
+            || is_web_tool
             || is_file_read
             || control_skill_mcp_op.is_some()
             || memory_mcp_op.is_some()
@@ -371,66 +392,21 @@ impl PolicyEngine {
                         scope: format!("agent:{}", self.ctx.agent_id),
                     });
                 }
-                WorkspaceWritePolicy::AllowWorkspace => {
+                WorkspaceWritePolicy::AllowWorkspace | WorkspaceWritePolicy::AskBeforeWrite => {
+                    // Owner 2-Mode Autonomy (`A-CORE-1`): BOTH `AutonomyMode::Auto` and
+                    // `AutonomyMode::FullAccess` allow canonical in-workspace file edits without
+                    // tedious manual approval prompts (while DenyAll / AllowPaths / parent ceiling
+                    // / explicit Deny rules / workspace containment remain strictly enforced!).
                     let joined_rel = normalized_rel_targets.join(", ");
                     return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
                         effect: PolicyEffect::Allow,
                         matched_rule_id: None,
                         reason: format!(
-                            "allowed by workspace_write_policy=allow_workspace within project root (`{joined_rel}`)"
+                            "allowed workspace write under autonomy_mode={} within project root (`{joined_rel}`)",
+                            self.ctx.autonomy_mode
                         ),
                         scope: format!("agent:{}", self.ctx.agent_id),
                     });
-                }
-                WorkspaceWritePolicy::AskBeforeWrite => {
-                    // Explicit Allow policy rule applies ONLY when EVERY normalized target matches (D2-SEC-02).
-                    if let Some(allow_rule) = applicable_rules.iter().find(|r| {
-                        r.effect == PolicyEffect::Allow
-                            && rule_matches_all_for_allow(r, &tool_lower, &allow_match_targets)
-                    }) {
-                        return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
-                            effect: PolicyEffect::Allow,
-                            matched_rule_id: Some(allow_rule.rule_id),
-                            reason: format!(
-                                "allowed by explicit policy rule: {}",
-                                allow_rule.reason
-                            ),
-                            scope: allow_rule.scope.clone(),
-                        });
-                    }
-                    // Check active revocable CapabilityGrants (non-revoked, non-expired, remaining uses).
-                    if let Some(grant) = self.find_matching_grant(
-                        active_grants,
-                        now,
-                        &tool_lower,
-                        true,
-                        &normalized_rel_targets,
-                    ) {
-                        let joined_rel = normalized_rel_targets.join(", ");
-                        return PolicyEvaluationDecision::AllowedByGrant {
-                            grant_id: grant.grant_id,
-                            outcome: PolicyEvaluationOutcome {
-                                effect: PolicyEffect::Allow,
-                                matched_rule_id: None,
-                                reason: format!(
-                                    "allowed by active capability grant {} ({}) for `{joined_rel}`",
-                                    grant.grant_id, grant.reason
-                                ),
-                                scope: grant.scope.clone(),
-                            },
-                        };
-                    }
-                    // Otherwise require interactive owner approval outside the model!
-                    let target_summary = normalized_rel_targets.join(", ");
-                    return PolicyEvaluationDecision::NeedsInteractiveApproval {
-                        normalized_targets: normalized_rel_targets,
-                        target_summary: target_summary.clone(),
-                        scope: self.primary_scope_label(),
-                        reason: format!(
-                            "workspace_write_policy=ask_before_write requires owner approval to run `{}` on `{target_summary}`",
-                            req.tool_name
-                        ),
-                    };
                 }
                 _ => {
                     return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
@@ -441,6 +417,17 @@ impl PolicyEngine {
                     });
                 }
             }
+        }
+
+        // 3b. Built-in web search / web fetch tools (`A8`): never falsely treated as local fs
+        //     reads outside workspace (explicit Step 2 Deny rules still override!).
+        if is_web_tool {
+            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                matched_rule_id: None,
+                reason: format!("allowed built-in web tool `{}`", req.tool_name),
+                scope: self.primary_scope_label(),
+            });
         }
 
         // 4. Scoped `dennett-memory-mcp` tools: enforce agent's `allowed_memory_scopes` (defense-in-depth).
@@ -464,6 +451,7 @@ impl PolicyEngine {
                     | "memory_claim_supersede"
                     | "memory_conflict_resolve"
                     | "memory_document_write"
+                    | "memory_evidence_create"
                     | "mcp:dennett-memory"
             );
 
@@ -537,29 +525,63 @@ impl PolicyEngine {
             });
         }
 
-        // 4b. Scoped `dennett-control-mcp` tools (Agent-Native Events):
-        //     Step 2 explicit `Deny` rules already ran above; standalone sessions have no project
-        //     context and deny control MCP unconditionally; reject foreign `project_id`, and
-        //     block recursive `dennett_event_create` inside background `task_run` turns unless
-        //     explicitly allowed by policy rule.
+        // 4b. Scoped `dennett-control-mcp` tools (Agent-Native Events, Artifacts, Delegation):
+        //     Step 2 explicit `Deny` rules already ran above; standalone sessions may create/manage
+        //     their own standalone reminders & session artifacts (never targeting any foreign project
+        //     and never delegating project subagents), while background `task_run` turns may schedule
+        //     bounded follow-up timers (depth cap enforced in PostgreSQL `create_task`) but cannot
+        //     recursively spawn unscheduled tasks without an explicit Allow rule.
         if let Some(ctrl_op) = control_mcp_op {
-            let Some(owning_project_id) = self.ctx.project_id else {
-                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
-                    effect: PolicyEffect::Deny,
-                    matched_rule_id: None,
-                    reason: format!(
-                        "denied control MCP tool `{}`: standalone session `{}` has no owning project",
-                        req.tool_name, self.ctx.session_id
-                    ),
-                    scope: format!("session:{}", self.ctx.session_id),
-                });
-            };
-            if let Some(requested_pid) = req
+            let requested_pid = req
                 .raw_input
                 .get("project_id")
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty());
+
+            let Some(owning_project_id) = self.ctx.project_id else {
+                let standalone_allowed = matches!(
+                    ctrl_op,
+                    "dennett_event_create"
+                        | "dennett_event_list"
+                        | "dennett_event_update"
+                        | "dennett_event_cancel"
+                        | "dennett_artifact_register"
+                        | "dennett_artifact_list"
+                );
+                if !standalone_allowed {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Deny,
+                        matched_rule_id: None,
+                        reason: format!(
+                            "denied control MCP tool `{}`: standalone session `{}` has no owning project",
+                            req.tool_name, self.ctx.session_id
+                        ),
+                        scope: format!("session:{}", self.ctx.session_id),
+                    });
+                }
+                if let Some(foreign_pid) = requested_pid {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Deny,
+                        matched_rule_id: None,
+                        reason: format!(
+                            "denied control MCP tool `{}`: standalone session cannot target project `{foreign_pid}`",
+                            req.tool_name
+                        ),
+                        scope: format!("session:{}", self.ctx.session_id),
+                    });
+                }
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Allow,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "allowed standalone session Dennett control MCP tool `{}`",
+                        req.tool_name
+                    ),
+                    scope: format!("session:{}", self.ctx.session_id),
+                });
+            };
+            if let Some(requested_pid) = requested_pid
                 && requested_pid != owning_project_id.to_string()
             {
                 return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
@@ -574,6 +596,24 @@ impl PolicyEngine {
             }
 
             if ctrl_op == "dennett_event_create" && self.ctx.task_id.is_some() {
+                let has_explicit_schedule = req.raw_input.get("schedule").is_some_and(|v| !v.is_null())
+                    || req.raw_input.get("schedule_kind").is_some_and(|v| !v.is_null())
+                    || req.raw_input.get("fire_at").is_some_and(|v| !v.is_null())
+                    || req.raw_input.get("fire_at_ms").is_some_and(|v| !v.is_null())
+                    || req.raw_input.get("in_seconds").is_some_and(|v| !v.is_null())
+                    || req.raw_input.get("interval_secs").is_some_and(|v| !v.is_null())
+                    || req.raw_input.get("daily_hour").is_some_and(|v| !v.is_null())
+                    || req.raw_input.get("yearly_month").is_some_and(|v| !v.is_null());
+                if has_explicit_schedule {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        matched_rule_id: None,
+                        reason: String::from(
+                            "allowed scheduled follow-up timer from task_run (depth cap enforced by Head)",
+                        ),
+                        scope: format!("project:{owning_project_id}"),
+                    });
+                }
                 if let Some(allow_rule) = applicable_rules.iter().find(|r| {
                     r.effect == PolicyEffect::Allow
                         && rule_matches_all_for_allow(r, &tool_lower, &allow_match_targets)
@@ -589,7 +629,7 @@ impl PolicyEngine {
                     effect: PolicyEffect::Deny,
                     matched_rule_id: None,
                     reason: String::from(
-                        "denied control MCP tool `dennett_event_create` inside background task_run (anti-self-recursion guard)",
+                        "denied unscheduled control MCP tool `dennett_event_create` inside background task_run (anti-self-recursion guard)",
                     ),
                     scope: format!("session:{}", self.ctx.session_id),
                 });
@@ -646,25 +686,76 @@ impl PolicyEngine {
         }
 
         // 4d. Active registered A08 MCP servers (explicitly enabled & trusted in capability_records;
+        //     strictly matched by tool_name prefix ONLY — NEVER by title (`A11`)!
         //     Step 2 explicit Deny rules already ran above and still take precedence).
         if !is_execute
             && !is_file_write
             && !is_file_read
-            && let Some(server_name) = match_registered_mcp_server(
-                &tool_lower,
-                &req.title,
-                &self.ctx.registered_mcp_servers,
-            )
+            && let Some(server_name) =
+                match_registered_mcp_server(&tool_lower, &self.ctx.registered_mcp_servers)
         {
-            return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
-                effect: PolicyEffect::Allow,
-                matched_rule_id: None,
+            if self.ctx.autonomy_mode == AutonomyMode::FullAccess
+                || !is_mutating_or_external_mcp_tool(&tool_lower, &req.tool_kind)
+            {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Allow,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "allowed registered active A08 MCP server `{server_name}` tool `{}`",
+                        req.tool_name
+                    ),
+                    scope: self.primary_scope_label(),
+                });
+            }
+            // Under AutonomyMode::Auto, third-party mutating / E3-E4 MCP tools check explicit
+            // Allow rules & active CapabilityGrants first, then ask via InboxCard (`A-CORE-1`)!
+            if let Some(allow_rule) = applicable_rules.iter().find(|r| {
+                r.effect == PolicyEffect::Allow
+                    && rule_matches_all_for_allow(r, &tool_lower, &allow_match_targets)
+            }) {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Allow,
+                    matched_rule_id: Some(allow_rule.rule_id),
+                    reason: format!("allowed by explicit policy rule: {}", allow_rule.reason),
+                    scope: allow_rule.scope.clone(),
+                });
+            }
+            let grant_targets: Vec<String> = allow_match_targets
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+            if let Some(grant) =
+                self.find_matching_grant(active_grants, now, &tool_lower, false, &grant_targets)
+            {
+                return PolicyEvaluationDecision::AllowedByGrant {
+                    grant_id: grant.grant_id,
+                    outcome: PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        matched_rule_id: None,
+                        reason: format!(
+                            "allowed by active capability grant {} ({})",
+                            grant.grant_id, grant.reason
+                        ),
+                        scope: grant.scope.clone(),
+                    },
+                };
+            }
+            let target_summary = req
+                .target
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&req.tool_name)
+                .to_owned();
+            return PolicyEvaluationDecision::NeedsInteractiveApproval {
+                normalized_targets: Vec::new(),
+                target_summary: target_summary.clone(),
+                scope: self.primary_scope_label(),
                 reason: format!(
-                    "allowed registered active A08 MCP server `{server_name}` tool `{}`",
+                    "third-party mutating MCP tool `{}` on server `{server_name}` requires owner approval under autonomy_mode=auto (target: {target_summary})",
                     req.tool_name
                 ),
-                scope: self.primary_scope_label(),
-            });
+            };
         }
 
         // 5. Explicit `Allow` rules (ALL targets must match; D2-SEC-02) and active non-file `CapabilityGrants`.
@@ -702,6 +793,99 @@ impl PolicyEngine {
             }
         }
 
+        // 5b. Local workspace shell execution & compound-command guard (`A-CORE-1`):
+        //     Only applies when the project has a bound workspace and write policy permits whole-workspace
+        //     dev work (`AllowWorkspace` or default `AskBeforeWrite`) — never bypassing `DenyAll` or
+        //     narrow `AllowPaths` prefix sandboxes or delegated parent ceilings!
+        if is_execute
+            && self.ctx.project_id.is_some()
+            && self.ctx.workspace_bound
+            && self.ctx.project_lifecycle_state == ProjectLifecycleState::Active
+            && matches!(
+                self.ctx.workspace_write_policy,
+                WorkspaceWritePolicy::AllowWorkspace | WorkspaceWritePolicy::AskBeforeWrite
+            )
+            && !matches!(
+                self.ctx.parent_write_ceiling,
+                Some(WorkspaceWritePolicy::DenyAll | WorkspaceWritePolicy::AllowPaths { .. })
+            )
+        {
+            let cmd = extract_shell_command(req);
+            if self.ctx.autonomy_mode == AutonomyMode::FullAccess {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Allow,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "allowed workspace shell command under autonomy_mode=full_access (cwd={})",
+                        self.ctx.workspace_root.display()
+                    ),
+                    scope: self.primary_scope_label(),
+                });
+            }
+            match classify_workspace_shell_command(&cmd, &self.ctx.workspace_root) {
+                ShellCommandClass::SafeLocal => {
+                    return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        matched_rule_id: None,
+                        reason: format!(
+                            "allowed safe local workspace shell command under autonomy_mode=auto (cwd={})",
+                            self.ctx.workspace_root.display()
+                        ),
+                        scope: self.primary_scope_label(),
+                    });
+                }
+                ShellCommandClass::RequiresAsk(why) => {
+                    let cmd_summary = if cmd.trim().is_empty() {
+                        req.tool_name.clone()
+                    } else {
+                        cmd.trim().to_owned()
+                    };
+                    return PolicyEvaluationDecision::NeedsInteractiveApproval {
+                        normalized_targets: Vec::new(),
+                        target_summary: cmd_summary.clone(),
+                        scope: self.primary_scope_label(),
+                        reason: format!(
+                            "shell command requires owner approval ({why}): `{cmd_summary}` (cwd={})",
+                            self.ctx.workspace_root.display()
+                        ),
+                    };
+                }
+            }
+        }
+
+        // 5c. Critical E3/E4 external operations (external effects, messaging, email, payments):
+        //     `FullAccess` auto-allows (Step 2 explicit Deny rules already enforced); `Auto`
+        //     requests interactive owner approval via InboxCard (with approve_once/session/project).
+        if !is_execute && !is_file_write && !is_file_read && is_external_e3_e4_op(&tool_lower, &req.tool_kind) {
+            if self.ctx.autonomy_mode == AutonomyMode::FullAccess {
+                return PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                    effect: PolicyEffect::Allow,
+                    matched_rule_id: None,
+                    reason: format!(
+                        "allowed external operation `{}` under autonomy_mode=full_access",
+                        req.tool_name
+                    ),
+                    scope: self.primary_scope_label(),
+                });
+            }
+            let target_summary = req
+                .target
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&req.tool_name)
+                .to_owned();
+            return PolicyEvaluationDecision::NeedsInteractiveApproval {
+                normalized_targets: Vec::new(),
+                target_summary: target_summary.clone(),
+                scope: self.primary_scope_label(),
+                reason: format!(
+                    "critical external operation `{}` requires owner approval under autonomy_mode=auto (target: {target_summary})",
+                    req.tool_name
+                ),
+            };
+        }
+
         // 6. Read-only file inspection strictly inside the project workspace root
         //    (all targets already verified non-empty & in-workspace in Step 1, and Deny-checked in Step 2).
         if is_file_read {
@@ -714,7 +898,7 @@ impl PolicyEngine {
             });
         }
 
-        // 7. Default-DENY for unknown or dangerous tools (shell, run_command, network).
+        // 7. Default-DENY for unknown or dangerous tools (shell under DenyAll, unregistered MCP, unknown).
         PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
             effect: PolicyEffect::Deny,
             matched_rule_id: None,
@@ -741,12 +925,19 @@ impl PolicyEngine {
         is_file_write: bool,
         normalized_rel_targets: &[String],
     ) -> Option<&'a CapabilityGrantRecord> {
-        let owning_project_id = self.ctx.project_id?;
+        let owning_project_id = self
+            .ctx
+            .project_id
+            .unwrap_or_else(standalone_system_project_id);
         grants.iter().find(|grant| {
             if !grant.is_active_at(now) {
                 return false;
             }
             if grant.project_id != owning_project_id {
+                return false;
+            }
+            // Standalone grants MUST always be explicitly pinned to this exact session_id!
+            if self.ctx.project_id.is_none() && grant.session_id != Some(self.ctx.session_id) {
                 return false;
             }
             if grant.agent_id.is_some_and(|a| a != self.ctx.agent_id) {
@@ -878,7 +1069,7 @@ const FILE_TARGET_INPUT_KEYS: &[&str] = &[
     "Uri",
     "uri",
 ];
-const MEMORY_MCP_OPS: [&str; 13] = [
+const MEMORY_MCP_OPS: [&str; 15] = [
     "memory_search",
     "memory_get_current",
     "memory_get_history",
@@ -891,15 +1082,21 @@ const MEMORY_MCP_OPS: [&str; 13] = [
     "memory_conflict_resolve",
     "memory_document_read",
     "memory_document_write",
+    "memory_evidence_create",
+    "memory_evidence_list",
     "memory_index_status",
 ];
-const CONTROL_MCP_OPS: [&str; 7] = [
+const CONTROL_MCP_OPS: [&str; 11] = [
     "dennett_event_create",
     "dennett_event_list",
     "dennett_event_update",
     "dennett_event_cancel",
+    "dennett_agent_list",
     "dennett_agent_send_message",
     "dennett_agent_list_messages",
+    "dennett_artifact_register",
+    "dennett_artifact_list",
+    "dennett_task_send_signal",
     "dennett_delegate_task",
 ];
 const CONTROL_MCP_SKILL_OPS: [&str; 2] = ["dennett_skill_list", "dennett_skill_read"];
@@ -910,6 +1107,536 @@ const NATIVE_SUBAGENT_OPS: [&str; 5] = [
     "post_message",
     "read_board",
 ];
+const BUILTIN_WEB_TOOLS: [&str; 6] = [
+    "web_search",
+    "search_web",
+    "web_fetch",
+    "fetch_url",
+    "google_search",
+    "read_url_content",
+];
+
+/// Safe local dev/build/test command basenames allowed without prompting in `AutonomyMode::Auto`
+/// strictly inside a bound project workspace (`A-CORE-1`).
+const SAFE_LOCAL_SHELL_COMMANDS: &[&str] = &[
+    "cargo", "rustc", "rustfmt", "npm", "npx", "pnpm", "yarn", "node", "uv", "python", "python3",
+    "pytest", "rg", "fd", "ls", "dir", "cat", "type", "head", "tail", "find", "grep", "wc", "sort",
+    "echo", "pwd", "mkdir", "cp", "mv", "tsc", "vitest", "eslint", "prettier", "cmake", "make",
+    "go", "dotnet",
+];
+
+/// Safe local `git` subcommands allowed without prompting in `AutonomyMode::Auto`.
+const SAFE_LOCAL_GIT_SUBCOMMANDS: &[&str] = &[
+    "status", "diff", "log", "show", "add", "commit", "branch", "checkout", "switch", "rev-parse",
+    "stash", "tag", "blame", "ls-files", "grep", "merge-base", "describe", "shortlog",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShellCommandClass {
+    SafeLocal,
+    RequiresAsk(String),
+}
+
+fn is_builtin_web_tool(tool_lower: &str, tool_kind: &str, raw_input: &serde_json::Value) -> bool {
+    if is_execute_tool(tool_lower, tool_kind, raw_input)
+        || is_write_tool(tool_lower, tool_kind)
+        || has_any_json_key(raw_input, FILE_TARGET_INPUT_KEYS)
+    {
+        return false;
+    }
+    BUILTIN_WEB_TOOLS.contains(&tool_lower)
+}
+
+fn is_mutating_or_external_mcp_tool(tool_lower: &str, tool_kind: &str) -> bool {
+    let kind_lower = tool_kind.trim().to_ascii_lowercase();
+    if matches!(kind_lower.as_str(), "edit" | "delete" | "move" | "execute" | "external_effect") {
+        return true;
+    }
+    // Extract trailing operation token after server separator (`__`, `:`, `/`, `.`) if present.
+    let op_part = tool_lower
+        .rsplit_once("__")
+        .or_else(|| tool_lower.rsplit_once(':'))
+        .or_else(|| tool_lower.rsplit_once('/'))
+        .map_or(tool_lower, |(_, tail)| tail);
+    let tokens: Vec<&str> = op_part
+        .split(['_', '-', '.'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mutating_keywords = [
+        "send", "post", "publish", "pay", "payment", "charge", "transfer", "purchase", "buy",
+        "delete", "remove", "drop", "destroy", "create", "update", "write", "edit", "modify",
+        "patch", "put", "email", "mail", "message", "dm", "tweet", "webhook", "dispatch",
+        "execute", "exec", "run", "deploy", "merge", "push", "invite", "grant", "revoke",
+    ];
+    tokens.iter().any(|tok| mutating_keywords.contains(tok))
+}
+
+fn is_external_e3_e4_op(tool_lower: &str, tool_kind: &str) -> bool {
+    if tool_kind.eq_ignore_ascii_case("external_effect")
+        || tool_lower.starts_with("external_effect:")
+    {
+        return true;
+    }
+    matches!(
+        tool_lower,
+        "send_email"
+            | "send_message"
+            | "send_sms"
+            | "send_payment"
+            | "create_payment"
+            | "charge_card"
+            | "transfer_funds"
+            | "post_webhook"
+            | "publish_post"
+            | "send_telegram"
+            | "send_slack"
+    )
+}
+
+fn extract_shell_command(req: &PolicyEvaluationRequest) -> String {
+    if let Some(obj) = req.raw_input.as_object() {
+        for key in SHELL_INPUT_KEYS {
+            if let Some(val) = obj
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return val.to_owned();
+            }
+        }
+    }
+    req.target
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn contains_subshell_or_escape_syntax(cmd: &str) -> Option<&'static str> {
+    let mut in_single = false;
+    let mut escaped = false;
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if b == b'\\' && !in_single {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_single = !in_single;
+            i += 1;
+            continue;
+        }
+        if !in_single {
+            if b == b'`' {
+                return Some("backtick command substitution");
+            }
+            if b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+                return Some("subshell `$()` expansion");
+            }
+            if (b == b'<' || b == b'>') && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+                return Some("process substitution");
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn split_shell_segments(cmd: &str) -> Result<Vec<String>, String> {
+    let mut segments = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if escaped {
+            cur.push(c);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if c == '\\' && !in_single {
+            cur.push(c);
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if !in_single && !in_double {
+            if c == ';' || c == '\n' || c == '\r' {
+                let trimmed = cur.trim();
+                if !trimmed.is_empty() {
+                    segments.push(trimmed.to_owned());
+                }
+                cur.clear();
+                i += 1;
+                continue;
+            }
+            if c == '&' {
+                // Allow fd duplication like `2>&1` inside a segment.
+                if i > 0 && chars[i - 1] == '>' {
+                    cur.push(c);
+                    i += 1;
+                    continue;
+                }
+                if i + 1 < chars.len() && chars[i + 1] == '&' {
+                    let trimmed = cur.trim();
+                    if !trimmed.is_empty() {
+                        segments.push(trimmed.to_owned());
+                    }
+                    cur.clear();
+                    i += 2;
+                    continue;
+                }
+                return Err(String::from("background `&` operator"));
+            }
+            if c == '|' {
+                let trimmed = cur.trim();
+                if !trimmed.is_empty() {
+                    segments.push(trimmed.to_owned());
+                }
+                cur.clear();
+                if i + 1 < chars.len() && chars[i + 1] == '|' {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        cur.push(c);
+        i += 1;
+    }
+    if in_single || in_double {
+        return Err(String::from("unterminated shell quote"));
+    }
+    let trimmed = cur.trim();
+    if !trimmed.is_empty() {
+        segments.push(trimmed.to_owned());
+    }
+    Ok(segments)
+}
+
+fn tokenize_shell_segment(seg: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for c in seg.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+            continue;
+        }
+        if c == '\\' && !in_single && !cfg!(windows) {
+            escaped = true;
+            continue;
+        }
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            continue;
+        }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            continue;
+        }
+        if !in_single && !in_double && c.is_whitespace() {
+            if !cur.is_empty() {
+                tokens.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        cur.push(c);
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+fn is_env_assignment_token(tok: &str) -> Option<&str> {
+    let (name, _val) = tok.split_once('=')?;
+    if !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && !name.as_bytes()[0].is_ascii_digit()
+    {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+fn validate_shell_arg_within_workspace(arg: &str, workspace_root: &Path) -> Result<(), String> {
+    let trimmed = arg.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    // Check embedded redirection target (`>path`, `>>path`, `2>path`, `<path`)
+    let redir_target = trimmed
+        .strip_prefix(">>")
+        .or_else(|| trimmed.strip_prefix('>'))
+        .or_else(|| trimmed.strip_prefix("1>>"))
+        .or_else(|| trimmed.strip_prefix("1>"))
+        .or_else(|| trimmed.strip_prefix("2>>"))
+        .or_else(|| trimmed.strip_prefix("2>"));
+    if let Some(target) = redir_target {
+        if target.is_empty()
+            || target == "&1"
+            || target == "&2"
+            || target.eq_ignore_ascii_case("/dev/null")
+            || target.eq_ignore_ascii_case("NUL")
+        {
+            return Ok(());
+        }
+        resolve_within_workspace(workspace_root, target)
+            .map(|_| ())
+            .map_err(|_| format!("redirection target `{target}` escapes workspace"))?;
+        return Ok(());
+    }
+
+    // Reject path traversal (`..`) or home (`~`) escapes in any path-like argument.
+    let norm = trimmed.replace('\\', "/");
+    if norm == ".."
+        || norm.starts_with("../")
+        || norm.ends_with("/..")
+        || norm.contains("/../")
+        || norm == "~"
+        || norm.starts_with("~/")
+        || norm.starts_with("//")
+    {
+        return Err(format!("argument `{trimmed}` traverses outside workspace"));
+    }
+
+    // Reject absolute paths (POSIX `/...` or Windows `C:/...` or `C:\...`) pointing outside workspace!
+    let looks_windows_abs = trimmed.len() >= 2
+        && trimmed.as_bytes()[0].is_ascii_alphabetic()
+        && trimmed.as_bytes()[1] == b':';
+    let looks_posix_abs = trimmed.starts_with('/') && !trimmed.eq_ignore_ascii_case("/dev/null");
+    if (looks_windows_abs || looks_posix_abs)
+        && resolve_within_workspace(workspace_root, trimmed).is_err()
+    {
+        return Err(format!("absolute path `{trimmed}` escapes workspace"));
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "shell command classification audits compound segments, redirections, allowlist, and subcommand rules in one place"
+)]
+fn classify_workspace_shell_command(cmd: &str, workspace_root: &Path) -> ShellCommandClass {
+    let trimmed = cmd.trim();
+    if trimmed.is_empty() {
+        return ShellCommandClass::RequiresAsk(String::from("empty command"));
+    }
+    if let Some(why) = contains_subshell_or_escape_syntax(trimmed) {
+        return ShellCommandClass::RequiresAsk(why.to_owned());
+    }
+    let segments = match split_shell_segments(trimmed) {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => return ShellCommandClass::RequiresAsk(String::from("empty command")),
+        Err(why) => return ShellCommandClass::RequiresAsk(why),
+    };
+
+    for seg in &segments {
+        let tokens = tokenize_shell_segment(seg);
+        if tokens.is_empty() {
+            return ShellCommandClass::RequiresAsk(String::from("empty command segment"));
+        }
+
+        // Skip safe leading `VAR=val` env assignments; reject linker/PATH hijacks.
+        let mut idx = 0;
+        while idx < tokens.len()
+            && let Some(var_name) = is_env_assignment_token(&tokens[idx])
+        {
+            let upper = var_name.to_ascii_uppercase();
+            if matches!(
+                upper.as_str(),
+                "PATH"
+                    | "LD_PRELOAD"
+                    | "LD_LIBRARY_PATH"
+                    | "DYLD_INSERT_LIBRARIES"
+                    | "PYTHONPATH"
+                    | "NODE_OPTIONS"
+                    | "RUSTFLAGS"
+            ) {
+                return ShellCommandClass::RequiresAsk(format!(
+                    "sensitive env override `{var_name}`"
+                ));
+            }
+            idx += 1;
+        }
+        if idx >= tokens.len() {
+            return ShellCommandClass::RequiresAsk(String::from("assignment without command"));
+        }
+
+        let raw_exe = &tokens[idx];
+        let args = &tokens[idx + 1..];
+
+        // Reject path-qualified executables pointing outside workspace or containing separators.
+        if raw_exe.contains('/') || raw_exe.contains('\\') || raw_exe.contains(':') {
+            return ShellCommandClass::RequiresAsk(format!(
+                "path-qualified executable `{raw_exe}`"
+            ));
+        }
+
+        let exe_lower = raw_exe.to_ascii_lowercase();
+        let exe_base = exe_lower
+            .strip_suffix(".exe")
+            .or_else(|| exe_lower.strip_suffix(".cmd"))
+            .or_else(|| exe_lower.strip_suffix(".bat"))
+            .unwrap_or(&exe_lower);
+
+        // Validate every argument & redirection target against workspace boundaries!
+        let mut expect_redir_target = false;
+        for arg in args {
+            if expect_redir_target {
+                expect_redir_target = false;
+                if arg != "/dev/null"
+                    && !arg.eq_ignore_ascii_case("NUL")
+                    && resolve_within_workspace(workspace_root, arg).is_err()
+                {
+                    return ShellCommandClass::RequiresAsk(format!(
+                        "redirection target `{arg}` escapes workspace"
+                    ));
+                }
+                continue;
+            }
+            if matches!(arg.as_str(), ">" | ">>" | "1>" | "1>>" | "2>" | "2>>") {
+                expect_redir_target = true;
+                continue;
+            }
+            if let Err(why) = validate_shell_arg_within_workspace(arg, workspace_root) {
+                return ShellCommandClass::RequiresAsk(why);
+            }
+        }
+        if expect_redir_target {
+            return ShellCommandClass::RequiresAsk(String::from("dangling shell redirection"));
+        }
+
+        // Special-case `git`: allow ONLY safe local subcommands!
+        if exe_base == "git" {
+            let mut sub_idx = 0;
+            while sub_idx < args.len() {
+                let a = args[sub_idx].as_str();
+                if a == "-C" || a == "-c" || a == "--git-dir" || a == "--work-tree" {
+                    sub_idx += 2;
+                    continue;
+                }
+                if a.starts_with('-') {
+                    sub_idx += 1;
+                    continue;
+                }
+                break;
+            }
+            let Some(subcmd) = args.get(sub_idx).map(|s| s.to_ascii_lowercase()) else {
+                return ShellCommandClass::RequiresAsk(String::from("git without subcommand"));
+            };
+            if !SAFE_LOCAL_GIT_SUBCOMMANDS.contains(&subcmd.as_str()) {
+                return ShellCommandClass::RequiresAsk(format!(
+                    "git subcommand `{subcmd}` may perform network or destructive operation"
+                ));
+            }
+            continue;
+        }
+
+        if !SAFE_LOCAL_SHELL_COMMANDS.contains(&exe_base) {
+            return ShellCommandClass::RequiresAsk(format!(
+                "command `{raw_exe}` is outside safe local workspace allowlist"
+            ));
+        }
+
+        // Guard destructive/network subcommands on otherwise-allowlisted toolchains.
+        if exe_base == "cargo"
+            && let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
+            && matches!(
+                sub.to_ascii_lowercase().as_str(),
+                "publish" | "login" | "logout" | "owner" | "yank" | "install"
+            )
+        {
+            return ShellCommandClass::RequiresAsk(format!(
+                "cargo subcommand `{sub}` accesses remote registry or global install"
+            ));
+        }
+
+        if matches!(exe_base, "npm" | "pnpm" | "yarn")
+            && let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
+            && matches!(
+                sub.to_ascii_lowercase().as_str(),
+                "publish" | "login" | "adduser" | "unpublish" | "owner" | "token"
+            )
+        {
+            return ShellCommandClass::RequiresAsk(format!(
+                "{exe_base} subcommand `{sub}` accesses remote registry"
+            ));
+        }
+
+        if matches!(exe_base, "python" | "python3" | "node") {
+            let joined_lower = args.join(" ").to_ascii_lowercase();
+            let has_inline_eval = args
+                .iter()
+                .any(|a| matches!(a.as_str(), "-c" | "-e" | "--eval"));
+            if has_inline_eval
+                && [
+                    "urllib",
+                    "requests",
+                    "http.client",
+                    "httpx",
+                    "socket",
+                    "subprocess",
+                    "os.system",
+                    "shutil.rmtree",
+                    "child_process",
+                    "fetch(",
+                ]
+                .iter()
+                .any(|kw| joined_lower.contains(kw))
+            {
+                return ShellCommandClass::RequiresAsk(format!(
+                    "inline `{exe_base}` eval contains network or destructive API"
+                ));
+            }
+        }
+
+        if exe_base == "uv"
+            && let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
+            && matches!(sub.to_ascii_lowercase().as_str(), "publish" | "self")
+        {
+            return ShellCommandClass::RequiresAsk(format!(
+                "uv subcommand `{sub}` performs external/global mutation"
+            ));
+        }
+    }
+
+    ShellCommandClass::SafeLocal
+}
 
 fn has_any_json_key(raw_input: &serde_json::Value, keys: &[&str]) -> bool {
     let Some(obj) = raw_input.as_object() else {
@@ -987,13 +1714,12 @@ fn canonical_native_subagent_op(tool_lower: &str, tool_kind: &str) -> Option<&'s
 
 fn match_registered_mcp_server<'a>(
     tool_lower: &str,
-    title: &str,
     registered: &'a BTreeSet<String>,
 ) -> Option<&'a str> {
     if registered.is_empty() {
         return None;
     }
-    let title_lower = title.trim().to_ascii_lowercase();
+    // A11: Match strictly against the registered MCP server prefix on `tool_lower` — NEVER trust `title`!
     for srv in registered {
         let srv_lower = srv.to_ascii_lowercase();
         let srv_under = srv_lower.replace('-', "_");
@@ -1006,8 +1732,6 @@ fn match_registered_mcp_server<'a>(
             || tool_lower.starts_with(&format!("mcp_{srv_lower}_"))
             || tool_lower.starts_with(&format!("mcp__{srv_under}__"))
             || tool_lower.starts_with(&format!("mcp_{srv_under}_"))
-            || title_lower.starts_with(&format!("{srv_lower}:"))
-            || title_lower.starts_with(&format!("mcp:{srv_lower}"))
         {
             return Some(srv.as_str());
         }
@@ -1526,6 +2250,7 @@ mod tests {
             workspace_write_policy: WorkspaceWritePolicy::AllowPaths {
                 allowed_prefixes: vec![String::from("docs/")],
             },
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
             registered_mcp_servers: BTreeSet::new(),
@@ -1590,6 +2315,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -1632,6 +2358,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
             registered_mcp_servers: BTreeSet::new(),
@@ -1735,6 +2462,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -1796,7 +2524,11 @@ mod tests {
     }
 
     #[test]
-    fn ask_before_write_evaluates_active_revoked_expired_grants_and_blocks_workspace_escape() {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "verifies Auto vs FullAccess, safe local shell, compound shell escape guard, A8 web search, and workspace escape blocking"
+    )]
+    fn autonomy_mode_evaluates_grants_shell_guards_and_blocks_workspace_escape() {
         let ws = temp_workspace("grants");
         let outside = temp_workspace("grants-outside");
         let project_id = ProjectId::new();
@@ -1813,6 +2545,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -1820,14 +2553,67 @@ mod tests {
             rules: vec![],
         });
 
+        // Routine in-workspace file write is allowed directly under AutonomyMode::Auto (NO manual gate!).
         let ok_write = make_req("write_file", "edit", Some("notes/out.md"));
-        // 1. Without grant -> NeedsInteractiveApproval.
         assert!(matches!(
             engine.evaluate_with_grants(&ok_write, &[], now),
-            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+            PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                ..
+            })
         ));
 
-        // 2. Active grant allows within project workspace.
+        // Safe local workspace shell commands are allowed without prompting under AutonomyMode::Auto.
+        for safe_cmd in [
+            "cargo test",
+            "git status",
+            "git diff --stat",
+            "npm test",
+            "rg TODO src",
+            "cargo check && git status",
+        ] {
+            let mut req = make_req("run_command", "execute", Some(safe_cmd));
+            req.raw_input = json!({ "command": safe_cmd });
+            assert!(
+                matches!(
+                    engine.evaluate_with_grants(&req, &[], now),
+                    PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                        effect: PolicyEffect::Allow,
+                        ..
+                    })
+                ),
+                "expected safe local shell command `{safe_cmd}` to be allowed under Auto"
+            );
+        }
+
+        // Destructive / network / chained-escape shell commands return NeedsInteractiveApproval (`Ask`).
+        let mut push_cmd = make_req("run_command", "execute", Some("git push origin main"));
+        push_cmd.raw_input = json!({ "command": "git push origin main" });
+        // 1. Without grant -> NeedsInteractiveApproval.
+        assert!(matches!(
+            engine.evaluate_with_grants(&push_cmd, &[], now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
+        for risky_cmd in [
+            "cargo test && curl https://evil.example",
+            "git status; wget https://evil.example",
+            "echo $(whoami)",
+            "cat ../outside.txt",
+            "rm -rf /",
+            "powershell -enc SQBFAFgA",
+        ] {
+            let mut req = make_req("run_command", "execute", Some(risky_cmd));
+            req.raw_input = json!({ "command": risky_cmd });
+            assert!(
+                matches!(
+                    engine.evaluate_with_grants(&req, &[], now),
+                    PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+                ),
+                "expected risky command `{risky_cmd}` to require interactive approval under Auto"
+            );
+        }
+
+        // 2. Active grant allows matching command without re-prompting.
         let active_grant = CapabilityGrantRecord {
             grant_id: CapabilityGrantId::new(),
             scope: format!("project:{project_id}"),
@@ -1835,18 +2621,18 @@ mod tests {
             agent_id: None,
             session_id: None,
             task_id: None,
-            tool_pattern: String::from("workspace_write"),
+            tool_pattern: String::from("run_command"),
             target_prefixes: vec![],
             max_uses: Some(2),
             uses_consumed: 0,
-            reason: String::from("approved project writes"),
+            reason: String::from("approved project shell action"),
             expires_at: Some(TimestampMs::from_millis(now.as_millis() + 60_000)),
             revoked_at: None,
             revoked_reason: None,
             created_at: now,
         };
         assert!(matches!(
-            engine.evaluate_with_grants(&ok_write, std::slice::from_ref(&active_grant), now),
+            engine.evaluate_with_grants(&push_cmd, std::slice::from_ref(&active_grant), now),
             PolicyEvaluationDecision::AllowedByGrant { grant_id, .. } if grant_id == active_grant.grant_id
         ));
 
@@ -1864,28 +2650,81 @@ mod tests {
             })
         ));
 
-        // 4. Revoked grant MUST NOT authorize writes!
+        // 4. Revoked grant MUST NOT authorize!
         let mut revoked_grant = active_grant.clone();
         revoked_grant.revoked_at = Some(now);
         assert!(matches!(
-            engine.evaluate_with_grants(&ok_write, &[revoked_grant], now),
+            engine.evaluate_with_grants(&push_cmd, &[revoked_grant], now),
             PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
         ));
 
-        // 5. Expired grant MUST NOT authorize writes!
+        // 5. Expired grant MUST NOT authorize!
         let mut expired_grant = active_grant.clone();
         expired_grant.expires_at = Some(now);
         assert!(matches!(
-            engine.evaluate_with_grants(&ok_write, &[expired_grant], now),
+            engine.evaluate_with_grants(&push_cmd, &[expired_grant], now),
             PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
         ));
 
-        // 6. Exhausted max_uses grant MUST NOT authorize writes!
+        // 6. Exhausted max_uses grant MUST NOT authorize!
         let mut exhausted_grant = active_grant;
         exhausted_grant.uses_consumed = 2;
         assert!(matches!(
-            engine.evaluate_with_grants(&ok_write, &[exhausted_grant], now),
+            engine.evaluate_with_grants(&push_cmd, &[exhausted_grant], now),
             PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
+
+        // 7. AutonomyMode::FullAccess allows shell commands, external ops, and trusted MCPs without asking,
+        //    while still blocking workspace escapes!
+        let full_engine = PolicyEngine::new(PolicyContext {
+            project_id: Some(project_id),
+            project_lifecycle_state: ProjectLifecycleState::Active,
+            workspace_bound: true,
+            agent_id,
+            session_id,
+            task_id: None,
+            workspace_root: ws.clone(),
+            workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+            autonomy_mode: AutonomyMode::FullAccess,
+            parent_write_ceiling: None,
+            allowed_memory_scopes: BTreeSet::new(),
+            registered_mcp_servers: BTreeSet::from([String::from("telegram")]),
+            task_budget_exhausted: false,
+            rules: vec![],
+        });
+        assert!(matches!(
+            full_engine.evaluate_with_grants(&push_cmd, &[], now),
+            PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                ..
+            })
+        ));
+        let ext_send = make_req("external_effect:send_email", "external_effect", Some("a@b.c"));
+        assert!(matches!(
+            engine.evaluate_with_grants(&ext_send, &[], now),
+            PolicyEvaluationDecision::NeedsInteractiveApproval { .. }
+        ));
+        assert!(matches!(
+            full_engine.evaluate_with_grants(&ext_send, &[], now),
+            PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                ..
+            })
+        ));
+        let tg_send = make_req("mcp__telegram__send_message", "other", Some("@alice"));
+        assert!(matches!(
+            full_engine.evaluate_with_grants(&tg_send, &[], now),
+            PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Allow,
+                ..
+            })
+        ));
+        assert!(matches!(
+            full_engine.evaluate_with_grants(&escape_write, &[], now),
+            PolicyEvaluationDecision::Immediate(PolicyEvaluationOutcome {
+                effect: PolicyEffect::Deny,
+                ..
+            })
         ));
 
         let _ = fs::remove_dir_all(&ws);
@@ -1918,6 +2757,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: Some(WorkspaceWritePolicy::AllowPaths {
                 allowed_prefixes: vec![String::from("docs/safe")],
             }),
@@ -1939,9 +2779,7 @@ mod tests {
             PolicyEffect::Deny
         );
 
-        // 1b. Without any `parent_write_ceiling`, an explicit `Allow` rule for `docs/*` MUST
-        //     require ALL targets to match (`rule_matches_all_for_allow`) — mixing one allowed
-        //     target (`docs/a.txt`) with an unpermitted target (`src/escape.txt`) MUST be denied!
+        // 1b. Explicit `Allow` rule for `docs/*` on a non-file tool MUST require ALL targets to match!
         let allow_only_engine = PolicyEngine::new(PolicyContext {
             project_id: Some(project_id),
             project_lifecycle_state: ProjectLifecycleState::Active,
@@ -1950,7 +2788,8 @@ mod tests {
             session_id: SessionId::new(),
             task_id: None,
             workspace_root: ws.clone(),
-            workspace_write_policy: WorkspaceWritePolicy::AskBeforeWrite,
+            workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -2036,6 +2875,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::AllowWorkspace,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -2060,6 +2900,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -2089,6 +2930,7 @@ mod tests {
             task_id: Some(TaskId::new()),
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -2127,6 +2969,7 @@ mod tests {
             task_id: None,
             workspace_root: scratch.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: Some(WorkspaceWritePolicy::DenyAll),
             allowed_memory_scopes: BTreeSet::from([standalone_scope]),
             registered_mcp_servers: BTreeSet::new(),
@@ -2147,10 +2990,23 @@ mod tests {
                 .effect,
             PolicyEffect::Deny
         );
-        // Control MCP is denied on standalone sessions.
+        // Standalone reminders (without foreign project_id) are allowed; foreign project_id and delegation are denied!
         let mut ctrl = make_req("dennett_event_create", "other", None);
         ctrl.raw_input = json!({ "title": "Reminder", "goal": "Ping" });
-        assert_eq!(engine.evaluate_request(&ctrl).effect, PolicyEffect::Deny);
+        assert_eq!(engine.evaluate_request(&ctrl).effect, PolicyEffect::Allow);
+
+        let mut foreign_ctrl = make_req("dennett_event_create", "other", None);
+        foreign_ctrl.raw_input = json!({ "project_id": ProjectId::new().to_string(), "title": "Escape" });
+        assert_eq!(
+            engine.evaluate_request(&foreign_ctrl).effect,
+            PolicyEffect::Deny
+        );
+
+        let delegate = make_req("dennett_delegate_task", "other", None);
+        assert_eq!(
+            engine.evaluate_request(&delegate).effect,
+            PolicyEffect::Deny
+        );
 
         // Agent's own standalone memory scope is allowed; project scope is denied.
         let mut ok_mem = make_req("memory_write_note", "other", None);
@@ -2186,6 +3042,7 @@ mod tests {
             task_id: Some(TaskId::new()),
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::from([scope_alpha]),
             registered_mcp_servers: BTreeSet::from([String::from("docs-helper")]),
@@ -2337,6 +3194,7 @@ mod tests {
             task_id: None,
             workspace_root: ws.clone(),
             workspace_write_policy: WorkspaceWritePolicy::DenyAll,
+            autonomy_mode: AutonomyMode::Auto,
             parent_write_ceiling: None,
             allowed_memory_scopes: BTreeSet::new(),
             registered_mcp_servers: BTreeSet::new(),
@@ -2364,12 +3222,12 @@ mod tests {
         spoofed.raw_input = json!({ "path": "/etc/passwd" });
         assert_eq!(engine.evaluate_request(&spoofed).effect, PolicyEffect::Deny);
 
-        // Project-scoped events & delegation remain strictly DENIED in standalone chats!
+        // Project-only delegation & messaging remain strictly DENIED in standalone chats!
         for project_tool in [
-            "dennett_event_create",
-            "dennett_event_list",
             "dennett_delegate_task",
             "dennett_agent_send_message",
+            "dennett_agent_list",
+            "dennett_task_send_signal",
         ] {
             let req = make_req(project_tool, "other", None);
             assert_eq!(
@@ -2378,6 +3236,39 @@ mod tests {
                 "expected standalone chat to deny `{project_tool}`"
             );
         }
+
+        // A8: Built-in web search/fetch tools MUST NOT be rejected as local fs reads!
+        for web_tool in [
+            ("web_search", "search"),
+            ("search_web", "search"),
+            ("web_fetch", "read"),
+            ("fetch_url", "other"),
+            ("google_search", "search"),
+        ] {
+            let mut req = make_req(web_tool.0, web_tool.1, Some("https://example.com"));
+            req.raw_input = json!({ "query": "rust async" });
+            assert_eq!(
+                engine.evaluate_request(&req).effect,
+                PolicyEffect::Allow,
+                "A8: expected built-in web tool `{}` to be allowed",
+                web_tool.0
+            );
+        }
+
+        // A11: Third-party MCP tool CANNOT spoof a registered server via `title` alone!
+        let mut title_spoof_ctx = standalone_ctx.clone();
+        title_spoof_ctx
+            .registered_mcp_servers
+            .insert(String::from("docs-helper"));
+        let mut spoofed_mcp = make_req("evil_unregistered_tool", "other", None);
+        spoofed_mcp.title = String::from("docs-helper: safe lookup");
+        assert_eq!(
+            PolicyEngine::new(title_spoof_ctx)
+                .evaluate_request(&spoofed_mcp)
+                .effect,
+            PolicyEffect::Deny,
+            "A11: title spoofing MUST NOT match registered MCP servers"
+        );
 
         // Explicit Deny rule still beats built-in skill allow!
         let mut denied_ctx = standalone_ctx;

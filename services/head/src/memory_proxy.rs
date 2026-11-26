@@ -15,7 +15,7 @@ use dennett_contracts::{
     ConsolidationJob, ConsolidationJobId, CorrectNoteRequest, CorrelationId, CreateClaimRequest,
     CreateConsolidationJobRequest, CreateDocumentRequest, DennettError, DocumentId, ExportRequest,
     ExportResponse, ForgetRequest, ForgetResponse, ForgetTargetType, GetDocumentVersionsResponse,
-    ImportRequest, ImportResponse, ListClaimsResponse, ListConflictsResponse,
+    ImportRequest, ImportResponse, IndexState, ListClaimsResponse, ListConflictsResponse,
     ListConsolidationJobsResponse, ListDocumentsResponse, ListTombstonesResponse, MemoryCapability,
     MemoryClaim, MemoryConflict, MemoryDocument, MemoryNoteId, MemoryOverviewResponse, MemoryScope,
     MemoryStatus, NoteHistoryResponse, NoteMutationResponse, ResolveConflictRequest,
@@ -486,6 +486,24 @@ impl HeadService {
             )
             .await?;
         let res = client.import_package(req, Some(correlation_id)).await;
+        self.observe_memory_proxy_result(&res);
+        res
+    }
+
+    /// Proxies `GET /v1/memory/index/status` (`Read`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`DennettError`] from `memoryd` or `503 DatabaseUnavailable` when unreachable.
+    pub async fn proxy_get_memory_index_status(
+        &self,
+        scope: Option<&MemoryScope>,
+        correlation_id: &CorrelationId,
+    ) -> Result<IndexState, DennettError> {
+        let client = self
+            .owner_memory_client(scope, &[MemoryCapability::Read])
+            .await?;
+        let res = client.get_index_status(scope, Some(correlation_id)).await;
         self.observe_memory_proxy_result(&res);
         res
     }

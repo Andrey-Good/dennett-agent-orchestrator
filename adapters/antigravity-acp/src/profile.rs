@@ -365,12 +365,250 @@ pub fn safe_skill_dir_name(slug: &str) -> Result<String, DennettError> {
     Ok(trimmed.replace(':', "__"))
 }
 
-/// Materializes `active_skills` strictly into `<config_dir>/skills/<safe_slug>/SKILL.md`,
-/// removing any previously materialized skills first so disabled skills never linger.
+const MAX_SKILL_COMPANION_DEPTH: usize = 8;
+const MAX_SKILL_COMPANION_FILES: usize = 64;
+const MAX_SKILL_COMPANION_TOTAL_BYTES: u64 = 2 * 1024 * 1024;
+const ALLOWED_COMPANION_SUBDIRS: [&str; 2] = ["scripts", "references"];
+
+fn is_symlink_or_reparse_point(meta: &fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn validate_safe_entry_name(name: &std::ffi::OsStr) -> Result<String, DennettError> {
+    let raw = name.to_str().ok_or_else(|| DennettError::AccessDenied {
+        scope: String::from("skill_overlay"),
+        reason: String::from("non-UTF-8 companion filename in skill directory"),
+    })?;
+    if raw.is_empty()
+        || raw == "."
+        || raw == ".."
+        || raw.contains('/')
+        || raw.contains('\\')
+        || raw.contains('\0')
+        || raw.contains(':')
+    {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("skill_overlay"),
+            reason: format!("unsafe companion entry name `{raw}` in skill directory"),
+        });
+    }
+    Ok(raw.to_owned())
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "recursively copies companion scripts/references with explicit symlink, reparse, containment, file-count, and byte-size guards"
+)]
+fn copy_companion_tree_bounded(
+    canonical_root: &Path,
+    src_dir: &Path,
+    dst_dir: &Path,
+    depth: usize,
+    files_copied: &mut usize,
+    bytes_copied: &mut u64,
+) -> Result<(), DennettError> {
+    if depth > MAX_SKILL_COMPANION_DEPTH {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("skill_overlay"),
+            reason: format!(
+                "companion directory depth exceeded maximum ({MAX_SKILL_COMPANION_DEPTH})"
+            ),
+        });
+    }
+    let dir_meta = fs::symlink_metadata(src_dir).map_err(|err| DennettError::Internal {
+        detail: format!(
+            "failed reading metadata for skill companion dir `{}`: {err}",
+            src_dir.display()
+        ),
+    })?;
+    if is_symlink_or_reparse_point(&dir_meta) || !dir_meta.is_dir() {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("skill_overlay"),
+            reason: format!(
+                "refusing symlink/reparse companion directory `{}`",
+                src_dir.display()
+            ),
+        });
+    }
+    let canonical_dir = fs::canonicalize(src_dir).map_err(|err| DennettError::AccessDenied {
+        scope: String::from("skill_overlay"),
+        reason: format!(
+            "failed canonicalizing skill companion dir `{}`: {err}",
+            src_dir.display()
+        ),
+    })?;
+    if !canonical_dir.starts_with(canonical_root) {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("skill_overlay"),
+            reason: format!(
+                "skill companion directory `{}` escapes skill root",
+                src_dir.display()
+            ),
+        });
+    }
+
+    fs::create_dir_all(dst_dir).map_err(|err| DennettError::Internal {
+        detail: format!(
+            "failed creating destination skill companion dir `{}`: {err}",
+            dst_dir.display()
+        ),
+    })?;
+
+    let entries = fs::read_dir(src_dir).map_err(|err| DennettError::Internal {
+        detail: format!(
+            "failed listing skill companion dir `{}`: {err}",
+            src_dir.display()
+        ),
+    })?;
+
+    for entry_res in entries {
+        let entry = entry_res.map_err(|err| DennettError::Internal {
+            detail: format!("failed iterating skill companion dir: {err}"),
+        })?;
+        let name = validate_safe_entry_name(&entry.file_name())?;
+        let child_src = entry.path();
+        let child_dst = dst_dir.join(&name);
+        let meta = fs::symlink_metadata(&child_src).map_err(|err| DennettError::Internal {
+            detail: format!(
+                "failed reading metadata for companion entry `{}`: {err}",
+                child_src.display()
+            ),
+        })?;
+        if is_symlink_or_reparse_point(&meta) {
+            return Err(DennettError::AccessDenied {
+                scope: String::from("skill_overlay"),
+                reason: format!(
+                    "refusing symlink/reparse companion file `{}` in skill overlay",
+                    child_src.display()
+                ),
+            });
+        }
+        if meta.is_dir() {
+            copy_companion_tree_bounded(
+                canonical_root,
+                &child_src,
+                &child_dst,
+                depth + 1,
+                files_copied,
+                bytes_copied,
+            )?;
+        } else if meta.is_file() {
+            let canonical_file =
+                fs::canonicalize(&child_src).map_err(|err| DennettError::AccessDenied {
+                    scope: String::from("skill_overlay"),
+                    reason: format!(
+                        "failed canonicalizing companion file `{}`: {err}",
+                        child_src.display()
+                    ),
+                })?;
+            if !canonical_file.starts_with(canonical_root) {
+                return Err(DennettError::AccessDenied {
+                    scope: String::from("skill_overlay"),
+                    reason: format!(
+                        "companion file `{}` escapes skill root",
+                        child_src.display()
+                    ),
+                });
+            }
+            *files_copied = files_copied.saturating_add(1);
+            if *files_copied > MAX_SKILL_COMPANION_FILES {
+                return Err(DennettError::AccessDenied {
+                    scope: String::from("skill_overlay"),
+                    reason: format!(
+                        "skill companion file count exceeds maximum ({MAX_SKILL_COMPANION_FILES})"
+                    ),
+                });
+            }
+            *bytes_copied = bytes_copied.saturating_add(meta.len());
+            if *bytes_copied > MAX_SKILL_COMPANION_TOTAL_BYTES {
+                return Err(DennettError::AccessDenied {
+                    scope: String::from("skill_overlay"),
+                    reason: format!(
+                        "skill companion files exceed total byte limit ({MAX_SKILL_COMPANION_TOTAL_BYTES})"
+                    ),
+                });
+            }
+            fs::copy(&child_src, &child_dst).map_err(|err| DennettError::Internal {
+                detail: format!(
+                    "failed copying companion file `{}` to `{}`: {err}",
+                    child_src.display(),
+                    child_dst.display()
+                ),
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_skill_companion_subdirs(src_skill_dir: &Path, dst_skill_dir: &Path) -> Result<(), DennettError> {
+    let root_meta = match fs::symlink_metadata(src_skill_dir) {
+        Ok(m) => m,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(DennettError::Internal {
+                detail: format!(
+                    "failed inspecting skill source dir `{}`: {err}",
+                    src_skill_dir.display()
+                ),
+            });
+        }
+    };
+    if is_symlink_or_reparse_point(&root_meta) || !root_meta.is_dir() {
+        return Err(DennettError::AccessDenied {
+            scope: String::from("skill_overlay"),
+            reason: format!(
+                "refusing symlink/non-directory skill source root `{}`",
+                src_skill_dir.display()
+            ),
+        });
+    }
+    let canonical_root =
+        fs::canonicalize(src_skill_dir).map_err(|err| DennettError::AccessDenied {
+            scope: String::from("skill_overlay"),
+            reason: format!(
+                "failed canonicalizing skill source root `{}`: {err}",
+                src_skill_dir.display()
+            ),
+        })?;
+    let mut files_copied = 0_usize;
+    let mut bytes_copied = 0_u64;
+    for sub in ALLOWED_COMPANION_SUBDIRS {
+        let sub_src = src_skill_dir.join(sub);
+        if fs::symlink_metadata(&sub_src).is_ok() {
+            let sub_dst = dst_skill_dir.join(sub);
+            copy_companion_tree_bounded(
+                &canonical_root,
+                &sub_src,
+                &sub_dst,
+                0,
+                &mut files_copied,
+                &mut bytes_copied,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Materializes `active_skills` strictly into `<config_dir>/skills/<safe_slug>/SKILL.md`
+/// (plus safe read-only copies of companion `scripts/` and `references/` subdirectories when
+/// `source_dir` is provided), removing any previously materialized skills first so disabled skills
+/// never linger.
 ///
 /// # Errors
 ///
-/// Returns [`DennettError::InvalidInput`] on invalid slugs or [`DennettError::Internal`] on IO error.
+/// Returns [`DennettError::InvalidInput`] on invalid slugs, [`DennettError::AccessDenied`] on
+/// symlink/traversal companion entries, or [`DennettError::Internal`] on IO error.
 pub fn materialize_isolated_skills(
     config_dir: &Path,
     active_skills: &[ActiveSkillPayload],
@@ -413,6 +651,9 @@ pub fn materialize_isolated_skills(
                 ),
             }
         })?;
+        if let Some(ref src_dir) = skill.source_dir {
+            copy_skill_companion_subdirs(src_dir, &skill_dir)?;
+        }
     }
 
     Ok(())
@@ -676,6 +917,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "verifies isolated skill overlay materialization, companion scripts/references copying, symlink blocking, and stale cleanup"
+    )]
     fn a08_isolated_skills_materializes_and_cleans_removed_skills_without_touching_home() {
         let tmp = std::env::temp_dir().join(format!(
             "dennett-profile-skills-{}",
@@ -687,12 +932,14 @@ mod tests {
             version: String::from("1.0.0"),
             content_sha256: "a".repeat(64),
             skill_markdown: String::from("# Rust Audit\nCheck invariants."),
+            source_dir: None,
         };
         let skill_b = ActiveSkillPayload {
             slug: String::from("plugin:db-check"),
             version: String::from("2.0.0"),
             content_sha256: "b".repeat(64),
             skill_markdown: String::from("# DB Check\nVerify PG16."),
+            source_dir: None,
         };
 
         let p1 = prepare_isolated_profile_with_skills(
@@ -750,11 +997,61 @@ mod tests {
             version: String::from("1.0.0"),
             content_sha256: "c".repeat(64),
             skill_markdown: String::from("bad"),
+            source_dir: None,
         };
         assert!(matches!(
             materialize_isolated_skills(&p2.config_dir, &[bad]),
             Err(DennettError::InvalidInput { .. })
         ));
+
+        // Companion `scripts/` and `references/` are copied safely while arbitrary sibling dirs are skipped.
+        let src_skill = tmp.join("src-skill");
+        fs::create_dir_all(src_skill.join("scripts")).expect("scripts dir");
+        fs::create_dir_all(src_skill.join("references")).expect("references dir");
+        fs::create_dir_all(src_skill.join("private")).expect("private dir");
+        fs::write(src_skill.join("scripts").join("check.py"), b"print('ok')").expect("script");
+        fs::write(src_skill.join("references").join("guide.md"), b"# Guide").expect("ref");
+        fs::write(src_skill.join("private").join("secret.txt"), b"do not copy").expect("private");
+
+        let skill_with_companions = ActiveSkillPayload {
+            slug: String::from("companion-skill"),
+            version: String::from("1.0.0"),
+            content_sha256: "d".repeat(64),
+            skill_markdown: String::from("# Companion Skill"),
+            source_dir: Some(src_skill.clone()),
+        };
+        materialize_isolated_skills(&p2.config_dir, &[skill_with_companions])
+            .expect("materialize companion skill");
+        assert_eq!(
+            fs::read_to_string(
+                p2.config_dir
+                    .join("skills")
+                    .join("companion-skill")
+                    .join("scripts")
+                    .join("check.py")
+            )
+            .expect("copied script"),
+            "print('ok')"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                p2.config_dir
+                    .join("skills")
+                    .join("companion-skill")
+                    .join("references")
+                    .join("guide.md")
+            )
+            .expect("copied ref"),
+            "# Guide"
+        );
+        assert!(
+            !p2.config_dir
+                .join("skills")
+                .join("companion-skill")
+                .join("private")
+                .exists(),
+            "only scripts/ and references/ may be copied"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }

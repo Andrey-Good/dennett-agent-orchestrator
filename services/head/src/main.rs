@@ -17,6 +17,7 @@ use dennett_contracts::{CorrelationId, DennettError, ProfileMode, RuntimeAuthPro
 use dennett_head::{
     HEAD_STAGE_LABEL, HeadAppState, HeadService, HeadServiceExtras, MAX_CONCURRENT_REQUESTS,
     MemoryMcpWiring, MemoryTokenSigner, ValidatedControlPgTarget, build_head_router,
+    write_owner_only_file,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
@@ -24,6 +25,7 @@ use dennett_runtime_antigravity::{
 };
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeKind {
@@ -580,6 +582,11 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         None
     };
     let antigravity_profile_root = opts.profile_root.clone();
+    let token_data_dir = opts.profile_root.clone().unwrap_or_else(default_head_data_dir);
+    let env_head_token = env::var("DENNETT_HEAD_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
     let (runtime, rt_secrets) = build_runtime(
         opts.runtime_kind,
         opts.auth_profile,
@@ -616,6 +623,8 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
                 effect_port: None,
                 effects_ledger_path,
                 antigravity_profile_root,
+                antigravity_enable_sandbox: opts.enable_sandbox,
+                owner_token_override: env_head_token.clone(),
                 allow_non_loopback_local_runtime: opts.allow_non_loopback,
                 ..HeadServiceExtras::default()
             },
@@ -643,6 +652,32 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         },
         None => None,
     };
+
+    // A-SEC-1: Resolve mandatory owner bearer token; if DENNETT_HEAD_TOKEN was not supplied via
+    // environment, persist the generated 256-bit token into `<data_dir>/head.token` with strict
+    // owner-only filesystem permissions (never logging the plaintext token!).
+    let owner_token = if let Some(ref svc) = service {
+        Zeroizing::new(svc.owner_token().to_owned())
+    } else if let Some(ref tok) = env_head_token {
+        Zeroizing::new(tok.clone())
+    } else {
+        use chacha20poly1305::aead::OsRng;
+        use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
+        use core::fmt::Write as _;
+        let key = ChaCha20Poly1305::generate_key(&mut OsRng);
+        let mut hex = String::with_capacity(64);
+        for b in key {
+            let _ = write!(&mut hex, "{b:02x}");
+        }
+        Zeroizing::new(hex)
+    };
+    if env_head_token.is_none() {
+        let token_path = token_data_dir.join("head.token");
+        if let Err(err) = write_owner_only_file(&token_path, owner_token.as_bytes()) {
+            emit_stderr_error(&err);
+            return ExitCode::from(1);
+        }
+    }
 
     let listener = match TcpListener::bind(opts.addr).await {
         Ok(l) => l,
@@ -687,6 +722,7 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
         runtime_adapter_id,
         runtime_is_simulated,
         allow_non_loopback: opts.allow_non_loopback,
+        owner_token,
         shutdown_tx,
         request_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
     };
@@ -724,6 +760,25 @@ async fn run_serve(opts: ServeOptions, profile_mode: ProfileMode) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+fn default_head_data_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(local) = env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
+            return PathBuf::from(local).join("dennett");
+        }
+    }
+    if let Some(xdg) = env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(xdg).join("dennett");
+    }
+    if let Some(home) = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .filter(|v| !v.is_empty())
+    {
+        return PathBuf::from(home).join(".local").join("share").join("dennett");
+    }
+    env::temp_dir().join("dennett-head")
 }
 
 fn emit_stderr_error(err: &DennettError) {

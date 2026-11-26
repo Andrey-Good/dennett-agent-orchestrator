@@ -343,30 +343,35 @@ impl HeadService {
             },
         };
 
+        let standalone_uuid = crate::policy::STANDALONE_SYSTEM_PROJECT_UUID;
         let project_rows = if let Some(pid) = project_id {
             let sql = format!(
                 "SELECT {PROJECT_SELECT_COLS} FROM projects
-                 WHERE project_id = $1 AND lifecycle_state <> 'deleted_record'"
+                 WHERE project_id = $1
+                   AND project_id <> $2
+                   AND lifecycle_state <> 'deleted_record'"
             );
-            tx.query(&sql, &[&pid.as_uuid()])
+            tx.query(&sql, &[&pid.as_uuid(), &standalone_uuid])
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?
         } else if include_archived {
             let sql = format!(
                 "SELECT {PROJECT_SELECT_COLS} FROM projects
-                 WHERE lifecycle_state <> 'deleted_record'
+                 WHERE project_id <> $1
+                   AND lifecycle_state <> 'deleted_record'
                  ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             );
-            tx.query(&sql, &[])
+            tx.query(&sql, &[&standalone_uuid])
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?
         } else {
             let sql = format!(
                 "SELECT {PROJECT_SELECT_COLS} FROM projects
-                 WHERE lifecycle_state IN ('active', 'detached')
+                 WHERE project_id <> $1
+                   AND lifecycle_state IN ('active', 'detached')
                  ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             );
-            tx.query(&sql, &[])
+            tx.query(&sql, &[&standalone_uuid])
                 .await
                 .map_err(|err| map_pg_err(self.pg_target(), &err))?
         };
@@ -390,7 +395,8 @@ impl HeadService {
             let sql = format!(
                 "SELECT {SESSION_SELECT_COLS}
                  FROM sessions
-                 WHERE project_id = $1
+                 WHERE deleted_at IS NULL
+                   AND project_id = $1
                    AND EXISTS (
                        SELECT 1 FROM projects p
                        WHERE p.project_id = sessions.project_id
@@ -405,12 +411,15 @@ impl HeadService {
             let sql = format!(
                 "SELECT {SESSION_SELECT_COLS}
                  FROM sessions
-                 WHERE sessions.project_id IS NULL
-                    OR EXISTS (
-                        SELECT 1 FROM projects p
-                        WHERE p.project_id = sessions.project_id
-                          AND p.lifecycle_state <> 'deleted_record'
-                    )
+                 WHERE deleted_at IS NULL
+                   AND (
+                       sessions.project_id IS NULL
+                       OR EXISTS (
+                           SELECT 1 FROM projects p
+                           WHERE p.project_id = sessions.project_id
+                             AND p.lifecycle_state <> 'deleted_record'
+                       )
+                   )
                  ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC"
             );
             tx.query(&sql, &[])
@@ -426,7 +435,8 @@ impl HeadService {
         let task_rows = if let Some(pid) = project_id {
             let sql = format!(
                 "SELECT {TASK_SELECT_COLS} FROM tasks
-                 WHERE project_id = $1
+                 WHERE deleted_at IS NULL
+                   AND project_id = $1
                    AND EXISTS (
                        SELECT 1 FROM projects p
                        WHERE p.project_id = tasks.project_id
@@ -440,11 +450,12 @@ impl HeadService {
         } else {
             let sql = format!(
                 "SELECT {TASK_SELECT_COLS} FROM tasks
-                 WHERE EXISTS (
-                     SELECT 1 FROM projects p
-                     WHERE p.project_id = tasks.project_id
-                       AND p.lifecycle_state <> 'deleted_record'
-                 )
+                 WHERE deleted_at IS NULL
+                   AND EXISTS (
+                       SELECT 1 FROM projects p
+                       WHERE p.project_id = tasks.project_id
+                         AND p.lifecycle_state <> 'deleted_record'
+                   )
                  ORDER BY updated_at DESC"
             );
             tx.query(&sql, &[])

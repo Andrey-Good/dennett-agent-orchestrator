@@ -20,28 +20,32 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
+use chacha20poly1305::aead::OsRng;
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use dennett_contracts::redact::{REDACTED_PLACEHOLDER, redact_secrets_owned};
 use dennett_contracts::{
     AgentConfigHistoryResponse, AgentConfigVersionId, AgentId, AgentRecord, ArtifactCompleteness,
-    ArtifactId, ArtifactLifecycleState, ArtifactRecord, CancelRunResponse, CommitMemoryNoteRequest,
-    CommitMemoryNoteResponse, CorrelationId, CreateAgentRequest, CreateArtifactRequest,
-    CreateNoteRequest, CreatePolicyRuleRequest, CreateProjectRequest, CreateSessionRequest,
-    DennettError, DiagnosticsResponse, DispatchEffectRequest, EffectClaimRecord,
-    EnqueueFollowupRequest, ExternalEffectStatus, FlushOutboxResponse, FollowupId, FollowupStatus,
-    ForgetTargetType, HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse,
-    IdempotencyKey, ListAgentsResponse, ListArtifactsResponse, ListOutboxResponse,
-    ListPolicyRulesResponse, ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse,
-    LiveRunResponse, LiveRunSnapshot, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus,
-    MemoryScope, MemoryStatus, MessageId, MessageRecord, MessageRole, OrderedOutboxItem,
-    OrderedOutboxStatus, OutboxItemId, PermissionDecisionRecord, PermissionRequestId, PolicyRule,
-    PolicyRuleId, PrincipalId, ProfileMode, ProjectId, ProjectLifecycleState, ProjectRecord,
-    ProviderConnectionId, ResumeFollowupsResponse, RunId, RunRecord, RunStatus, RuntimeAuthProfile,
-    RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse, SearchNotesRequest,
-    SendMessageRequest, SendMessageResponse, ServiceKind, SessionDetailResponse,
-    SessionFollowupRecord, SessionId, SessionKind, SessionRecord, SessionStatus, Sha256Hex,
-    SimEffectBehavior, SteerSessionRequest, TaskId, TimestampMs, UpdateAgentConfigRequest,
-    UpdateFollowupRequest, UpdateProjectRequest, UpdateSessionRequest, WorkspaceWritePolicy,
+    ArtifactId, ArtifactLifecycleState, ArtifactRecord, AutonomyMode, CancelRunResponse,
+    CommitMemoryNoteRequest, CommitMemoryNoteResponse, CorrelationId, CreateAgentRequest,
+    CreateArtifactRequest, CreateNoteRequest, CreatePolicyRuleRequest, CreateProjectRequest,
+    CreateSessionRequest, DennettError, DiagnosticsResponse, DispatchEffectRequest,
+    EffectClaimRecord, EmergencyStopResponse, EnqueueFollowupRequest, ExternalEffectStatus,
+    FlushOutboxResponse, FollowupId, FollowupStatus, ForgetTargetType, ForkSessionRequest,
+    HeadHealth, HeadMemorySearchRequest, HeadMemorySearchResponse, IdempotencyKey,
+    ListAgentsResponse, ListArtifactsResponse, ListOutboxResponse, ListPolicyRulesResponse,
+    ListProjectFilesResponse, ListProjectsResponse, ListSessionsResponse, LiveRunResponse,
+    LiveRunSnapshot, MemoryCapability, MemoryOutboxItem, MemoryOutboxStatus, MemoryScope,
+    MemoryStatus, MessageId, MessageRecord, MessageRole, OrderedOutboxItem, OrderedOutboxStatus,
+    OutboxItemId, PermissionDecisionRecord, PermissionRequestId, PolicyRule, PolicyRuleId,
+    PrincipalId, ProfileMode, ProjectFileContentResponse, ProjectId, ProjectLifecycleState,
+    ProjectRecord, ProviderConnectionId, ResumeFollowupsResponse, RunId, RunRecord, RunStatus,
+    RuntimeAuthProfile, RuntimeBinding, RuntimeBindingId, RuntimeCatalogResponse,
+    SearchNotesRequest, SendMessageRequest, SendMessageResponse, ServiceKind,
+    SessionDetailResponse, SessionFollowupRecord, SessionId, SessionKind, SessionRecord,
+    SessionStatus, Sha256Hex, SimEffectBehavior, SteerSessionRequest, TaskId, ThinkingLevel,
+    TimestampMs, UpdateAgentConfigRequest, UpdateFollowupRequest, UpdateProjectRequest,
+    UpdateSessionRequest, UpdateUserPreferencesRequest, UserPreferences, WorkspaceWritePolicy,
 };
 use dennett_memory_client::MemoryClient;
 use dennett_runtime_antigravity::{
@@ -53,6 +57,7 @@ use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::time;
 use tokio_postgres::NoTls;
+use zeroize::Zeroizing;
 
 use crate::approvals::{
     ApprovalResolutionSignal, CapturedPermissionDecision, DEFAULT_APPROVAL_WAIT_TIMEOUT,
@@ -71,7 +76,8 @@ use crate::memory_auth::{ControlTokenSigner, MemoryTokenSigner};
 use crate::migrations::{query_control_schema_version, run_control_migrations, sha256_hex};
 use crate::pg_target::ValidatedControlPgTarget;
 use crate::policy::{
-    PolicyContext, PolicyEngine, PolicyEvaluationDecision, resolve_within_workspace,
+    PolicyContext, PolicyEngine, PolicyEvaluationDecision, STANDALONE_SYSTEM_PROJECT_UUID,
+    resolve_within_workspace,
 };
 use crate::secrets::{SecretCipher, VaultMasterKey, default_vault_dir};
 use crate::store::{
@@ -84,11 +90,12 @@ use crate::store::{
     decode_session_row, fetch_active_session_followups, fetch_agent, fetch_all_runtime_bindings,
     fetch_policy_rules, fetch_project, fetch_runtime_binding, fetch_session,
     fetch_session_artifacts, fetch_session_messages, fetch_session_permission_decisions,
-    fetch_session_runs, is_pg_unique_violation, map_pg_err, next_stream_seq, truncate_utf8,
+    fetch_session_runs, fetch_user_preferences, is_pg_unique_violation, map_pg_err,
+    next_stream_seq, truncate_utf8, update_user_preferences_in_tx,
 };
 use crate::workspace_files::{
     clean_display_path, is_symlink_or_reparse_point, list_project_workspace_files,
-    validate_safe_workspace_root,
+    read_project_workspace_file, validate_safe_workspace_root,
 };
 
 /// Current implementation milestone label advertised in [`HeadHealth`].
@@ -140,6 +147,10 @@ pub struct HeadServiceExtras {
     pub antigravity_profile_root: Option<PathBuf>,
     /// Optional override path to the `agy` CLI binary for dynamic Antigravity connections.
     pub antigravity_binary: Option<PathBuf>,
+    /// Whether dynamically constructed Antigravity ACP runtimes forward `--sandbox`.
+    pub antigravity_enable_sandbox: bool,
+    /// Optional explicit owner bearer token override (`DENNETT_HEAD_TOKEN` fallback, or CSPRNG 256-bit hex).
+    pub owner_token_override: Option<String>,
     /// Optional deterministic override for `GEMINI_API_KEY` environment fallback (`Some(None)` forces unset in tests).
     pub gemini_api_key_env_override: Option<Option<String>>,
 }
@@ -166,6 +177,11 @@ impl fmt::Debug for HeadServiceExtras {
             )
             .field("antigravity_profile_root", &self.antigravity_profile_root)
             .field("antigravity_binary", &self.antigravity_binary)
+            .field("antigravity_enable_sandbox", &self.antigravity_enable_sandbox)
+            .field(
+                "owner_token_override",
+                &self.owner_token_override.as_ref().map(|_| REDACTED_PLACEHOLDER),
+            )
             .field(
                 "gemini_api_key_env_override",
                 &self
@@ -342,6 +358,9 @@ pub(crate) struct CoreTurnInput {
     pub(crate) prompt_text: String,
     pub(crate) runtime: Arc<dyn AgentRuntimePort>,
     pub(crate) connection_id: Option<ProviderConnectionId>,
+    pub(crate) model_override: Option<String>,
+    pub(crate) thinking_override: Option<ThinkingLevel>,
+    pub(crate) skill_slugs_override: Option<Vec<String>>,
     pub(crate) turn_timeout: Duration,
     pub(crate) approval_timeout: Duration,
     pub(crate) cancel_rx: watch::Receiver<bool>,
@@ -722,6 +741,8 @@ struct HeadServiceInner {
     allow_non_loopback_local_runtime: bool,
     antigravity_profile_root: PathBuf,
     antigravity_binary: Option<PathBuf>,
+    antigravity_enable_sandbox: bool,
+    owner_token: Zeroizing<String>,
     #[expect(
         clippy::option_option,
         reason = "tri-state: None reads process env, Some(None) forces unset in tests, Some(Some(v)) injects deterministic key"
@@ -870,6 +891,24 @@ impl HeadService {
             .control_hmac_signer
             .unwrap_or_else(ControlTokenSigner::ephemeral);
 
+        let owner_token_raw = extras
+            .owner_token_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                std::env::var("DENNETT_HEAD_TOKEN")
+                    .ok()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_else(generate_random_owner_token);
+        if owner_token_raw.len() >= 3 {
+            secrets.push(owner_token_raw.clone());
+        }
+        let owner_token = Zeroizing::new(owner_token_raw);
+
         Ok(Self {
             inner: Arc::new(HeadServiceInner {
                 pg_target,
@@ -892,6 +931,8 @@ impl HeadService {
                 allow_non_loopback_local_runtime: extras.allow_non_loopback_local_runtime,
                 antigravity_profile_root,
                 antigravity_binary: extras.antigravity_binary,
+                antigravity_enable_sandbox: extras.antigravity_enable_sandbox,
+                owner_token,
                 gemini_api_key_env_override: extras.gemini_api_key_env_override,
                 runtime_catalog_cache: Mutex::new(None),
                 last_memory_status: AtomicU8::new(initial_memory_status),
@@ -907,6 +948,18 @@ impl HeadService {
                 secrets_to_redact: StdRwLock::new(secrets),
             }),
         })
+    }
+
+    /// Returns the owner bearer token (`DENNETT_HEAD_TOKEN` or 256-bit CSPRNG hex) required for
+    /// owner HTTP routes (A-SEC-1). NEVER log this plaintext value!
+    #[must_use]
+    pub fn owner_token(&self) -> &str {
+        self.inner.owner_token.as_str()
+    }
+
+    /// Returns whether dynamically built Antigravity ACP connections should pass `--sandbox`.
+    pub(crate) fn antigravity_enable_sandbox(&self) -> bool {
+        self.inner.antigravity_enable_sandbox
     }
 
     /// Registers the bound loopback HTTP base URL of this `dennett-head` instance so
@@ -1072,6 +1125,10 @@ impl HeadService {
         .map_err(|_| DennettError::DatabaseUnavailable {
             detail: String::from("control PostgreSQL migration timed out"),
         })??;
+
+        // Seed built-in on-demand Dennett skills (e.g. `dennett-guide`) idempotently on migration.
+        self.ensure_builtin_capabilities_seeded_on_conn(&conn)
+            .await?;
 
         *guard = Some(version);
         Ok(version)
@@ -1245,13 +1302,14 @@ impl HeadService {
         .await
         .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
+        let autonomy_mode = req.autonomy_mode.unwrap_or_default();
         tx.execute(
             "INSERT INTO agent_config_versions (
                 config_version_id, agent_id, version_number, system_prompt,
                 model_preference, thinking_level, allowed_memory_scopes,
                 workspace_write_policy, default_budget, attached_skills,
-                preferred_connection_id
-             ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10)",
+                preferred_connection_id, autonomy_mode
+             ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
             &[
                 &config_version_id.as_uuid(),
                 &agent_id.as_uuid(),
@@ -1264,6 +1322,7 @@ impl HeadService {
                 &attached_skills_json,
                 &req.preferred_connection_id
                     .map(ProviderConnectionId::as_uuid),
+                &autonomy_mode.as_str(),
             ],
         )
         .await
@@ -1366,17 +1425,23 @@ impl HeadService {
 
         let locked = tx
             .query_opt(
-                "SELECT agent_id FROM agents WHERE agent_id = $1 FOR UPDATE",
+                "SELECT v.autonomy_mode
+                 FROM agents a
+                 JOIN agent_config_versions v ON v.config_version_id = a.current_config_version_id
+                 WHERE a.agent_id = $1
+                 FOR UPDATE OF a",
                 &[&agent_id.as_uuid()],
             )
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
-        if locked.is_none() {
+        let Some(locked_row) = locked else {
             return Err(DennettError::NotFound {
                 resource: String::from("agent"),
                 id: agent_id.to_string(),
             });
-        }
+        };
+        let prev_autonomy_mode = AutonomyMode::from_str(&locked_row.get::<_, String>(0))?;
+        let next_autonomy_mode = req.autonomy_mode.unwrap_or(prev_autonomy_mode);
 
         let max_ver: i64 = tx
             .query_one(
@@ -1435,8 +1500,8 @@ impl HeadService {
                 config_version_id, agent_id, version_number, system_prompt,
                 model_preference, thinking_level, allowed_memory_scopes,
                 workspace_write_policy, default_budget, attached_skills,
-                preferred_connection_id
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                preferred_connection_id, autonomy_mode
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
             &[
                 &new_version_id.as_uuid(),
                 &agent_id.as_uuid(),
@@ -1450,6 +1515,7 @@ impl HeadService {
                 &attached_skills_json,
                 &req.preferred_connection_id
                     .map(ProviderConnectionId::as_uuid),
+                &next_autonomy_mode.as_str(),
             ],
         )
         .await
@@ -1523,7 +1589,8 @@ impl HeadService {
                         model_preference, thinking_level, allowed_memory_scopes,
                         workspace_write_policy, default_budget, attached_skills,
                         TRUNC(EXTRACT(EPOCH FROM created_at) * 1000)::bigint,
-                        preferred_connection_id
+                        preferred_connection_id,
+                        autonomy_mode
                  FROM agent_config_versions
                  WHERE agent_id = $1
                  ORDER BY version_number ASC",
@@ -1856,6 +1923,38 @@ impl HeadService {
         })?
     }
 
+    /// Reads a bounded, symlink-safe preview of a workspace-relative file inside `project_id`
+    /// (`GET /v1/projects/{project_id}/file?path=...`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`],
+    /// [`DennettError::AccessDenied`], or [`DennettError::DatabaseUnavailable`].
+    pub async fn get_project_file_content(
+        &self,
+        project_id: ProjectId,
+        relative_path: String,
+    ) -> Result<ProjectFileContentResponse, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let project = fetch_project(&conn, project_id, &self.inner.pg_target).await?;
+        if project.lifecycle_state == ProjectLifecycleState::DeletedRecord {
+            return Err(DennettError::NotFound {
+                resource: String::from("project"),
+                id: project_id.to_string(),
+            });
+        }
+        let ws = project.workspace_path;
+
+        tokio::task::spawn_blocking(move || {
+            read_project_workspace_file(project_id, ws.as_deref(), &relative_path)
+        })
+        .await
+        .map_err(|err| DennettError::Internal {
+            detail: format!("workspace file preview task failed: {err}"),
+        })?
+    }
+
     /// Lists active/detached registered projects (excluding `archived` and `deleted_record`).
     ///
     /// # Errors
@@ -1866,7 +1965,7 @@ impl HeadService {
     }
 
     /// Lists registered projects with explicit `include_archived` toggle (`deleted_record` rows
-    /// are never returned in active lists per Contract C).
+    /// and the hidden standalone system project are never returned in active lists per Contract C).
     ///
     /// # Errors
     ///
@@ -1877,23 +1976,26 @@ impl HeadService {
     ) -> Result<ListProjectsResponse, DennettError> {
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let standalone_uuid = STANDALONE_SYSTEM_PROJECT_UUID;
         let sql = if include_archived {
             format!(
                 "SELECT {PROJECT_SELECT_COLS}
                  FROM projects
-                 WHERE lifecycle_state <> 'deleted_record'
+                 WHERE project_id <> $1
+                   AND lifecycle_state <> 'deleted_record'
                  ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             )
         } else {
             format!(
                 "SELECT {PROJECT_SELECT_COLS}
                  FROM projects
-                 WHERE lifecycle_state NOT IN ('archived', 'deleted_record')
+                 WHERE project_id <> $1
+                   AND lifecycle_state NOT IN ('archived', 'deleted_record')
                  ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC"
             )
         };
         let rows = conn
-            .query(&sql, &[])
+            .query(&sql, &[&standalone_uuid])
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
@@ -2042,7 +2144,8 @@ impl HeadService {
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
 
         let trimmed_title = req.title.as_deref().map(str::trim);
-        let bump_updated_at = trimmed_title.is_some();
+        let status_str = req.status.map(|s| s.as_str().to_owned());
+        let bump_updated_at = trimmed_title.is_some() || status_str.is_some();
         let update_sql = format!(
             "UPDATE sessions
              SET title = COALESCE($2, title),
@@ -2052,8 +2155,9 @@ impl HeadService {
                      WHEN $3 IS FALSE THEN NULL
                      ELSE pinned_at
                  END,
+                 status = COALESCE($5, status),
                  updated_at = CASE WHEN $4 THEN now() ELSE updated_at END
-             WHERE session_id = $1
+             WHERE session_id = $1 AND deleted_at IS NULL
              RETURNING {SESSION_SELECT_COLS}"
         );
         let row = tx
@@ -2064,6 +2168,7 @@ impl HeadService {
                     &trimmed_title,
                     &req.pinned,
                     &bump_updated_at,
+                    &status_str.as_deref(),
                 ],
             )
             .await
@@ -2078,7 +2183,8 @@ impl HeadService {
 
         let binding = fetch_runtime_binding(&tx, session_id, &self.inner.pg_target).await?;
         let record = decode_session_row(&row, binding)?;
-        let audit_kind = if trimmed_title.is_some() && req.pinned.is_none() {
+        let audit_kind = if trimmed_title.is_some() && req.pinned.is_none() && req.status.is_none()
+        {
             "session_renamed"
         } else {
             "session_updated"
@@ -2092,8 +2198,8 @@ impl HeadService {
             "head",
             audit_kind,
             &format!(
-                "updated session {session_id} title=`{}` pinned={}",
-                record.title, record.pinned
+                "updated session {session_id} title=`{}` pinned={} status={}",
+                record.title, record.pinned, record.status
             ),
         )
         .await?;
@@ -2113,6 +2219,7 @@ impl HeadService {
                     "project_id": record.project_id,
                     "title": record.title,
                     "session_kind": record.session_kind,
+                    "status": record.status,
                     "pinned": record.pinned,
                     "pinned_at": record.pinned_at,
                 }),
@@ -2123,6 +2230,321 @@ impl HeadService {
             .await
             .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
         Ok(record)
+    }
+
+    /// Forks an existing session at an inclusive `from_message_id`, copying the exact prefix of
+    /// messages into a fresh isolated session (`POST /v1/sessions/{session_id}/fork`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`], [`DennettError::NotFound`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "forking a session atomically verifies source message membership, creates the forked session, copies message prefix with monotonic stream_seq, and emits audit + journal events"
+    )]
+    pub async fn fork_session(
+        &self,
+        source_session_id: SessionId,
+        req: ForkSessionRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<SessionRecord, DennettError> {
+        req.validate()?;
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let source = fetch_session(&tx, source_session_id, &self.inner.pg_target).await?;
+        let target_seq_row = tx
+            .query_opt(
+                "SELECT stream_seq FROM messages WHERE session_id = $1 AND message_id = $2",
+                &[&source_session_id.as_uuid(), &req.from_message_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        let Some(seq_row) = target_seq_row else {
+            return Err(DennettError::NotFound {
+                resource: String::from("message"),
+                id: req.from_message_id.to_string(),
+            });
+        };
+        let target_seq: i64 = seq_row.get(0);
+
+        let prefix_rows = tx
+            .query(
+                "SELECT role, content, correlation_id
+                 FROM messages
+                 WHERE session_id = $1 AND stream_seq <= $2
+                 ORDER BY stream_seq ASC",
+                &[&source_session_id.as_uuid(), &target_seq],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let fork_title_raw = req
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map_or_else(
+                || format!("{} (ветка)", source.title),
+                ToOwned::to_owned,
+            );
+        let fork_title = truncate_utf8(&fork_title_raw, 256);
+
+        let new_session_id = SessionId::new();
+        let insert_sql = format!(
+            "INSERT INTO sessions (session_id, agent_id, project_id, title, status, session_kind)
+             VALUES ($1, $2, $3, $4, 'active', 'user_chat')
+             RETURNING {SESSION_SELECT_COLS}"
+        );
+        let new_sess_row = tx
+            .query_one(
+                &insert_sql,
+                &[
+                    &new_session_id.as_uuid(),
+                    &source.agent_id.as_uuid(),
+                    &source.project_id.map(ProjectId::as_uuid),
+                    &fork_title,
+                ],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let stream_id = format!("session:{new_session_id}:messages");
+        for row in &prefix_rows {
+            let role: String = row.get(0);
+            let content: String = row.get(1);
+            let orig_cid: String = row.get(2);
+            let copied_id = MessageId::new();
+            let seq = next_stream_seq(&tx, &stream_id, &self.inner.pg_target).await?;
+            tx.execute(
+                "INSERT INTO messages (
+                    message_id, session_id, stream_seq, role, content, run_id, correlation_id
+                 ) VALUES ($1, $2, $3, $4, $5, NULL, $6)",
+                &[
+                    &copied_id.as_uuid(),
+                    &new_session_id.as_uuid(),
+                    &seq,
+                    &role,
+                    &content,
+                    &orig_cid,
+                ],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        }
+
+        let record = decode_session_row(&new_sess_row, None)?;
+        let _ = append_audit_event(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            Some(new_session_id),
+            None,
+            "head",
+            "session_forked",
+            &format!(
+                "forked session {new_session_id} from {source_session_id} up to message {} ({} messages copied)",
+                req.from_message_id,
+                prefix_rows.len()
+            ),
+        )
+        .await?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{new_session_id}"),
+                event_type: "session.forked",
+                project_id: record.project_id,
+                session_id: Some(new_session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": new_session_id,
+                    "source_session_id": source_session_id,
+                    "from_message_id": req.from_message_id,
+                    "copied_messages": prefix_rows.len(),
+                    "title": record.title,
+                }),
+            },
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(record)
+    }
+
+    /// Soft-deletes an idle conversation session (`DELETE /v1/sessions/{session_id}`), rejecting
+    /// active runs with `409 Conflict`, cleaning mutable operational state (follow-ups, runtime
+    /// binding, artifacts, open non-effect inbox cards), closing the runtime session, and
+    /// preserving V15 append-only audit/journal invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`], [`DennettError::Conflict`], or
+    /// [`DennettError::DatabaseUnavailable`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "session deletion guards against active runs, cleans operational tables, soft-deletes session row, emits journal event, and tears down live runtime state"
+    )]
+    pub async fn delete_session(
+        &self,
+        session_id: SessionId,
+        correlation_id: &CorrelationId,
+    ) -> Result<(), DennettError> {
+        let _ = self.ensure_migrated().await?;
+        {
+            let active = self.inner.active_runs.lock().await;
+            if active.contains_key(&session_id) {
+                return Err(DennettError::Conflict {
+                    resource: String::from("session"),
+                    expected_revision: None,
+                    actual_revision: None,
+                    reason: format!(
+                        "cannot delete session `{session_id}` while a run is actively executing; cancel it first"
+                    ),
+                });
+            }
+        }
+
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let lock_sql = format!(
+            "SELECT {SESSION_SELECT_COLS} FROM sessions WHERE session_id = $1 AND deleted_at IS NULL FOR UPDATE"
+        );
+        let Some(row) = tx
+            .query_opt(&lock_sql, &[&session_id.as_uuid()])
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+        else {
+            return Err(DennettError::NotFound {
+                resource: String::from("session"),
+                id: session_id.to_string(),
+            });
+        };
+        let existing = decode_session_row(&row, None)?;
+
+        let has_running: bool = tx
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE session_id = $1 AND status = 'running')",
+                &[&session_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?
+            .get(0);
+        if has_running {
+            return Err(DennettError::Conflict {
+                resource: String::from("session"),
+                expected_revision: None,
+                actual_revision: None,
+                reason: format!(
+                    "cannot delete session `{session_id}` while a run is still in `running` state"
+                ),
+            });
+        }
+
+        tx.execute(
+            "DELETE FROM session_followups WHERE session_id = $1",
+            &[&session_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        tx.execute(
+            "DELETE FROM runtime_bindings WHERE session_id = $1",
+            &[&session_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        tx.execute(
+            "UPDATE artifacts
+             SET lifecycle_state = 'deleted',
+                 content = NULL
+             WHERE session_id = $1 AND lifecycle_state <> 'deleted'",
+            &[&session_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        tx.execute(
+            "UPDATE inbox_cards
+             SET status = 'withdrawn',
+                 resolution_summary = 'Сессия удалена владельцем',
+                 revision = revision + 1,
+                 resolved_at = now(),
+                 updated_at = now()
+             WHERE session_id = $1 AND status = 'open' AND kind <> 'unknown_effect'",
+            &[&session_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        tx.execute(
+            "UPDATE sessions
+             SET deleted_at = now(),
+                 status = 'closed',
+                 pinned = FALSE,
+                 pinned_at = NULL,
+                 updated_at = now()
+             WHERE session_id = $1",
+            &[&session_id.as_uuid()],
+        )
+        .await
+        .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let _ = append_audit_event(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            Some(session_id),
+            None,
+            "head",
+            "session_deleted",
+            &format!("deleted session `{}` ({session_id})", existing.title),
+        )
+        .await?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("session:{session_id}"),
+                event_type: "session.deleted",
+                project_id: existing.project_id,
+                session_id: Some(session_id),
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "session_id": session_id,
+                    "project_id": existing.project_id,
+                }),
+            },
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        self.runtime_router().close_session_all(session_id).await;
+        if let Ok(mut snaps) = self.inner.live_snapshots.lock() {
+            snaps.remove(&session_id);
+        }
+        if let Ok(mut steering) = self.inner.steering_sessions.lock() {
+            steering.remove(&session_id);
+        }
+        Ok(())
     }
 
     /// Lists all persisted sessions with their latest runtime bindings.
@@ -2137,6 +2559,7 @@ impl HeadService {
         let sql = format!(
             "SELECT {SESSION_SELECT_COLS}
              FROM sessions
+             WHERE deleted_at IS NULL
              ORDER BY pinned DESC, pinned_at DESC NULLS LAST, updated_at DESC"
         );
         let rows = conn
@@ -2253,6 +2676,209 @@ impl HeadService {
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let rules = fetch_policy_rules(&conn, &self.inner.pg_target).await?;
         Ok(ListPolicyRulesResponse { rules })
+    }
+
+    /// Removes an external policy rule by ID (`DELETE /v1/policies/{rule_id}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::NotFound`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn delete_policy_rule(
+        &self,
+        rule_id: PolicyRuleId,
+        correlation_id: &CorrelationId,
+    ) -> Result<(), DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let deleted = tx
+            .execute(
+                "DELETE FROM policy_rules WHERE rule_id = $1",
+                &[&rule_id.as_uuid()],
+            )
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        if deleted == 0 {
+            return Err(DennettError::NotFound {
+                resource: String::from("policy_rule"),
+                id: rule_id.to_string(),
+            });
+        }
+
+        let _ = append_audit_event(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            None,
+            None,
+            "policy_engine",
+            "policy_rule_deleted",
+            &format!("deleted policy rule {rule_id}"),
+        )
+        .await?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: &format!("policy_rule:{rule_id}"),
+                event_type: "policy_rule.deleted",
+                project_id: None,
+                session_id: None,
+                task_id: None,
+                correlation_id,
+                payload: json!({ "rule_id": rule_id }),
+            },
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(())
+    }
+
+    /// Returns persisted owner preferences (`GET /v1/preferences`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] on PG failure.
+    pub async fn get_preferences(&self) -> Result<UserPreferences, DennettError> {
+        let _ = self.ensure_migrated().await?;
+        let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        fetch_user_preferences(&conn, &self.inner.pg_target).await
+    }
+
+    /// Updates persisted owner preferences (`PATCH /v1/preferences`), validating any updated
+    /// IANA timezone directly against PostgreSQL 16 `pg_timezone_names`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::InvalidInput`] or [`DennettError::DatabaseUnavailable`].
+    pub async fn update_preferences(
+        &self,
+        req: UpdateUserPreferencesRequest,
+        correlation_id: &CorrelationId,
+    ) -> Result<UserPreferences, DennettError> {
+        req.validate()?;
+        let _ = self.ensure_migrated().await?;
+        let mut conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+
+        let updated = update_user_preferences_in_tx(&tx, &req, &self.inner.pg_target).await?;
+        let _ = append_audit_event(
+            &tx,
+            &self.inner.pg_target,
+            correlation_id,
+            None,
+            None,
+            "head",
+            "user_preferences_updated",
+            &format!(
+                "updated user preferences (ui={}, agent={}, tz={}, enter_to_send={})",
+                updated.ui_language, updated.agent_language, updated.timezone, updated.enter_to_send
+            ),
+        )
+        .await?;
+        let _ = append_control_event_in_tx(
+            &tx,
+            &self.inner.pg_target,
+            ControlEventAppend {
+                entity_key: "user_preferences:1",
+                event_type: "preferences.updated",
+                project_id: None,
+                session_id: None,
+                task_id: None,
+                correlation_id,
+                payload: json!({
+                    "ui_language": updated.ui_language,
+                    "agent_language": updated.agent_language,
+                    "timezone": updated.timezone,
+                    "enter_to_send": updated.enter_to_send,
+                }),
+            },
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+        Ok(updated)
+    }
+
+    /// Global emergency stop (`POST /v1/runs/emergency-stop`): immediately cancels every active
+    /// session run AND every `running`/`queued`/`waiting_approval` durable task without blocking on
+    /// `memoryd`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DennettError::DatabaseUnavailable`] on PG failure.
+    pub async fn emergency_stop_all(
+        &self,
+        correlation_id: &CorrelationId,
+    ) -> Result<EmergencyStopResponse, DennettError> {
+        let _ = self.ensure_migrated().await?;
+
+        let mut session_ids: BTreeSet<SessionId> = {
+            let guard = self.inner.active_runs.lock().await;
+            guard.keys().copied().collect()
+        };
+        let mut task_ids: BTreeSet<TaskId> = {
+            let guard = self.inner.active_tasks.lock().await;
+            guard.keys().copied().collect()
+        };
+
+        {
+            let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
+            let running_sess_rows = conn
+                .query(
+                    "SELECT DISTINCT session_id FROM runs WHERE status = 'running'",
+                    &[],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            for row in running_sess_rows {
+                session_ids.insert(SessionId::from_uuid(row.get(0)));
+            }
+
+            let active_task_rows = conn
+                .query(
+                    "SELECT task_id FROM tasks
+                     WHERE deleted_at IS NULL
+                       AND status IN ('running', 'queued', 'waiting_approval')",
+                    &[],
+                )
+                .await
+                .map_err(|err| map_pg_err(&self.inner.pg_target, &err))?;
+            for row in active_task_rows {
+                task_ids.insert(TaskId::from_uuid(row.get(0)));
+            }
+        }
+
+        let mut cancelled_task_ids = Vec::with_capacity(task_ids.len());
+        for tid in task_ids {
+            if self.cancel_task(tid, correlation_id).await.is_ok() {
+                cancelled_task_ids.push(tid);
+            }
+        }
+
+        let mut cancelled_session_ids = Vec::with_capacity(session_ids.len());
+        for sid in session_ids {
+            if let Ok(resp) = self.cancel_session_run(sid, correlation_id).await
+                && (resp.cancelled || resp.run_id.is_some())
+            {
+                cancelled_session_ids.push(sid);
+            }
+        }
+
+        Ok(EmergencyStopResponse {
+            cancelled_session_ids,
+            cancelled_task_ids,
+        })
     }
 
     /// Persists an ordinary D1 artifact linked to `session_id` and its project workspace.
@@ -2704,7 +3330,9 @@ impl HeadService {
         let resolved_caps = match self
             .resolve_active_capabilities_for_session(
                 project_id_opt,
+                Some(input.agent.agent_id),
                 &input.agent.current_config.attached_skills,
+                input.skill_slugs_override.as_deref(),
             )
             .await
         {
@@ -2720,15 +3348,26 @@ impl HeadService {
         mcp_servers.extend(resolved_caps.extra_mcp_servers);
         let turn_secrets = self.collect_turn_secrets(&mcp_servers);
 
+        let user_prefs = self.get_preferences().await.unwrap_or_default();
+        let runtime_ctx_block = format_runtime_context_block(
+            input.session_id,
+            &input.agent,
+            input.project.as_ref(),
+            &user_prefs,
+            &resolved_caps.session_skills,
+        );
         let skills_index = format_session_skills_prompt_index(&resolved_caps.session_skills);
-        let effective_system_prompt = if skills_index.is_empty() {
-            input.agent.current_config.system_prompt.clone()
-        } else {
-            format!(
-                "{}{}",
-                input.agent.current_config.system_prompt, skills_index
-            )
-        };
+        let effective_system_prompt = format!(
+            "{}{}{}",
+            input.agent.current_config.system_prompt, runtime_ctx_block, skills_index
+        );
+        let effective_model = input
+            .model_override
+            .clone()
+            .or_else(|| input.agent.current_config.model_preference.clone());
+        let effective_thinking = input
+            .thinking_override
+            .or(input.agent.current_config.thinking_level);
 
         let start_outcome = match input
             .runtime
@@ -2736,8 +3375,8 @@ impl HeadService {
                 dennett_session_id: input.session_id,
                 workspace_cwd: effective_workspace_cwd.clone(),
                 system_prompt: effective_system_prompt,
-                model_preference: input.agent.current_config.model_preference.clone(),
-                thinking_level: input.agent.current_config.thinking_level,
+                model_preference: effective_model,
+                thinking_level: effective_thinking,
                 workspace_write_policy: effective_write_policy.clone(),
                 mcp_servers,
                 active_skills: resolved_caps.active_skills,
@@ -2815,6 +3454,7 @@ impl HeadService {
             workspace_bound: live_ws_bound,
             workspace_root: effective_workspace_cwd,
             workspace_write_policy: effective_write_policy,
+            autonomy_mode: input.agent.current_config.autonomy_mode,
             parent_write_ceiling: live_parent_ceiling,
             allowed_memory_scopes: input.agent.current_config.allowed_memory_scopes.clone(),
             registered_mcp_servers: resolved_caps.registered_mcp_server_names,
@@ -3582,6 +4222,9 @@ impl HeadService {
                     prompt_text: effective_prompt,
                     runtime,
                     connection_id,
+                    model_override: None,
+                    thinking_override: None,
+                    skill_slugs_override: None,
                     turn_timeout,
                     approval_timeout,
                     cancel_rx,
@@ -5586,6 +6229,7 @@ impl HeadService {
             workspace_bound: live.workspace_bound,
             workspace_root,
             workspace_write_policy,
+            autonomy_mode: agent.current_config.autonomy_mode,
             parent_write_ceiling: live.parent_write_ceiling,
             allowed_memory_scopes: agent.current_config.allowed_memory_scopes.clone(),
             registered_mcp_servers: BTreeSet::new(),
@@ -6765,6 +7409,8 @@ impl HeadService {
             self.wake_expired_approval_waiters(&expired_perms, session_id, "run finalized")
                 .await;
         }
+        self.wake_tasks_waiting_for_run(run_id, correlation_id)
+            .await;
 
         let run_record = RunRecord {
             run_id,
@@ -6867,6 +7513,8 @@ impl HeadService {
             self.wake_expired_approval_waiters(&expired_perms, session_id, &truncated)
                 .await;
         }
+        self.wake_tasks_waiting_for_run(run_id, correlation_id)
+            .await;
     }
 
     /// Finalizes a run whose detached worker panicked or was aborted on daemon shutdown,
@@ -7852,6 +8500,68 @@ fn read_regular_file_snapshot(
 
     let digest = sha256_hex(&bytes);
     Ok((bytes, digest))
+}
+
+fn generate_random_owner_token() -> String {
+    let key = ChaCha20Poly1305::generate_key(&mut OsRng);
+    let mut hex = String::with_capacity(64);
+    for byte in key {
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    hex
+}
+
+fn format_runtime_context_block(
+    session_id: SessionId,
+    agent: &AgentRecord,
+    project: Option<&ProjectRecord>,
+    prefs: &UserPreferences,
+    session_skills: &[crate::capabilities::ResolvedSessionSkill],
+) -> String {
+    let project_label = project.map_or_else(
+        || String::from("none (standalone chat)"),
+        |p| format!("{} ({})", p.name, p.project_id),
+    );
+    let workspace_label = project
+        .and_then(|p| p.workspace_path.as_deref())
+        .map_or_else(|| String::from("none"), ToOwned::to_owned);
+    let scopes = if agent.current_config.allowed_memory_scopes.is_empty() {
+        String::from("none")
+    } else {
+        agent
+            .current_config
+            .allowed_memory_scopes
+            .iter()
+            .map(MemoryScope::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let skill_slugs = if session_skills.is_empty() {
+        String::from("none")
+    } else {
+        session_skills
+            .iter()
+            .map(|s| s.summary.slug.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "\n\n[Dennett Runtime Context]\n\
+         session_id: {session_id}\n\
+         agent_id: {}\n\
+         project: {project_label}\n\
+         workspace_path: {workspace_label}\n\
+         autonomy_mode: {}\n\
+         allowed_memory_scopes: {scopes}\n\
+         user_language: {}\n\
+         timezone: {}\n\
+         active_skills: {skill_slugs}\n\
+         Tip: call `dennett_skill_read` with slug `dennett-guide` for Dennett tools, memory, reminders, subagents, and artifacts.",
+        agent.agent_id,
+        agent.current_config.autonomy_mode,
+        prefs.agent_language,
+        prefs.timezone,
+    )
 }
 
 fn is_default_session_title(title: &str) -> bool {

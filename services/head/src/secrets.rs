@@ -15,6 +15,7 @@
 //!   and tool excerpts can never leak credentials.
 
 use core::fmt;
+use core::str::FromStr as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,8 +25,8 @@ use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use dennett_contracts::redact::REDACTED_PLACEHOLDER;
 use dennett_contracts::{
-    CorrelationId, DennettError, ListSecretsResponse, SecretMetadataRecord, SecretSource,
-    SetSecretRequest, TimestampMs, validate_secret_slot_key,
+    CorrelationId, DennettError, ListSecretsResponse, ProjectId, SecretMetadataRecord,
+    SecretSource, SetSecretRequest, TimestampMs, validate_secret_slot_key,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -312,11 +313,28 @@ fn decode_master_key_material(raw: &str) -> Result<[u8; 32], String> {
     ))
 }
 
-fn write_master_key_file(path: &Path, content: &[u8]) -> Result<(), DennettError> {
+/// Writes sensitive key or token material to `path` with strict owner-only filesystem permissions:
+/// `0o600` on Unix and an owner-only DACL (inheritance stripped) on Windows (`A-SEC-1`, `A-SEC-3`).
+///
+/// # Errors
+///
+/// Returns [`DennettError::Internal`] if writing the file or applying restrictive ACLs fails.
+pub fn write_owner_only_file(path: &Path, content: &[u8]) -> Result<(), DennettError> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|err| DennettError::Internal {
+            detail: format!(
+                "failed creating parent directory for `{}`: {err}",
+                path.display()
+            ),
+        })?;
+    }
+
     #[cfg(unix)]
     {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
         let mut file = fs::OpenOptions::new()
             .create(true)
@@ -325,30 +343,154 @@ fn write_master_key_file(path: &Path, content: &[u8]) -> Result<(), DennettError
             .mode(0o600)
             .open(path)
             .map_err(|err| DennettError::Internal {
-                detail: format!(
-                    "failed creating vault master key `{}`: {err}",
-                    path.display()
-                ),
+                detail: format!("failed creating secret file `{}`: {err}", path.display()),
             })?;
         file.write_all(content)
             .map_err(|err| DennettError::Internal {
-                detail: format!(
-                    "failed writing vault master key `{}`: {err}",
-                    path.display()
-                ),
+                detail: format!("failed writing secret file `{}`: {err}", path.display()),
             })?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
+            DennettError::Internal {
+                detail: format!("failed tightening permissions on `{}`: {err}", path.display()),
+            }
+        })?;
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         fs::write(path, content).map_err(|err| DennettError::Internal {
-            detail: format!(
-                "failed writing vault master key `{}`: {err}",
-                path.display()
-            ),
+            detail: format!("failed writing secret file `{}`: {err}", path.display()),
+        })?;
+        apply_windows_owner_only_dacl(path)?;
+        Ok(())
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        fs::write(path, content).map_err(|err| DennettError::Internal {
+            detail: format!("failed writing secret file `{}`: {err}", path.display()),
         })
     }
+}
+
+#[cfg(windows)]
+fn resolve_current_windows_principal() -> Option<String> {
+    use std::sync::OnceLock;
+    static PRINCIPAL: OnceLock<Option<String>> = OnceLock::new();
+    PRINCIPAL
+        .get_or_init(|| {
+            if let Ok(output) = std::process::Command::new("whoami")
+                .args(["/user", "/fo", "csv", "/nh"])
+                .output()
+                && output.status.success()
+            {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = text.lines().map(str::trim).find(|l| !l.is_empty())
+                    && let Some((_, sid_part)) = line.rsplit_once(',')
+                {
+                    let sid = sid_part.trim().trim_matches('"');
+                    if sid.starts_with("S-1-")
+                        && sid
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    {
+                        return Some(format!("*{sid}"));
+                    }
+                }
+            }
+            let user = std::env::var("USERNAME").ok()?;
+            let trimmed = user.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if let Ok(domain) = std::env::var("USERDOMAIN") {
+                let d = domain.trim();
+                if !d.is_empty() {
+                    return Some(format!("{d}\\{trimmed}"));
+                }
+            }
+            Some(trimmed.to_owned())
+        })
+        .clone()
+}
+
+#[cfg(windows)]
+fn apply_windows_owner_only_dacl(path: &Path) -> Result<(), DennettError> {
+    let Some(principal) = resolve_current_windows_principal() else {
+        return Err(DennettError::Internal {
+            detail: format!(
+                "unable to determine current Windows user SID to protect `{}`",
+                path.display()
+            ),
+        });
+    };
+    let grant_spec = format!("{principal}:(F)");
+    let output = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &grant_spec])
+        .output()
+        .map_err(|err| DennettError::Internal {
+            detail: format!(
+                "failed invoking icacls to protect `{}`: {err}",
+                path.display()
+            ),
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(DennettError::Internal {
+            detail: format!(
+                "icacls failed protecting `{}` (status={}): {} {}",
+                path.display(),
+                output.status,
+                stdout.trim(),
+                stderr.trim()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn write_master_key_file(path: &Path, content: &[u8]) -> Result<(), DennettError> {
+    write_owner_only_file(path, content)
+}
+
+/// Enforces `secret_entries.scope` containment (`"global"` vs `"project:<uuid>"`, `A-SEC-3`).
+///
+/// Fails closed on cross-project access, standalone access to project secrets, or malformed scopes.
+pub(crate) fn enforce_secret_scope(
+    slot_key: &str,
+    entry_scope: &str,
+    caller_project_id: Option<ProjectId>,
+) -> Result<(), DennettError> {
+    let trimmed = entry_scope.trim();
+    if trimmed == "global" {
+        return Ok(());
+    }
+    if let Some(raw_pid) = trimmed.strip_prefix("project:") {
+        let target_pid = ProjectId::from_str(raw_pid).map_err(|_| DennettError::AccessDenied {
+            scope: trimmed.to_owned(),
+            reason: format!(
+                "secret slot `{slot_key}` has malformed project scope `{trimmed}`; failing closed"
+            ),
+        })?;
+        if caller_project_id == Some(target_pid) {
+            return Ok(());
+        }
+        return Err(DennettError::AccessDenied {
+            scope: trimmed.to_owned(),
+            reason: format!(
+                "secret slot `{slot_key}` is restricted to project `{target_pid}` and cannot be resolved for caller project {caller_project_id:?}"
+            ),
+        });
+    }
+    Err(DennettError::AccessDenied {
+        scope: trimmed.to_owned(),
+        reason: format!(
+            "secret slot `{slot_key}` has unrecognized scope `{trimmed}`; failing closed"
+        ),
+    })
 }
 
 impl HeadService {
@@ -610,29 +752,33 @@ impl HeadService {
         })
     }
 
-    /// Resolves plaintext secret material strictly internally for runtime/MCP env injection.
+    /// Resolves plaintext secret material strictly internally for runtime/MCP env injection,
+    /// enforcing `secret_entries.scope` containment against `caller_project_id` (`A-SEC-3`).
     ///
     /// Automatically registers resolved plaintext in `HeadService`'s secret redactor so no
     /// downstream error or diagnostic message can ever leak it.
     pub(crate) async fn resolve_secret_plaintext(
         &self,
         slot_key: &str,
+        caller_project_id: Option<ProjectId>,
     ) -> Result<Option<(Zeroizing<String>, SecretSource, i64)>, DennettError> {
         validate_secret_slot_key(slot_key)?;
         let _ = self.ensure_migrated().await?;
         let conn = self.get_conn(DEFAULT_PG_OP_TIMEOUT).await?;
         let row = conn
             .query_opt(
-                "SELECT nonce, ciphertext, version FROM secret_entries WHERE slot_key = $1",
+                "SELECT scope, nonce, ciphertext, version FROM secret_entries WHERE slot_key = $1",
                 &[&slot_key],
             )
             .await
             .map_err(|err| map_pg_err(self.pg_target(), &err))?;
 
         if let Some(row) = row {
-            let nonce: Vec<u8> = row.get(0);
-            let ciphertext: Vec<u8> = row.get(1);
-            let version: i64 = row.get(2);
+            let entry_scope: String = row.get(0);
+            enforce_secret_scope(slot_key, &entry_scope, caller_project_id)?;
+            let nonce: Vec<u8> = row.get(1);
+            let ciphertext: Vec<u8> = row.get(2);
+            let version: i64 = row.get(3);
             let plaintext = self
                 .secret_cipher()
                 .decrypt(slot_key, &nonce, &ciphertext)?;
@@ -750,5 +896,36 @@ mod tests {
         assert_eq!(dec.as_str(), "secret-val-123");
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn secret_scope_isolation_blocks_cross_project_and_malformed_scopes() {
+        let proj_a = ProjectId::new();
+        let proj_b = ProjectId::new();
+        let scope_a = format!("project:{proj_a}");
+
+        assert!(enforce_secret_scope("global_key", "global", None).is_ok());
+        assert!(enforce_secret_scope("global_key", "global", Some(proj_a)).is_ok());
+        assert!(enforce_secret_scope("proj_a_key", &scope_a, Some(proj_a)).is_ok());
+
+        // Cross-project MUST fail with AccessDenied!
+        assert!(matches!(
+            enforce_secret_scope("proj_a_key", &scope_a, Some(proj_b)),
+            Err(DennettError::AccessDenied { .. })
+        ));
+        // Standalone / global caller MUST NOT read project-scoped secret!
+        assert!(matches!(
+            enforce_secret_scope("proj_a_key", &scope_a, None),
+            Err(DennettError::AccessDenied { .. })
+        ));
+        // Malformed or unknown scope MUST fail closed!
+        assert!(matches!(
+            enforce_secret_scope("bad_key", "project:not-a-uuid", Some(proj_a)),
+            Err(DennettError::AccessDenied { .. })
+        ));
+        assert!(matches!(
+            enforce_secret_scope("bad_key", "custom:foo", Some(proj_a)),
+            Err(DennettError::AccessDenied { .. })
+        ));
     }
 }

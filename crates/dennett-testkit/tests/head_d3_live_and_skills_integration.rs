@@ -99,15 +99,23 @@ struct RunningHead {
     child: Child,
     addr: String,
     base_url: String,
+    owner_token: String,
 }
 
 impl RunningHead {
+    fn client(&self) -> HeadClient {
+        HeadClient::new(&self.base_url)
+            .expect("head client")
+            .with_owner_token(&self.owner_token)
+    }
+
     async fn spawn_simulated(
         control_pg_url: &str,
         profile_root: Option<&Path>,
         with_control_mcp: bool,
     ) -> Self {
         let bin = locate_binary("dennett-head", "dennett-head");
+        let owner_token = format!("d3-live-tok-{}", Uuid::new_v4().simple());
         let mut cmd = Command::new(&bin);
         cmd.args(["--serve", "127.0.0.1:0", "--runtime", "simulated"]);
         if let Some(root) = profile_root {
@@ -120,6 +128,7 @@ impl RunningHead {
         let mut child = cmd
             .env(TEST_PROFILE_ENV, "1")
             .env("DENNETT_TEST_CONTROL_PG_URL", control_pg_url)
+            .env("DENNETT_HEAD_TOKEN", &owner_token)
             .env_remove("DENNETT_CONTROL_PG_URL")
             .env_remove("DENNETT_MEMORY_URL")
             .env_remove("DENNETT_MEMORY_TOKEN")
@@ -147,13 +156,14 @@ impl RunningHead {
             child,
             addr,
             base_url,
+            owner_token,
         }
     }
 
     async fn shutdown(mut self) {
         let req = format!(
-            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            self.addr
+            "POST /shutdown HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nX-Dennett-Shutdown: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            self.addr, self.owner_token
         );
         if let Ok(Ok(mut stream)) =
             time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr)).await
@@ -172,11 +182,12 @@ impl RunningHead {
     }
 }
 
-async fn run_dennettctl(head_url: &str, args: &[&str]) -> (i32, String, String) {
+async fn run_dennettctl(head: &RunningHead, args: &[&str]) -> (i32, String, String) {
     let bin = locate_binary("dennettctl", "dennett-head-client");
     let out = Command::new(&bin)
-        .args(["--url", head_url])
+        .args(["--url", &head.base_url])
         .args(args)
+        .env("DENNETT_HEAD_TOKEN", &head.owner_token)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -254,10 +265,10 @@ async fn d3_live_streaming_text_tool_break_and_context_usage_persisted() {
     let ctrl_pg = require_control_pg_url();
     let (profile, _tmp) = TestProfile::create_on_disk("d3-live-stream").expect("temp profile");
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), false).await;
-    let client = HeadClient::new(&head.base_url).expect("client");
+    let client = head.client();
 
     let health = client.healthz(None).await.expect("health");
-    assert_eq!(health.schema_version, Some(10));
+    assert_eq!(health.schema_version, Some(11));
 
     let scope = unique_scope("live-stream");
     let project = client
@@ -304,7 +315,7 @@ async fn d3_live_streaming_text_tool_break_and_context_usage_persisted() {
         .expect("session");
 
     // Start streaming turn with silent tool call between two prose chunks.
-    let turn_client = HeadClient::new(&head.base_url).expect("turn client");
+    let turn_client = head.client();
     let sid = session.session_id;
     let turn_handle = tokio::spawn(async move {
         turn_client
@@ -393,7 +404,7 @@ async fn d3_live_streaming_text_tool_break_and_context_usage_persisted() {
 
     // CLI parity: `dennettctl --json sessions live`
     let (code, stdout, stderr) = run_dennettctl(
-        &head.base_url,
+        &head,
         &["--json", "sessions", "live", "--session", &sid.to_string()],
     )
     .await;
@@ -414,7 +425,7 @@ async fn d3_durable_followups_crud_dedup_v03_auto_dispatch_and_idle_enqueue() {
     let ctrl_pg = require_control_pg_url();
     let (profile, _tmp) = TestProfile::create_on_disk("d3-followups").expect("temp profile");
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), false).await;
-    let client = HeadClient::new(&head.base_url).expect("client");
+    let client = head.client();
 
     let agent = client
         .create_agent(
@@ -450,7 +461,7 @@ async fn d3_durable_followups_crud_dedup_v03_auto_dispatch_and_idle_enqueue() {
     let sid = session.session_id;
 
     // 1. Start a slow turn and immediately detach/ignore caller HTTP completion (proves V03!).
-    let slow_client = HeadClient::new(&head.base_url).expect("slow client");
+    let slow_client = head.client();
     let slow_task = tokio::spawn(async move {
         let _ = slow_client
             .send_message(
@@ -622,7 +633,7 @@ async fn d3_durable_followups_crud_dedup_v03_auto_dispatch_and_idle_enqueue() {
 
     // 5. Idle enqueue auto-dispatch (race right after run end must never strand a message!).
     let (code, stdout, stderr) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "sessions",
@@ -655,7 +666,7 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
     let ctrl_pg = require_control_pg_url();
     let (profile, _tmp) = TestProfile::create_on_disk("d3-fup-pause").expect("temp profile");
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), false).await;
-    let client = HeadClient::new(&head.base_url).expect("client");
+    let client = head.client();
 
     let agent = client
         .create_agent(
@@ -691,7 +702,7 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
     let sid = session.session_id;
 
     // --- Part A: Explicit Stop pauses queued follow-ups ---
-    let slow_client = HeadClient::new(&head.base_url).expect("slow client");
+    let slow_client = head.client();
     let slow_handle = tokio::spawn(async move {
         slow_client
             .send_message(
@@ -795,7 +806,7 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
     }
 
     // --- Part B: Failed run pauses remaining queued follow-ups ---
-    let err_lead_client = HeadClient::new(&head.base_url).expect("err lead client");
+    let err_lead_client = head.client();
     let err_lead_task = tokio::spawn(async move {
         let _ = err_lead_client
             .send_message(
@@ -859,7 +870,7 @@ async fn d3_followups_safe_pause_on_stop_and_failure_plus_resume_auto_start() {
 
     // Clear all remaining follow-ups via `dennettctl sessions followup clear`.
     let (code, _, stderr) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "sessions",
@@ -890,7 +901,7 @@ async fn d3_live_steer_mid_run_without_409_preserving_queued_followups() {
     let ctrl_pg = require_control_pg_url();
     let (profile, _tmp) = TestProfile::create_on_disk("d3-live-steer").expect("temp profile");
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), false).await;
-    let client = HeadClient::new(&head.base_url).expect("client");
+    let client = head.client();
 
     let agent = client
         .create_agent(
@@ -925,7 +936,7 @@ async fn d3_live_steer_mid_run_without_409_preserving_queued_followups() {
         .expect("session");
     let sid = session.session_id;
 
-    let slow_client = HeadClient::new(&head.base_url).expect("slow client");
+    let slow_client = head.client();
     let slow_handle = tokio::spawn(async move {
         slow_client
             .send_message(
@@ -1006,7 +1017,7 @@ async fn d3_live_steer_mid_run_without_409_preserving_queued_followups() {
         time::sleep(Duration::from_millis(25)).await;
     }
     let (code, stdout, stderr) = run_dennettctl(
-        &head.base_url,
+        &head,
         &[
             "--json",
             "sessions",
@@ -1035,7 +1046,7 @@ async fn d3_session_skills_delivery_mcp_scope_isolation_standalone_and_prompt_in
     let ctrl_pg = require_control_pg_url();
     let (profile, _tmp) = TestProfile::create_on_disk("d3-session-skills").expect("temp profile");
     let head = RunningHead::spawn_simulated(&ctrl_pg, Some(profile.data_dir()), true).await;
-    let client = HeadClient::new(&head.base_url).expect("client");
+    let client = head.client();
 
     // Direct call to `/v1/capabilities/session-skills` without `dct1.` token MUST fail 401!
     let unauth = client.list_session_skills(None).await;
@@ -1444,13 +1455,14 @@ async fn d3_session_skills_delivery_mcp_scope_isolation_standalone_and_prompt_in
     );
     assert!(!denied_proj_text.contains("PROJ_A_ONDEMAND_BODY"));
 
-    // Standalone chat MUST STILL DENY `dennett_event_create` at PolicyEngine boundary!
+    // Standalone chat ALLOWS standalone reminders (scoped to this session via hidden system project),
+    // while strictly DENYING project delegation and cross-project event creation!
     let standalone_evt = client
         .send_message(
             sess_standalone.session_id,
             &SendMessageRequest {
                 content: String::from(
-                    r#"[SIM:EVENT:CREATE title="Standalone Escape" goal="Must be denied"]"#,
+                    r#"[SIM:EVENT:CREATE title="Standalone Reminder" goal="Ping owner later" target_session="current" interval_secs=3600]"#,
                 ),
                 timeout_ms: Some(10_000),
                 client_message_id: None,
@@ -1458,17 +1470,41 @@ async fn d3_session_skills_delivery_mcp_scope_isolation_standalone_and_prompt_in
             None,
         )
         .await
-        .expect("standalone event attempt");
+        .expect("standalone reminder attempt");
     let evt_text = standalone_evt.assistant_message.expect("evt text").content;
     assert!(
-        evt_text.contains("DENIED"),
-        "standalone chat must deny dennett_event_create, got: {evt_text}"
+        evt_text.contains("ALLOWED") && evt_text.contains("Standalone Reminder"),
+        "standalone chat must allow session-scoped reminders, got: {evt_text}"
+    );
+
+    // Standalone chat MUST STILL DENY `dennett_delegate_task` at PolicyEngine boundary!
+    let standalone_delegate = client
+        .send_message(
+            sess_standalone.session_id,
+            &SendMessageRequest {
+                content: String::from(
+                    r#"[SIM:CONTROL_MCP:dennett_delegate_task|{"title":"Escape","goal":"Must be denied"}]"#,
+                ),
+                timeout_ms: Some(10_000),
+                client_message_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("standalone delegate attempt");
+    let delegate_text = standalone_delegate
+        .assistant_message
+        .expect("delegate text")
+        .content;
+    assert!(
+        delegate_text.contains("DENIED"),
+        "standalone chat must deny dennett_delegate_task, got: {delegate_text}"
     );
     assert!(
-        standalone_evt
+        standalone_delegate
             .permission_decisions
             .iter()
-            .any(|d| d.tool_name == "dennett_event_create" && d.effect == PolicyEffect::Deny)
+            .any(|d| d.tool_name == "dennett_delegate_task" && d.effect == PolicyEffect::Deny)
     );
 
     head.shutdown().await;
